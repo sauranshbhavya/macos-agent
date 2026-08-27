@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgent
 import MacAgentCore
 
@@ -153,16 +154,25 @@ struct WidgetVoiceEntryTests {
     /// running in. Both branches assert something real, so this is deterministic rather than
     /// conditionally skipped — it is the one test here that does read `hasAPIKey`.
     @Test
-    func theLiveRuleReportsAMissingKeyAndOnlyAMissingKey() throws {
+    func theLiveRuleBlocksVoiceOnNothingAtAllSinceTheGatewayLanded() throws {
+        // **The successor to `theLiveRuleReportsAMissingKeyAndOnlyAMissingKey`** (SONNY-130), and
+        // the outcome is inverted because the rule's one input is gone. Transcription runs through
+        // Sonny's backend under the user's session, and the founder's manual item launches the
+        // packaged app from Finder — where no shell environment exists, so a gate on
+        // `OPENAI_API_KEY` would have blocked the mic on every launch this ticket is about.
+        //
+        // Unconditional now, where the old test had to branch on the environment the suite happened
+        // to be launched with. `hasAPIKey` still exists and still answers about the variable; what
+        // changed is that voice no longer asks it.
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let viewModel = try makeViewModel(root: root)
 
-        if viewModel.hasAPIKey {
-            #expect(viewModel.voiceConfigurationBlocker == nil)
-        } else {
-            #expect(viewModel.voiceConfigurationBlocker == AgentViewModel.missingAPIKeyVoiceMessage)
-        }
+        #expect(viewModel.voiceConfigurationBlocker == nil)
+        #expect(viewModel.canUseVoice)
+        // And the message it used to return is still declared, for `feature/row-12-degradation` to
+        // remove with the rest of the environment-variable surface.
+        #expect(AgentViewModel.missingAPIKeyVoiceMessage == "No API key is set up. Add one, then relaunch Sonny.")
     }
 
     /// The half the fix must not have broken. Each of these clears on its own, the user can do
@@ -464,6 +474,10 @@ private func makeViewModel(root: URL) throws -> AgentViewModel {
             )
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
+        // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
+        // every request fails before a URL is built, and an in-memory Keychain of its own.
+        backendClient: makeHermeticBackendClient(),
         // In-memory by construction — this store has no file at all.
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),

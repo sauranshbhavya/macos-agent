@@ -381,7 +381,19 @@ final class AgentViewModel: ObservableObject {
     private let memoryPolicyProvider: any MemoryPolicyProviding
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
+    private let backendClient: SonnyBackendClient
     private let plannerProviderRegistry: PlannerProviderRegistry
+
+    /// §5.1's `task_id` for the run in flight — **minted when a task starts, not when its record is
+    /// written** (SONNY-130).
+    ///
+    /// `CompletedTaskRecord` is written at completion, so an id that only appeared in that
+    /// initializer's default would arrive after every request the task made: the backend's retained
+    /// content and the local row would be filed under different keys, and SONNY-134's delete would
+    /// have nothing to join them on. `beginNewTaskIdentity()` is the one place it moves, and it
+    /// moves with the usage recorder's reset — the two have exactly the same lifetime, which is why
+    /// they are one function rather than two lines that have to be remembered together.
+    private(set) var currentTaskID = UUID().uuidString
     /// Which registered planner provider plans tasks. Environment-backed in production
     /// (`SONNY_PLANNER`, read once at init — the environment cannot change under a running
     /// process); mutable so tests can drive both the honored and fallback selection paths
@@ -809,7 +821,7 @@ final class AgentViewModel: ObservableObject {
     /// `outputLocationStore:` parameter. The clipboard monitor likewise gets the same settings store
     /// the view model does, so the switch the user sees and the switch the monitor obeys are one
     /// object.
-    static func atItsRealStoreLocations() -> AgentViewModel {
+    static func atItsRealStoreLocations(backendClient: SonnyBackendClient) -> AgentViewModel {
         let whitelist = PathWhitelist()
         let clipboardHistorySettingsStore = ClipboardHistorySettingsStore()
         return AgentViewModel(
@@ -833,6 +845,9 @@ final class AgentViewModel: ObservableObject {
             resumableTaskStore: ResumableTaskStore(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore),
             localDataDeletionService: LocalDataDeletionService(),
+            // The one client the process holds, built in `main.swift` beside the real Keychain and
+            // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
+            backendClient: backendClient,
             whitelist: whitelist
         )
     }
@@ -928,10 +943,20 @@ final class AgentViewModel: ObservableObject {
         // passed it, so this costs nothing and closes the one door on this initializer where a
         // silent default would have erased the developer's data rather than corrupted it.
         localDataDeletionService: LocalDataDeletionService,
+        // **No default, for SONNY-240's reason one step further out** (SONNY-130). This client holds
+        // the Keychain session, and every packaged build on a Mac shares one Keychain — so a
+        // defaulted one would let a fixture read and delete the founder's own sign-in. It is also
+        // the single-flight refresh guard: two clients in one process is two rotations where the
+        // server's overlap rule allows one, which §3.3 reads as theft. `SonnyAccountModel` states
+        // the same rule for the same object, and `main.swift` builds the one instance both share.
+        backendClient: SonnyBackendClient,
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
-        plannerProviderRegistry: PlannerProviderRegistry = .default,
+        // Resolved from `backendClient` when absent, which a default value cannot do — Swift default
+        // expressions cannot name another parameter. The shipped registry's default provider plans
+        // through the backend, so it needs the client the line above requires.
+        plannerProviderRegistry: PlannerProviderRegistry? = nil,
         plannerSelection: String? = ProcessInfo.processInfo
             .environment[AgentViewModel.plannerSelectionEnvironmentKey],
         userDefaults: UserDefaults = .standard,
@@ -978,7 +1003,8 @@ final class AgentViewModel: ObservableObject {
         self.memorySettingsStore = MemorySettingsStore(userDefaults: userDefaults)
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
-        self.plannerProviderRegistry = plannerProviderRegistry
+        self.backendClient = backendClient
+        self.plannerProviderRegistry = plannerProviderRegistry ?? .default(client: backendClient)
         self.plannerSelection = plannerSelection
         self.whitelist = whitelist
         // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
@@ -1295,15 +1321,28 @@ final class AgentViewModel: ObservableObject {
     /// was unreachable from the one surface most people press. The hotkey, gated by no SwiftUI
     /// state at all, reached its copy of the guard and explained itself. Same failure, two answers.
     ///
-    /// **This split outlives its current contents.** SONNY-136 deletes every provider environment
-    /// variable, and `hasAPIKey` goes with it — what that changes is the body of this property, not
-    /// the rule it exists to state: an actionable refusal explains itself, a transient one stays
-    /// quiet, and only the transient half is ever allowed into a `.disabled` predicate.
+    /// **This split outlives its current contents**, and SONNY-130 is the first time the contents
+    /// changed: the rule it exists to state — an actionable refusal explains itself, a transient one
+    /// stays quiet, and only the transient half is ever allowed into a `.disabled` predicate — is
+    /// untouched, while the one thing it used to report is gone.
+    ///
+    /// **The live answer is `nil`, because no local configuration blocks voice any more.** It read
+    /// `hasAPIKey` until this ticket, and leaving it that way would have made this ticket's own
+    /// headline outcome unreachable: transcription now goes through Sonny's backend under the user's
+    /// session, and the founder's manual item launches the packaged app **from Finder**, where no
+    /// shell environment exists and `OPENAI_API_KEY` is therefore never set. The mic would have been
+    /// blocked, with a message telling the user to export a variable nothing reads.
+    ///
+    /// **`missingAPIKeyVoiceMessage` and this seam both stay**, unreachable in the shipping app and
+    /// deliberately so: the "export a variable" strings and the final environment-variable removal
+    /// belong to `feature/row-12-degradation`, which cannot run until both gateways land, and
+    /// SONNY-136 owns what an unreachable backend says instead. What a *signed-out* user is told is
+    /// theirs too — today they record, and the transcriber answers "Sign in to Sonny to run this."
     var voiceConfigurationBlocker: String? {
         if let voiceConfigurationBlockerOverride {
             return voiceConfigurationBlockerOverride()
         }
-        return hasAPIKey ? nil : Self.missingAPIKeyVoiceMessage
+        return nil
     }
 
     /// **The transient half of voice readiness** — the app is busy, and refusing in silence is the
@@ -1723,11 +1762,14 @@ final class AgentViewModel: ObservableObject {
         activeResumableTask = nil
 
         if preserveUsageForNextStart {
+            // **The `task_id` is preserved with the usage, and for the same reason** (SONNY-130).
+            // This branch is a run continuing something that already spent something — a
+            // transcription that produced this command, or a clarification answer — so it is the
+            // same task, and its requests belong under the same key.
             preserveUsageForNextStart = false
             publishTaskUsageSummary()
         } else {
-            taskUsageRecorder.reset()
-            taskUsageSummary = .empty
+            beginNewTaskIdentity()
         }
 
         activeTaskScope = .unscoped
@@ -1862,6 +1904,7 @@ final class AgentViewModel: ObservableObject {
                 // `OpenAIPlanner(usageRecorder:)` call that used to be written inline.
                 let selected = try plannerProviderRegistry.makePlanner(
                     selection: plannerSelection,
+                    taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
                     usageRecorder: taskUsageRecorder
                 )
                 if let notice = selected.fallbackNotice {
@@ -4552,6 +4595,10 @@ final class AgentViewModel: ObservableObject {
     private func makeDelegationPlanner() throws -> any Planning {
         let selected = try plannerProviderRegistry.makePlanner(
             selection: plannerSelection,
+            // A delegated instruction is planned under the run it belongs to — same task id, same
+            // retention answer — because it is the same task. `makeDelegationRunner`'s whole
+            // argument is that a delegated command meets what a typed one would.
+            taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
             usageRecorder: taskUsageRecorder
         )
         if let notice = selected.fallbackNotice {
@@ -4596,13 +4643,46 @@ final class AgentViewModel: ObservableObject {
     /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): a resolver plan never carries a
     /// vision step, and `makeLiveVisionEnvironment()` assigns `visionUserPauseMonitor` on the way —
     /// a side effect a routing decision must not have. Every run takes the overload above.
+    /// §2.4's two fields for one run: this run's `task_id`, and whether the backend may keep its
+    /// content.
+    ///
+    /// **`recordingPolicy` is a parameter rather than a read of `taskRecordingPolicy`**, and that is
+    /// the same care `makeExecutor` already takes for the same term. A scheduled run deliberately
+    /// does not read the "Don't save this task" switch — it cannot have been pressed for a run the
+    /// user did not start — so it passes `.record`, and reading the published property here would
+    /// have sent `retention: "none"` for a routine that fired while the switch happened to be on
+    /// for something the user was composing.
+    ///
+    /// The mapping is §10.1's, exactly: the switch is the only thing that produces `"none"`. The
+    /// memory switches are about which local stores a run writes to and say nothing about what the
+    /// backend keeps.
+    func backendTaskContext(recordingPolicy: TaskRecordingPolicy) -> BackendTaskContext {
+        BackendTaskContext(
+            taskID: currentTaskID,
+            retention: recordingPolicy.suppressesTraces ? .notStored : .standard
+        )
+    }
+
+    /// A new task's identity: a fresh `task_id` and a cleared usage recorder, **together**.
+    ///
+    /// One function rather than three lines at each site, because the two things have identical
+    /// lifetimes and the failure of letting them drift is silent in both directions — a stale id
+    /// files this task's content under the last one's, and a stale recorder bills this task for it.
+    private func beginNewTaskIdentity() {
+        currentTaskID = UUID().uuidString
+        taskUsageRecorder.reset()
+        taskUsageSummary = .empty
+    }
+
     private func makeExecutor(
         recordingPolicy: TaskRecordingPolicy?,
         visionSession: VisionSessionEnvironment?
     ) -> AgentActionExecutor {
-        AgentActionExecutor(
+        let resolvedRecordingPolicy = recordingPolicy ?? taskRecordingPolicy
+        let taskContext = backendTaskContext(recordingPolicy: resolvedRecordingPolicy)
+        return AgentActionExecutor(
             // A fresh executor per run, so this cannot leak into the next task.
-            recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
+            recordingPolicy: resolvedRecordingPolicy,
             // Never overridable by the caller, unlike `recordingPolicy` directly above: the
             // scheduled path deliberately passes `.record` because an unattended run cannot have
             // had "Don't save this task" pressed for it, but the memory switches are the user's
@@ -4618,11 +4698,24 @@ final class AgentViewModel: ObservableObject {
             finderContextReader: finderContextReader,
             routineStore: routineStore,
             workspaceStore: workspaceStore,
-            // `try?` is the degradation path, not error swallowing: construction only throws for
-            // a missing TAVILY_API_KEY, and nil falls back to `UnavailableWebSearchProvider`'s
-            // existing "Web search provider not configured." error. Constructed per executor like
-            // everything else here, so a key exported after launch works on the next run.
-            webSearchProvider: try? TavilySearchProvider(),
+            // **No `try?` and no degradation branch any more** (SONNY-130). Construction used to
+            // throw for a missing `TAVILY_API_KEY` and `nil` fell back to
+            // `UnavailableWebSearchProvider`; there is no key to miss now, so search is always
+            // present and a call made with no session signed in fails at the request with a
+            // sentence the user can act on. What the user sees when the backend is unreachable is
+            // `feature/row-12-degradation`'s, which this leaves possible rather than decides.
+            webSearchProvider: TavilySearchProvider(
+                client: backendClient,
+                taskContext: taskContext
+            ),
+            // Passed rather than defaulted for the first time: the executor's own fallback is now
+            // `UnavailableWebResearchSynthesizer`, which refuses, because the lazy
+            // environment-reading indirection it replaced had nothing left to read.
+            webResearchSynthesizer: OpenAIWebResearchSynthesizer(
+                client: backendClient,
+                taskContext: taskContext,
+                usageRecorder: taskUsageRecorder
+            ),
             usageRecorder: taskUsageRecorder,
             snippetStore: snippetStore,
             runningAppSwitcher: runningAppSwitcher,
@@ -4631,10 +4724,11 @@ final class AgentViewModel: ObservableObject {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
-            // `nil` when OPENCODE_API_KEY is unset — the same degradation shape as the Tavily key
-            // above. A vision session dispatched into an executor built that way fails loudly with
-            // `visionUnavailable` rather than half-running; `visionSessionEnvironment` is an
-            // injectable seam so a test supplies its own substrate and never touches the machine.
+            // `nil` when OPENCODE_API_KEY is unset — the vision route still reads a key, because
+            // moving it is `feature/row-12-gateway-vision`'s. A vision session dispatched into an
+            // executor built that way fails loudly with `visionUnavailable` rather than
+            // half-running; `visionSessionEnvironment` is an injectable seam so a test supplies its
+            // own substrate and never touches the machine.
             visionSession: visionSession
         )
     }
@@ -4719,9 +4813,9 @@ final class AgentViewModel: ObservableObject {
     }
 
     private func stopVoiceRecordingAndTranscribe() {
-        let audioURL: URL
+        let recording: FinishedRecording
         do {
-            audioURL = try audioRecorder.stop()
+            recording = try audioRecorder.stop()
             isRecordingVoice = false
         } catch {
             isRecordingVoice = false
@@ -4735,8 +4829,11 @@ final class AgentViewModel: ObservableObject {
             case .command:
                 // A command is a fresh task, and its transcription is the first cost of it: the
                 // recorder starts over here so the summary the run ends with is this task's alone.
-                taskUsageRecorder.reset()
-                taskUsageSummary = .empty
+                // **And the `task_id` starts over with it** (SONNY-130) — the transcription is the
+                // first request this task makes, so it must already carry the id the run will use,
+                // or the voice half of a task is filed under the previous task's key.
+                // `performStart` sees `preserveUsageForNextStart` and keeps both.
+                beginNewTaskIdentity()
                 logStore.append(.act, "Transcribing voice command")
             case .clarificationAnswer:
                 // **An answer belongs to the task that is paused, so nothing of that task's is
@@ -4752,12 +4849,25 @@ final class AgentViewModel: ObservableObject {
             errorMessage = nil
             defer {
                 publishTaskUsageSummary()
-                try? FileManager.default.removeItem(at: audioURL)
+                try? FileManager.default.removeItem(at: recording.url)
             }
 
             do {
-                let transcriber = try OpenAITranscriber(usageRecorder: taskUsageRecorder)
-                let result = try await transcriber.transcribe(audioFileURL: audioURL)
+                let transcriber = OpenAITranscriber(
+                    client: backendClient,
+                    // A transcription belongs to the task it begins, so it carries that task's
+                    // retention answer too: a run the user started with "Don't save this task" on
+                    // sends `retention: "none"` for their voice, which is the most personally
+                    // sensitive of the four content types this branch moved.
+                    taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                    usageRecorder: taskUsageRecorder
+                )
+                let result = try await transcriber.transcribe(
+                    audioFileURL: recording.url,
+                    // How long the user held the key, not how long the file is — `FinishedRecording`
+                    // says why the two differ once the recorder bounds itself.
+                    recordedDuration: recording.heldFor
+                )
                 // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
                 // through `dispatch`, which assigns it and clears it again if the dispatch is
                 // refused — writing it first would reinstate exactly the residue this round removes,
@@ -5562,6 +5672,12 @@ final class AgentViewModel: ObservableObject {
         }
 
         let record = CompletedTaskRecord(
+            // **This run's own id, rather than the fresh UUID the initializer would default to**
+            // (SONNY-130, contract §5.1). The default is evaluated per call and would therefore
+            // arrive *after* every request the task made, leaving the backend's retained content
+            // filed under one key and this row under another — and `DELETE /v1/tasks/{task_id}`
+            // with nothing to join them on.
+            id: currentTaskID,
             command: command,
             startedAt: startedAt,
             completedAt: Date(),
@@ -6210,6 +6326,17 @@ final class AgentViewModel: ObservableObject {
     private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {
         let previousOrigin = activeTaskOrigin
         activeTaskOrigin = .scheduled
+        // A scheduled run is a task, so it gets a `task_id` of its own (SONNY-130): the routine it
+        // runs reaches the backend through the same executor a typed command does, and the row this
+        // run writes has to be the row those requests are filed under.
+        //
+        // **Only the id, and deliberately not `beginNewTaskIdentity()`.** That helper also clears
+        // the usage recorder and the published summary, and the summary is one of the properties
+        // this method's own doc comment lists as untouched on purpose — a background event silently
+        // blanking the usage line of the task the user is looking at is exactly the failure that
+        // paragraph exists to prevent. The recorder's own contents are left as they were, which is
+        // what this path has always done.
+        currentTaskID = UUID().uuidString
         let startedAt = Date()
         let name = routine.name
         scheduledRunDisplayCommand = "Run my \(name) routine"
@@ -6447,6 +6574,10 @@ final class AgentViewModel: ObservableObject {
             return
         }
         let record = CompletedTaskRecord(
+            // The scheduled twin of the foreground line above, and it needs it for the same reason:
+            // a routine's run makes backend requests through the executor, and they are filed under
+            // the id this row carries.
+            id: currentTaskID,
             command: command,
             startedAt: startedAt,
             completedAt: Date(),

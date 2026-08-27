@@ -1084,6 +1084,54 @@ bottom-left account row → **Sign in**.
       button on one line, or stacked, never character-wrapped. Both are
       `SettingsAdaptiveControlRow`s, which is the pattern that exists for exactly this.
 
+### The four routes behind the backend (new 2026-08-27, SONNY-130)
+
+**This section is where the row stops being plumbing.** The planner, web-research synthesis, voice
+transcription and web search all run through Sonny's own gateway now, under your sign-in, with no
+provider key anywhere on your Mac.
+
+**Setup — three things, and the third is the one that is easy to get wrong.**
+
+1. A gateway has to be answering *with provider credentials*. `./scripts/deploy.sh local` runs the
+   container with `SONNY_ENV` and `LOG_LEVEL` only, so it mounts health alone and every one of these
+   routes answers 401. Until SONNY-306 makes it one command, run the server by hand with the
+   Supabase variables the sign-in section needs plus `OPENAI_API_KEY` and `TAVILY_API_KEY`.
+2. The debug build pointed at it, exactly as the sign-in section above describes
+   (`defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`).
+3. **Launch the packaged app from Finder, and do not export any provider key in the shell you
+   launched anything from.** A Finder launch inherits no shell environment, which is the whole
+   point: if any of these work only because a key happened to be exported, the row proved nothing.
+
+- [ ] **(new 2026-08-27, SONNY-130) — the headline check.** Sign in, then run an ordinary typed
+      command ("open Safari"). It should plan and run exactly as before. **This is the first time in
+      the project's life that works with no provider key on the machine**, so if it works, the
+      credential really has moved.
+- [ ] **(new 2026-08-27, SONNY-130)** Hold the push-to-talk hotkey, speak a short command, release.
+      The transcript should arrive and dispatch as it always did. Note that the mic is no longer
+      blocked by a missing key — before this branch a Finder launch left it refusing with "No API
+      key is set up", which is precisely the failure this row is checking is gone.
+- [ ] **(new 2026-08-27, SONNY-130)** Run a web-research command that needs a search ("research
+      what's new in Swift 6 concurrency and save it as markdown"). Both halves go through the
+      backend now — the search and the synthesis — so a note that comes back with real sources means
+      both worked.
+- [ ] **(new 2026-08-27, SONNY-130)** **Hold the record hotkey for more than three minutes**, then
+      release. It must refuse with *"That recording is too long. Sonny listens for up to 3 minutes
+      at a time."* — a human sentence, no status code, no mention of bytes or uploads. The recorder
+      also stops itself a few seconds past the cap, so the file cannot grow without limit while you
+      are waiting; nothing should be uploaded at all.
+- [ ] **(new 2026-08-27, SONNY-130)** Turn **"Don't save this task"** on, then run a command. It
+      should behave identically. (What it changes on the backend — `retention: "none"` — is not
+      observable from the app, and the backend does not store anything yet either: SONNY-134 builds
+      the content store. This row is checking the switch did not break the run.)
+- [ ] **(new 2026-08-27, SONNY-130)** Sign **out**, then try to run a command. It should fail with
+      *"Sign in to Sonny to run this."* rather than a status code, a URL, or anything about
+      providers or tokens. (What the product should do about being signed out — beyond saying so —
+      is `feature/row-12-degradation`'s; this row is only checking the sentence is human.)
+- [ ] **(new 2026-08-27, SONNY-130)** After any of the above, open **Tasks** and check the run's
+      usage line still shows token counts. The numbers now come from the server rather than from the
+      app's own estimate, and the one thing that must not have happened is the summary silently
+      going blank.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 Needs `TAVILY_API_KEY` exported in the launching shell (GUI `open` won't inherit it). Each search

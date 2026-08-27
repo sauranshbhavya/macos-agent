@@ -34,12 +34,28 @@ final class SonnyAccountModel: ObservableObject {
 
     private let service: SonnyAccountService
 
-    /// **`service` has no default**, for SONNY-240's reason applied to the Keychain: a default here
+    /// The one backend client this process holds, exposed so `main.swift` can hand the *same* one to
+    /// `AgentViewModel` (SONNY-130).
+    ///
+    /// **One client, not two, and the reason is the refresh guard.** `SonnyBackendClient` holds the
+    /// single-flight generation counter that makes ten concurrent `401 auth.token_expired`s cause
+    /// one token rotation; the server reads a second rotation presented past its ten-second overlap
+    /// as theft and revokes the whole family (§3.3). A second client would have its own counter and
+    /// its own cache, so the guard would be guarding half the callers. That was latent while
+    /// sign-out was the only authenticated caller in the tree; SONNY-130 adds four more.
+    let backendClient: SonnyBackendClient
+
+    /// **`client` has no default**, for SONNY-240's reason applied to the Keychain: a default here
     /// would reach the one Keychain every packaged build on this Mac shares, invisibly, from any
     /// call site that predates the parameter. `atItsRealKeychainLocation()` is the one named place
     /// that asks for it, and `main.swift` is the only file allowed to call that.
-    init(service: SonnyAccountService) {
-        self.service = service
+    ///
+    /// Takes the client rather than the service, because the client is the thing that is shared and
+    /// the service is a thin wrapper over it. Building the service here keeps "one client, one
+    /// service" true by construction rather than by two call sites agreeing.
+    init(client: SonnyBackendClient) {
+        self.backendClient = client
+        self.service = SonnyAccountService(client: client)
     }
 
     /// The shipping app's one request for the real Keychain and the real host resolution.
@@ -52,14 +68,14 @@ final class SonnyAccountModel: ObservableObject {
     /// `SignInReleaseSwitchScanTests`, whose population is the five staging-pointer tokens and not
     /// this one; PR #133, F7.)
     static func atItsRealKeychainLocation() -> SonnyAccountModel {
-        SonnyAccountModel(service: SonnyAccountService(client: SonnyBackendClient(
+        SonnyAccountModel(client: SonnyBackendClient(
             environment: SonnyBackendHost.resolve(),
             tokenStore: KeychainAccountTokenStore(),
             // Named rather than defaulted: the client's `= .shared` default is a session backed by
             // a 20 MB disk cache that nobody chose, which SONNY-130 and SONNY-134's authenticated
             // `GET`s would fill with the user's own data (PR #133, F11).
             session: SonnyBackendSession.forBackendCalls()
-        )))
+        ))
     }
 
     var isSignedIn: Bool { identity != nil }
