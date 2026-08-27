@@ -31,18 +31,37 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
 /**
  * How long an `in_flight` claim is believed, in seconds.
  *
- * Contract §12's longest total deadline is 105 s (`/v1/screen/analyze` and
- * `/v1/research/synthesize`), so a request that is genuinely still running is always inside this and
- * can never have its key taken from under it. Past it the holder is assumed dead — a process killed
+ * A holder past this instant is assumed dead. Something has to assume that: a process killed
  * mid-request would otherwise hold its key against every retry forever, and the row it left behind
  * is indistinguishable from a live one from any other process's side.
+ *
+ * **The interval this has to cover is claim → `onSend`, and that is not the same as a route's
+ * deadline** — which is what this comment used to claim, saying §12's longest total deadline is 105 s
+ * "so a request that is genuinely still running can never have its key taken". PR #142's review
+ * measured the gap. On the JSON routes the margin is real but thin: `synthesize` and
+ * `screen/analyze` total 105 s against this 120 s. On `POST /v1/transcriptions` there is **no bound
+ * at all** — the multipart body read (`for await (const part of request.parts())` with
+ * `part.toBuffer()` over up to 10 MiB) sits *outside* `withDeadlines`, which `routes/model.ts`
+ * applies only to the upstream call, and Fastify's `requestTimeout` is unset and therefore disabled.
+ * A stalled upload holds its claim indefinitely, and no constant here can fix that.
+ *
+ * **So a lease can be taken from a live holder, and the fencing token is what makes that survivable
+ * rather than corrupting.** `claim_token` means a superseded holder's `complete` or `release` matches
+ * zero rows instead of landing on its successor's claim. What the token does *not* prevent is the
+ * other consequence: while both are running, the provider may be called twice for one key, which is
+ * the outcome §9.2 bullet 4 exists to avoid. Bounding the body read is the fix for that, it belongs
+ * to the route rather than to this file, and it is filed rather than assumed away.
  */
 export const CLAIM_LEASE_SECONDS = 120;
 
 /** What a claim attempt turned out to be. The hook maps each to a contract §7.2 answer. */
 export type ClaimOutcome =
-  /** The key is this request's. Run the handler, then `completeClaim` or `releaseClaim`. */
-  | { readonly kind: "claimed" }
+  /**
+   * The key is this request's. Run the handler, then `completeClaim` or `releaseClaim` — **passing
+   * `token` back**, which is what makes those act on this claim rather than on whatever claim the row
+   * is on by the time they run.
+   */
+  | { readonly kind: "claimed"; readonly token: string }
   /** §9.2 bullet 1: a stored response inside its window. Replay it, run nothing. */
   | { readonly kind: "replay"; readonly response: StoredResponse }
   /** §9.2 bullet 4: another request holds this key. `retryAfterSeconds` is what remains of its lease. */
@@ -93,18 +112,20 @@ interface KeyRow {
 export async function claimKey(client: pg.Client, request: ClaimRequest): Promise<ClaimOutcome> {
   await client.query("BEGIN");
   try {
-    const inserted = await client.query(
+    const inserted = await client.query<{ claim_token: string }>(
       `INSERT INTO sonny.idempotency_key
          (account_scope, idempotency_key, route, request_fingerprint,
-          state, claimed_at, lease_expires_at)
-       VALUES ($1, $2, $3, $4, 'in_flight', now(), now() + make_interval(secs => $5))
+          claim_token, state, claimed_at, lease_expires_at)
+       VALUES ($1, $2, $3, $4, gen_random_uuid(), 'in_flight', now(),
+               now() + make_interval(secs => $5))
        ON CONFLICT (account_scope, idempotency_key) DO NOTHING
-       RETURNING 1`,
+       RETURNING claim_token`,
       [request.accountScope, request.key, request.route, request.fingerprint, CLAIM_LEASE_SECONDS],
     );
-    if (inserted.rowCount === 1) {
+    const insertedToken = inserted.rows[0]?.claim_token;
+    if (insertedToken !== undefined) {
       await client.query("COMMIT");
-      return { kind: "claimed" };
+      return { kind: "claimed", token: insertedToken };
     }
 
     // `response_live` and `lease_remaining_seconds` are computed by Postgres rather than by
@@ -166,18 +187,21 @@ export async function claimKey(client: pg.Client, request: ClaimRequest): Promis
     // `completed` whose twenty-four hours have passed. **`metering_claimed_at` is deliberately not
     // touched**, and that omission is the whole of what makes "at most once per key, ever" survive a
     // re-attempt: this row may run again, and it may not bill again.
-    await client.query(
+    const reclaimed = await client.query<{ claim_token: string }>(
       `UPDATE sonny.idempotency_key
           SET route = $3, state = 'in_flight', claimed_at = now(),
+              claim_token = gen_random_uuid(),
               lease_expires_at = now() + make_interval(secs => $4),
               completed_at = NULL, response_expires_at = NULL,
               response_status = NULL, response_content_type = NULL,
               response_body = NULL, response_request_id = NULL
-        WHERE account_scope = $1 AND idempotency_key = $2`,
+        WHERE account_scope = $1 AND idempotency_key = $2
+        RETURNING claim_token`,
       [request.accountScope, request.key, request.route, CLAIM_LEASE_SECONDS],
     );
     await client.query("COMMIT");
-    return { kind: "claimed" };
+    // The row was locked `FOR UPDATE` above and nothing deletes rows, so this always returns one.
+    return { kind: "claimed", token: reclaimed.rows[0]!.claim_token };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -194,13 +218,18 @@ export interface CompletedResponse {
 /**
  * Store this key's response and start its twenty-four hours.
  *
- * `WHERE state = 'in_flight'` so that a late write cannot overwrite a response some *other* request
- * has since stored under the same key — which is reachable whenever a holder outlives its lease, is
- * declared dead, and then finishes anyway.
+ * **`claim_token` is the guard that matters, and `state = 'in_flight'` alone is not enough** — which
+ * is what this comment used to claim, saying the state guard stops "a late write overwriting a
+ * response some *other* request has since stored". That is true only when the successor has already
+ * *completed*. When the successor is still **in flight**, `state = 'in_flight'` matches its row, and
+ * a superseded holder's completion lands on it: the ghost's body is stored and replayed for
+ * twenty-four hours while the successor's real answer is dropped, because by then the state guard
+ * matches nothing. PR #142's review measured exactly that ordering; the token closes it, because a
+ * superseded holder's token is no longer the row's.
  */
 export async function completeClaim(
   client: pg.Client,
-  request: { readonly accountScope: string; readonly key: string },
+  request: { readonly accountScope: string; readonly key: string; readonly token: string },
   response: CompletedResponse,
 ): Promise<void> {
   await client.query(
@@ -209,7 +238,8 @@ export async function completeClaim(
             response_expires_at = now() + make_interval(secs => $6),
             response_status = $3, response_content_type = $4, response_body = $5,
             response_request_id = $7
-      WHERE account_scope = $1 AND idempotency_key = $2 AND state = 'in_flight'`,
+      WHERE account_scope = $1 AND idempotency_key = $2
+        AND state = 'in_flight' AND claim_token = $8`,
     [
       request.accountScope,
       request.key,
@@ -218,6 +248,7 @@ export async function completeClaim(
       response.body,
       RESPONSE_TTL_SECONDS,
       response.requestId,
+      request.token,
     ],
   );
 }
@@ -236,18 +267,25 @@ export async function completeClaim(
  * `metering_claimed_at` is never cleared, so the re-attempt finds the claim already taken and writes
  * no second event. The re-attempt's own usage goes unbilled, which is the direction §9.2's second
  * bullet chooses deliberately — "a client retry unable to double-bill a user" errs toward the user.
+ *
+ * **`claim_token` is why "give the key back" cannot mean somebody else's key.** Without it a holder
+ * whose lease had expired would release its *successor's* live claim, and a third request would
+ * claim immediately and call the provider while the successor was still running — §9.2 bullet 4
+ * defeated by the very mechanism that is supposed to keep retries honest. Measured in PR #142's
+ * review; the token makes a superseded release match zero rows.
  */
 export async function releaseClaim(
   client: pg.Client,
-  request: { readonly accountScope: string; readonly key: string },
+  request: { readonly accountScope: string; readonly key: string; readonly token: string },
 ): Promise<void> {
   await client.query(
     `UPDATE sonny.idempotency_key
         SET state = 'released', completed_at = now(),
             response_expires_at = NULL, response_status = NULL,
             response_content_type = NULL, response_body = NULL, response_request_id = NULL
-      WHERE account_scope = $1 AND idempotency_key = $2 AND state = 'in_flight'`,
-    [request.accountScope, request.key],
+      WHERE account_scope = $1 AND idempotency_key = $2
+        AND state = 'in_flight' AND claim_token = $3`,
+    [request.accountScope, request.key, request.token],
   );
 }
 
@@ -312,7 +350,10 @@ export async function meteringEventClaimed(
  * **Not a delete, and `0011`'s header says why**: the row carries `metering_claimed_at`, and
  * deleting it at twenty-four hours would hand the same key a second metering event on day two.
  * `state` moves to `released` so the key is re-claimable, which is what an expired response already
- * means to `claimKey`.
+ * means to `claimKey`, and `completed_at` is cleared with the rest — it recorded a completion whose
+ * response this statement is erasing, and leaving it set would have the row describe a stored answer
+ * that is no longer there. Nothing reads it today; the point is that nothing should be able to read
+ * a false value from it later (PR #142's review, recorded residual).
  *
  * Returns how many rows it cleared. **Nothing schedules this** — the gateway runs no timer and this
  * ticket adds none; it exists so that clearing is a call rather than a migration, and so a test can
@@ -322,7 +363,8 @@ export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Pr
   const pruned = await client.query(
     `UPDATE sonny.idempotency_key
         SET state = 'released', response_status = NULL, response_content_type = NULL,
-            response_body = NULL, response_request_id = NULL, response_expires_at = NULL
+            response_body = NULL, response_request_id = NULL, response_expires_at = NULL,
+            completed_at = NULL
       WHERE (account_scope, idempotency_key) IN (
               SELECT account_scope, idempotency_key
                 FROM sonny.idempotency_key
@@ -372,10 +414,14 @@ export async function deleteStoredResponsesForAccount(
 export interface KeyStore {
   claim: (request: ClaimRequest) => Promise<ClaimOutcome>;
   complete: (
-    request: { readonly accountScope: string; readonly key: string },
+    request: { readonly accountScope: string; readonly key: string; readonly token: string },
     response: CompletedResponse,
   ) => Promise<void>;
-  release: (request: { readonly accountScope: string; readonly key: string }) => Promise<void>;
+  release: (request: {
+    readonly accountScope: string;
+    readonly key: string;
+    readonly token: string;
+  }) => Promise<void>;
 }
 
 /**

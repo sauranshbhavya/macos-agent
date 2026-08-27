@@ -78,10 +78,20 @@ const MAXIMUM_STORED_RESPONSE_BYTES = 1024 * 1024;
  * carries both `provider.unavailable` (retryable) and `provider.rejected` (not), so a status-keyed
  * set would either freeze the recoverable case or re-run the one guaranteed to fail identically.
  *
- * `auth.token_expired` is in the set and is the one that is easy to miss. §3.3 makes it the single
- * 401 a client answers by refreshing once and retrying the original request — with the same key. A
- * stored `auth.token_expired` replayed at that retry would answer the refreshed request with the
- * failure that prompted the refresh, permanently.
+ * **`auth.token_expired` is in the set and is unreachable today, and that is stated rather than
+ * dressed up as a prevented failure** (PR #142's review, F4). This comment used to say a stored one
+ * "would answer the refreshed request with the failure that prompted the refresh, permanently" —
+ * nothing can store one. That code is produced only by the auth gate, in an `onRequest` hook
+ * (`auth/gate.ts`), and `onRequest` runs strictly before `preHandler`, so a request refused that way
+ * never claims a key and never reaches this set. It stays in the set defensively: §3.3 makes it the
+ * single 401 a client answers by refreshing once and retrying *the original request* with the same
+ * key, so the day any handler answers it after a claim, releasing is the behaviour that keeps the
+ * refresh-and-retry working. Same standard as the `!deps` branch below, which says plainly that it is
+ * unreachable rather than describing a failure it prevents.
+ *
+ * The rest of the set is reachable now: `limit.rate` from the sign-in limiter, `provider.unavailable`
+ * and `provider.timeout` from the model routes, `server.error` from the root error handler.
+ * `server.unavailable` is produced nowhere yet, which is forward-looking in the same way.
  */
 const RELEASE_ON_CODES: ReadonlySet<string> = new Set([
   "limit.rate",
@@ -92,21 +102,34 @@ const RELEASE_ON_CODES: ReadonlySet<string> = new Set([
   "auth.token_expired",
 ]);
 
-/** What `preHandler` left for `onSend`. `null` on every request that claimed no key. */
-interface ClaimState {
-  readonly accountScope: string;
-  readonly key: string;
-  /**
-   * `replayed` is what tells `onSend` not to store what `preHandler` just read back.
-   *
-   * **`replayedRequestId` is a separate field rather than the same one doing double duty**, because
-   * a stored response can legitimately carry no request id — a row written before that column was
-   * populated, or one whose original response had none — and a replay of it is still a replay.
-   * Collapsing the two would make such a row store itself again under a second key's worth of work.
-   */
-  readonly replayedRequestId: string | undefined;
-  readonly replayed: boolean;
-}
+/**
+ * What `preHandler` left for `onSend`. `null` on every request that claimed no key.
+ *
+ * **A union rather than one shape with optional fields**, so the invariant is the compiler's: a
+ * request that took a claim always has the fencing token that claim needs, and a replay — which took
+ * no claim and writes nothing — cannot be handed to a writer at all. The earlier shape carried
+ * `token: string | undefined` beside a `replayed` boolean and needed a non-null assertion at the one
+ * place it mattered, which is exactly the kind of pairing that rots when a third case arrives.
+ */
+type ClaimState =
+  | {
+      readonly kind: "claimed";
+      readonly accountScope: string;
+      readonly key: string;
+      /**
+       * The fencing token of the claim this request took, so `onSend` writes to *that* claim.
+       *
+       * Scope and key alone identify the row but not the claim, and a row can be on its second or
+       * third claim by the time this request's `onSend` runs; `store.ts` carries what that costs
+       * without the token.
+       */
+      readonly token: string;
+    }
+  | {
+      readonly kind: "replayed";
+      /** The stored response's `Sonny-Request-Id`, re-stamped on the way out. */
+      readonly requestId: string | undefined;
+    };
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -228,15 +251,10 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
 
     switch (outcome.kind) {
       case "claimed":
-        request.idempotency = { accountScope, key, replayed: false, replayedRequestId: undefined };
+        request.idempotency = { kind: "claimed", accountScope, key, token: outcome.token };
         return;
       case "replay":
-        request.idempotency = {
-          accountScope,
-          key,
-          replayed: true,
-          replayedRequestId: outcome.response.requestId,
-        };
+        request.idempotency = { kind: "replayed", requestId: outcome.response.requestId };
         request.log.info({ route: `POST ${routeUrl}` }, "idempotency key replayed a stored response");
         return replay(reply, outcome.response);
       case "in_flight":
@@ -253,12 +271,10 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
 
   app.addHook("onSend", async (request: FastifyRequest, reply: FastifyReply, payload: unknown) => {
     const claim = request.idempotency;
-    if (claim !== null && claim.replayed) {
+    if (claim !== null && claim.kind === "replayed") {
       // The last writer of this header, after `app.ts`'s own `onSend` has stamped the repeat's id.
       // A replay carries the original exchange's join key — see `replay` above for why.
-      if (claim.replayedRequestId !== undefined) {
-        void reply.header("Sonny-Request-Id", claim.replayedRequestId);
-      }
+      if (claim.requestId !== undefined) void reply.header("Sonny-Request-Id", claim.requestId);
       return payload;
     }
     if (!deps || claim === null) return payload;
@@ -281,18 +297,16 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
       (code === undefined || !RELEASE_ON_CODES.has(code));
 
     try {
+      const fenced = { accountScope: claim.accountScope, key: claim.key, token: claim.token };
       if (storable && body !== undefined) {
-        await deps.store.complete(
-          { accountScope: claim.accountScope, key: claim.key },
-          {
-            status,
-            body,
-            contentType: reply.getHeader("content-type")?.toString(),
-            requestId: request.id,
-          },
-        );
+        await deps.store.complete(fenced, {
+          status,
+          body,
+          contentType: reply.getHeader("content-type")?.toString(),
+          requestId: request.id,
+        });
       } else {
-        await deps.store.release({ accountScope: claim.accountScope, key: claim.key });
+        await deps.store.release(fenced);
       }
     } catch (error) {
       // **The response is never failed by a bookkeeping write.** The handler has already done its

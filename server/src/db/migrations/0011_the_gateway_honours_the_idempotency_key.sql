@@ -41,6 +41,20 @@ CREATE TABLE sonny.idempotency_key (
   -- other branch, so §9.2's third guarantee holds whatever state the row is in.
   request_fingerprint   text        NOT NULL,
 
+  -- **The fencing token: which claim this row is currently on.** A fresh value is minted by every
+  -- claim, including a re-claim, and `completeClaim`/`releaseClaim` name it in their `WHERE`. Without
+  -- it those two guard on `state = 'in_flight'`, which identifies *a* live claim rather than *this*
+  -- one, and a holder whose lease expired then acts on its successor's claim — measured both ways in
+  -- PR #142's review: a ghost's release frees the successor's claim and a third request calls the
+  -- provider while the successor is still in flight (§9.2 bullet 4 defeated), and a ghost's
+  -- completion stores its own stale body for twenty-four hours while the successor's real answer is
+  -- silently discarded. A stale writer now matches zero rows, which is already the safe outcome
+  -- everywhere else in this file.
+  --
+  -- No `DEFAULT`: every claim path supplies `gen_random_uuid()` explicitly, so a path that forgets to
+  -- mint a new token fails to insert rather than silently reusing the last one.
+  claim_token           uuid        NOT NULL,
+
   -- `in_flight`  — a request holding this key is running; a second one is §9.2's fourth bullet.
   -- `completed`  — a response is stored; a repeat inside `response_expires_at` replays it.
   -- `released`   — the response was a retryable failure (§9.3) or was not storable, so the key is
