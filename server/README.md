@@ -304,8 +304,10 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 **It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
-`DATABASE_URL` and `RATE_LIMIT_SALT`; it tracks `src/config.ts`, which is the only thing that
-decides what the gateway reads, and the script's own comment carries the command that re-derives it.
+`DATABASE_URL`, `RATE_LIMIT_SALT` and — added by SONNY-130 at the extension point SONNY-306 left —
+`OPENAI_API_KEY` and `TAVILY_API_KEY`, the two credentials the four model routes need. It tracks
+`src/config.ts`, which is the only thing that decides what the gateway reads, and the script's own
+comment carries the command that re-derives it.
 Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the script or printed
 by it — and only when it is set to something non-empty. Nothing is refused when one is missing: the
 absent ones are named, by name only, and the container starts anyway.
