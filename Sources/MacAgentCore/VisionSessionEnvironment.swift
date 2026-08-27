@@ -25,6 +25,15 @@ public struct VisionCapturePreview: Equatable, Sendable {
     /// screenshot with a promise attached.
     public let redactionReport: [RedactionReportEntry]
     public let iteration: Int
+    /// The session's own iteration budget, carried for the same reason ``VisionSessionProgress``
+    /// carries it: so the panel can say "Step 2 of 8" rather than inventing the second half.
+    ///
+    /// **It was not here, and the panel filled the gap with the app's name** (SONNY-303). Safe
+    /// mode's pre-send review read "Step 2 of Safari" — the app rendered where the cap belongs —
+    /// because the cap was genuinely unavailable at the point the line was built and something had
+    /// to go there. `containment.limits.maximumIterations` is in scope at the one construction site,
+    /// so this is a field the type should always have had rather than a value anyone has to derive.
+    public let maximumIterations: Int
 
     public init(
         appDisplayName: String,
@@ -33,7 +42,8 @@ public struct VisionCapturePreview: Equatable, Sendable {
         pixelWidth: Int,
         pixelHeight: Int,
         redactionReport: [RedactionReportEntry],
-        iteration: Int
+        iteration: Int,
+        maximumIterations: Int
     ) {
         self.appDisplayName = appDisplayName
         self.windowTitle = windowTitle
@@ -42,6 +52,7 @@ public struct VisionCapturePreview: Equatable, Sendable {
         self.pixelHeight = pixelHeight
         self.redactionReport = redactionReport
         self.iteration = iteration
+        self.maximumIterations = maximumIterations
     }
 }
 

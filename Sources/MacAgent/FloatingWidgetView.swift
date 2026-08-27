@@ -1465,7 +1465,20 @@ private struct WidgetCaptureReviewPanel: View {
             }
 
             HStack(spacing: 8) {
-                Text("Step \(preview.iteration) of \(preview.appDisplayName)")
+                // **The shared owner's sentence, not a hand-written one** (SONNY-303). This line
+                // interpolated `preview.appDisplayName` where the iteration cap belongs, so Safe
+                // mode's pre-send review read "Step 2 of Safari". The cap was genuinely missing from
+                // `VisionCapturePreview` and appears to have been substituted for rather than
+                // dropped; it is a field on the type now, and this reads it through the same
+                // `ScreenControlSessionPresentation.stepLine` the HUD and both approval panels use,
+                // which is the point — one sentence, one owner. The old text is not quoted here on
+                // purpose: `WidgetSessionApprovalPanelTests` counts that literal across this whole
+                // file and the count is the guard, so a comment carrying a copy of it would be
+                // arguing with the scan about what the file contains.
+                Text(ScreenControlSessionPresentation.stepLine(
+                    iteration: preview.iteration,
+                    maximumIterations: preview.maximumIterations
+                ))
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
                     .lineLimit(1)
