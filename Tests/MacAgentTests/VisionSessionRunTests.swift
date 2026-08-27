@@ -3003,6 +3003,168 @@ struct VisionSessionRunTests {
         // And the second run really was planned rather than replayed.
         #expect(fixture.viewModel.finalSummary == "It was already open.")
     }
+
+    // MARK: - The HUD for a session the widget did not start (SONNY-299)
+
+    /// **A screen session started from Command Center shows its HUD, and this is the door that
+    /// proves it is reachable.**
+    ///
+    /// `AgentViewModel.hasVisibleWidgetPanel` had no `visionSessionProgress` term at all, so a live
+    /// session with nothing parked on it fell through to the origin-gated running branch, which
+    /// answers `activeTaskOrigin == .widget`. `FloatingWidgetView.state` resolved to `.controlling`
+    /// and the panel that draws it was never rendered: Sonny moved the cursor with the widget
+    /// sitting as its ordinary pill — no statement of what it was controlling, no Pause, no Stop.
+    ///
+    /// Run again on a screen-control task is the reachable path, not a synthetic origin: it
+    /// dispatches `origin: .commandCenter` with a comment saying why, and the command text re-plans
+    /// into a session of its own (`runningAgainAScreenControlTaskStartsAFreshSessionAndExtendsNoJournal`
+    /// is the same flow, asserted on the journal instead).
+    ///
+    /// **The moment is caught deterministically rather than by racing the loop.** A mid-loop
+    /// approval suspends the second session on a continuation with both `approvalRequest` and
+    /// `visionSessionProgress` set; allowing it clears the question synchronously, before the loop
+    /// can advance, which is the one instant where `.controlling` is provably the state and no wall
+    /// clock decides it. Every other branch that could have carried the panel is asserted absent at
+    /// that instant, so the `#expect` below can only be answered by the session term.
+    @Test
+    func aScreenSessionStartedFromCommandCenterShowsItsHudOnTheWidget() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                // The first run, so there is a screen-control row to press Run again on.
+                #"{"action":"done","rationale":"It was already open."}"#,
+                // The run-again session: one destructive action to park on, then finish.
+                #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"remove it"}"#,
+                #"{"action":"done","rationale":"Deleted."}"#
+            ],
+            // Run again dispatches the record's command text, so something has to turn that text
+            // back into a vision plan.
+            delegationPlanner: VisionOnlyPlanner()
+        )
+        defer { fixture.tearDown() }
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+        let row = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(row.visionSessionID != nil, "the first run really was a screen-control task")
+
+        fixture.viewModel.runTaskAgain(row)
+        try await waitUntil("the run-again session's mid-loop approval") {
+            fixture.viewModel.approvalRequest != nil
+        }
+        // The premise: this is a Command-Center-origin session, which is what the old predicate
+        // answered `false` for.
+        #expect(fixture.viewModel.activeTaskOrigin == .commandCenter)
+        let parked = try #require(fixture.viewModel.visionSessionProgress)
+        #expect(parked.appDisplayName == "Safari")
+
+        fixture.viewModel.start()
+
+        // Synchronously after the press: the question is gone, the session is not.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.visionCapturePreview == nil)
+        #expect(fixture.viewModel.visionDelegationRequest == nil)
+        #expect(fixture.viewModel.visionSessionPause == nil)
+        #expect(fixture.viewModel.clarificationQuestion == nil)
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.activeTaskOrigin == .commandCenter)
+
+        // The fix. Before it, every assertion above held and this one was `false`.
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+        guard case .controlling(let progress) = widget.state else {
+            Issue.record("the widget resolved to \(widget.state) during a Command-Center-origin session")
+            return
+        }
+        #expect(progress.appDisplayName == "Safari")
+        #expect(progress.iteration >= 1)
+
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(!fixture.viewModel.hasVisibleWidgetPanel, "the HUD clears with the session")
+    }
+
+    /// **The widget's own door still shows the HUD**, asserted here rather than assumed from the
+    /// test above: the fix adds an unconditional branch, and an unconditional branch is only worth
+    /// having if the case that already worked still does. Same instant, same construction, the one
+    /// difference being the origin the session was started with.
+    @Test
+    func aScreenSessionStartedFromTheWidgetStillShowsItsHud() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"remove it"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
+
+        fixture.viewModel.startVisionSession(goal: "delete the draft", appName: "Safari", origin: .widget)
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+
+        #expect(fixture.viewModel.activeTaskOrigin == .widget)
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+        guard case .controlling = widget.state else {
+            Issue.record("the widget resolved to \(widget.state) during a widget-origin session")
+            return
+        }
+
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **The session term sits where `state` puts `.controlling`, and carries no origin.**
+    ///
+    /// The two tests above are about the origin that is reachable today. This is about the two
+    /// properties agreeing, which is what their doc comments promise each other and what was false
+    /// for the whole life of the HUD. Asserted by *position within the property*, not by presence: a
+    /// term placed below the origin-gated running branch would be dead code that reads like a fix,
+    /// and a term placed above the parked questions would answer a question the user is looking at
+    /// with a progress line.
+    ///
+    /// The origin half is asserted as the shape of the branch — `return true`, with no
+    /// `activeTaskOrigin` between it and the `if` — because origin-agnosticism is the one property
+    /// a behaviour test cannot finish: `.scheduled` is unreachable for screen control by three
+    /// independent refusals (`StoredRoutine.forbiddenStepOperations`, `performScheduledRun`'s belt,
+    /// and its fixed `.approved(.tier2)` ceiling), so no run can be built that would exercise it.
+    @Test
+    func thePanelPredicatePutsTheLiveSessionWhereTheWidgetsOwnPrecedenceDoes() throws {
+        let predicate = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var hasVisibleWidgetPanel: Bool {"
+        )
+        let parked = try #require(predicate.range(of: "if visionCapturePreview != nil"))
+        let approval = try #require(predicate.range(of: "if approvalRequest != nil {"))
+        let session = try #require(predicate.range(of: "if visionSessionProgress != nil {"))
+        let clarification = try #require(predicate.range(of: "if clarificationQuestion != nil {"))
+        let running = try #require(predicate.range(of: "if isRunning {"))
+
+        #expect(parked.lowerBound < session.lowerBound, "a parked question outranks the progress line")
+        #expect(approval.lowerBound < session.lowerBound, "so does an approval (SONNY-255)")
+        #expect(session.lowerBound < clarification.lowerBound)
+        #expect(session.lowerBound < running.lowerBound, "above the origin gate, or it is unreachable")
+
+        // Unconditional: what follows the branch is `return true`, and nothing between the two
+        // mentions the origin.
+        let branch = predicate[session.upperBound...]
+        let body = try #require(branch.range(of: "}"))
+        #expect(branch[..<body.lowerBound].contains("return true"))
+        #expect(!branch[..<body.lowerBound].contains("activeTaskOrigin"))
+
+        // And the same ordering on the widget's side, so "mirrors exactly" is checked on both
+        // properties rather than asserted on one and trusted on the other.
+        let state = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "var state: WidgetState {"
+        )
+        let statePermission = try #require(state.range(of: "return .permission(approvalRequest)"))
+        let stateControlling = try #require(state.range(of: "return .controlling(progress)"))
+        let stateClarification = try #require(state.range(of: "return .clarification(question)"))
+        let stateWorking = try #require(state.range(of: "return .working"))
+        #expect(statePermission.lowerBound < stateControlling.lowerBound)
+        #expect(stateControlling.lowerBound < stateClarification.lowerBound)
+        #expect(stateControlling.lowerBound < stateWorking.lowerBound)
+    }
 }
 
 /// A planner that answers every instruction with a vision-bearing plan.
