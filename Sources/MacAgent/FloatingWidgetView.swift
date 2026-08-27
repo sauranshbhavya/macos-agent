@@ -1958,7 +1958,7 @@ private struct WidgetResultPanel: View {
 /// search answered four — two calls plus two doc-comment mentions — and the live count was 2. At
 /// this head the live count is 4, which is those two plus this panel's pair:
 /// `git grep -cE '^[[:space:]]*\.help\(' -- Sources/MacAgent/FloatingWidgetView.swift` → 4 at
-/// `8ecc008`. The POSIX class rather than `\s` is not decoration — `git grep`'s ERE engine answers
+/// `83355ff`. The POSIX class rather than `\s` is not decoration — `git grep`'s ERE engine answers
 /// **0** for the same pattern written with `\s`, exit 1 and no output, which reads exactly like a
 /// file with no `.help` call in it. A plain search over this file answers more than four now and
 /// will keep drifting, because this correction added doc-comment mentions of its own; the call
