@@ -466,7 +466,12 @@ enum TaskRecordingPresentation {
 /// **The words are shared; the views are not, and that split is the whole design of this type.** The
 /// floating widget is System B and Command Center is System A, and
 /// `.claude/rules/macagent-ui-conventions.md` forbids either one's tokens leaving its own surface —
-/// so `WidgetSessionIdentityLine` and `CommandCenterSessionContextRow` are two views by necessity.
+/// so `WidgetSessionIdentityLine` (`FloatingWidgetView.swift`) and `CommandCenterSessionContextRow`
+/// (`CommandCenterView.swift`) are two views by necessity. **The second of those did not exist when
+/// this sentence first named it** (PR #132 cycle 2, N1): Command Center's half was an inline `HStack`
+/// inside `CommandCenterAttentionPanel.permissionContent`, so the doc comment of the type built to
+/// stop shared-words drift was itself carrying a fabricated symbol. It was extracted rather than the
+/// sentence weakened, which is the direction this branch's whole subject argues for.
 /// What must not be two is the *sentence*: a user who reads "Sonny is controlling Safari" in the
 /// widget and something else in Command Center is looking at one session described two ways, and
 /// nothing in either file would have caught the divergence. So the strings live here, once, and each
