@@ -955,7 +955,21 @@ without which the items cannot be run at all.
 1. A gateway has to be answering. There is no staging or production host yet (`./scripts/deploy.sh
    staging` and `production` are stubs that exit 3, and the first real remote deploy is owed on
    SONNY-192), so the target is the local one: `cd server && ./scripts/deploy.sh local`, which
-   builds the image, runs it, and verifies `/v1/health` serves that build.
+   builds the image, runs it, and verifies `/v1/health` serves that build. **That is the one
+   command, and there is no second hand-run step** (new 2026-08-27, SONNY-306): it also forwards
+   the gateway's own credentials out of the shell you run it from — `SUPABASE_JWT_SECRET`,
+   `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `DATABASE_URL` and `RATE_LIMIT_SALT` — each one
+   only when you have exported it, naming any it did not find and refusing nothing. Export them in
+   that terminal first if you have them; the script never asks for one, stores one or prints one.
+   **But four of the rows below still cannot be run.** The command ends by asking the container
+   what `POST /v1/auth/email/start` answers and printing it, and today that is a **404** however
+   many credentials were forwarded — `server.ts` mounts no auth route and no real mail adapter
+   exists, so there is nothing for the credentials to reach. When you see that 404 line it is this
+   deployment working as it currently is, **not a defect to report**. Four of the sign-in rows below
+   need a live gateway and stay unrunnable until SONNY-307 lands, named rather than counted so the
+   list checks itself: signing in with a real address, the relaunch headline check, sign-out, and
+   the wrong/expired/reused-code one. The three that need only the app can be run today — the two
+   pointed at a host which does not answer, and the narrow-window layout one.
 2. The debug build has to be pointed at it. `defaults write com.sonny.MacAgent SonnyBackendBaseURL
    http://127.0.0.1:8080` — a `defaults` value rather than an environment variable **because the
    relaunch in item 2 loses an environment variable**: `/usr/bin/open -n` starts the new process
@@ -964,8 +978,18 @@ without which the items cannot be run at all.
    builds have no such switch and no such line.
 
 Everything below is in the packaged `.app` (`./scripts/package-app.sh`, then open the bundle) —
-a bare `swift run` has no bundle identity and several of these paths need one. Sign-in is opened
-from the bottom-left account row → **Sign in**.
+a bare `swift run` has no bundle identity and several of these paths need one — **except the first
+row, which is a Terminal check of the setup in item 1 above.** Sign-in is opened from the
+bottom-left account row → **Sign in**.
+
+- [ ] **(new 2026-08-27, SONNY-306) — Terminal, not the app.** Run `cd server && ./scripts/deploy.sh
+      local` twice from the same terminal: once with none of the five variables exported, and once
+      with whichever of them you actually hold exported first. Both runs must end with `==> ok —
+      serving <sha>`. The first must say `forwarding 0 of 5` and then list all five names on the
+      `not set here` line; the second must say `forwarding N of 5` and list only the ones you left
+      out. **No run may print a credential's value anywhere** — that is the row's real subject, so
+      read the output rather than skimming it. Both runs also end with the `auth routes are NOT
+      mounted` line and a 404, which is correct today and is SONNY-307's to change.
 
 - [ ] **(new 2026-08-26, SONNY-128)** Sign in with a real address: type it, press **Send code**,
       read the code out of the mail, type it, press **Sign in**. The dialog's title becomes
