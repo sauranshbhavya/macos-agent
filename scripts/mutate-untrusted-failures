@@ -44,7 +44,7 @@
 #                   protecting, and nothing says so.
 #   >>> sites       how many times that `source` appears in the test tree, asserted exactly. The
 #                   `source` check alone only asks whether the text survives *somewhere*, and four
-#                   of the five records below have more than one site — so rewording one of six
+#                   of the six records below have more than one site — so rewording one of six
 #                   copies left the suite green while that copy's failures went back to counting as
 #                   kills, measured by rewording one (PR #112 review, F4). A count is what makes the
 #                   reword visible. When this number changes, the change itself is the question:
@@ -58,10 +58,15 @@
 # not a quarantine for broken tests — a red test that is genuinely red still has to be fixed, and
 # nothing here stops it failing the suite.
 
+>>> signature This is main-actor starvation and not a stuck loop
+>>> source This is main-actor starvation and not a stuck loop
+>>> sites 1
+>>> reason HangBackstop's own name for a wait that ran out of wall clock without ever getting enough turns on the shared main actor to observe anything (SONNY-302). It is a measurement of the actor's queue depth and says nothing whatever about the code under test, which is what the message itself tells a reader. Declared on the construct rather than on having watched a battery lose to it: the construct is new, and the failure it replaces was the single largest source of untrusted red in this suite.
+
 >>> signature This deadline is a deadlock backstop, not a timing assertion
 >>> source This deadline is a deadlock backstop, not a timing assertion
 >>> sites 2
->>> reason A poll that ran out of wall clock, in VisionSessionRunTests' waitUntil and in AgentActionExecutorTests' waitForLaunchSignal. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. One flagged run at 98c50c8 with a cold swift build beside it went red across most of VisionSessionRunTests on this message alone, while the runs either side of it passed; that run's log was a scratch artifact and is not in this repository, so no count is quoted from it. The reach is: 62 waitUntil call sites among 74 test functions in that one file (git grep -c 'waitUntil(' and git grep -c '@Test' over Tests/MacAgentTests/VisionSessionRunTests.swift at 98c50c8).
+>>> reason A poll that ran out of wall clock, in HangBackstop.wait — which VisionSessionRunTests' waitUntil now forwards to — and in AgentActionExecutorTests' waitForLaunchSignal. Since SONNY-302 the first of those fires only after the wait has evaluated its condition at least 500 times, which is far stronger evidence than the bare clock it replaced, and the question of whether that makes it trustworthy was measured rather than assumed. It does not, and the reason is a cascade: a wait that gives up leaves its test running against a precondition that never arrived, and every later wait in that test then times out at a perfectly healthy six-millisecond cadence, which reaches the floor easily. Measured on this branch with f65e72e checked out plus a counting-only probe patch, in the fourth of five instrumented runs: 19 of 19 timeouts that had collected a thousand observations or more were preceded, inside the same test, by one that had collected two or fewer. So load can still reach this wording, one step removed, and understating coverage stays the safe direction. The reach is 65 call-site lines among 77 test functions in that one file (grep -cE 'waitUntil[(]' and grep -c '^    @Test' over Tests/MacAgentTests/VisionSessionRunTests.swift on this branch; the patterns are bracketed and anchored so that prose about them is not counted as a call site), plus the one waitForLaunchSignal site.
 
 >>> signature did not become idle before timeout
 >>> source did not become idle before timeout

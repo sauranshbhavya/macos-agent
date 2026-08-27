@@ -13,7 +13,7 @@ import Testing
 ///
 /// So every record carries a `source` line — literal text that must still exist under `Tests/` —
 /// and a `sites` count of how many times it appears there. The count is the half that bites. A
-/// presence check alone asks only whether the text survives *somewhere*, and four of the five
+/// presence check alone asks only whether the text survives *somewhere*, and four of the six
 /// records have more than one site, so rewording one of six copies left this suite green while that
 /// copy's failures went quietly back to counting as kills (PR #112 review, F4).
 ///
