@@ -293,10 +293,12 @@ enum ComposerPresentation {
         /// condition before calling it `.waitingOnYou`, so the sentence is carried by the ordering
         /// rather than by a claim about it.
         ///
-        /// **That an approval during a screen-control session reaches no widget surface at all is a
-        /// separate, pre-existing defect** — SONNY-255, filed high — and nothing here fixes it or
-        /// implies otherwise. This case only stops the composer pointing at a panel that cannot
-        /// answer.
+        /// **The example above is history now, and the ordering it describes has moved** —
+        /// SONNY-255 put `.permission` above `.controlling`, because an approval raised inside a
+        /// session was a question the widget rendered nowhere at all. So an approval is
+        /// `.waitingOnYou` whether or not a session is live, and the composer points at a panel that
+        /// really is on screen in both cases. What has not changed is the argument: this case is
+        /// carried by a branch order rather than by a predicate, and the order is `state`'s.
         case waitingOnYou
 
         /// A run is in flight and there is nothing here for the user to type into.
@@ -304,9 +306,14 @@ enum ComposerPresentation {
         /// Deliberately *not* folded into `waitingOnYou`, for two separate reasons. The running
         /// branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action
         /// started shows no widget panel at all and a sentence pointing "above" would point at
-        /// nothing. And a live screen-control session lands here even while something is pending
-        /// underneath it, because the panel it puts on screen is a progress HUD rather than a
-        /// question — see `waitingOnYou` above.
+        /// nothing. And a live screen-control session lands here, because the panel it puts on
+        /// screen is a progress HUD rather than a question.
+        ///
+        /// **The second reason covers a narrower window than it used to** (SONNY-255). It read "even
+        /// while something is pending underneath it", which was true and was a defect: what was
+        /// pending was an approval the widget rendered on no surface. An approval now takes the
+        /// panel, so a session lands here only while nothing is parked on the user — which is the
+        /// state this case is meant to describe.
         case working
     }
 
@@ -452,6 +459,59 @@ enum TaskRecordingPresentation {
 
 /// The widget's offer to carry on with an unfinished task (row 13, SONNY-210).
 ///
+/// What a live screen-control session says about itself, and what the control that ends it is
+/// called — on **both** surfaces that can be asked something mid-session (SONNY-255, and PR #132's
+/// F1 for the second of them).
+///
+/// **The words are shared; the views are not, and that split is the whole design of this type.** The
+/// floating widget is System B and Command Center is System A, and
+/// `.claude/rules/macagent-ui-conventions.md` forbids either one's tokens leaving its own surface —
+/// so `WidgetSessionIdentityLine` (`FloatingWidgetView.swift`) and `CommandCenterSessionContextRow`
+/// (`CommandCenterView.swift`) are two views by necessity. **The second of those did not exist when
+/// this sentence first named it** (PR #132 cycle 2, N1): Command Center's half was an inline `HStack`
+/// inside `CommandCenterAttentionPanel.permissionContent`, so the doc comment of the type built to
+/// stop shared-words drift was itself carrying a fabricated symbol. It was extracted rather than the
+/// sentence weakened, which is the direction this branch's whole subject argues for.
+/// What must not be two is the *sentence*: a user who reads "Sonny is controlling Safari" in the
+/// widget and something else in Command Center is looking at one session described two ways, and
+/// nothing in either file would have caught the divergence. So the strings live here, once, and each
+/// surface renders them with its own tokens.
+///
+/// **`stopLabel` is a word, not a tone.** It says what the control does — ends the session — which is
+/// the point of it having a word at all: on both surfaces it replaced an unlabelled or
+/// mislabelled refusal that ended the whole session while reading as a per-step decline.
+enum ScreenControlSessionPresentation {
+    /// The first half of the identity line. The app's own name is the second, rendered in each
+    /// surface's emphasis font, which is why this is a prefix rather than a formatted whole.
+    static let controllingPrefix = "Sonny is controlling "
+
+    /// The identity line as one string, for a surface that renders it without the emphasis split —
+    /// and for a test that wants to assert the sentence rather than its halves.
+    static func controllingMessage(appDisplayName: String) -> String {
+        controllingPrefix + appDisplayName
+    }
+
+    /// How far into the session's own budget this iteration is.
+    static func stepLine(iteration: Int, maximumIterations: Int) -> String {
+        "Step \(iteration) of \(maximumIterations)"
+    }
+
+    /// The control that ends the session, on both surfaces.
+    static let stopLabel = "Stop"
+
+    /// Its VoiceOver name, which names the app because "Stop" alone does not say what stops.
+    static func stopAccessibilityLabel(appDisplayName: String) -> String {
+        "Stop Sonny controlling \(appDisplayName)"
+    }
+
+    /// The HUD's Pause, which exists on the widget's controlling panel and on neither surface's
+    /// approval panel — see `WidgetControllingPanel` for why a control that acts at the top of the
+    /// next iteration is not offered while the loop is parked on a continuation.
+    static func pauseAccessibilityLabel(appDisplayName: String) -> String {
+        "Pause Sonny controlling \(appDisplayName)"
+    }
+}
+
 /// **The founder's own sentence, and it says exactly what pressing Continue does.** The decision of
 /// 2026-08-22 is that Sonny *offers* the unfinished task the next time the user opens the floating
 /// widget — "you were partway through X, continue?" — rather than waiting in a list to be found and

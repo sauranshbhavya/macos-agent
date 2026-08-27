@@ -1919,6 +1919,134 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.errorMessage == nil)
     }
 
+    // MARK: - The widget while a mid-loop approval is parked (SONNY-255)
+
+    /// **The panel the user is actually looking at, asked of the widget rather than of its source.**
+    ///
+    /// This is the assertion the defect needed and did not have. `FloatingWidgetView.state` is an
+    /// ordered chain, `.controlling` sat above `.permission`, and `visionSessionProgress` is written
+    /// at the top of every iteration and cleared only at session end — so from iteration 1 the
+    /// widget showed the HUD, a panel with no question in it, while the loop waited on an answer.
+    /// Every source scan in the suite agreed, correctly, that each branch was where the file said it
+    /// was; none of them could say what the widget *resolved to*, which is why `state` is now
+    /// internal and this test reads it.
+    ///
+    /// The run is the ordinary mid-loop consequence-rule approval — the common path, not an edge:
+    /// the per-action gate raises it after the iteration's own progress report, so both values are
+    /// set together every time.
+    @Test
+    func theWidgetShowsTheApprovalRatherThanTheHudWhileAMidLoopQuestionIsParked() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"remove it"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
+
+        fixture.viewModel.startVisionSession(goal: "delete the draft", appName: "Safari")
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+
+        // Both are set — which is the whole premise, and is what made the old ordering unreachable
+        // rather than merely unlucky.
+        let progress = try #require(fixture.viewModel.visionSessionProgress)
+        #expect(progress.appDisplayName == "Safari")
+        let request = try #require(fixture.viewModel.approvalRequest)
+
+        guard case .permission(let shown) = widget.state else {
+            Issue.record("the widget resolved to \(widget.state) with an approval pending mid-session")
+            return
+        }
+        // The same request, not merely *a* permission state: one approval object reaches both
+        // surfaces, which is what "no second approval surface" means concretely.
+        #expect(shown.approvalCopy.actionDescription == request.approvalCopy.actionDescription)
+        #expect(shown.approvalCopy.actionDescription.contains("Delete"))
+
+        // And the composer agrees with the panel above it rather than describing the HUD.
+        #expect(ComposerPresentation.prompt(for: widget.composerState) == "Answer above first\u{2026}")
+
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.synthesizer.clickCount == 1)
+    }
+
+    /// **The HUD comes back the moment the question is answered, and the session carries on.**
+    ///
+    /// The other half of the reorder: `.permission` outranking `.controlling` is only correct if the
+    /// approval clears when it is answered — otherwise a stale question would cover the progress
+    /// line for the rest of the session, which is the same defect pointing the other way.
+    /// `resolveVisionApproval` clears `approvalRequest` synchronously before resuming the
+    /// continuation, and this is what says so from the widget's side.
+    @Test
+    func answeringTheApprovalPutsTheHudBackAndTheSessionContinues() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"remove it"}"#,
+            #"{"action":"click","x":20,"y":20,"target":"Bookmarks","consequence":"ordinary","rationale":"carry on"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
+
+        fixture.viewModel.startVisionSession(goal: "delete then browse", appName: "Safari")
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+
+        fixture.viewModel.start()
+
+        // Synchronously after the press, before the loop has had a chance to advance: the question
+        // is gone and the HUD is what the widget draws again.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        guard case .controlling = widget.state else {
+            Issue.record("the widget resolved to \(widget.state) immediately after the approval was allowed")
+            return
+        }
+
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.synthesizer.clickCount == 2)
+        #expect(fixture.viewModel.finalSummary == "Deleted.")
+        // Session over: neither panel is on screen anymore.
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(fixture.viewModel.approvalRequest == nil)
+    }
+
+    /// **Stop stays reachable while the question is up**, which is the constraint the reorder had to
+    /// respect: the HUD it displaces is where the emergency control for a program driving the user's
+    /// screen lived.
+    ///
+    /// Driven through the closure the panel is actually handed — `emergencyStopVisionSession`, the
+    /// same call the HUD's own Stop makes — rather than through `cancelCurrentRun`, so what is
+    /// exercised is the wiring and not just the underlying stop. The session ends, the click the
+    /// approval was asking about never happens, and the run reports being stopped rather than
+    /// reporting that the user declined an action.
+    @Test
+    func stopFromTheApprovalPanelEndsTheSessionWithoutTakingTheAction() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"remove it"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "delete the draft", appName: "Safari")
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+
+        // Live by the same predicate the panel's Stop is gated on, so the guard inside it is
+        // satisfied for the reason the panel assumes rather than by accident.
+        #expect(fixture.viewModel.isVisionSessionLive)
+        fixture.viewModel.emergencyStopVisionSession()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 0, "the action under question was never taken")
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(!fixture.viewModel.isVisionSessionLive)
+        // A stop reads as a stop, on both surfaces that record one. The task's own summary is the
+        // cancellation sentence every cancelled run gets, and the session's journal closes as
+        // `user_stopped` rather than as the declined-action refusal a `nil` decision would produce
+        // if the cancellation check inside `requestVisionActionApproval` were not there.
+        #expect(fixture.viewModel.finalSummary == "Canceled.")
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "user_stopped")
+        #expect(record.entries.isEmpty, "the action under question left no entry — it never ran")
+    }
+
     /// **Permission revocation takes the same stop path.** §13.5's invariant is one implementation of
     /// "control was lost, for any reason" — with a distinct reason code and copy routing the user to
     /// the Permission Center.
