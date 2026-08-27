@@ -37,6 +37,12 @@ struct SignInCopyTests {
         #expect(SignInCopy.message(for: .emailInvalid) == "That doesn't look like an email address.")
         #expect(SignInCopy.message(for: .codeAlreadyUsed) == "That code has already been used. Send a new one.")
         #expect(SignInCopy.message(for: .tooManyAttempts) == "Too many attempts. Try again in a few minutes.")
+        // **A spend cap is not a rate limit and must not borrow its sentence** (PR #133, F9). §7.2
+        // case 3a gives `limit.spend` no `Retry-After` precisely because waiting does not fix it,
+        // so "try again in a few minutes" would be a false promise the moment SONNY-130 or
+        // SONNY-136 reuse this mapping.
+        #expect(SignInCopy.message(for: .outOfAllowance) == "You've used up this period's allowance.")
+        #expect(!SignInCopy.message(for: .outOfAllowance).contains("Try again"))
         #expect(SignInCopy.message(for: .notConfigured) == "Sign-in isn't available in this build.")
         #expect(SignInCopy.message(for: .signedOut) == "You're signed out. Sign in again.")
         #expect(SignInCopy.message(for: .unexpected) == "Sonny couldn't finish signing you in. Try again.")
@@ -47,6 +53,17 @@ struct SignInCopyTests {
     func everyFailureHasADistinctMessage() {
         let all = Self.everyFailure.map(SignInCopy.message(for:))
         #expect(Set(all).count == Self.everyFailure.count, "duplicated wording across cases: \(all)")
+    }
+
+    /// The population is the enum's own, so a case added later is covered by every test above
+    /// without anyone remembering to add it. A floor rather than an equality: cases get added, and
+    /// the exact number is not the property under test — that the list is not a stale literal is.
+    @Test
+    func theCopyTestsPopulationIsTheEnumsOwn() {
+        #expect(Self.everyFailure.count == SignInFailure.allCases.count)
+        #expect(Self.everyFailure.count >= 11)
+        #expect(Set(Self.everyFailure).count == Self.everyFailure.count)
+        #expect(Self.everyFailure.contains(.outOfAllowance))
     }
 
     /// **The server's own sentence never reaches the user.** Every failure below is built from a
@@ -102,7 +119,7 @@ struct SignInCopyTests {
         ("auth.code_expired", SignInFailure.codeExpired),
         ("auth.code_used", SignInFailure.codeAlreadyUsed),
         ("limit.rate", SignInFailure.tooManyAttempts),
-        ("limit.spend", SignInFailure.tooManyAttempts),
+        ("limit.spend", SignInFailure.outOfAllowance),
         ("request.invalid", SignInFailure.emailInvalid),
         ("auth.unauthenticated", SignInFailure.signedOut),
         ("auth.token_expired", SignInFailure.signedOut),
@@ -209,10 +226,12 @@ struct SignInCopyTests {
         }
     }
 
-    static let everyFailure: [SignInFailure] = [
-        .emailInvalid, .codeIncorrect, .codeExpired, .codeAlreadyUsed, .tooManyAttempts,
-        .offline, .backendUnreachable, .notConfigured, .signedOut, .unexpected
-    ]
+    /// **`allCases`, not a hand-kept list** (PR #133, F10). The compiler catches a new case with no
+    /// `message(for:)` arm; it catches none of the three things the tests below exist for — a
+    /// message that duplicates another, one carrying a banned word, or one that has grown into a
+    /// paragraph. A literal list silently stops covering the enum the moment it grows, which is
+    /// exactly what happened when `.outOfAllowance` was split out of `.tooManyAttempts` for F9.
+    static let everyFailure: [SignInFailure] = SignInFailure.allCases
 
     /// Every code the contract's §7.2 tables name.
     static let everyWireCode = [

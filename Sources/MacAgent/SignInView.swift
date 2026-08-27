@@ -46,12 +46,19 @@ final class SonnyAccountModel: ObservableObject {
     ///
     /// Mirrors `AgentViewModel.atItsRealStoreLocations()` exactly, including why it exists: one
     /// named place where the real locations are allowed, rather than several where they arrive by
-    /// silence. `SignInReleaseSwitchScanTests` holds `Sources/` as the population, so only
-    /// `main.swift` may name it.
+    /// silence. `SignInSurfaceTests.onlyMainAsksForTheRealKeychain` holds `Sources/` as the
+    /// population — exact equality on `["SignInView.swift": 1, "main.swift": 1]`, so it fails in
+    /// both directions — and only `main.swift` may call it. (This named
+    /// `SignInReleaseSwitchScanTests`, whose population is the five staging-pointer tokens and not
+    /// this one; PR #133, F7.)
     static func atItsRealKeychainLocation() -> SonnyAccountModel {
         SonnyAccountModel(service: SonnyAccountService(client: SonnyBackendClient(
             environment: SonnyBackendHost.resolve(),
-            tokenStore: KeychainAccountTokenStore()
+            tokenStore: KeychainAccountTokenStore(),
+            // Named rather than defaulted: the client's `= .shared` default is a session backed by
+            // a 20 MB disk cache that nobody chose, which SONNY-130 and SONNY-134's authenticated
+            // `GET`s would fill with the user's own data (PR #133, F11).
+            session: SonnyBackendSession.forBackendCalls()
         )))
     }
 

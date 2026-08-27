@@ -733,6 +733,287 @@ struct SonnyBackendClientTests {
         #expect(counts.count("attempt") == 0)
     }
 
+    // MARK: - Sign-out racing a refresh (PR #133, F1)
+
+    /// **The defect F1 reproduced, as a test.** A refresh already in flight when the user presses
+    /// Sign out used to reach `adopt` *after* the Keychain had been cleared and write the rotated
+    /// session straight back: `keychain_holds_session_after_signout=true`, and `restore()` signed
+    /// the user in again at the next launch. The UI said signed out and a live credential sat on
+    /// disk.
+    ///
+    /// The ordering is enforced rather than raced. The refresh is held at the stub until the test
+    /// has seen it arrive, sign-out runs to completion while it is held, and only then is it
+    /// released — so the write it attempts is unambiguously after the clear. Both waits poll or
+    /// carry a backstop, and the test asserts the backstop did not fire.
+    @Test
+    func aRefreshInFlightWhenTheUserSignsOutCannotWriteTheSessionBack() async throws {
+        let harness = try Harness()
+        try await harness.signIn(accessToken: "expired-access", expiresIn: 3600)
+        let counts = StubCounter()
+        let releaseRefresh = StubSignal()
+        let refreshWasReleased = StubCounter()
+
+        harness.serve { request in
+            switch request.url?.path {
+            case "/v1/auth/refresh":
+                counts.increment("refresh-arrived")
+                if releaseRefresh.waitUntilSignalled() { refreshWasReleased.increment("released") }
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(
+                        accessToken: "rotated-access",
+                        refreshToken: "rotated-refresh"
+                    )
+                )
+            case "/v1/auth/signout":
+                return .reply(statusCode: 204, headers: [:], body: Data())
+            default:
+                counts.increment("protected")
+                return .reply(
+                    statusCode: 401,
+                    headers: [:],
+                    body: SonnyBackendFixtures.errorEnvelopeJSON(code: "auth.token_expired")
+                )
+            }
+        }
+
+        // A detached task rather than `async let`, because `#expect(throws:)` is a macro and cannot
+        // capture one.
+        let refreshingRequest = Task { [harness] in
+            _ = try await harness.client.send(harness.bearerRequest())
+        }
+
+        let refreshIsInFlight = await pollUntil { counts.count("refresh-arrived") == 1 }
+        #expect(refreshIsInFlight, "the refresh never reached the stub")
+
+        // Sign-out runs to completion while the refresh is parked mid-flight.
+        let outcome = try await SonnyAccountService(client: harness.client).signOut()
+        #expect(outcome == .revoked)
+        #expect(harness.keychainHoldsASession == false)
+
+        releaseRefresh.signal()
+        // The request that triggered the refresh learns that the session it was refreshing is gone.
+        await #expect(throws: SonnyBackendError.notSignedIn) {
+            try await refreshingRequest.value
+        }
+
+        #expect(refreshWasReleased.count("released") == 1, "the refresh's wait timed out instead of being released")
+        // The whole point: the rotated session the server issued is not on disk, and a relaunch
+        // does not sign the user back in.
+        #expect(harness.keychainHoldsASession == false)
+        #expect(try await harness.client.restoredIdentity() == nil)
+        #expect(harness.storedSessionJSON().isEmpty)
+        // And the encryption key is still where it was — three actions, three blast radii.
+        #expect(harness.keychainHoldsTheEncryptionKey)
+    }
+
+    /// The same guard from the other side: an ordinary refresh with nothing racing it still writes.
+    /// Without this, a client that simply never adopted a refreshed session would pass the test
+    /// above.
+    @Test
+    func anUnracedRefreshStillWritesTheRotatedSession() async throws {
+        let harness = try Harness()
+        try await harness.signIn(accessToken: "expired-access", refreshToken: "refresh-0", expiresIn: 3600)
+        let counts = StubCounter()
+        harness.serve { request in
+            if request.url?.path == "/v1/auth/refresh" {
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(
+                        accessToken: "rotated-access",
+                        refreshToken: "rotated-refresh"
+                    )
+                )
+            }
+            let attempt = counts.increment("protected")
+            return attempt == 1
+                ? .reply(
+                    statusCode: 401,
+                    headers: [:],
+                    body: SonnyBackendFixtures.errorEnvelopeJSON(code: "auth.token_expired")
+                )
+                : .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
+        }
+
+        _ = try await harness.client.send(harness.bearerRequest())
+
+        #expect(harness.storedSessionJSON().contains("rotated-refresh"))
+        #expect(harness.storedSessionJSON().contains("rotated-access"))
+        #expect(!harness.storedSessionJSON().contains("refresh-0"))
+    }
+
+    // MARK: - The refresh route itself (PR #133, F2 and F3)
+
+    /// **§2.2: the refresh request carries no `Authorization` header**, "so that an expired or
+    /// missing access token can never be the reason a refresh fails". F3 was that nothing held it:
+    /// a mutant flipping `.none` to `.bearer` left all 2202 tests green. Harmless against today's
+    /// gateway, which lists the route as public — but `performRefresh`'s catch clears the Keychain
+    /// on `auth.unauthenticated`, so a regression would present as a silent forced sign-out about
+    /// an hour into a session.
+    @Test
+    func theRefreshRequestCarriesNoAuthorizationHeader() async throws {
+        let harness = try Harness()
+        try await harness.signIn(accessToken: "nearly-expired", expiresIn: 60)
+        let seen = RecordedRequests()
+        harness.serve { request in
+            seen.record(request)
+            if request.url?.path == "/v1/auth/refresh" {
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "fresh-access")
+                )
+            }
+            return .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
+        }
+
+        _ = try await harness.client.send(harness.bearerRequest())
+
+        let refresh = try #require(seen.recorded.first { $0.url?.path == "/v1/auth/refresh" })
+        #expect(refresh.value(forHTTPHeaderField: "Authorization") == nil)
+        // The refresh token travels in the body, which is the whole reason no header is needed.
+        #expect(BackendStubURLProtocol.bodyJSON(of: refresh)["refresh_token"] as? String == "refresh-0")
+        // And the request that follows it does carry one, so this is not a client that has simply
+        // stopped setting the header anywhere.
+        let protectedRequest = try #require(seen.recorded.last)
+        #expect(protectedRequest.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-access")
+    }
+
+    /// **F2: a refresh is sent exactly once, whatever comes back.** §9.3 calls refresh retry-safe
+    /// *with the same key*, and the key is the mechanism — the server returns the stored response
+    /// instead of rotating again. The gateway reads no `Idempotency-Key` on any route (SONNY-300),
+    /// so a retry is a second POST of the identical refresh token, and §3.3 makes presenting an
+    /// already-rotated token past the ten-second overlap the definition of theft: the whole family
+    /// is revoked and the user is signed out of every device. Measured before the fix: a `503` with
+    /// `Retry-After: 30` produced two identical refresh POSTs 30 s apart.
+    @Test(arguments: [
+        ("server.unavailable", 503, 30.0),
+        ("server.error", 500, nil as Double?),
+        ("provider.unavailable", 502, nil as Double?)
+    ])
+    func aRefreshIsSentOnceAndNeverRetried(code: String, status: Int, retryAfter: Double?) async throws {
+        let sleeps = RecordedSleeps()
+        let harness = try Harness(sleeps: sleeps)
+        try await harness.signIn(accessToken: "nearly-expired", expiresIn: 60)
+        let counts = StubCounter()
+        harness.serve { request in
+            guard request.url?.path == "/v1/auth/refresh" else {
+                return .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
+            }
+            counts.increment("refresh")
+            var headers: [String: String] = [:]
+            if let retryAfter { headers["Retry-After"] = String(Int(retryAfter)) }
+            return .reply(
+                statusCode: status,
+                headers: headers,
+                body: SonnyBackendFixtures.errorEnvelopeJSON(
+                    code: code,
+                    retryable: true,
+                    retryAfterSeconds: retryAfter
+                )
+            )
+        }
+
+        await #expect(throws: SonnyBackendError.self) {
+            _ = try await harness.client.send(harness.bearerRequest())
+        }
+
+        #expect(counts.count("refresh") == 1, "the refresh token was re-presented")
+        #expect(sleeps.recorded.isEmpty, "the client waited before re-presenting a refresh token")
+        // The session is left alone: a failed refresh is recoverable on the next request, and the
+        // access token in hand keeps working until its own expiry.
+        #expect(harness.keychainHoldsASession)
+    }
+
+    /// A server-named delay longer than the request's own timeout stops the retry rather than
+    /// parking the operation for it. `Retry-After` is data from the network with nothing bounding
+    /// it, and an unbounded sleep inside something a user is watching is a hang the client does to
+    /// itself — `Retry-After: 86400` would park a sign-in for a day.
+    @Test
+    func aRetryAfterLongerThanTheRequestsOwnTimeoutStopsTheRetryInsteadOfSleeping() async throws {
+        let sleeps = RecordedSleeps()
+        let harness = try Harness(sleeps: sleeps)
+        let counts = StubCounter()
+        harness.serve { _ in
+            counts.increment("attempt")
+            return .reply(
+                statusCode: 429,
+                headers: ["Retry-After": "86400"],
+                body: SonnyBackendFixtures.errorEnvelopeJSON(
+                    code: "limit.rate",
+                    retryable: true,
+                    retryAfterSeconds: 86400
+                )
+            )
+        }
+
+        do {
+            _ = try await harness.client.send(harness.publicRequest())
+            Issue.record("expected the request to fail")
+        } catch let error as SonnyBackendError {
+            guard case .api(let api) = error else {
+                Issue.record("expected an API error, got \(error)")
+                return
+            }
+            // The delay is preserved on the typed error, so a surface that wants to say how long
+            // still can — it is the sleeping that is refused, not the information.
+            #expect(api.retryAfter == 86400)
+        }
+        #expect(counts.count("attempt") == 1)
+        #expect(sleeps.recorded.isEmpty)
+    }
+
+    /// The boundary, from the other side: a delay inside the request's own timeout is waited out
+    /// and retried, so the cap above is a bound rather than a refusal to honour `Retry-After`.
+    @Test
+    func aRetryAfterInsideTheRequestsTimeoutIsStillHonoured() async throws {
+        let sleeps = RecordedSleeps()
+        let harness = try Harness(sleeps: sleeps)
+        let counts = StubCounter()
+        harness.serve { _ in
+            counts.increment("attempt")
+            return .reply(
+                statusCode: 429,
+                headers: ["Retry-After": "17"],
+                body: SonnyBackendFixtures.errorEnvelopeJSON(
+                    code: "limit.rate",
+                    retryable: true,
+                    retryAfterSeconds: 17
+                )
+            )
+        }
+
+        await #expect(throws: SonnyBackendError.self) {
+            _ = try await harness.client.send(harness.publicRequest())
+        }
+        // 17 is under the auth route's 20-second timeout, so it is honoured exactly.
+        #expect(sleeps.recorded == [17])
+        #expect(counts.count("attempt") == 2)
+    }
+
+    // MARK: - The session the shipping app runs on (PR #133, F11)
+
+    /// `URLSession.shared` is backed by a disk cache nobody chose. The session the app passes keeps
+    /// nothing: no disk cache, no in-memory cache, and a request policy that says so at the request
+    /// level too, so a server's cache headers cannot reintroduce what this removes.
+    @Test
+    func theBackendSessionKeepsNothingOnDisk() {
+        let session = SonnyBackendSession.forBackendCalls()
+        let configuration = session.configuration
+
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
+        // Ephemeral gives cookie and credential stores of its own, in memory — the property worth
+        // asserting is that they are not the process-wide ones the shared session persists to.
+        #expect(configuration.httpCookieStorage !== HTTPCookieStorage.shared)
+        #expect(configuration.urlCredentialStorage !== URLCredentialStorage.shared)
+        // And it is not the shared session, whose cache is the thing being avoided.
+        #expect(session !== URLSession.shared)
+        #expect(URLSession.shared.configuration.urlCache != nil, "URLSession.shared stopped being the hazard this avoids")
+    }
+
     // MARK: - Transport failures
 
     /// §7.2 case 7 is the only entry with no HTTP status, and telling a user the wrong one of

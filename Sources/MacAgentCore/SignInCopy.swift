@@ -7,7 +7,7 @@ import Foundation
 /// hole straight through Sonny's standing rule that the product does not explain itself, editable by
 /// whoever edits the server with no review from anyone who knows that rule. So `code` maps to a case
 /// here, and a case maps to words this repository owns.
-public enum SignInFailure: Equatable, Sendable {
+public enum SignInFailure: Equatable, Sendable, CaseIterable {
     /// What was typed is not an address the backend will accept.
     case emailInvalid
     /// The code was wrong. §7.2's `auth.code_invalid`.
@@ -18,6 +18,12 @@ public enum SignInFailure: Equatable, Sendable {
     case codeAlreadyUsed
     /// A rate limit. `limit.rate`, which is a state that clears by waiting.
     case tooManyAttempts
+    /// A spend cap. `limit.spend`, which is **not** time-bounded — §7.2 case 3a gives it no
+    /// `Retry-After` precisely because waiting seconds does not fix it. Unreachable on the three
+    /// unauthenticated auth routes today; it is here because `SignInFailure` is the only typed-
+    /// error-to-copy mapping in the tree, so SONNY-130 and SONNY-136 will reuse it, and "try again
+    /// in a few minutes" becomes a wrong sentence the moment they do (PR #133, F9).
+    case outOfAllowance
     /// No network on this Mac. Everything Sonny does locally still works.
     case offline
     /// The network is fine and the backend is not: DNS, TLS, a refused connection, a 5xx, a
@@ -55,8 +61,10 @@ public enum SignInFailure: Equatable, Sendable {
             self = .codeExpired
         case .authCodeUsed:
             self = .codeAlreadyUsed
-        case .limitRate, .limitSpend:
+        case .limitRate:
             self = .tooManyAttempts
+        case .limitSpend:
+            self = .outOfAllowance
         case .requestInvalid:
             self = .emailInvalid
         case .authUnauthenticated, .authTokenExpired, .authTokenRevoked:
@@ -93,6 +101,8 @@ public enum SignInCopy {
             return "That code has already been used. Send a new one."
         case .tooManyAttempts:
             return "Too many attempts. Try again in a few minutes."
+        case .outOfAllowance:
+            return "You've used up this period's allowance."
         case .offline:
             return "You're offline. Reconnect and try again."
         case .backendUnreachable:

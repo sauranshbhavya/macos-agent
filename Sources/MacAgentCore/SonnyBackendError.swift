@@ -85,17 +85,6 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         }
     }
 
-    /// Whether a retry of the same operation could succeed, per §9.3's two lists.
-    ///
-    /// **An unrecognised code is not retryable.** Retrying a failure whose meaning this build does
-    /// not know burns a round trip in the best case, and in the worst repeats a side effect the
-    /// server described in words this client cannot read.
-    ///
-    /// **`idempotency.conflict` is the one code whose two sub-cases share it**, so it is the one
-    /// place the envelope's own `retryable` flag decides: §9.2 makes a key seen while its original
-    /// request is still in flight retryable with a `Retry-After`, while the same key with a
-    /// different body is a client bug that a retry cannot fix. Nothing else consults that flag —
-    /// a server bug flipping it on `provider.rejected` must not turn into a retry loop here.
     /// How many times an operation may be sent **in total** when this is what came back.
     ///
     /// Per-code rather than one global ceiling, because §7.2 does not ask for one ceiling: it says
@@ -114,6 +103,25 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         }
     }
 
+    /// Whether a retry of the same operation could succeed, per §9.3's two lists.
+    ///
+    /// **An unrecognised code is not retryable.** Retrying a failure whose meaning this build does
+    /// not know burns a round trip in the best case, and in the worst repeats a side effect the
+    /// server described in words this client cannot read.
+    ///
+    /// **`idempotency.conflict` is the one code whose two sub-cases share it**, so it is the one
+    /// place the envelope's own `retryable` flag decides: §9.2 makes a key seen while its original
+    /// request is still in flight retryable with a `Retry-After`, while the same key with a
+    /// different body is a client bug that a retry cannot fix. Nothing else consults that flag —
+    /// a server bug flipping it on `provider.rejected` must not turn into a retry loop here.
+    ///
+    /// **This member and `maximumAttempts` have to agree**, and their agreement is the invariant
+    /// `SignInCopyTests.aCodesAttemptCeilingAgreesWithWhetherItMayBeRetriedAtAll` holds: a code that
+    /// may not be retried gets exactly one attempt, one that may gets more than one. Without that,
+    /// a code could read as retryable while its ceiling silently refused to retry it — which is the
+    /// state this branch's own M10 mutant created, and which nothing noticed, because retryability
+    /// was only ever observed through an attempt count that masked it (PR #133, F8: this comment was
+    /// merged into `maximumAttempts`' and left the member the mutant was about undocumented).
     public func isRetryable(envelopeSaysRetryable: Bool) -> Bool {
         switch self {
         case .limitRate, .providerUnavailable, .providerTimeout, .serverError, .serverUnavailable:

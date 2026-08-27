@@ -381,6 +381,24 @@ struct SignInSurfaceTests {
         #expect(mentions == ["SignInView.swift": 1, "main.swift": 1], "found \(mentions)")
     }
 
+    /// **The shipping app does not run its backend calls on `URLSession.shared`** (PR #133, F11).
+    /// That session is backed by a 20 MB on-disk cache nobody chose, and SONNY-130 and SONNY-134
+    /// point authenticated `GET`s at this same client. A scan rather than a runtime check because
+    /// the one production site constructs the real Keychain store, which no test may reach.
+    @Test
+    func theProductionClientDoesNotRunOnTheSharedSession() throws {
+        let source = try MacAgentSource.read("SignInView.swift")
+        let factory = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "static func atItsRealKeychainLocation() -> SonnyAccountModel {"
+        )
+
+        #expect(MacAgentSource.count(of: "session: SonnyBackendSession.forBackendCalls()", inText: factory) == 1)
+        #expect(MacAgentSource.count(of: ".shared", inText: factory) == 0)
+        // And nowhere else in the app target names a session for this client either.
+        #expect(MacAgentSource.count(of: "SonnyBackendClient(", inText: source) == 1)
+    }
+
     // MARK: - Harness
 
     private final class Harness {

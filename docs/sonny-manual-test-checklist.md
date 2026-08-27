@@ -984,11 +984,14 @@ from the bottom-left account row → **Sign in**.
       history still has its entries. Sign-out, "delete my local data" and "reset the encryption
       identity" are three different actions, and this row is the check that this one did only its
       own job.
-- [ ] **(new 2026-08-26, SONNY-128)** Point the pointer at something that is *not* loopback
-      (`defaults write com.sonny.MacAgent SonnyBackendBaseURL https://sonny-offline-check.invalid`),
-      **turn wifi off**, relaunch, and open sign-in. The message must read as a human sentence
-      naming the real problem — you are offline — and must not be a status code, a URL, or anything
-      about tokens. Loopback is called out because `127.0.0.1` keeps answering with wifi off, so the
+- [ ] **(new 2026-08-26, SONNY-128; corrected 2026-08-27, PR #133 F6)** Point the pointer at
+      something that is *not* loopback (`defaults write com.sonny.MacAgent SonnyBackendBaseURL
+      https://sonny-offline-check.invalid`), **turn wifi off**, relaunch, open sign-in, type any
+      address and **press Send code**. The message must read as a human sentence naming the real
+      problem — you are offline — and must not be a status code, a URL, or anything about tokens.
+      **Pressing Send code is the point of the row**: opening the dialog fires no request at all,
+      so the original wording asked for an observation the app cannot produce and would have read
+      as a defect. Loopback is called out because `127.0.0.1` keeps answering with wifi off, so the
       obvious version of this check silently tests nothing.
 - [ ] **(new 2026-08-26, SONNY-128)** With wifi back on and the pointer still at a host that does
       not exist, try to send a code. The message must be **different** from the offline one — the
