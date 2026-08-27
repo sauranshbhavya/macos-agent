@@ -107,12 +107,19 @@ export function authWiringFrom(config: Config): AuthWiring | undefined {
     .filter(([, read]) => !read(config))
     .map(([name]) => name);
   if (missing.length > 0) {
+    // Both forms are written out rather than assembled from a plural `s`, because the pronoun has
+    // to agree too and the first version got exactly that wrong: "one variable is missing:
+    // RATE_LIMIT_SALT. Set them" (PR #137 review, residual 1). This message is the whole of what an
+    // operator gets at `exit 78`, so it is worth reading like something a person wrote.
+    const subject =
+      missing.length === 1
+        ? `one variable is missing: ${missing[0]}. Set it`
+        : `${missing.length} variables are missing: ${missing.join(", ")}. Set them`;
     throw new ConfigError(
-      `this deployment is configured for sign-in but ${missing.length === 1 ? "one variable is" : `${missing.length} variables are`} ` +
-        `missing: ${missing.join(", ")}. Set them, or unset every Supabase auth variable to run a ` +
-        "health-only gateway — those are the two supported shapes, and a partial one would answer " +
-        "404 to every sign-in while looking healthy. Values are omitted deliberately; see " +
-        "server/.env.example for the expected shape.",
+      `this deployment is configured for sign-in but ${subject}, or unset every Supabase auth ` +
+        "variable to run a health-only gateway — those are the two supported shapes, and a partial " +
+        "one would answer 404 to every sign-in while looking healthy. Values are omitted " +
+        "deliberately; see server/.env.example for the expected shape.",
     );
   }
 
