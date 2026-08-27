@@ -495,6 +495,20 @@ on screen said so. Both rows are about the same panel, from the two doors.
       resume, then let it finish. The controls have to actually work from this door too, not merely
       be drawn — this is the same panel, reached by a route it was never reachable from before
 
+### 3c-quater. Safe mode's capture review says "Step 1 of 12" (new 2026-08-27, SONNY-303)
+
+`VisionCapturePreview` carried the iteration and no cap, and the panel put the app's *name* where the
+cap belongs — so the pre-send review read "Step 2 of Safari". The founder's decision of 2026-08-27
+was to add the cap to the type rather than drop the "of …" half, so the line now goes through the
+same owner the HUD and both approval panels read. The shipping cap is **12**
+(`VisionSessionLimits.default.maximumIterations`), so that is the number to expect.
+
+- [ ] **(new 2026-08-27, SONNY-303)** Put Sonny in **Safe** mode and start a screen-control task. At
+      the capture review — the panel showing the picture before it is sent — the small line at the
+      bottom left must read **"Step 1 of 12"**, two numbers. Anything with an app name after the
+      "of" is the defect. Press **Send**, answer the action approval, and on the next capture review
+      the same line must read **"Step 2 of 12"** — the left number moves, the right one does not
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying

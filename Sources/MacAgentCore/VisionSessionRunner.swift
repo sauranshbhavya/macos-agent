@@ -274,7 +274,10 @@ final class VisionSessionRunner {
                         pixelWidth: sentImage.pixelWidth,
                         pixelHeight: sentImage.pixelHeight,
                         redactionReport: payload.report,
-                        iteration: iteration
+                        iteration: iteration,
+                        // The same value the progress report three lines up carries, from the same
+                        // place, so the two panels cannot disagree about how long the session is.
+                        maximumIterations: containment.limits.maximumIterations
                     )
                 )
                 guard allowed else {

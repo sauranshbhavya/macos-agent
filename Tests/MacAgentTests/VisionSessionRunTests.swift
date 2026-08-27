@@ -1452,6 +1452,74 @@ struct VisionSessionRunTests {
         #expect(fixture.synthesizer.clickCount == 1)
     }
 
+    /// **The capture review's step line is whole, and it says "Step 2 of 8" rather than "Step 2 of
+    /// Safari"** (SONNY-303).
+    ///
+    /// `VisionCapturePreview` carried `iteration` and no cap, so the panel interpolated the app's
+    /// display name where the second half belongs and Safe mode's pre-send review read as nonsense.
+    /// The cap is a field on the type now, taken from `containment.limits.maximumIterations` at the
+    /// one construction site, which is the same value the progress report three lines above it
+    /// carries — so the two panels cannot come to disagree about how long the session is.
+    ///
+    /// Asserted at the **second** iteration, and with a cap that is neither the iteration nor the
+    /// fixture's default, because "Step 2 of 8" is the sentence the founder's decision names and
+    /// because a test that reads 1 and 4 could pass on a field wired to the wrong number. The
+    /// sentence itself goes through `ScreenControlSessionPresentation.stepLine`, which is what the
+    /// panel calls — the source scan in `WidgetSessionApprovalPanelTests` says the panel calls it,
+    /// and this says what it produces for a real preview.
+    @Test
+    func theCaptureReviewsStepLineNamesTheIterationCapRatherThanTheApp() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe,
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0)
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open bookmarks", appName: "Safari")
+        try await waitUntil("the session-envelope approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+
+        try await waitUntil("the first capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        let first = try #require(fixture.viewModel.visionCapturePreview)
+        #expect(first.iteration == 1)
+        #expect(first.maximumIterations == 8, "the session's own budget, not the fixture default of 4")
+        #expect(
+            ScreenControlSessionPresentation.stepLine(
+                iteration: first.iteration,
+                maximumIterations: first.maximumIterations
+            ) == "Step 1 of 8"
+        )
+        // The app's name is still on the panel — in the sentence that is about the app — and this is
+        // the half the defect confused it with.
+        #expect(first.appDisplayName == "Safari")
+
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the action approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+
+        try await waitUntil("the second capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        let second = try #require(fixture.viewModel.visionCapturePreview)
+        #expect(second.iteration == 2)
+        #expect(second.maximumIterations == 8, "the cap does not move with the iteration")
+        #expect(
+            ScreenControlSessionPresentation.stepLine(
+                iteration: second.iteration,
+                maximumIterations: second.maximumIterations
+            ) == "Step 2 of 8"
+        )
+        // The same session, so the HUD's own count and the preview's agree rather than being two
+        // readings of one budget.
+        let progress = try #require(fixture.viewModel.visionSessionProgress)
+        #expect(progress.maximumIterations == second.maximumIterations)
+
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(fixture.viewModel)
+    }
+
     /// **The widget must render the capture question, or a Safe-mode session hangs.**
     ///
     /// `hasVisibleWidgetPanel` is the single source of truth for the widget's panel, so a parked
