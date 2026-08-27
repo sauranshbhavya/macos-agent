@@ -143,6 +143,63 @@ struct SignInCopyTests {
         #expect(SignInFailure(error) == expected)
     }
 
+    // MARK: - Retryability
+
+    /// **§9.3's two lists, asserted directly on the code rather than only through an attempt
+    /// count.** `scripts/mutate`'s M10 at `14b8a3d` made `provider.rejected` retryable and survived,
+    /// because `maximumAttempts` answers 1 for it either way and masked the change — so the only
+    /// test that could see it was one that reads `isRetryable` itself. It is a public value; a
+    /// caller outside this module can act on it.
+    @Test
+    func theRetryableAndNotRetryableListsAreExactlyTheContracts() {
+        let retryable: Set<String> = [
+            "limit.rate", "provider.unavailable", "provider.timeout", "server.error",
+            "server.unavailable"
+        ]
+        for wire in Self.everyWireCode {
+            let code = SonnyBackendErrorCode(wire: wire)
+            // `idempotency.conflict` is the one code whose two sub-cases share it, so its answer is
+            // the envelope's; it is checked on its own below.
+            guard code != .idempotencyConflict else { continue }
+            #expect(
+                code.isRetryable(envelopeSaysRetryable: false) == retryable.contains(wire),
+                "\(wire) retryability"
+            )
+            // And the envelope's own flag does not move it — a server that sent `retryable: true`
+            // on `provider.rejected` must not turn into a retry loop in this client.
+            #expect(
+                code.isRetryable(envelopeSaysRetryable: true) == retryable.contains(wire),
+                "\(wire) changed its answer when the envelope claimed otherwise"
+            )
+        }
+        #expect(SonnyBackendErrorCode.unknown("brand.new").isRetryable(envelopeSaysRetryable: true) == false)
+    }
+
+    /// §9.2: a key seen while its original request is in flight is retryable with a `Retry-After`;
+    /// the same key with a different body is a client bug a retry cannot fix. One code, two cases,
+    /// and only the envelope can tell them apart.
+    @Test
+    func idempotencyConflictIsTheOneCodeThatDefersToTheEnvelope() {
+        #expect(SonnyBackendErrorCode.idempotencyConflict.isRetryable(envelopeSaysRetryable: true))
+        #expect(SonnyBackendErrorCode.idempotencyConflict.isRetryable(envelopeSaysRetryable: false) == false)
+    }
+
+    /// The invariant that keeps the two retry mechanisms from disagreeing: a code that may not be
+    /// retried gets exactly one attempt, and one that may gets more than one. Without this, a code
+    /// could be marked retryable while its attempt ceiling silently refused to retry it — which is
+    /// the state M10 created and nothing noticed.
+    @Test
+    func aCodesAttemptCeilingAgreesWithWhetherItMayBeRetriedAtAll() {
+        for wire in Self.everyWireCode {
+            let code = SonnyBackendErrorCode(wire: wire)
+            if code.isRetryable(envelopeSaysRetryable: true) {
+                #expect(code.maximumAttempts >= 2, "\(wire) is retryable but gets one attempt")
+            } else {
+                #expect(code.maximumAttempts == 1, "\(wire) is not retryable but gets \(code.maximumAttempts) attempts")
+            }
+        }
+    }
+
     /// A `code` value is part of the versioned contract (§7.1), so a round trip through this
     /// client's enum has to preserve it exactly — including one it has never heard of.
     @Test

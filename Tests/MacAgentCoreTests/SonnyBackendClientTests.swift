@@ -358,33 +358,93 @@ struct SonnyBackendClientTests {
         #expect(SonnyBackendClient.proactiveRefreshMargin == 180)
     }
 
-    /// §3.5: expiry arithmetic runs in server time, from the `Date` header, because the user can
-    /// change their own clock. A Mac running two hours slow must not decide a live token is stale.
+    /// **§3.5: expiry arithmetic runs in server time, and the offset has to be applied where it
+    /// changes an answer.**
+    ///
+    /// The first version of this test could not fail. It stored an expiry through the same clock it
+    /// later compared against, so a mutant that dropped the offset entirely shifted both sides by
+    /// the same amount and cancelled — `scripts/mutate`'s M8 survived it at `14b8a3d`. The offset
+    /// only matters when the stored expiry is an *absolute* instant learned under one clock and
+    /// judged under another, which is exactly what a relaunch produces: a session comes back off
+    /// the Keychain, and the process that reads it has learned no offset yet.
+    ///
+    /// So: a stored expiry sixty seconds ahead of *this Mac's* clock, and a server whose `Date`
+    /// header puts it an hour behind that. Judged locally the token is inside the 180-second margin
+    /// and gets refreshed for nothing; judged in server time it has an hour of life and does not.
     @Test
     func expiryIsJudgedAgainstTheServerClockAndNotTheLocalOne() async throws {
-        let serverNow = Date(timeIntervalSince1970: 1_800_000_000)
-        // This Mac believes it is two hours earlier than the server does.
-        let harness = try Harness(now: { serverNow.addingTimeInterval(-7200) })
+        let localNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let storedExpiry = localNow.addingTimeInterval(60)
+        let serverNow = storedExpiry.addingTimeInterval(-3600)
+        let harness = try Harness(now: { localNow })
+        try await harness.client.adopt(SonnyBackendFixtures.storedTokens(
+            accessToken: "stored-access",
+            expiresAt: storedExpiry
+        ))
         let seen = RecordedRequests()
         harness.serve { request in
             seen.record(request)
+            if request.url?.path == "/v1/auth/refresh" {
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "refreshed")
+                )
+            }
             return .reply(
                 statusCode: 200,
                 headers: ["Date": SonnyHTTPDate.formatter.string(from: serverNow)],
-                body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "issued", expiresIn: 3600)
+                body: Data("{}".utf8)
             )
         }
-        // One call teaches the client the offset and stores a token expiring an hour of SERVER time
-        // from now. Judged on the local clock it would look like it expires in three hours, which
-        // is not the error this catches; judged on a clock two hours FAST it would look expired.
-        _ = try await harness.verifyThroughService()
-        let afterSignIn = seen.recorded.count
+
+        // One unauthenticated call, which is what teaches the client the offset — no token is read
+        // and no expiry is judged.
+        _ = try await harness.client.send(harness.publicRequest())
+        #expect(await harness.client.serverNow().timeIntervalSince(serverNow) < 1)
 
         _ = try await harness.client.send(harness.bearerRequest())
 
-        // No refresh: an hour of server-time life is outside the 180-second margin.
-        #expect(seen.recorded.count == afterSignIn + 1)
-        #expect(seen.recorded.last?.url?.path == "/v1/protected")
+        #expect(seen.recorded.map { $0.url?.path } == ["/v1/public", "/v1/protected"])
+        #expect(seen.recorded.last?.value(forHTTPHeaderField: "Authorization") == "Bearer stored-access")
+    }
+
+    /// The other side of the same clock: a token that really is near expiry **in server time** is
+    /// refreshed even though this Mac's clock says it has hours left.
+    @Test
+    func aTokenTheServerClockCallsNearlyExpiredIsRefreshedThoughTheLocalClockDisagrees() async throws {
+        let localNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let storedExpiry = localNow.addingTimeInterval(7200)
+        // The server is two hours ahead of this Mac, so that expiry is sixty seconds away, not two
+        // hours away.
+        let serverNow = storedExpiry.addingTimeInterval(-60)
+        let harness = try Harness(now: { localNow })
+        try await harness.client.adopt(SonnyBackendFixtures.storedTokens(
+            accessToken: "stored-access",
+            expiresAt: storedExpiry
+        ))
+        let seen = RecordedRequests()
+        harness.serve { request in
+            seen.record(request)
+            if request.url?.path == "/v1/auth/refresh" {
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "refreshed")
+                )
+            }
+            return .reply(
+                statusCode: 200,
+                headers: ["Date": SonnyHTTPDate.formatter.string(from: serverNow)],
+                body: Data("{}".utf8)
+            )
+        }
+
+        _ = try await harness.client.send(harness.publicRequest())
+        _ = try await harness.client.send(harness.bearerRequest())
+
+        #expect(seen.recorded.map { $0.url?.path } == ["/v1/public", "/v1/auth/refresh", "/v1/protected"])
+        #expect(seen.recorded.last?.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed")
     }
 
     // MARK: - Timeouts
