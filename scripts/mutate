@@ -1409,11 +1409,21 @@ st_absent() {
 # `test cmd   : $TEST_CMD` and a stand-in is a multi-line shell script, so the whole fixture lands
 # in the output before a single mutant runs. Every needle a fixture contains then matches itself,
 # and an assertion that the report NAMED a test passes whether or not the report named anything.
-# Measured rather than reasoned about: 11 of the 70 `st_contains … "$ST_OUT"` checks inside an
-# st_run arm carried a needle that also appears in the stand-in that arm ran, every "the test is
-# named" check among them (the scan is in SONNY-305's closing comment). It is the same shape as
-# PR #112's F6, where a check passed with the summary block deleted outright, and it was found the
-# same way — a new arm passing a check it had no business passing yet.
+# Measured rather than reasoned about: of the checks that existed before this cut, **10 of 68**
+# `st_contains … "$ST_OUT"` inside an st_run arm carried a needle that also appears in the stand-in
+# that arm ran, and that set is every "the test is named" check in the classifier's arms (scanned
+# over this file at f65e72e; the script is in SONNY-305's closing comment, and at 5b14bbc, with
+# this branch's two new arms, the same scan answers 13 of 75). **The figure was first written as
+# 11 of 70 and that was wrong** in the way this repository has recorded before: it was taken on a
+# working tree that already carried this branch's own first arm, so it counted that arm's own check
+# among the pre-existing ones and stamped a working-tree reading with a commit that did not contain
+# it. Commit d1648a2's message still says 11 of 70 and is left as written — this repository
+# restamps rather than rewriting a commit message, and the correction lives here and in the
+# changelog.
+#
+# It is the same shape as PR #112's F6, where a check passed with the summary block deleted
+# outright, and it was found the same way — a new arm passing a check it had no business passing
+# yet.
 #
 # Cut here rather than by tightening 11 needles, so that the safe thing is what a future arm gets
 # by default. The range runs from the `test cmd` line to the `tree` line printed immediately after
