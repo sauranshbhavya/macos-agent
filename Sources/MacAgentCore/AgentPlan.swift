@@ -491,31 +491,46 @@ public enum AgentPlanSchema {
         "browserName"
     ]
 
+    /// The schema's own name, as `docs/sonny-backend-api-contract.md` §4.2's
+    /// `response_schema_name` carries it. Short, stable, and never rendered anywhere.
+    public static let name = "agent_plan"
+
+    /// **The bare JSON Schema, separated from the provider wrapper around it** (SONNY-130).
+    ///
+    /// §4.2 puts `response_schema` — this value — on the wire and leaves the mapping onto a
+    /// provider's structured-output mechanism to the server, because "the client does not know
+    /// which mechanism was used and must not need to". `responseFormat()` below is one such
+    /// wrapper, and it stays: `CerebrasPlanner` builds its own request from it, and that planner
+    /// keeps its own credential until the provider-router branch moves it.
+    public static func schema() -> [String: Any] {
+        [
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["summary", "requiresConfirmation", "steps"],
+            "properties": [
+                "summary": [
+                    "type": "string",
+                    "description": "Short human-readable summary of the proposed action."
+                ],
+                "requiresConfirmation": [
+                    "type": "boolean",
+                    "description": "True when the action writes files, opens apps, or converts documents."
+                ],
+                "steps": [
+                    "type": "array",
+                    "minItems": 1,
+                    "items": stepSchema(allowsRoutineSteps: true)
+                ]
+            ]
+        ]
+    }
+
     public static func responseFormat() -> [String: Any] {
         [
             "type": "json_schema",
-            "name": "agent_plan",
+            "name": name,
             "strict": true,
-            "schema": [
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["summary", "requiresConfirmation", "steps"],
-                "properties": [
-                    "summary": [
-                        "type": "string",
-                        "description": "Short human-readable summary of the proposed action."
-                    ],
-                    "requiresConfirmation": [
-                        "type": "boolean",
-                        "description": "True when the action writes files, opens apps, or converts documents."
-                    ],
-                    "steps": [
-                        "type": "array",
-                        "minItems": 1,
-                        "items": stepSchema(allowsRoutineSteps: true)
-                    ]
-                ]
-            ]
+            "schema": schema()
         ]
     }
 

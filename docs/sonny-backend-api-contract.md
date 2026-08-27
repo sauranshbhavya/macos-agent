@@ -616,9 +616,18 @@ Multipart rather than base64-in-JSON because base64 would inflate the audio by a
 and the client already builds a multipart body (`OpenAITranscriber.swift:106-124`).
 
 What the recorder produces today, so the server knows what it will receive: `.m4a`, MPEG-4 AAC, mono,
-44.1 kHz, `AVAudioQuality.high` (`AudioCommandRecorder.swift:32-38`). There is **no maximum duration**
-today, which is why the byte limit in section 6.1 exists as a backstop; the duration cap and its
-user-facing refusal are SONNY-130's.
+44.1 kHz, `AVAudioQuality.high` (`AudioCommandRecorder.swift:34-39` at `f65e72e`). It had **no
+maximum duration** until SONNY-130, which is why the byte limit in section 6.1 exists as a backstop.
+
+**The duration cap now exists** (updated 2026-08-27, SONNY-130): 180 seconds, in
+`VoiceRecordingLimit.maximumDurationSeconds`, refused on the Mac before a byte is sent and shown as
+"That recording is too long. Sonny listens for up to 3 minutes at a time." The recorder also bounds
+the *file* a few seconds above that, so a hotkey that sticks cannot grow one without limit. Section
+6.1's 10 MiB is unchanged and is now the backstop it was always described as: the two sides measure
+different units on purpose, because the Mac is the only side that knows a duration honestly — a
+client-supplied one would be a client-trust decision on the field that decides the bill, which 2.4.1
+forbids in general — and at this recorder's bitrate 180 seconds is roughly 2 MB, so the client's cap
+binds an order of magnitude before the server's.
 
 ```json
 {
@@ -1396,4 +1405,5 @@ author's own drafting would bury the changes a downstream session actually has t
 |---|---|---|
 | 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
 | 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |
+| 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `f65e72e`, where the settings block is `:34-39`. | SONNY-130 |
 | 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |

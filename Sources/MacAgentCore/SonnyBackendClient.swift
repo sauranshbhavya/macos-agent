@@ -14,11 +14,22 @@ import Foundation
 /// | search | 25 s | 30 s |
 /// | auth, account, meta, health, delete | 15 s | 20 s |
 ///
-/// Only the last row is declared: this ticket builds no other route, and a constant for a route
-/// nobody sends is a number that goes stale before anything reads it. SONNY-130 and SONNY-131 add
-/// theirs beside it.
+/// SONNY-128 declared only the last row, because a constant for a route nobody sends is a number
+/// that goes stale before anything reads it. SONNY-130 added the four it built beside it; the vision
+/// route is still SONNY-131's and is still not here.
+///
+/// Each of these sits above the server's own total deadline for the same route
+/// (`server/src/model/limits.ts`), which is the whole of §12's governing rule. **The margin is not
+/// a constant, and this comment said it was fifteen seconds until PR #139's F2** — it is fifteen on
+/// the three long routes and **five** on `search` and on the auth row, straight from §12's table.
+/// `ModelRouteNumbersTests` holds both halves of that table as literals, so neither side can move
+/// without the other failing.
 public enum SonnyBackendTimeouts {
     public static let auth: TimeInterval = 20
+    public static let plan: TimeInterval = 90
+    public static let researchSynthesis: TimeInterval = 120
+    public static let transcription: TimeInterval = 90
+    public static let search: TimeInterval = 30
 }
 
 /// One request, described in the terms the contract's rules are written in.
@@ -36,6 +47,12 @@ public struct SonnyBackendRequest: Sendable, Equatable {
     public let method: String
     public let path: String
     public let body: Data?
+    /// The body's media type, or `nil` for §2.1's default of `application/json`.
+    ///
+    /// Defaulted rather than required because the contract itself is: "UTF-8 JSON,
+    /// `Content-Type: application/json`, except `POST /v1/transcriptions`". One route names its
+    /// own, every other route says nothing, and this mirrors that exactly (SONNY-130).
+    public let contentType: String?
     public let authentication: Authentication
     /// §9.1: one key per logical operation, not one per attempt. A retry reuses the operation's
     /// key — that is the entire mechanism — so it is minted where the operation begins.
@@ -47,6 +64,7 @@ public struct SonnyBackendRequest: Sendable, Equatable {
         method: String,
         path: String,
         body: Data?,
+        contentType: String? = nil,
         authentication: Authentication,
         idempotencyKey: UUID?,
         timeout: TimeInterval,
@@ -55,6 +73,7 @@ public struct SonnyBackendRequest: Sendable, Equatable {
         self.method = method
         self.path = path
         self.body = body
+        self.contentType = contentType
         self.authentication = authentication
         self.idempotencyKey = idempotencyKey
         self.timeout = timeout
@@ -486,7 +505,10 @@ public actor SonnyBackendClient {
         urlRequest.timeoutInterval = request.timeout
         if let body = request.body {
             urlRequest.httpBody = body
-            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.setValue(
+                request.contentType ?? "application/json",
+                forHTTPHeaderField: "Content-Type"
+            )
         }
         if let accessToken {
             urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")

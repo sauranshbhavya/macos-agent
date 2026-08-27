@@ -822,9 +822,10 @@ it feels confusing in practice, not just whether it's "technically correct."
       ~6+ seconds without touching anything. Confirm the failure banner actually clears itself back to
       idle in one shot (collapse + clear now happen at the same 6s mark — this replaced the earlier
       two-timer version that needed 2+ compacts to fully clear). Separately, trigger a *configuration*
-      error instead (e.g. deny mic permission, or something producing "OPENAI_API_KEY is not set…")
-      and confirm THAT one does **not** auto-clear — it should keep saying so indefinitely until you
-      actually fix it. **This second half (config errors staying put) hasn't been explicitly
+      error instead and confirm THAT one does **not** auto-clear — it should keep saying so
+      indefinitely until you actually fix it. (**The example this row used to give — "something
+      producing `OPENAI_API_KEY is not set…`" — is no longer reachable as of 2026-08-27, SONNY-130**:
+      no client reads a provider key. Denying mic permission still is, and is the example to use.) **This second half (config errors staying put) hasn't been explicitly
       retested — worth a quick check, not just the retryable-failure half.**
 
 ## 6. Menu bar & launch
@@ -1084,16 +1085,74 @@ bottom-left account row → **Sign in**.
       button on one line, or stacked, never character-wrapped. Both are
       `SettingsAdaptiveControlRow`s, which is the pattern that exists for exactly this.
 
+### The four routes behind the backend (new 2026-08-27, SONNY-130)
+
+**This section is where the row stops being plumbing.** The planner, web-research synthesis, voice
+transcription and web search all run through Sonny's own gateway now, under your sign-in, with no
+provider key anywhere on your Mac.
+
+**Setup — three things, and the third is the one that is easy to get wrong.**
+
+1. A gateway has to be answering *with provider credentials*, **and none exists yet that can**.
+   `./scripts/deploy.sh local` forwards the gateway's own credentials since SONNY-306, but
+   `src/server.ts` supplies no `AuthDeps`, so the container still mounts health alone and every one
+   of these routes answers 401 whatever is forwarded — SONNY-307 is the ticket for that, and these
+   rows cannot be run until it lands. When it has, the same script wants `OPENAI_API_KEY` and
+   `TAVILY_API_KEY` added to its passthrough alongside the Supabase variables.
+2. The debug build pointed at it, exactly as the sign-in section above describes
+   (`defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`).
+3. **Launch the packaged app from Finder, and do not export any provider key in the shell you
+   launched anything from.** A Finder launch inherits no shell environment, which is the whole
+   point: if any of these work only because a key happened to be exported, the row proved nothing.
+
+- [ ] **(new 2026-08-27, SONNY-130) — the headline check.** Sign in, then run an ordinary typed
+      command ("open Safari"). It should plan and run exactly as before. **This is the first time in
+      the project's life that works with no provider key on the machine**, so if it works, the
+      credential really has moved.
+- [ ] **(new 2026-08-27, SONNY-130)** Hold the push-to-talk hotkey, speak a short command, release.
+      The transcript should arrive and dispatch as it always did. Note that the mic is no longer
+      blocked by a missing key — before this branch a Finder launch left it refusing with "No API
+      key is set up", which is precisely the failure this row is checking is gone.
+- [ ] **(new 2026-08-27, SONNY-130)** Run a web-research command that needs a search ("research
+      what's new in Swift 6 concurrency and save it as markdown"). Both halves go through the
+      backend now — the search and the synthesis — so a note that comes back with real sources means
+      both worked.
+- [ ] **(new 2026-08-27, SONNY-130)** **Hold the record hotkey for more than three minutes**, then
+      release. It must refuse with *"That recording is too long. Sonny listens for up to 3 minutes
+      at a time."* — a human sentence, no status code, no mention of bytes or uploads. The recorder
+      also stops itself a few seconds past the cap, so the file cannot grow without limit while you
+      are waiting; nothing should be uploaded at all.
+- [ ] **(new 2026-08-27, SONNY-130)** Turn **"Don't save this task"** on, then run a command. It
+      should behave identically. (What it changes on the backend — `retention: "none"` — is not
+      observable from the app, and the backend does not store anything yet either: SONNY-134 builds
+      the content store. This row is checking the switch did not break the run.)
+- [ ] **(new 2026-08-27, SONNY-130)** Sign **out**, then try to run a command. It should fail with
+      *"Sign in to Sonny to run this."* rather than a status code, a URL, or anything about
+      providers or tokens. (What the product should do about being signed out — beyond saying so —
+      is `feature/row-12-degradation`'s; this row is only checking the sentence is human.)
+- [ ] **(new 2026-08-27, SONNY-130)** After any of the above, open **Tasks** and check the run's
+      usage line still shows token counts. The numbers now come from the server rather than from the
+      app's own estimate, and the one thing that must not have happened is the summary silently
+      going blank.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
-Needs `TAVILY_API_KEY` exported in the launching shell (GUI `open` won't inherit it). Each search
-costs real money (~$0.008), so a handful of runs is plenty.
+**Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads
+`TAVILY_API_KEY` on this Mac at all: the credential is the gateway's, and a search command goes
+through Sonny's backend under your sign-in. The two key-shaped rows below are struck through rather
+than deleted, because what they *tested* — the shape of a good research note, and direct-URL
+summarization being unaffected — is still worth checking, and the section above is where the
+credential half is now checked from. Each search still costs real money, so a handful of runs is
+plenty.
 
-- [ ] Without the key set: a search command ("research three alternatives to Raycast and save a
-      comparison") still fails with the honest "Web search provider not configured." error — not a
-      crash, not a hang
-- [ ] With the key: the same command produces a real Markdown research note — Sources section lists
-      the pages actually fetched (not raw search-result text), and a generation timestamp is present
+- [x] ~~Without the key set: a search command still fails with the honest "Web search provider not
+      configured." error~~ — **no longer reachable.** `TavilySearchProvider` cannot fail to
+      construct, so `AgentViewModel` no longer falls back to `UnavailableWebSearchProvider`, and
+      that sentence is unreachable from the search path. A search made while signed out says "Sign
+      in to Sonny to run this." instead, which is the row in the section above.
+- [ ] ~~With the key:~~ **signed in**, the command ("research three alternatives to Raycast and save
+      a comparison") produces a real Markdown research note — Sources section lists the pages
+      actually fetched (not raw search-result text), and a generation timestamp is present
 - [ ] Direct-URL summarization ("summarize <url> and save it as Markdown") still works exactly as
       before — the provider only affects search/topic commands
 

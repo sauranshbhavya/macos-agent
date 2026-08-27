@@ -4,19 +4,9 @@ import { describe, expect, it } from "vitest";
 import { buildApp, DEFAULT_BODY_LIMIT_BYTES } from "../src/app.js";
 import { registerErrorHandlers } from "../src/errors.js";
 import type { Config } from "../src/config.js";
-import { TEST_JWT_CONFIG } from "./support/tokens.js";
+import { testConfig } from "./support/config.js";
 
-const config: Config = {
-  environment: "local",
-  port: 0,
-  host: "127.0.0.1",
-  buildId: "test-build-1",
-  databaseUrl: undefined,
-  logLevel: "fatal",
-  trustProxy: false,
-  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG,
-  credentials: [],
-};
+const config: Config = testConfig();
 
 /** Contract §7.1's envelope, asserted structurally rather than by eyeball. */
 function expectContractEnvelope(body: unknown, code: string): void {
