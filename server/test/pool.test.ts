@@ -45,7 +45,12 @@ function pooled(options: { max?: number } = {}): {
   pool: FakePool;
 } {
   const pool = new FakePool();
-  const wiring = pooledConnections("postgres://user:pw@localhost:1/db", {
+  // The allowlisted local-development shape, and it is never dialled — `FakePool.connect` ignores
+  // it entirely. `npm run check:secrets` refuses any other DSN carrying a password, correctly: a
+  // connection string with credentials is exactly what that pattern hunts, and it caught this file
+  // on the first run after it was committed. Second time this branch has been caught by the
+  // scanner's tracked-files population, which is the gotcha its own changelog entry records.
+  const wiring = pooledConnections("postgres://postgres:postgres@localhost:1/db", {
     ...options,
     createPool: () => pool as unknown as pg.Pool,
   });
