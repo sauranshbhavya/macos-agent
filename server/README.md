@@ -261,6 +261,22 @@ none. `test/config.test.ts` walks all three steps and asserts a usable key at ev
 SHA as its build identifier, runs it, and **verifies `/v1/health` reports that same identifier** —
 so a deploy that appeared to succeed while something older kept serving is a failure, not a pass.
 
+**It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
+decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
+`docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
+`DATABASE_URL` and `RATE_LIMIT_SALT`; it tracks `src/config.ts`, which is the only thing that
+decides what the gateway reads, and the script's own comment carries the command that re-derives it.
+Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the script or printed
+by it — and only when it is set to something non-empty. Nothing is refused when one is missing: the
+absent ones are named, by name only, and the container starts anyway.
+
+**Health-only is still what that container serves**, and the script now says so from a probe rather
+than from a comment that could go stale: after the health check it asks
+`POST /v1/auth/email/start` what it answers and prints the result. Today that is
+`404 resource.not_found` whatever is forwarded, because `src/server.ts` calls `buildApp(config)`
+with no `auth` argument and no concrete `AuthProvider` adapter exists — so the sign-in rows in
+`docs/sonny-manual-test-checklist.md` §7 cannot be run against it yet. Recorded on SONNY-306.
+
 `staging` and `production` **are stubs and exit 3.** The founder confirmed on 2026-08-21 that
 deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The script builds the
 image, says plainly what did not happen, and lists the four things a real target needs. It does not
