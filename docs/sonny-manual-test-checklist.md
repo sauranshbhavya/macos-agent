@@ -917,6 +917,29 @@ costs real money (~$0.008), so a handful of runs is plenty.
 - [ ] Direct-URL summarization ("summarize <url> and save it as Markdown") still works exactly as
       before — the provider only affects search/topic commands
 
+### Prompt-text folds — screen control and web research (new 2026-08-26, SONNY-226 / SONNY-231)
+
+**Almost nothing here is founder-checkable, and that is stated rather than left as an empty
+section.** Both tickets change *prompt text* — what the vision model and the web-research synthesizer
+receive — and nothing else. No pixel of the app changes, and the prompts themselves are handed to a
+model API and to nothing else, so there is no surface a human can read them on. The line counts, the
+shapes and the escaping are all pinned by `InterpolatedFieldLineFoldTests`, and every one of those
+assertions was shown to fail against the unfolded tree.
+
+The two rows below are the *only* part a test cannot reach, because no test in this repo calls a
+model: whether a model still behaves the same on the changed prompt. Ordinary app names and ordinary
+page text are provably unchanged scalar-for-scalar (`textWithoutALineBreakIsUntouched`), so these are
+sanity checks on end-to-end behaviour, not on the fold.
+
+- [ ] **(SONNY-231)** Run one ordinary screen-control task on an app whose name contains a space —
+      "in Google Chrome, open a new tab" or similar. It should behave exactly as it did before: the
+      model still finds and clicks controls, and nothing in the session reads as confused about which
+      app it is in. What would show a regression is the model losing track of the app.
+- [ ] **(SONNY-226)** Run one web-research task that fetches a real page ("summarize <url> and save it
+      as Markdown"). The note should still summarise the page's actual body — the readable text is
+      deliberately *not* folded, so a note that reads as one run-on line, or that has lost the page's
+      paragraphs, is the regression to report.
+
 ## 8. How to report back
 
 For each real finding, give me:
