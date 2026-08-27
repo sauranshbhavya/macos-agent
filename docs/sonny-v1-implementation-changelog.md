@@ -172,6 +172,78 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/the-gateway-honours-the-idempotency-key
+Status: complete — SONNY-300 Done. Server half only; nothing under `Sources/` or `Tests/` is touched.
+Date: 2026-08-28
+Tickets: **SONNY-300** (the gateway honours `Idempotency-Key`, and contract §9.2's three guarantees become real). Cut from `main` at `7f555cd` — PR #141's merge. Filed by SONNY-128's session, which found the gap while building the client half and could not close it: `server/` is on that ticket's never-touch list. Ran in parallel with SONNY-131 (vision route) and SONNY-132 (provider router) under recorded region boundaries — this lane owns the idempotency middleware and its migration, and `server/src/app.ts` is shared at different lines under the append-point rule.
+Reviewed by: fresh session per WORKFLOW.md step 7 — **owed, not yet run.**
+
+Spec sections covered: the API contract's §9 end to end — §9.1's header, all four sentences of §9.2, and §9.3's retryable list, which is what decides whether a stored failure may be replayed. §11's `idempotency_key` column is the read API this leaves for SONNY-133 rather than the metering event itself, which is that ticket's.
+
+Files changed, nine — five new (`git diff --stat 7f555cd...HEAD` at `7f9d733`):
+- `server/src/db/migrations/0011_the_gateway_honours_the_idempotency_key.sql` (**new**) — `sonny.idempotency_key`, one row per `(account_scope, key)`, and a partial index on the response expiry. Carries its `-- @rollback` half; applied, rolled back and re-applied against Postgres 17 (below).
+- `server/src/idempotency/store.ts` (**new**) — the SQL. `claimKey` and its state machine, `completeClaim`, `releaseClaim`, the metering claim and its read, `pruneExpiredResponses`, `deleteStoredResponsesForAccount`, and the `KeyStore` seam with its Postgres implementation.
+- `server/src/idempotency/hook.ts` (**new**) — the `preHandler`/`onSend` pair, the release set, and the mapping from a `ClaimOutcome` onto §7.2's answers.
+- `server/src/idempotency/fingerprint.ts` (**new**) — what "the same body" means, and the measurement that decided it.
+- `server/src/app.ts` — two imports, `AppOverrides`, and one `registerIdempotency` line beside `registerHealth`.
+- `server/test/idempotency.test.ts` (**new**, 27) and `server/test/idempotency.db.test.ts` (**new**, 30).
+- `docs/sonny-backend-api-contract.md` — §9.2 gains the two founder decisions and one stated limit; §14 gains its row. **No shape moved**: no endpoint, request body, response body, header, error `code`, size limit or timeout changed, and §9.3's tables and lists are byte-identical.
+- `docs/sonny-manual-test-checklist.md` — three unchecked rows.
+
+Tests: `npm test` -> **266 passed, 161 skipped, 427 total, exit 0**; `npm run test:db` -> **427 passed in 20 files, exit 0**; `npm run typecheck` -> **exit 0**; `npm run build` -> **exit 0**; `npm run check:secrets` -> **clean, 461 files, exit 0**. All five at `7f9d733`, each exit code read with nothing between it and the command. Baseline at `7f555cd`, measured in a detached worktree rather than inferred: `npm test` **239 passed, 131 skipped, 370 total**, and the same suite with a database **370 passed in 18 files**. Net **+57 tests, +2 files**, and the 57 are exactly this branch's two files (27 + 30) — reconciled, not assumed. **No Swift command was run and none is owed**: `Package.swift`'s target paths all name `Sources/...` or `Tests/...`, so nothing in this diff reaches a Swift target and `scripts/warnings` would report zero over it while compiling nothing that changed (WORKFLOW.md step 7's server-only case).
+
+**Measured against a live container, all four of §9.2's sentences.** `./scripts/deploy.sh local` built and verified the image (`7f555cd-dirty`, health reporting that build, auth routes mounted). The same image was then re-run by hand with `OPENAI_BASE_URL` pointed at a call-counting stub — the mechanism `deploy.sh`'s own comment names, since those four endpoint settings are deliberately not in its passthrough — and the counter is what makes "no second upstream call" a number rather than a claim:
+
+| §9.2 | measured |
+|---|---|
+| repeat returns the stored response | two `POST /v1/plan` with one key -> both `200`, byte-identical bodies, **the same `sonny-request-id`**, upstream calls `1` |
+| metering event at most once, ever | the claim `UPDATE` SONNY-133 will run -> `UPDATE 1`, then `UPDATE 0`, then `UPDATE 0` |
+| same key, different body | `409` `idempotency.conflict`, `retryable: false`, no `Retry-After`, upstream calls unchanged at `1` |
+| key seen while the first is in flight | second request 1 s into a 4 s upstream -> `409`, `retryable: true`, `Retry-After: 120`, upstream calls `1` not `2` |
+
+Two more, both the founder decisions below: a `502 provider.unavailable` left the row `released` and the same key **re-ran** rather than answering `409`, while the metering claim taken before the retry answered `UPDATE 0` after it; and a keyless `POST` was served `200`, wrote no row, and logged `POST carries no Idempotency-Key; served without the section 9.2 guarantees`. The migration was applied, rolled back — table and index gone, ledger row removed — and re-applied.
+
+Behavior added:
+- Every `POST` this gateway serves, and every one a later ticket adds to the same instance, is idempotent on the client's key: a repeat inside twenty-four hours gets the stored response, a repeat with a different body gets `409 idempotency.conflict`, and a repeat while the first is running gets `409` with a `Retry-After` rather than a second upstream call.
+- A one-shot metering claim on the key, which is the read API SONNY-133 consumes to make "at most once per key, ever" true.
+
+Behavior preserved (required, no blanket claims):
+- **The four model routes (SONNY-130) are unchanged.** `model.test.ts`'s 36 tests pass untouched, including the two body-limit pairs and the multipart oversize refusal — which is the one that broke and was fixed properly rather than worked around (below).
+- **The auth gate is unchanged and still runs first.** A `POST` carrying a key on a health-only deployment still answers `401` from `registerAuthGate`, which is what makes the no-store branch unreachable; pinned as a test rather than argued.
+- **`registerAuth`'s five routes are unchanged**: `auth.db.test.ts` (39), `authgate.db.test.ts` (10), `authlimits.db.test.ts` (23) and `linking.db.test.ts` (42) all pass with no edit.
+- **`app.ts`'s own `onSend` still stamps `Sonny-Api-Version` and `Sonny-Request-Id` on every ordinary response.** The one exception is a replay, which deliberately carries the original's request id — see below.
+- **The migration runner and every earlier migration are untouched**; `migrate.db.test.ts` and `migrate.load.test.ts` pass, and `0011` is additive.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**§9.2 and §9.3 cannot both be read literally, and the resolution is a founder decision (2026-08-28).** §9.2 says a repeat returns the stored response; §9.3 marks `limit.rate`, `provider.unavailable`, `provider.timeout`, `server.error` and `server.unavailable` retryable *with the same key*. Replaying a stored one of those makes every such retry safe but useless — a `429` becomes a twenty-four-hour ban on that operation, and a `503` during a deploy freezes every request in flight for a day, which would defeat the retry design SONNY-128 shipped a week earlier. The decision taken, with both alternatives written out, is that a retryable failure **releases** the key and the retry genuinely re-runs. `auth.token_expired` is in the release set for the same reason and is the one that is easy to miss: §3.3 makes it the single `401` a client answers by refreshing and retrying *the original request*, so a stored one replayed at that retry would answer the refreshed request with the failure that caused the refresh, permanently.
+
+**What makes the release safe is a line that is not there.** `releaseClaim` does not clear `metering_claimed_at`, so a re-attempt finds the claim taken and writes no second event; the re-attempt's own usage goes unbilled, which is the direction §9.2's second bullet chooses deliberately. This is why the row outlives the response it holds — two clocks of different lengths, the shape §10.3 already gives content and usage — and why nothing in this branch ever deletes a row. `pruneExpiredResponses` clears payloads and keeps claims. A prune that deleted rows would hand the same key a second metering event on day two.
+
+**The release set is keyed on `code` and never on status, and one pair proves why.** `provider.unavailable` and `provider.rejected` are both `502`, and exactly one of them may be re-run — §9.3 states the client-side version of the same rule. Both are pinned, in the same suite, for that reason.
+
+**The body fingerprint hashes the parsed body because the obvious design deadlocks, and the failure is silent and arrives only at size.** A `preParsing` hook teeing the raw body stream through a hashing `Transform` is the design that needs no per-route knowledge and covers every content type. Measured at fastify 5.6.1 / `@fastify/multipart` 9.2.1, it serves a 4-byte and a 60,000-byte audio part and then **hangs** on a 2,000,000-byte one — no error, no response, the request never completes. The cause is the order the two ends run in: `@fastify/multipart` hands the handler an iterator and reads nothing until the handler's `for await`, which is *after* `preHandler`, while the `Transform` fills its default 16 KB buffer long before then and stops. Raising the high-water mark past the body size clears it, which is only another way of saying the whole audio body is buffered — the thing `limits.fileSize` exists to prevent, and the guard PR #139 measured. It surfaced as `model.test.ts`'s `lets /v1/transcriptions carry ten times what /v1/search may` timing out at 5000 ms, in a test whose subject has nothing to do with idempotency. **The fix removes the stream from the picture entirely**: the digest is taken at `preHandler` from `request.body`, canonically, with keys sorted at every level. Multipart therefore has no digest in time and falls back to the declared body length — the one stated weakness, recorded in the contract because it is invisible from outside, and safe in direction: a replay never bills twice and never calls a provider twice.
+
+**A replay carries the *original* exchange's `Sonny-Request-Id`, and getting that right needs the last `onSend`, not the first.** §2.3 makes that header the join key between an error the user saw, the metering event and the retained content; a replay has exactly one of each and they are the original's, so a fresh id would name a request that metered nothing and stored nothing, and would contradict the `request_id` inside the body it is sent with. The first version set the header in the `preHandler` that sends the replay and was wrong: `app.ts` sets it from `request.id` in an `onSend` hook registered earlier, Fastify runs `onSend` hooks in registration order, and the repeat's own id therefore overwrote it on the way out. Caught by the test that asserted the stored id and got a real UUID. It is set in this module's `onSend`, which is the last writer.
+
+**The claim inserts before it selects, and the order is what survives a race on a key nobody has used.** `SELECT ... FOR UPDATE` locks nothing when there is no row, so two concurrent first attempts would both find nothing, both insert, and one would fail on the primary key. `INSERT ... ON CONFLICT DO NOTHING` makes the loser block until the winner commits and then return no row, at which point the select finds the winner's row and answers `in_flight` — which is §9.2's fourth sentence rather than an error. Pinned with two real connections racing.
+
+**Keys are scoped to the account, and the unauthenticated scope is the nil UUID rather than a nullable column.** A global key space would let one caller learn that another's key exists from the `409` it gets back, and would let a stored response cross between callers. NULL cannot carry that scope: it is not comparable in a primary key, so two unauthenticated rows with one key would both be accepted and uniqueness would be silently absent on exactly the routes §9.3 calls safe to retry. `sonny.account.id` is `gen_random_uuid()`, which is v4 and cannot produce the nil UUID, so the sentinel can never collide with a real account.
+
+**An `in_flight` claim has a lease, because a dead holder otherwise owns its key forever.** 120 seconds, from §12's longest total deadline (105 s) plus margin, so a request that is genuinely still running can never have its key taken. The `Retry-After` a conflicting request gets is what remains of that lease — honest rather than a guess, and the client bounds it by its own timeout and gives up, which is the correct outcome when the original is still running and will deliver its own answer.
+
+**A test seam on `buildApp` exists so the *flagged* `npm test` can see §9.2 at all.** The store is Postgres and a database-backed test runs only under `npm run test:db`; without `AppOverrides.idempotencyStore` every behaviour §9.2 names would be invisible to the run this repository gates on. The split is deliberate: `idempotency.test.ts` drives the whole real app against a store the test controls, and `idempotency.db.test.ts` proves the SQL underneath.
+
+Known limitations / deferred scope:
+- **Nothing schedules `pruneExpiredResponses`.** The gateway runs no timer and this branch adds none, so stored response payloads past their twenty-four hours are cleared only when something calls it. Filed as **SONNY-318**, Backlog, untriaged.
+- **`deleteStoredResponsesForAccount` has no call site.** `DELETE /v1/account` is a privacy wipe and this table is the one place in the gateway holding response content outside the route that produced it; the deletion route is `routes/auth.ts`'s and outside this ticket's region, so the function is written and the wiring is filed as **SONNY-319**, Backlog, untriaged.
+- **Metering itself is not built** — SONNY-133's. This branch supplies the guarantee it consumes and the read API, recorded as a dated comment on that ticket.
+- The live-container measurement used a stub upstream, not a vendor. A round against real providers rides the batched manual pass.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap — SONNY-131 and SONNY-132 are running in parallel with this one; SONNY-133 is the direct successor, and it consumes this branch's read API.
+
 ### Branch: docs/the-contract-records-its-own-changes
 Status: complete — SONNY-297 Done; written 2026-08-27 before the PR opened
 Date: 2026-08-27
