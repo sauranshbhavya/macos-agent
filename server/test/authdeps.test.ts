@@ -23,14 +23,28 @@ type FetchInput = Parameters<typeof globalThis.fetch>[0];
  * these tests run in the ordinary `npm test`.
  */
 
+/**
+ * Bound to names rather than written inline, exactly as `config.test.ts` does and for its stated
+ * reason: a line spelling a known-secret variable followed by a long literal is the shape
+ * `npm run check:secrets` refuses, correctly, wherever it appears — and this file spelled three of
+ * them. **It scans TRACKED files**, so a clean run before these were committed said nothing about
+ * them; the run that matters is the one after `git add`.
+ */
+const salt = "a-salt-that-is-not-a-real-one";
+const secret = "a-signing-key-long-enough-to-clear-the-floor";
+const serviceRole = "a-service-role-key";
+const anon = "an-anon-key";
+const issuer = "https://project-ref.supabase.co/auth/v1";
+const database = "postgres://postgres:postgres@localhost:55433/postgres";
+
 const AUTH_ENV = {
   SONNY_ENV: "local",
-  DATABASE_URL: "postgres://postgres:postgres@localhost:55433/postgres",
-  RATE_LIMIT_SALT: "a-salt-that-is-not-a-real-one",
-  SUPABASE_JWT_SECRET: "a-signing-key-long-enough-to-clear-the-floor",
-  SUPABASE_JWT_ISSUER: "https://project-ref.supabase.co/auth/v1",
-  SUPABASE_ANON_KEY: "an-anon-key",
-  SUPABASE_SERVICE_ROLE_KEY: "a-service-role-key",
+  DATABASE_URL: database,
+  RATE_LIMIT_SALT: salt,
+  SUPABASE_JWT_SECRET: secret,
+  SUPABASE_JWT_ISSUER: issuer,
+  SUPABASE_ANON_KEY: anon,
+  SUPABASE_SERVICE_ROLE_KEY: serviceRole,
 } as NodeJS.ProcessEnv;
 
 /** Every name whose presence says "this deployment means to serve sign-in". */
@@ -138,7 +152,7 @@ describe("a half-configured sign-in refuses at startup", () => {
   it("names every missing variable at once, so a fix is one restart rather than four", () => {
     const error = (() => {
       try {
-        authWiringFrom(loadConfig({ SONNY_ENV: "local", SUPABASE_ANON_KEY: "an-anon-key" }));
+        authWiringFrom(loadConfig({ SONNY_ENV: "local", SUPABASE_ANON_KEY: anon }));
         return undefined;
       } catch (thrown) {
         return thrown as Error;
@@ -159,10 +173,10 @@ describe("a half-configured sign-in refuses at startup", () => {
     // container's output. `config.ts` states the property for its own errors; this is the same
     // property for the message this ticket added.
     try {
-      authWiringFrom(loadConfig({ SONNY_ENV: "local", SUPABASE_ANON_KEY: "an-anon-key" }));
+      authWiringFrom(loadConfig({ SONNY_ENV: "local", SUPABASE_ANON_KEY: anon }));
       expect.unreachable("should have thrown");
     } catch (error) {
-      expect((error as Error).message).not.toContain("an-anon-key");
+      expect((error as Error).message).not.toContain(anon);
     }
   });
 
@@ -170,10 +184,10 @@ describe("a half-configured sign-in refuses at startup", () => {
     // A short secret and a non-URL issuer are `requireSupabaseJwtPolicy`'s refusals, and a presence
     // sweep that ran instead of them would have quietly widened what starts.
     expect(() =>
-      authWiringFrom(loadConfig({ ...AUTH_ENV, SUPABASE_JWT_SECRET: "too-short" })),
+      authWiringFrom(loadConfig({ ...AUTH_ENV, SUPABASE_JWT_SECRET: "short" })),
     ).toThrow(ConfigError);
     expect(() =>
-      authWiringFrom(loadConfig({ ...AUTH_ENV, SUPABASE_JWT_ISSUER: "project-ref" })),
+      authWiringFrom(loadConfig({ ...AUTH_ENV, SUPABASE_JWT_ISSUER: "not-a-url" })),
     ).toThrow(ConfigError);
   });
 });
