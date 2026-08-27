@@ -330,7 +330,7 @@ export class SupabaseAuthProvider implements AuthProvider {
    * than approximated, and reported on SONNY-307 as owed.
    *
    * The operation this needs is "revoke every session of user X, given X's id and no token of
-   * theirs". GoTrue's whole path list is in `openapi.yaml` (39 paths) and it is not among them:
+   * theirs". GoTrue's whole path list is in `openapi.yaml` (43 of them, read 2026-08-27) and it is not among them:
    * `/logout` is the only session-revoking endpoint and it is authenticated by the **user's own
    * bearer token** (`UserAuth`), deriving the user from that token rather than from a parameter;
    * the entire `/admin/*` surface — `generate_link`, `audit`, `users`, `users/{id}`,
