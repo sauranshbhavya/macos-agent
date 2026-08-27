@@ -32,8 +32,14 @@ export const BODY_LIMIT_BYTES = {
  * `upstream` bounds the call to the provider and is what produces `504 provider.timeout`. `total`
  * bounds the whole handler — the upstream call plus this server's own work around it — and exists
  * so that a hang anywhere in the handler still ends as this server's own typed failure rather than
- * as whatever the platform in front does when it gives up. The 15-second difference between them is
- * §12's, not this file's.
+ * as whatever the platform in front does when it gives up.
+ *
+ * **The margin between the two is §12's and is not one number.** It is fifteen seconds on `plan`,
+ * `synthesize` and `transcriptions`, and **five** on `search` — which the four literals twelve lines
+ * below disprove any other claim about. This said "the 15-second difference" until PR #139's G1, the
+ * third and last site of a wrong figure F2 corrected in the two others; the invariant that does hold
+ * on every row is the ordering, `upstream < total`, and `test/model.test.ts` asserts both the
+ * literals and the ordering rather than a margin.
  */
 export const DEADLINE_MS = {
   plan: { upstream: 60_000, total: 75_000 },

@@ -360,9 +360,16 @@ describe("POST /v1/plan and POST /v1/research/synthesize", () => {
     await app.close();
   });
 
-  it("gives /v1/transcriptions its own 10 MiB limit, which /v1/search does not get", async () => {
+  it("lets /v1/transcriptions carry ten times what /v1/search may", async () => {
     // The same shape for the other route that carries an oversized body, so both routes with a
-    // limit of their own are held by behaviour rather than by a constant.
+    // ceiling of their own are held by behaviour rather than by a constant.
+    //
+    // **The two ceilings are enforced by different mechanisms, and this test deliberately asserts
+    // neither** (PR #139's G2). `/v1/search` is bounded by its route `bodyLimit`; `/v1/transcriptions`
+    // is bounded by `@fastify/multipart`'s `limits.fileSize`, because registering that parser
+    // replaces the body parser for its content type and the route's own `bodyLimit` is then not
+    // consulted at all — measured, and recorded at the route. What a caller can observe is the pair
+    // below: the same number of bytes refused on one route and served on the other.
     stubUpstream(() => jsonResponse({ results: [] }));
     const app = build();
 
@@ -650,6 +657,12 @@ describe("POST /v1/transcriptions", () => {
     // The server half of SONNY-130's audio limit. The client's half is a *duration* and refuses
     // long before this — `model/limits.ts` says why the two sides measure different units — so this
     // is the backstop for a client that is not ours, or is broken.
+    //
+    // **The outcome is what is pinned, not the mechanism.** The guard that actually fires is
+    // `@fastify/multipart`'s `limits.fileSize`, raising `FST_REQ_FILE_TOO_LARGE` while the part
+    // streams, which `errors.ts` maps on its `status === 413` arm. Two comments at the route have
+    // been wrong about that in opposite directions, so this test stays on what a caller sees: the
+    // code, the retryability, and that nothing was sent upstream.
     const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
     const oversized = Buffer.alloc(BODY_LIMIT_BYTES.transcriptions + 1, 0x41);

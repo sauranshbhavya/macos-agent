@@ -276,18 +276,27 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
   /**
    * `POST /v1/transcriptions` — §4.4's two-part multipart body.
    *
-   * **The audio's byte ceiling is enforced ahead of this handler, twice, and neither is here** (PR
-   * #139, F11). `bodyLimit` bounds the whole request before it is buffered, and `@fastify/multipart`
-   * bounds the file part while it streams. A third check on the *part* at the same number could
-   * never fire: a part cannot be larger than the request that carries it, so `bodyLimit` refuses
-   * first by construction. This route had one anyway, with a comment calling the pair "not
-   * redundant"; the check is gone and `UpstreamRequestTooLarge` with it, because a guard nothing can
-   * reach is worse than no guard — it reads as protection while contributing none.
+   * **The audio's byte ceiling is enforced by exactly one guard, and it is not `bodyLimit`** (PR
+   * #139's F11, corrected by its G2). `@fastify/multipart`'s `limits.fileSize` — set in `app.ts` —
+   * throws `FST_REQ_FILE_TOO_LARGE` with `statusCode: 413` while the part is still streaming, and
+   * `errors.ts` maps it on its `status === 413` arm to §7.2's `request.too_large`.
    *
-   * What a caller actually gets is unchanged and is what the tests assert: Fastify's 413, mapped by
-   * `errors.ts` to §7.2's `request.too_large`. Both are backstops anyway — SONNY-130's real cap is a
-   * duration, enforced on the Mac before a byte is sent, and `model/limits.ts` says why the two
-   * sides measure different units.
+   * **The route's `bodyLimit` below is not consulted for a multipart body**, which is measured
+   * rather than reasoned: with it lowered to 1 MiB and `fileSize` left at 10 MiB, a 2 MiB multipart
+   * body was **served 200**. Registering the multipart parser replaces the body parser for this
+   * content type, and Fastify's own `FST_ERR_CTP_BODY_TOO_LARGE` never enters the picture. The
+   * option stays because it still bounds a body sent to this route with some *other* content type,
+   * where the JSON parser and its limit do run.
+   *
+   * **Two comments have now been wrong about this in the same place, in opposite directions.** The
+   * first called the removed per-part check and `bodyLimit` a pair that was "not redundant"; the
+   * second, written while removing that check, said the ceiling was enforced "twice" and that
+   * `bodyLimit` "refuses first by construction". Neither had been measured. What the oversize test
+   * pins is the outcome and nothing about the mechanism: an 11 MiB audio part answers
+   * `413 request.too_large` with `retryable: false`, and **zero** upstream calls are made.
+   *
+   * All of it is a backstop anyway — SONNY-130's real cap is a duration, enforced on the Mac before
+   * a byte is sent, and `model/limits.ts` says why the two sides measure different units.
    */
   app.post(
     "/v1/transcriptions",
