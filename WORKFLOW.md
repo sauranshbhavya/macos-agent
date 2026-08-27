@@ -293,6 +293,29 @@ dropped — never carried forward — and once merged, `git merge-base --is-ance
 origin/main` exits 0 for every SHA the entry cites (`CLAUDE.md`, Claims and evidence; the
 mechanism is in §8).
 
+**Not every branch owes one, and what decides it is what the branch recorded, not what it
+touched.** An entry is owed whenever a branch records anything of the kind the sentence above
+names — a durable architectural decision, a pitfall discovered, or a correction to the record;
+the first two are that sentence's own words, the third is what #122's and #123's entries are —
+and a bookkeeping branch that records none of that writes no entry at all. The prefix does not
+decide it: `docs/` is no exemption, and eleven `docs/` branches have entries
+(`grep -n '^### Branch: docs/' docs/sonny-v1-implementation-changelog.md`, at `bb7ce39`). Nor
+does the template's `Architectural decisions / pitfalls discovered` field: its "write none if
+true" governs a field inside an entry already owed, and does not make one owed.
+
+The five `docs/` branches that merged on 2026-08-26 are the data points, and that same command
+shows which three the changelog does not hold. **#122** and **#123** corrected the record across
+the tracked files and wrote entries, rightly. **#125** — step 2's manual-test-items bullet, plus
+the checklist rows SONNY-281's items had been stranded off — and **#126** — ticks and dated notes
+on checklist rows — recorded nothing of that kind and rightly wrote none. **#124** is where the
+line actually runs, and it is the reason this paragraph names branches rather than prefixes: it
+was mostly process wording, this file's "Who does what" rewritten for two founders, but it also
+added `CLAUDE.md`'s gotcha about `git grep`'s ERE engine not honouring `\b`, a pitfall its own
+work turned up (`git diff b23f448^1 b23f448 -- CLAUDE.md` prints all three edits) — so it owed an
+entry and wrote none. **No back-entry is written for #124, #125 or #126** (founder decision
+2026-08-26, SONNY-298). #124's gap is recorded here rather than papered over, and the gotcha
+itself was never lost: it is in `CLAUDE.md`, which is where a session reads it.
+
 **Fresh-session review:** the user launches a new CLI session, giving it only the branch
 name and its ticket identifiers — no implementer context. It hunts for problems rather
 than validating:
