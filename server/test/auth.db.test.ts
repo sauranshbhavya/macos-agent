@@ -303,6 +303,70 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
+    it("theIdentityIsKeyedOnTheAddressTheCallerAsserted, never on the provider's own", async () => {
+      // **The boundary Supabase's automatic identity linking sits behind, pinned where it is
+      // decided** (PR #137 review, F7). Supabase may attach a newly verified address to an existing
+      // `auth.users` row, so `session.email` is that row's PRIMARY address and not necessarily the
+      // one just verified — one `supabaseUserId` can cover several. This product's identity key is
+      // `(provider, subject)` and `subject` is the address the CALLER asserted
+      // (`docs/sonny-identity-linking-rule.md`).
+      //
+      // The mutant is one line in the route: `subject: session.email ?? email`. Under it, a code
+      // sent to `just-verified@` lands on the account of `primary@` — two people's sign-ins merging
+      // onto one account, silently, and only when Supabase happens to have linked them. **It was
+      // killed only incidentally, by a revocation test that reads identity rows for other reasons**,
+      // so nothing in the suite had a name that said what was being protected. This does.
+      const app = build();
+      provider.session = {
+        ...provider.session,
+        // What the provider reports: the linked row's primary address, deliberately different from
+        // the address this sign-in is for.
+        email: "primary@example.com",
+        supabaseUserId: "22222222-2222-2222-2222-222222222222",
+      };
+      await app.inject({
+        method: "POST", url: "/v1/auth/email/start", payload: { email: "just-verified@example.com" },
+      });
+      const response = await verify(app, "123456", "just-verified@example.com");
+      expect(response.statusCode).toBe(200);
+
+      const { rows } = await client.query<{ subject: string; email_hint: string | null }>(
+        "SELECT subject, email_hint FROM sonny.identity WHERE account_id = $1",
+        [response.json().user.id],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.subject).toBe("just-verified@example.com");
+      expect(rows[0]!.subject).not.toBe("primary@example.com");
+      await app.close();
+    });
+
+    it("two addresses one Supabase user covers stay two accounts here", async () => {
+      // The consequence of the line above, stated as behaviour rather than as a column value. Both
+      // sign-ins verify against the SAME provider-side user — which is exactly what automatic
+      // linking produces — and must still resolve to two distinct Sonny accounts, because merging
+      // two accounts is the failure the linking rule exists to prevent.
+      const app = build();
+      provider.session = {
+        ...provider.session,
+        email: "primary@example.com",
+        supabaseUserId: "33333333-3333-3333-3333-333333333333",
+      };
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "one@example.com" } });
+      const first = await verify(app, "123456", "one@example.com");
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "two@example.com" } });
+      const second = await verify(app, "123456", "two@example.com");
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      expect(first.json().user.id).not.toBe(second.json().user.id);
+      const { rows } = await client.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM sonny.identity WHERE supabase_user_id = $1",
+        ["33333333-3333-3333-3333-333333333333"],
+      );
+      expect(rows[0]!.n).toBe(2);
+      await app.close();
+    });
+
     it("gives the three distinct failures the contract requires", async () => {
       const app = build();
       // invalid: nothing was ever issued

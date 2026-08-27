@@ -1,5 +1,5 @@
 import type { Config } from "../../src/config.js";
-import { TEST_JWT_CONFIG } from "./tokens.js";
+import { TEST_SUPABASE_CONFIG } from "./tokens.js";
 
 /**
  * One `Config` for every test that builds an app, replacing five hand-written copies (SONNY-130).
@@ -12,6 +12,21 @@ import { TEST_JWT_CONFIG } from "./tokens.js";
  *
  * `Partial<Config>` overrides rather than named parameters, because what a test needs to vary is
  * unpredictable and the alternative is a parameter list that grows the same way the copies did.
+ *
+ * **The next unrelated ticket arrived while this file was still the newest thing in the tree, and it
+ * proved the point twice over** (SONNY-307, rebasing onto SONNY-130). That ticket added two more
+ * `Config` fields and renamed the constant spread below — `TEST_JWT_CONFIG` became
+ * `TEST_SUPABASE_CONFIG`, because it had stopped being only about JWTs. Before this file existed
+ * that rename cost five edits; with it, one. **And the two branches merged clean and did not
+ * compile**: this file and `tokens.ts` never conflicted, because each side touched a different one,
+ * so nothing in the rebase's conflict list pointed at the import that had stopped resolving. What
+ * caught it was `npm run typecheck` — **`npm run build` exits 0 on that tree**, since `tsconfig.json`
+ * includes only sources under `src` and nothing under `test`. (Written without the glob: the glob
+ * ends in a star-slash, which closes this comment and deletes the rest of the file from the
+ * compiler's view — `CLAUDE.md` records the same trap on the Swift side.) That is the server
+ * half's version of the trap
+ * `CLAUDE.md` records from PR #111, and it is why a rebase runs the typecheck and the suite rather
+ * than reading the conflict list.
  */
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -23,7 +38,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     logLevel: "fatal",
     trustProxy: false,
     rateLimitSalt: "test-salt",
-    ...TEST_JWT_CONFIG,
+    ...TEST_SUPABASE_CONFIG,
     openAIBaseUrl: "https://openai.invalid/v1",
     openAITextModel: "test-text-model",
     openAITranscriptionModel: "test-transcription-model",
