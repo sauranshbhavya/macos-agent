@@ -182,6 +182,31 @@ describe("a half-configured sign-in refuses at startup", () => {
     expect(error!.message).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
   });
 
+  it("reads correctly in both the singular and the plural, number and pronoun agreeing", () => {
+    // **The singular form said "one variable is missing: RATE_LIMIT_SALT. Set them"** (PR #137
+    // review, residual 1). This message is the whole of what an operator gets at `exit 78`, and a
+    // copy fix with no test is a copy fix that comes back. Both forms are asserted, so a future
+    // edit to either has to keep both grammatical.
+    const messageFor = (env: NodeJS.ProcessEnv): string => {
+      try {
+        authWiringFrom(loadConfig(env));
+        throw new Error("expected a refusal");
+      } catch (thrown) {
+        return (thrown as Error).message;
+      }
+    };
+
+    // Exactly one missing: everything set except the salt.
+    const singular = messageFor(envWithout("RATE_LIMIT_SALT"));
+    expect(singular).toContain("one variable is missing: RATE_LIMIT_SALT. Set it,");
+    expect(singular).not.toContain("Set them");
+
+    // More than one missing.
+    const plural = messageFor(envWithout("RATE_LIMIT_SALT", "DATABASE_URL"));
+    expect(plural).toContain("2 variables are missing: DATABASE_URL, RATE_LIMIT_SALT. Set them,");
+    expect(plural).not.toContain("Set it,");
+  });
+
   it("never echoes a value into the message it prints at startup", () => {
     // This message goes to stderr before any logger exists and lands in whatever collects the
     // container's output. `config.ts` states the property for its own errors; this is the same

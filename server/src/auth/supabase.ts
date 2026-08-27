@@ -365,7 +365,10 @@ export class SupabaseAuthProvider implements AuthProvider {
    * than approximated, and reported on SONNY-307 as owed.
    *
    * The operation this needs is "revoke every session of user X, given X's id and no token of
-   * theirs". GoTrue's whole path list is in `openapi.yaml` (43 of them, read 2026-08-27) and it is not among them:
+   * theirs". GoTrue's whole path list is in `supabase/auth`'s published `openapi.yaml` — **43 paths**,
+   * counted rather than eyeballed and dated rather than pinned to a commit, because it is somebody
+   * else's file: `curl -s https://raw.githubusercontent.com/supabase/auth/master/openapi.yaml |
+   * grep -cE "^  /"` answered 43 on 2026-08-27. The operation is not among them:
    * `/logout` is the only session-revoking endpoint and it is authenticated by the **user's own
    * bearer token** (`UserAuth`), deriving the user from that token rather than from a parameter;
    * the entire `/admin/*` surface — `generate_link`, `audit`, `users`, `users/{id}`,
@@ -514,9 +517,16 @@ export class SupabaseAuthProvider implements AuthProvider {
   /**
    * Status and code → which of the two errors the seam declares.
    *
-   * Order matters and is the safe one: a named busy code wins over its status, a named caller code
-   * wins next, and only then does the status decide. 429 is unavailable whatever it names, because a
-   * rate limit is never a statement about whether the user's input was correct.
+   * Order matters and is the safe one. Read in the order the code checks them: a named busy code
+   * wins over everything; then **429 and every 5xx are unavailable whatever code they name**; then a
+   * named caller code makes it rejected; then a remaining 4xx does. The reason the status outranks
+   * the caller-code list here and not below it is the same for both statuses — a rate limit and a
+   * server error are statements about the provider's ability to answer, never about whether the
+   * user's input was correct, so `429 validation_failed` and `500 otp_expired` are both the
+   * provider's failure. **This paragraph said "a named caller code wins next, and only then does the
+   * status decide"**, which is true of 4xx and false of 5xx, and would have had a reader expect a
+   * 500 naming a caller code to come back rejected (PR #137 review, residual 2). The behaviour was
+   * the intended one; only the sentence was wrong.
    */
   #failure(operation: string, failure: ProviderFailure): Error {
     const named = failure.code === undefined ? "" : ` (${failure.code})`;
