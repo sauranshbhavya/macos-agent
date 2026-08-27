@@ -1132,7 +1132,8 @@ looks similar.
 ### 9.2 What the server guarantees
 
 - The key is stored with its response for **24 hours**. Within that window, a repeat of the same key
-  returns the stored response.
+  returns the stored response. **Except when that response was a retryable failure** — see the two
+  decisions below.
 - **A metering event is written at most once per idempotency key, ever.** That single sentence is
   what makes a client retry unable to double-bill a user, and it is the reason the key is required
   rather than optional.
@@ -1141,6 +1142,34 @@ looks similar.
   worth surfacing.
 - A key seen while its original request is still in flight gets `409 idempotency.conflict` with
   `retryable: true` and a `Retry-After`, rather than a second upstream call.
+
+#### Two decisions taken when this was built (founder, 2026-08-28, SONNY-300)
+
+**A stored *retryable* failure is released rather than replayed.** The four sentences above and
+section 9.3 cannot both be read literally: 9.3 marks `limit.rate`, `provider.unavailable`,
+`provider.timeout`, `server.error` and `server.unavailable` retryable *with the same key*, and
+replaying a stored one of those makes every such retry safe but useless — a `429` becomes a
+twenty-four-hour ban on that operation and a `503` during a deploy freezes everything in flight for a
+day. So a response carrying one of those codes gives the key back, and a retry with it genuinely
+re-runs. `auth.token_expired` is released for the same reason, because 3.3 makes it the one `401` a
+client answers by refreshing and retrying the original request.
+
+**What that does not cost is the money guarantee**, which is the point of separating the two. The
+metering claim is a mark on the key that a release does not clear, so the re-attempt finds it taken
+and writes no second event. The re-attempt's own usage therefore goes unbilled — the direction the
+second bullet above chooses deliberately, since "unable to double-bill a user" errs toward the user.
+
+**A `POST` carrying no `Idempotency-Key` is served, not refused.** 9.1 makes the header the client's
+obligation and the Mac client sends it on every `POST`; enforcing it server-side would refuse a shape
+no shipping client produces. Such a request has no at-most-once guarantee, because there is no key
+for one to be about. A key longer than 255 characters is `400 request.invalid`.
+
+**One place conflict detection is weaker than "different body" suggests**, stated because it is
+invisible from the outside: on `POST /v1/transcriptions` alone the body is `multipart/form-data` and
+is consumed inside the handler, so the comparison is made on the declared body length rather than on
+the body. Two different recordings of exactly the same encoded length sent under one key are read as
+the same body and the first response is replayed instead of a 409 being raised. It fails in the safe
+direction — a replay never bills twice and never calls a provider twice.
 
 ### 9.3 What is safe to retry
 
@@ -1534,3 +1563,4 @@ record rather than a tidy list.
 | 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `f65e72e`, where the settings block is `:34-39`. | SONNY-130 |
 | 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |
 | 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `f8f5c75`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `f8f5c75` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `f8f5c75` as at `5ad846f`. | SONNY-297 |
+| 2026-08-28 | **9.2 — two founder decisions recorded, and one implementation limit stated.** The gateway implemented no `Idempotency-Key` handling at all until this ticket, so 9.2 had never been built against; building it surfaced a conflict between 9.2's first sentence and 9.3's retryable list that cannot be resolved by reading either more carefully. A stored *retryable* failure is now released rather than replayed, so a same-key retry re-runs — without which a `429` is a twenty-four-hour ban on that operation and a `503` during a deploy freezes every request in flight. The at-most-once metering guarantee is untouched and is what makes the release safe: the claim survives it, so the re-attempt cannot bill again. A `POST` with no key is served rather than refused, because 9.1 is the client's obligation and the only client meets it. And conflict detection on `POST /v1/transcriptions` is by declared body length rather than by body, because a multipart body is consumed inside the handler and buffering it would take 6.1's audio ceiling away from the guard that fires while the part is still streaming. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 9.3's tables and lists are byte-identical. | SONNY-300 |
