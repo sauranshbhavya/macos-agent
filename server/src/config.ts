@@ -459,22 +459,30 @@ export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
  * **The auth base URL is not among these**, deliberately: it is `SUPABASE_JWT_ISSUER`, so the
  * project this gateway *calls* and the project whose tokens it *accepts* cannot be configured apart.
  * `auth/supabase.ts`'s `authUrl` docstring has the argument.
+ *
+ * **`SUPABASE_SERVICE_ROLE_KEY` is deliberately NOT required, and this is where it used to be**
+ * (founder decision of 2026-08-27, option (c), taken at PR #137's review). It is the most dangerous
+ * credential in the project — it bypasses every row-level policy and can act as any user — and
+ * **exactly one method reaches for it**, `deleteUser`, which **no code path calls today**: the
+ * account-closure route revokes sessions and deliberately keeps identities, and the ticket that
+ * would call it is SONNY-196's. Requiring it meant every gateway that serves sign-in had to hold a
+ * key nothing used, which is a standing risk bought for nothing — the whole of least privilege is
+ * not holding a credential until something needs it. So a deployment mounting sign-in starts without
+ * one, `deleteUser` fails at its own call site if it is ever invoked without one, and **the ticket
+ * that lands a caller adds the name back to the required set and to `deploy.sh`'s passthrough in the
+ * same change.** Setting it is still supported and still forwarded to the adapter; it is only no
+ * longer refused for.
  */
 export function requireSupabaseAuthCredentials(config: Config): {
   anonKey: string;
-  serviceRoleKey: string;
+  serviceRoleKey: string | undefined;
 } {
-  const missing = [
-    config.supabaseAnonKey ? undefined : "SUPABASE_ANON_KEY",
-    config.supabaseServiceRoleKey ? undefined : "SUPABASE_SERVICE_ROLE_KEY",
-  ].filter((name): name is string => name !== undefined);
-  if (missing.length > 0) {
+  if (!config.supabaseAnonKey) {
     throw new ConfigError(
-      `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required wherever the sign-in ` +
-        "routes are mounted: without them this gateway cannot ask Supabase to send a code or " +
-        "exchange one. Values are omitted deliberately; see server/.env.example for the expected " +
-        "shape.",
+      "SUPABASE_ANON_KEY is required wherever the sign-in routes are mounted: without it this " +
+        "gateway cannot ask Supabase to send a code or exchange one. Values are omitted " +
+        "deliberately; see server/.env.example for the expected shape.",
     );
   }
-  return { anonKey: config.supabaseAnonKey!, serviceRoleKey: config.supabaseServiceRoleKey! };
+  return { anonKey: config.supabaseAnonKey, serviceRoleKey: config.supabaseServiceRoleKey };
 }

@@ -227,9 +227,20 @@ characters. "Authenticating a request" above has the three variables and what ea
 straight.** The three above verify a token this gateway was handed: local, symmetric, no network.
 `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are for the other direction — asking the project
 to send a sign-in code, exchanging one, rotating, signing out, deleting a provider user. The anon key
-is publishable by design and is sent as `apikey` on every call; the service-role key is a real secret
-that bypasses every row-level policy, is on the secret scanner's name-anchored list, and is sent by
-exactly one method, the admin user delete. **There is no `SUPABASE_URL`**: the auth base URL is
+is publishable by design and is sent as `apikey` on every call.
+
+**The service-role key is a real secret and is deliberately not required** (founder decision
+2026-08-27, option (c)). It bypasses every row-level policy and can act as any user, and **exactly
+one method reaches for it — `deleteUser` — which nothing calls today**: account closure revokes
+sessions and deliberately keeps identities, and the ticket that would call it is SONNY-196's.
+Requiring it would have made every gateway serving sign-in hold the project's most dangerous
+credential in order to use none of it. So startup does not ask for it, `deploy.sh local` does not
+forward it, and `deleteUser` throws `ServiceRoleKeyNotConfigured` at its own call site if a future
+caller reaches it without one — a deployment fault reported as one, rather than a 502 that sends an
+operator hunting a Supabase outage. **The ticket that lands a caller adds it back to the required set
+and the passthrough in the same change.**
+
+**There is no `SUPABASE_URL`**: the auth base URL is
 `SUPABASE_JWT_ISSUER`, so the project this gateway calls and the project whose tokens it accepts
 cannot be pointed at two different places — a mistake that presents as every request answering 401
 with nothing in the logs to say why.
@@ -332,24 +343,25 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 **It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
-`SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added by
-SONNY-130 at the extension point SONNY-306 left — `OPENAI_API_KEY` and `TAVILY_API_KEY`, the two
-credentials the four model routes need. It tracks `src/config.ts`, which is the only thing that
-decides what the gateway reads, and the script's own comment carries the command that re-derives it.
-Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the script or printed
-by it — and only when it is set to something non-empty. Nothing is refused when one is missing: the
-absent ones are named, by name only, and the container starts anyway.
+`SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added by SONNY-130 at the extension
+point SONNY-306 left — `OPENAI_API_KEY` and `TAVILY_API_KEY`, the two credentials the four model
+routes need. `SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
+`SUPABASE_SERVICE_ROLE_KEY` is **not** forwarded, above. It tracks `src/config.ts`, which is the
+only thing that decides what the gateway reads, and the script's own comment carries the command
+that re-derives it. Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the
+script or printed by it — and only when it is set to something non-empty. Nothing is refused when
+one is missing: the absent ones are named, by name only, and the container starts anyway.
 
 **What that container serves depends on what you set, and the script probes it rather than asserting
 it**: after the health check it asks `POST /v1/auth/email/start` what it answers and prints the
-result. Set none of the four `SUPABASE_` names and it is `404 resource.not_found` — health-only,
-which is a supported deployment. Set all seven and it answers `400`, which is `startBody` refusing
+result. Set none of the three `SUPABASE_` names and it is `404 resource.not_found` — health-only,
+which is a supported deployment. Set all six and it answers `400`, which is `startBody` refusing
 the probe's empty body: the route exists. **Until SONNY-307 it was 404 whatever you set**, because
 `src/server.ts` called `buildApp(config)` with no `auth` argument and no concrete `AuthProvider`
 existed; that ticket built both and the probe flipped with no edit to it, which is what probing was
 for.
 
-**Set some of the four and the container refuses to start**, exiting 78 (EX_CONFIG) with the missing
+**Set some of the three and the container refuses to start**, exiting 78 (EX_CONFIG) with the missing
 names printed. That is deliberate: an operator who set three of them has said what they want, and
 serving health-only there would answer 404 to every sign-in while looking perfectly healthy — which
 is indistinguishable from the defect SONNY-307 fixed, and was measured reading exactly that way.

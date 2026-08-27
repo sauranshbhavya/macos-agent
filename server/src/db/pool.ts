@@ -37,6 +37,19 @@ export interface PoolOptions {
   readonly connectionTimeoutMillis?: number;
   /** How long an unused connection is kept. Thirty seconds — enough to survive ordinary bursts. */
   readonly idleTimeoutMillis?: number;
+  /**
+   * How the pool is constructed. Injected only by tests, the same seam and the same reason as
+   * `SupabaseAuthConfig.fetch`.
+   *
+   * **The two properties below are why this exists** (PR #137 review, F6). Both — that a connection
+   * is released when the callback *throws*, and that an idle client's error does not take the
+   * process down — are invisible to a test that cannot reach the pool, and both had surviving
+   * mutants. Testing them against a real Postgres is possible for the first and racy for the second:
+   * making a backend fail while idle means terminating it from another connection and then waiting
+   * on a timer for an event, which is the sleep-then-assert shape that manufactures kills. A pool
+   * the test controls makes both deterministic.
+   */
+  readonly createPool?: (config: pg.PoolConfig) => pg.Pool;
 }
 
 export interface PooledConnections {
@@ -58,7 +71,8 @@ export function pooledConnections(
   connectionString: string,
   options: PoolOptions = {},
 ): PooledConnections {
-  const pool = new pg.Pool({
+  const create = options.createPool ?? ((config: pg.PoolConfig) => new pg.Pool(config));
+  const pool = create({
     connectionString,
     max: options.max ?? 10,
     connectionTimeoutMillis: options.connectionTimeoutMillis ?? 5_000,

@@ -265,12 +265,15 @@ describe("SupabaseAuthProvider — the session it reports", () => {
     expect((await provider.verifyEmailCode("a@example.com", "not-yet")).emailVerified).toBe(false);
   });
 
-  it("reports the provider's own email without ever making it the identity", async () => {
-    // Supabase's automatic identity linking can attach a newly verified address to an existing
-    // `auth.users` row, so `user.email` is the row's primary address and not necessarily the one
-    // just verified. This adapter reports it and `routes/auth.ts` resolves the account from the
-    // address the CALLER asserted — the assertion below is that the two really can differ, which is
-    // what makes reading this field back as the subject a defect rather than a style choice.
+  it("reports the provider's own email, which can differ from the address just verified", async () => {
+    // **Renamed from a claim this test cannot make** (PR #137 review, F7). It said "without ever
+    // making it the identity", and nothing here decides the identity — `routes/auth.ts` does, and
+    // `auth.db.test.ts`'s `theIdentityIsKeyedOnTheAddressTheCallerAsserted` is the test that holds
+    // that boundary. What this one establishes is the premise that makes the boundary matter: the
+    // provider's `user.email` really can name a different address from the one just verified,
+    // because Supabase's automatic identity linking attaches a newly verified address to an existing
+    // `auth.users` row and reports that row's primary address. Reading this field back as the
+    // subject is therefore a defect rather than a style choice.
     const { provider } = providerAnswering(() =>
       json(200, { ...SESSION_BODY, user: { id: "u1", email: "primary@example.com" } }),
     );

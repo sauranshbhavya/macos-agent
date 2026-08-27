@@ -53,6 +53,11 @@ import {
  *    `b@example.com` would land on the account of `a@example.com`, and it is a one-line mistake to
  *    make, which is why the field is documented here rather than merely typed.
  *
+ * **Every method throws `ProviderRejected` or `ProviderUnavailable` and nothing else — with one
+ * named exception.** `deleteUser` throws `ServiceRoleKeyNotConfigured` when this adapter was built
+ * without a service-role key, which is a deployment fault rather than a provider one and is argued
+ * at that method. Every other failure, on every method, is one of the seam's two.
+ *
  * **No value reaches a message, a log line or an error.** Errors name the operation, the HTTP status
  * and the provider's error **code** — a fixed vocabulary from GoTrue's own `errorcode.go` — and
  * never the URL (which contains the project ref), the response body, the address, the code or a
@@ -84,13 +89,21 @@ export interface SupabaseAuthConfig {
    */
   readonly anonKey: string;
   /**
-   * The service-role key, sent on the `/admin/*` endpoints only.
+   * The service-role key, sent on the `/admin/*` endpoints only — **and optional**.
    *
    * **This one is a real secret** and is on `scripts/check-secrets.sh`'s name-anchored list already.
    * It is used by exactly one method here, `deleteUser`, and is never sent on a request a user's
    * token could have made instead.
+   *
+   * **`undefined` is a supported and expected value** (founder decision of 2026-08-27, option (c)).
+   * Nothing calls `deleteUser` today, so requiring this key would make every gateway serving sign-in
+   * hold the project's most dangerous credential in order to use none of it. When it is absent the
+   * adapter is fully functional for every other method and `deleteUser` throws
+   * `ServiceRoleKeyNotConfigured` at its own call site — loudly, rather than sending a request with
+   * no `apikey` and reading Supabase's 401 as something else. `config.ts`'s
+   * `requireSupabaseAuthCredentials` carries the reasoning where the requirement used to be.
    */
-  readonly serviceRoleKey: string;
+  readonly serviceRoleKey: string | undefined;
   /**
    * Per-request timeout. **A bound this repository already owes** (`auth/revocation.ts`: "there is
    * no timeout on `signOutAllForUser` to bound it further. A real adapter should set one; whichever
@@ -104,6 +117,28 @@ export interface SupabaseAuthConfig {
   readonly timeoutMs?: number;
   /** Injected so the translation can be tested without a project. Defaults to the global `fetch`. */
   readonly fetch?: typeof globalThis.fetch;
+}
+
+/**
+ * `deleteUser` was called on an adapter built without `SUPABASE_SERVICE_ROLE_KEY`.
+ *
+ * **Not one of the seam's two errors, on purpose.** `provider.ts` declares `ProviderRejected` and
+ * `ProviderUnavailable`, and both are statements about what the *provider* did; this is a statement
+ * about this deployment's configuration, and the two want opposite responses from whoever sees it —
+ * an operator sets a variable rather than waiting for Supabase to recover. It is exported so the
+ * ticket that lands a caller for `deleteUser` (SONNY-196's) can catch it by type rather than by
+ * message, and so a reader grepping for it finds the argument in one place.
+ */
+export class ServiceRoleKeyNotConfigured extends Error {
+  constructor() {
+    super(
+      "supabase deleteUser needs SUPABASE_SERVICE_ROLE_KEY and this gateway was started without " +
+        "one. It is not required at startup because nothing called this method when that decision " +
+        "was taken (founder decision, 2026-08-27, option (c)); the ticket that lands a caller adds " +
+        "it back to the required set.",
+    );
+    this.name = "ServiceRoleKeyNotConfigured";
+  }
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -220,7 +255,7 @@ interface ProviderFailure {
 export class SupabaseAuthProvider implements AuthProvider {
   readonly #authUrl: string;
   readonly #anonKey: string;
-  readonly #serviceRoleKey: string;
+  readonly #serviceRoleKey: string | undefined;
   readonly #timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
 
@@ -374,10 +409,18 @@ export class SupabaseAuthProvider implements AuthProvider {
    * asked for.
    */
   async deleteUser(supabaseUserId: string): Promise<void> {
+    // **The one failure here that is neither of the seam's two errors, and it is deliberate.** A
+    // missing service-role key is a deployment fault, not a provider one: answering
+    // `ProviderUnavailable` would send an operator hunting a Supabase outage that is not happening,
+    // and `ProviderRejected` would be read by `revocation.ts` as "already done". Failing before the
+    // request is also the only way to avoid sending Supabase an admin call with no `apikey` and
+    // then having to guess whether its 401 meant "no key" or "wrong key".
+    const key = this.#serviceRoleKey;
+    if (key === undefined) throw new ServiceRoleKeyNotConfigured();
     await this.#call("deleteUser", `/admin/users/${encodeURIComponent(supabaseUserId)}`, {
       method: "DELETE",
-      key: this.#serviceRoleKey,
-      bearer: this.#serviceRoleKey,
+      key,
+      bearer: key,
     });
   }
 

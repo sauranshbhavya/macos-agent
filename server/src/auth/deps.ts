@@ -20,7 +20,7 @@ import { SupabaseAuthProvider } from "./supabase.js";
  *
  * | environment holds                     | outcome                                              |
  * |---------------------------------------|------------------------------------------------------|
- * | none of the four Supabase auth names  | `undefined` — health-only, and a supported deployment |
+ * | none of the three Supabase auth names | `undefined` — health-only, and a supported deployment |
  * | some of them                          | `ConfigError` at startup, naming every missing name   |
  * | all of them                           | `AuthDeps` — the auth routes mount                    |
  *
@@ -40,15 +40,24 @@ import { SupabaseAuthProvider } from "./supabase.js";
  * stated property: "a missing credential is a startup failure with a named variable, not a server
  * that runs and fails on the first real request."
  *
- * **Why the trigger is the four Supabase names and not the whole set.** `DATABASE_URL` is also
+ * **Why the trigger is the three Supabase names and not the whole set.** `DATABASE_URL` is also
  * required for auth, but it is not a *signal* of intent: a gateway running health-only while a
  * migration runs legitimately holds one, and treating it as intent would make that shape refuse to
- * start. `RATE_LIMIT_SALT` is the same. The four below mean sign-in and nothing else, so they are the
- * question, and `DATABASE_URL` and `RATE_LIMIT_SALT` are then requirements the answer carries.
+ * start. `RATE_LIMIT_SALT` is the same. The three below mean sign-in and nothing else, so they are
+ * the question, and `DATABASE_URL` and `RATE_LIMIT_SALT` are then requirements the answer carries.
  *
  * **`SUPABASE_JWT_AUDIENCE` is deliberately not one of them**: it has a default, so its presence
  * says nothing about intent, and an environment setting only that would otherwise refuse to start
  * over a variable that changes nothing.
+ *
+ * **`SUPABASE_SERVICE_ROLE_KEY` was a fourth trigger and is no longer one** (founder decision of
+ * 2026-08-27, option (c), taken at PR #137's review). Nothing calls the one method that uses it, so
+ * requiring it made every sign-in deployment hold the project's most dangerous credential in order
+ * to use none of it. It is still read, still passed to the adapter when set, and no longer a reason
+ * to refuse a start. Two consequences a reader should expect: an environment carrying **only** that
+ * name is health-only rather than a refusal, because it now says nothing about intent; and
+ * `deleteUser` throws `ServiceRoleKeyNotConfigured` if a future caller reaches it without one.
+ * `config.ts`'s `requireSupabaseAuthCredentials` carries the full argument.
  */
 
 /**
@@ -61,7 +70,6 @@ const AUTH_INTENT: readonly (readonly [name: string, read: (config: Config) => u
   ["SUPABASE_JWT_SECRET", (config) => config.supabaseJwtSecret],
   ["SUPABASE_JWT_ISSUER", (config) => config.supabaseJwtIssuer],
   ["SUPABASE_ANON_KEY", (config) => config.supabaseAnonKey],
-  ["SUPABASE_SERVICE_ROLE_KEY", (config) => config.supabaseServiceRoleKey],
 ];
 
 /** Everything auth needs beyond the four above, in the order an operator would fix them. */
