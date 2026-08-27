@@ -35,7 +35,12 @@ import type { FastifyRequest } from "fastify";
  * document) and it also removes the dependence on a serializer's insertion order, which would
  * otherwise make a dependency bump turn live keys into conflicts.
  *
- * ## The one place it is weaker, stated plainly
+ * ## Where it is weaker, stated plainly
+ *
+ * **There is one such place, and this section named it as the only one while a second existed** (PR
+ * #142's review, F2). The other was a collision *across content types*, closed by hashing each body
+ * kind under its own prefix — `digestOfBody` carries what it cost. What follows is the one that
+ * remains, and it is remaining by choice rather than by oversight.
  *
  * `/v1/transcriptions` is `multipart/form-data` (§4.4) and its body is consumed inside the handler,
  * so `request.body` is `undefined` at `preHandler` and `LENGTH_PREFIX` below stands in: the declared
@@ -73,12 +78,34 @@ function canonicalize(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v)}`).join(",")}}`;
 }
 
+/**
+ * **Each body kind is hashed under its own prefix, and the prefix is the whole point.**
+ *
+ * Without it a parsed object is hashed canonically while a string is hashed raw, so a `text/plain`
+ * body whose bytes happen to *equal* the canonical serialization digests identically to the JSON
+ * document — two genuinely different requests, one fingerprint. PR #142's review measured the
+ * consequence end to end: the canonical bytes sent as `text/plain` were answered `400
+ * request.invalid` and stored (a non-retryable code, so the row stays `completed`), and the client's
+ * real `application/json` request under the same key was then **replayed that 400 for twenty-four
+ * hours**, with zero upstream calls and a code it will not retry. Unlike the multipart fallback
+ * below, that direction fails *unsafe*: it is a wrong answer to a correct request, not a repeat of a
+ * right one.
+ *
+ * The prefixes make the kinds disjoint, so no serialization coincidence can cross them.
+ */
 function digestOfBody(body: unknown): string | undefined {
   if (body === undefined || body === null) return undefined;
   const hash = createHash("sha256");
-  if (Buffer.isBuffer(body)) hash.update(body);
-  else if (typeof body === "string") hash.update(body, "utf8");
-  else hash.update(canonicalize(body), "utf8");
+  if (Buffer.isBuffer(body)) {
+    hash.update("bytes\n", "utf8");
+    hash.update(body);
+  } else if (typeof body === "string") {
+    hash.update("text\n", "utf8");
+    hash.update(body, "utf8");
+  } else {
+    hash.update("json\n", "utf8");
+    hash.update(canonicalize(body), "utf8");
+  }
   return hash.digest("hex");
 }
 
@@ -91,7 +118,8 @@ function digestOfBody(body: unknown): string | undefined {
  * because which branch applies is decided by the content type — a parsed body is always available at
  * `preHandler` and a multipart one never is — and not by timing. A key sent once as JSON and once as
  * multipart to one route lands on different branches and conflicts, which is the correct answer to a
- * request that really has changed shape.
+ * request that really has changed shape; the same now holds for two *parsed* bodies of different
+ * kinds, which it did not until `digestOfBody` gained its prefixes.
  */
 export function fingerprintOf(request: FastifyRequest, routeKey: string): string {
   const digest = digestOfBody(request.body);

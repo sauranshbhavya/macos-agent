@@ -74,10 +74,13 @@ const signedInConnection: WithConnection = async (work) => {
  * in a response.
  */
 class RecordingStore implements KeyStore {
-  outcome: ClaimOutcome = { kind: "claimed" };
+  /** The token a granted claim hands back; recorded on every write so the fencing is checkable. */
+  static readonly TOKEN = "3c3c3c3c-4d4d-4e4e-8f8f-909090909090";
+  outcome: ClaimOutcome = { kind: "claimed", token: RecordingStore.TOKEN };
   readonly claims: ClaimRequest[] = [];
-  readonly completed: { key: string; scope: string; response: CompletedResponse }[] = [];
-  readonly released: { key: string; scope: string }[] = [];
+  readonly completed: { key: string; scope: string; token: string; response: CompletedResponse }[] =
+    [];
+  readonly released: { key: string; scope: string; token: string }[] = [];
   failWrites = false;
 
   async claim(request: ClaimRequest): Promise<ClaimOutcome> {
@@ -85,15 +88,20 @@ class RecordingStore implements KeyStore {
     return this.outcome;
   }
   async complete(
-    request: { accountScope: string; key: string },
+    request: { accountScope: string; key: string; token: string },
     response: CompletedResponse,
   ): Promise<void> {
     if (this.failWrites) throw new Error("the key store is down");
-    this.completed.push({ key: request.key, scope: request.accountScope, response });
+    this.completed.push({
+      key: request.key,
+      scope: request.accountScope,
+      token: request.token,
+      response,
+    });
   }
-  async release(request: { accountScope: string; key: string }): Promise<void> {
+  async release(request: { accountScope: string; key: string; token: string }): Promise<void> {
     if (this.failWrites) throw new Error("the key store is down");
-    this.released.push({ key: request.key, scope: request.accountScope });
+    this.released.push({ key: request.key, scope: request.accountScope, token: request.token });
   }
 }
 
@@ -354,7 +362,9 @@ describe("a retryable failure releases the key rather than freezing it", () => {
 
       expect(response.statusCode).toBe(status);
       expect(response.json()["error"]["code"]).toBe(code);
-      expect(store.released).toEqual([{ key: KEY, scope: ACCOUNT }]);
+      expect(store.released).toEqual([
+        { key: KEY, scope: ACCOUNT, token: RecordingStore.TOKEN },
+      ]);
       expect(store.completed).toHaveLength(0);
       await app.close();
     });
@@ -571,6 +581,42 @@ describe("the multipart route, whose body the hook cannot hash", () => {
   });
 });
 
+describe("the fencing token", () => {
+  it("carries the token of the claim it took into the write that closes it", async () => {
+    // Scope and key identify the row; only the token identifies the *claim*. A writer that dropped
+    // it would land on whatever claim the row is on by the time `onSend` runs — which is a live
+    // successor's, in the ordering `idempotency.db.test.ts` measures.
+    stubUpstream();
+    const app = build();
+
+    await post(app, { key: KEY });
+
+    expect(store.completed).toHaveLength(1);
+    expect(store.completed[0]!.token).toBe(RecordingStore.TOKEN);
+    await app.close();
+  });
+
+  it("writes nothing at all for a replay, which took no claim", async () => {
+    stubUpstream();
+    const app = build();
+    store.outcome = {
+      kind: "replay",
+      response: {
+        status: 200,
+        body: Buffer.from("{}", "utf8"),
+        contentType: "application/json",
+        requestId: "original-id",
+      },
+    };
+
+    await post(app, { key: KEY });
+
+    expect(store.completed).toHaveLength(0);
+    expect(store.released).toHaveLength(0);
+    await app.close();
+  });
+});
+
 describe("the fingerprint", () => {
   const request = (body: unknown, headers: Record<string, string> = {}) =>
     ({ body, headers }) as never;
@@ -616,6 +662,34 @@ describe("the fingerprint", () => {
   it("never lets a parsed body and an unparsed one collide", () => {
     expect(fingerprintOf(request({}), "POST /v1/plan")).not.toBe(
       fingerprintOf(request(undefined, { "content-length": "2" }), "POST /v1/plan"),
+    );
+  });
+
+  it("does not let a string body collide with the JSON document that spells it", () => {
+    // **The unsafe collision** (PR #142's review, F2). `digestOfBody` hashes an object canonically
+    // and a string raw, so a `text/plain` body whose bytes equal the canonical serialization used to
+    // fingerprint identically to the parsed JSON — and because the 400 such a body earns is not a
+    // retryable code, the row stayed `completed` and the client's real request was answered with
+    // that stored 400 for twenty-four hours. Unlike the multipart fallback above, this direction
+    // fails unsafe: a wrong answer to a correct request.
+    const parsed = { a: 1, b: 2 };
+    const canonicalText = '{"a":1,"b":2}';
+    expect(fingerprintOf(request(parsed), "POST /v1/plan")).not.toBe(
+      fingerprintOf(request(canonicalText), "POST /v1/plan"),
+    );
+  });
+
+  it("does not let a Buffer body collide with the string that spells it", () => {
+    const text = '{"a":1}';
+    expect(fingerprintOf(request(text), "POST /v1/plan")).not.toBe(
+      fingerprintOf(request(Buffer.from(text, "utf8")), "POST /v1/plan"),
+    );
+  });
+
+  it("still gives two equal strings the same fingerprint", () => {
+    // The prefixes separate the kinds without making a genuine repeat conflict with itself.
+    expect(fingerprintOf(request("hello"), "POST /v1/plan")).toBe(
+      fingerprintOf(request("hello"), "POST /v1/plan"),
     );
   });
 

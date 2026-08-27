@@ -6,6 +6,7 @@ import type { WithConnection } from "../src/db/connection.js";
 import { up } from "../src/db/migrate.js";
 import {
   CLAIM_LEASE_SECONDS,
+  type ClaimOutcome,
   RESPONSE_TTL_SECONDS,
   UNAUTHENTICATED_SCOPE,
   claimKey,
@@ -49,6 +50,22 @@ const claim = (fingerprint = "POST /v1/plan\nsha256:aaa", accountScope = ACCOUNT
   fingerprint,
 });
 const at = (accountScope = ACCOUNT) => ({ accountScope, key: KEY });
+/**
+ * Assert a claim was granted and hand back its fencing token.
+ *
+ * Every writer now needs the token, so this replaces the bare `toEqual({ kind: "claimed" })` the
+ * suite used before fencing — and asserts the token is a real one rather than an empty string, which
+ * a mutant that dropped `gen_random_uuid()` would otherwise slip past.
+ */
+const grantedTo = (outcome: ClaimOutcome): string => {
+  expect(outcome.kind).toBe("claimed");
+  if (outcome.kind !== "claimed") throw new Error("unreachable");
+  expect(outcome.token).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  return outcome.token;
+};
+
+/** Scope, key and a claim's fencing token — what `completeClaim` and `releaseClaim` now take. */
+const heldBy = (token: string, accountScope = ACCOUNT) => ({ accountScope, key: KEY, token });
 const response = (body: string, status = 200) => ({
   status,
   body: Buffer.from(body, "utf8"),
@@ -82,7 +99,7 @@ describeDb("the idempotency key store", () => {
   };
 
   it("gives the key to the first request that asks", async () => {
-    expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+    grantedTo(await claimKey(client, claim()));
 
     const { rows } = await client.query(
       `SELECT state, route, request_fingerprint, metering_claimed_at,
@@ -113,8 +130,8 @@ describeDb("the idempotency key store", () => {
   });
 
   it("returns the stored response, byte for byte, to a repeat inside the window", async () => {
-    await claimKey(client, claim());
-    await completeClaim(client, at(), response('{"output_text":"the answer"}'));
+    const token = grantedTo(await claimKey(client, claim()));
+    await completeClaim(client, heldBy(token), response('{"output_text":"the answer"}'));
 
     const repeat = await claimKey(client, claim());
 
@@ -127,8 +144,8 @@ describeDb("the idempotency key store", () => {
   });
 
   it("starts the twenty-four hours at completion, not at the claim", async () => {
-    await claimKey(client, claim());
-    await completeClaim(client, at(), response("{}"));
+    const token = grantedTo(await claimKey(client, claim()));
+    await completeClaim(client, heldBy(token), response("{}"));
 
     const { rows } = await client.query(
       `SELECT ROUND(EXTRACT(EPOCH FROM (response_expires_at - now()))) AS remaining
@@ -142,11 +159,11 @@ describeDb("the idempotency key store", () => {
   });
 
   it("stops replaying once the twenty-four hours have passed, and lets the key run again", async () => {
-    await claimKey(client, claim());
-    await completeClaim(client, at(), response("{}"));
+    const token = grantedTo(await claimKey(client, claim()));
+    await completeClaim(client, heldBy(token), response("{}"));
     await backDate("response_expires_at", 1);
 
-    expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+    grantedTo(await claimKey(client, claim()));
   });
 
   it("takes the key back from a holder that outlived its lease", async () => {
@@ -156,7 +173,7 @@ describeDb("the idempotency key store", () => {
     await claimKey(client, claim());
     await backDate("lease_expires_at", 1);
 
-    expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+    grantedTo(await claimKey(client, claim()));
   });
 
   describe("a different body under the same key", () => {
@@ -167,43 +184,43 @@ describeDb("the idempotency key store", () => {
     });
 
     it("conflicts against a stored response", async () => {
-      await claimKey(client, claim());
-      await completeClaim(client, at(), response("{}"));
+      const token = grantedTo(await claimKey(client, claim()));
+      await completeClaim(client, heldBy(token), response("{}"));
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
     it("conflicts against a released key, which is otherwise free", async () => {
-      await claimKey(client, claim());
-      await releaseClaim(client, at());
+      const token = grantedTo(await claimKey(client, claim()));
+      await releaseClaim(client, heldBy(token));
       // Free to the same body...
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
     it("conflicts even after the response window has passed", async () => {
-      await claimKey(client, claim());
-      await completeClaim(client, at(), response("{}"));
+      const token = grantedTo(await claimKey(client, claim()));
+      await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
   });
 
   it("gives a released key straight back to the same body", async () => {
-    await claimKey(client, claim());
-    await releaseClaim(client, at());
+    const token = grantedTo(await claimKey(client, claim()));
+    await releaseClaim(client, heldBy(token));
 
-    expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+    grantedTo(await claimKey(client, claim()));
   });
 
   it("keeps one account's key entirely separate from another's", async () => {
-    await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
-    await completeClaim(client, at(ACCOUNT), response('{"mine":true}'));
+    const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
+    await completeClaim(client, heldBy(mineToken, ACCOUNT), response('{"mine":true}'));
 
     // The same key under a different scope is a *fresh claim*, never the first account's response —
     // which is the property that stops a stored answer crossing between callers.
-    expect(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT))).toEqual({
-      kind: "claimed",
-    });
-    await completeClaim(client, at(OTHER_ACCOUNT), response('{"theirs":true}'));
+    const theirToken = grantedTo(
+      await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT)),
+    );
+    await completeClaim(client, heldBy(theirToken, OTHER_ACCOUNT), response('{"theirs":true}'));
 
     // And each replays its own.
     const mine = await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
@@ -220,31 +237,88 @@ describeDb("the idempotency key store", () => {
       kind: "conflict",
     });
     // The same different body under another account is simply that account's first request.
-    expect(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", OTHER_ACCOUNT))).toEqual({
-      kind: "claimed",
-    });
+    grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", OTHER_ACCOUNT)));
   });
 
   it("holds an unauthenticated key in a scope no account can reach", async () => {
     await claimKey(client, claim("POST /v1/auth/email/start\nsha256:aaa", UNAUTHENTICATED_SCOPE));
-    expect(
-      await claimKey(client, claim("POST /v1/auth/email/start\nsha256:aaa", ACCOUNT)),
-    ).toEqual({ kind: "claimed" });
+    grantedTo(await claimKey(client, claim("POST /v1/auth/email/start\nsha256:aaa", ACCOUNT)));
   });
 
-  it("does not let a late completion overwrite a response another request has since stored", async () => {
-    // Reachable whenever a holder outlives its lease, is declared dead, and then finishes anyway.
-    await claimKey(client, claim());
-    await backDate("lease_expires_at", 1);
-    await claimKey(client, claim()); // the successor takes it
-    await completeClaim(client, at(), response('{"from":"the successor"}'));
+  /**
+   * A holder whose lease expired, finishing after its successor took the key.
+   *
+   * **Both orderings are here, and only one of them was before** (PR #142's review, F1). The suite
+   * covered the ghost finishing after the successor had already *completed*, which `state =
+   * 'in_flight'` alone is enough to refuse. The ordering that actually misbehaved is the successor
+   * still being **in flight** — then the state guard matches the successor's row, and the ghost's
+   * write lands on a claim that is not its own. `claim_token` is what tells the two apart, and each
+   * of the three tests below fails without it.
+   */
+  describe("a superseded holder finishing late", () => {
+    /** Claim, let the lease lapse, let a successor take it. Returns both claims' tokens. */
+    const ghostAndSuccessor = async () => {
+      const ghost = grantedTo(await claimKey(client, claim()));
+      await backDate("lease_expires_at", 1);
+      const successor = grantedTo(await claimKey(client, claim()));
+      expect(successor).not.toBe(ghost);
+      return { ghost, successor };
+    };
 
-    // The original finally answers. `WHERE state = 'in_flight'` is what refuses it.
-    await completeClaim(client, at(), response('{"from":"the ghost"}'));
+    it("cannot complete over a successor that has already completed", async () => {
+      const { ghost, successor } = await ghostAndSuccessor();
+      await completeClaim(client, heldBy(successor), response('{"from":"the successor"}'));
 
-    const repeat = await claimKey(client, claim());
-    if (repeat.kind !== "replay") throw new Error("expected a replay");
-    expect(repeat.response.body.toString("utf8")).toBe('{"from":"the successor"}');
+      await completeClaim(client, heldBy(ghost), response('{"from":"the ghost"}'));
+
+      const repeat = await claimKey(client, claim());
+      if (repeat.kind !== "replay") throw new Error("expected a replay");
+      expect(repeat.response.body.toString("utf8")).toBe('{"from":"the successor"}');
+    });
+
+    it("cannot complete over a successor that is still in flight, discarding its real answer", async () => {
+      // Direction B of the measured failure. Without the token the ghost's body is stored and
+      // replayed for twenty-four hours, and the successor's own completion then matches nothing
+      // because the row is no longer `in_flight` — its real answer is dropped silently.
+      const { ghost, successor } = await ghostAndSuccessor();
+
+      await completeClaim(client, heldBy(ghost), response('{"from":"the ghost"}'));
+
+      // The row is untouched: still the successor's claim, still in flight.
+      const { rows } = await client.query(
+        `SELECT state, response_body, claim_token FROM sonny.idempotency_key
+          WHERE account_scope = $1 AND idempotency_key = $2`,
+        [ACCOUNT, KEY],
+      );
+      expect(rows[0].state).toBe("in_flight");
+      expect(rows[0].response_body).toBeNull();
+      expect(rows[0].claim_token).toBe(successor);
+
+      // And the successor's own answer still lands.
+      await completeClaim(client, heldBy(successor), response('{"from":"the successor"}'));
+      const repeat = await claimKey(client, claim());
+      if (repeat.kind !== "replay") throw new Error("expected a replay");
+      expect(repeat.response.body.toString("utf8")).toBe('{"from":"the successor"}');
+    });
+
+    it("cannot release a successor that is still in flight, freeing the key under it", async () => {
+      // Direction A, and the one that defeats §9.2 bullet 4: without the token the ghost's release
+      // frees the successor's claim, and a third request claims and calls the provider while the
+      // successor is still running.
+      const { ghost, successor } = await ghostAndSuccessor();
+
+      await releaseClaim(client, heldBy(ghost));
+
+      const third = await claimKey(client, claim());
+      expect(third.kind).toBe("in_flight");
+      const { rows } = await client.query(
+        `SELECT state, claim_token FROM sonny.idempotency_key
+          WHERE account_scope = $1 AND idempotency_key = $2`,
+        [ACCOUNT, KEY],
+      );
+      expect(rows[0].state).toBe("in_flight");
+      expect(rows[0].claim_token).toBe(successor);
+    });
   });
 
   describe("the metering claim — §9.2's second guarantee, which is the one that costs money", () => {
@@ -260,22 +334,22 @@ describeDb("the idempotency key store", () => {
       // **This is the whole reason `releaseClaim` does not clear `metering_claimed_at`.** The
       // founder decision of 2026-08-28 lets a retryable failure re-run; what keeps that from being a
       // double charge is that the second attempt finds the claim already taken.
-      await claimKey(client, claim());
+      const token = grantedTo(await claimKey(client, claim()));
       expect(await claimMeteringEvent(client, at())).toBe(true);
 
-      await releaseClaim(client, at());
-      expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+      await releaseClaim(client, heldBy(token));
+      grantedTo(await claimKey(client, claim()));
 
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
     it("survives the response expiring, so a key reused after a day still cannot bill twice", async () => {
-      await claimKey(client, claim());
+      const token = grantedTo(await claimKey(client, claim()));
       await claimMeteringEvent(client, at());
-      await completeClaim(client, at(), response("{}"));
+      await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
 
-      expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+      grantedTo(await claimKey(client, claim()));
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
@@ -284,14 +358,14 @@ describeDb("the idempotency key store", () => {
       await claimMeteringEvent(client, at());
       await backDate("lease_expires_at", 1);
 
-      expect(await claimKey(client, claim())).toEqual({ kind: "claimed" });
+      grantedTo(await claimKey(client, claim()));
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
     it("survives pruning, which clears payloads and never rows", async () => {
-      await claimKey(client, claim());
+      const token = grantedTo(await claimKey(client, claim()));
       await claimMeteringEvent(client, at());
-      await completeClaim(client, at(), response("{}"));
+      await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
 
       expect(await pruneExpiredResponses(client)).toBe(1);
@@ -344,8 +418,8 @@ describeDb("the idempotency key store", () => {
 
   describe("pruning and account deletion", () => {
     it("clears an expired payload and frees the key, leaving the row", async () => {
-      await claimKey(client, claim());
-      await completeClaim(client, at(), response("{}"));
+      const token = grantedTo(await claimKey(client, claim()));
+      await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
 
       expect(await pruneExpiredResponses(client)).toBe(1);
@@ -365,8 +439,8 @@ describeDb("the idempotency key store", () => {
     });
 
     it("leaves a payload that is still inside its window", async () => {
-      await claimKey(client, claim());
-      await completeClaim(client, at(), response("{}"));
+      const token = grantedTo(await claimKey(client, claim()));
+      await completeClaim(client, heldBy(token), response("{}"));
 
       expect(await pruneExpiredResponses(client)).toBe(0);
       const repeat = await claimKey(client, claim());
@@ -374,11 +448,21 @@ describeDb("the idempotency key store", () => {
     });
 
     it("drops one account's stored responses and keeps its metering claims", async () => {
-      await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
+      const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
       await claimMeteringEvent(client, at(ACCOUNT));
-      await completeClaim(client, at(ACCOUNT), response('{"content":"the user asked something"}'));
-      await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT));
-      await completeClaim(client, at(OTHER_ACCOUNT), response('{"content":"someone else"}'));
+      await completeClaim(
+        client,
+        heldBy(mineToken, ACCOUNT),
+        response('{"content":"the user asked something"}'),
+      );
+      const theirToken = grantedTo(
+        await claimKey(client, claim("POST /v1/plan\nsha256:aaa", OTHER_ACCOUNT)),
+      );
+      await completeClaim(
+        client,
+        heldBy(theirToken, OTHER_ACCOUNT),
+        response('{"content":"someone else"}'),
+      );
 
       expect(await deleteStoredResponsesForAccount(client, ACCOUNT)).toBe(1);
 
