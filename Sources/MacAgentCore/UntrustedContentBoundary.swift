@@ -387,14 +387,15 @@ public enum UntrustedContentBoundary {
     /// the Unicode line and paragraph separators (U+2028, U+2029) — and every non-space horizontal
     /// separator, tab and the non-breaking space among them, free to split the token. A prompt is
     /// JSON-serialised UTF-8, so each of those survives the wire intact and renders where it lands.
-    /// `PriorTaskContext.foldingLineBreaks` closed the same narrowing over the prior-task block one
-    /// ticket earlier; this is the observed-content boundary's copy of it.
+    /// ``foldingLineBreaks`` — the sibling below, which `PriorTaskContext` closed the same narrowing
+    /// with one ticket earlier and which SONNY-226 hoisted here — is the *other* answer to the same
+    /// question; this is the observed-content attribute's.
     ///
     /// **`_` is the replacement, and its one-for-one-ness is not what makes any of this safe.** Say
     /// that plainly, because the first draft of this comment credited it and PR #97's review was
     /// right to call that out: one character for one only means a folded payload cannot grow the
     /// prompt, which is a length argument and nothing more. It is why runs are *not* collapsed here —
-    /// deliberately unlike `PriorTaskContext.foldingLineBreaks`, whose two-character `\n` marker
+    /// deliberately unlike ``foldingLineBreaks``, whose two-character `\n` marker
     /// really could expand a capped string, and whose marker belongs in a field *value* where a
     /// reader gains from knowing a break was there. Here the value has to survive as one token, so
     /// the replacement has to read as part of it. **The property that carries the safety is the
@@ -451,5 +452,76 @@ public enum UntrustedContentBoundary {
         value
             .components(separatedBy: separators)
             .joined(separator: "_")
+    }
+
+    // MARK: - Folding line breaks in a field interpolated into a line-structured block
+
+    /// Every run of line-break characters in `value`, replaced by the two literal characters `\n`, so
+    /// a value interpolated into a **line** of a line-structured block cannot begin a line of its own
+    /// and be read as that block's structure.
+    ///
+    /// **Three folds, one rule, and this is the paragraph that stops the third from reading as an
+    /// inconsistency** (SONNY-226 and SONNY-231, founder decision 2026-08-26). The shape a value is
+    /// folded into follows from the shape of the position it lands in, and this repository now has all
+    /// three positions:
+    ///
+    /// - **An attribute** — the `id=` and `source=` tokens on a wrapper's opening line — has to survive
+    ///   as one *token* as well as one line, so ``escapeAttribute`` folds every separator, tab and
+    ///   non-breaking space included, to `_`, one character for one. A two-character marker would end
+    ///   the token as surely as the space did.
+    /// - **A field on a line of an otherwise multi-line block** — `Window title: …`, a history entry,
+    ///   `Title: …`, `Previous outcome: …` — has to stay on its line and is otherwise ordinary readable
+    ///   text a model is meant to understand. That is this function: line breaks only, runs collapsed
+    ///   to one marker, and the marker is the two literal characters `\n` so a reader still knows a
+    ///   break was there. `escapeAttribute`'s `_` is wrong here — it would destroy every space in
+    ///   readable prose to close a line-break hole.
+    /// - **The body of a block that is deliberately multi-line** — a fetched page's readable text, the
+    ///   observed block as a whole — is **not folded at all**, and that is the decision rather than an
+    ///   omission. Folding it would flatten the content the model is there to read, and the wrapper
+    ///   around it already says the whole block is data.
+    ///
+    /// **The character set is `CharacterSet.newlines`, deliberately wider than `\n`.** It covers LF,
+    /// VT, FF, CR, CRLF, NEL (U+0085) and the Unicode line and paragraph separators (U+2028, U+2029). A
+    /// prompt is JSON-serialised UTF-8, so every one of those survives the wire intact and any of them
+    /// can begin a new line where it is rendered; folding only `\n` would leave six ways in. **That set
+    /// is the invariant, and it is why this function is here rather than copied** (SONNY-262):
+    /// narrowing one copy of a two-copy rule silently restores that copy's own defect, and nothing
+    /// fails.
+    ///
+    /// **Runs collapse to one marker rather than one marker per character**, which bounds what an
+    /// attacker can do to the prompt's length: a two-character marker per line-break character would
+    /// let a payload of nothing but newlines expand a capped string rather than shrink it. A run is a
+    /// paragraph break as far as a field is concerned, and one marker says so.
+    ///
+    /// **It cannot rebuild a delimiter, which is why callers may fold before escaping.**
+    /// `foldingSeparators` emits `_`, a delimiter character, so `UNTRUSTED_OBSERVED CONTENT_END`
+    /// becomes a real delimiter after it — the hazard that makes ``escapeAttribute``'s fold-escape-fold
+    /// ordering load-bearing. This one emits `\` and lowercase `n`, and neither appears in any
+    /// delimiter, so nothing it produces can complete one. Callers fold first, so that a break hidden
+    /// *inside* a near-delimiter is gone before `escape` looks — a line break is deliberately not
+    /// stepped over by `isIgnorableInsideADelimiter`, so `escape` alone would leave it whole.
+    ///
+    /// **What it costs, stated rather than hidden:** a genuine paragraph inside a folded field reaches
+    /// the model as one line with `\n` where the breaks were. **And what it does not promise:** a value
+    /// that already contained the two literal characters `\n` as text is now indistinguishable from a
+    /// folded break. Neither reads as a structural line, so nothing here depends on telling them apart;
+    /// the ambiguity is cosmetic and is not closed by escaping backslashes, which would double every
+    /// one in a Windows path a model is meant to read back.
+    static func foldingLineBreaks(in value: String) -> String {
+        guard value.rangeOfCharacter(from: .newlines) != nil else {
+            return value
+        }
+        return value
+            .components(separatedBy: .newlines)
+            .reduce(into: [String]()) { folded, piece in
+                // An empty piece is the gap between two adjacent break characters — a run. Dropping
+                // it here is what makes the run collapse to a single marker; `CRLF` produces exactly
+                // one such gap, so it folds to one marker rather than two.
+                if piece.isEmpty, !folded.isEmpty {
+                    return
+                }
+                folded.append(piece)
+            }
+            .joined(separator: #"\n"#)
     }
 }
