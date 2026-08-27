@@ -255,6 +255,46 @@ rather than a `primary`/`secondary` pair: with two named fields, retiring the pr
 two variables at once, and a deploy that catches them half-applied has either a duplicated key or
 none. `test/config.test.ts` walks all three steps and asserts a usable key at every one.
 
+## The four model routes (SONNY-130)
+
+`POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions` and `POST /v1/search`.
+All four are authenticated — they are covered by *not* appearing in `PUBLIC_ROUTES`, which is what
+deny-by-default means — and all four hold the provider credential here so the Mac app never sees
+one. `docs/sonny-backend-api-contract.md` §4.2–§4.4 is the wire shape; what belongs here is the
+operational half.
+
+**Which provider serves which route is one function**, `modelProvidersFrom` in
+`src/model/providers.ts`, reading the endpoints and model identifiers from the environment. That is
+what makes SONNY-110's move to a paid zero-retention route a redeploy: nothing in the Mac app names
+a provider, a model or an endpoint, so changing any of the three never needs an app release.
+
+**A route whose provider has no credential answers `502 provider.unavailable`, not `404`.** The
+route table does not change shape with the environment, because a 404 tells the client "no such
+route" — which it does not retry and cannot explain — when the truth is a deployment missing a key.
+
+**Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
+contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in
+`Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each fifteen seconds
+above this server's total deadline for the same route. That gap is §12's governing rule — the
+client's timeout is always longer than the server's — so a slow route surfaces as this server's
+typed `504 provider.timeout` rather than as the client's opaque transport timeout, which it cannot
+tell apart from a dead network.
+
+**The audio limit is enforced in different units on each side, on purpose.** The Mac caps a
+*recording* at `VoiceRecordingLimit.maximumDurationSeconds` (180 s) and refuses before a byte is
+sent; this server caps *bytes* at §6.1's 10 MiB. The Mac is the side holding the recorder, so it is
+the only side that knows a duration honestly — a client-supplied one would be a client-trust
+decision on the field that decides the bill, which §2.4.1 forbids in general. At this recorder's
+bitrate, 180 s is roughly 2 MB, so the client's cap binds an order of magnitude before this one:
+the byte ceiling is the backstop for a client that is not ours, or is broken.
+
+**`retention` is validated and not yet honoured, and that is stated rather than implied.** §2.4.2
+makes an omitted `retention` a loud `400` rather than a quiet guess in either direction, and these
+routes enforce that. What they do not do is store anything at all — there is no content store yet,
+and SONNY-134 builds it along with §10.1's rule that retention is enforced where the storing
+happens rather than at the call site. Claiming the guarantee now would be claiming a promise nothing
+keeps.
+
 ## Deploying
 
 `./scripts/deploy.sh local` is real and works end to end: it builds the image with the current git
@@ -281,6 +321,14 @@ with no `auth` argument and no concrete `AuthProvider` adapter exists — so the
 deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The script builds the
 image, says plainly what did not happen, and lists the four things a real target needs. It does not
 pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
+
+**`local` runs the container with `SONNY_ENV` and `LOG_LEVEL` and nothing else**, so `buildApp`
+mounts health only and the four model routes above answer `401` to everyone — the gate refusing a
+protected route on a process with no way to authenticate anyone. Exercising them against a local
+container therefore needs the Supabase and provider variables passed in by hand today. **SONNY-306
+is making that one command**, and its passthrough list is read from `src/config.ts`; SONNY-130 added
+`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` there, so
+a credentialed local run wants those four alongside the credentials themselves.
 
 ## `GET /v1/health`
 

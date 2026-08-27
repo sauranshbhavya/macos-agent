@@ -7,9 +7,8 @@ import type { Config } from "../src/config.js";
 import type { WithConnection } from "../src/db/connection.js";
 import { registerErrorHandlers } from "../src/errors.js";
 import { registerHealth } from "../src/routes/health.js";
-import {
-  TEST_JWT_CONFIG, TEST_JWT_POLICY, accessTokenFor, tokenWithBrokenSignature, tokenWithClaims,
-} from "./support/tokens.js";
+import { TEST_JWT_POLICY, accessTokenFor, tokenWithBrokenSignature, tokenWithClaims } from "./support/tokens.js";
+import { testConfig } from "./support/config.js";
 
 /**
  * The gate as a routing decision, with no database in reach (SONNY-203).
@@ -22,11 +21,7 @@ import {
 
 const USER = "11111111-1111-1111-1111-111111111111";
 
-const config: Config = {
-  environment: "local", port: 0, host: "127.0.0.1", buildId: "t",
-  databaseUrl: undefined, logLevel: "fatal", trustProxy: false,
-  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG, credentials: [],
-};
+const config: Config = testConfig();
 
 class UnusedProvider implements AuthProvider {
   async sendEmailCode() { return { providerRequestId: undefined }; }
@@ -124,6 +119,12 @@ describe("which routes the gate challenges", () => {
     expect(protectedRoutes.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       "DELETE /v1/account",
       "POST /v1/auth/signout",
+      // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
+      // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
+      "POST /v1/plan",
+      "POST /v1/research/synthesize",
+      "POST /v1/search",
+      "POST /v1/transcriptions",
     ]);
     await app.close();
   });
@@ -139,14 +140,23 @@ describe("which routes the gate challenges", () => {
     // this route is covered, and measurement agrees: it answers 401, as do routes added directly,
     // nested two plugins deep, in a second plugin beside a first, and behind a prefix. The assertion
     // below was always right; only the story around it was wrong.
+    //
+    // **The stand-in route was `POST /v1/plan` until SONNY-130 built it**, at which point this test
+    // stopped proving anything and started failing with `Method 'POST' already declared`. A route
+    // that a later ticket might really add is the wrong stand-in for a hypothetical one; the path
+    // below is not in the contract's §4.1 table and is not going to be.
     const app = build();
-    app.register(async (scope) => { scope.post("/v1/plan", async () => ({ served: true })); });
+    app.register(async (scope) => {
+      scope.post("/v1/not-a-contract-route", async () => ({ served: true }));
+    });
     const routes = await registeredRoutes(app);
-    expect(routes.map((route) => `${route.method} ${route.url}`)).toContain("POST /v1/plan");
+    expect(routes.map((route) => `${route.method} ${route.url}`))
+      .toContain("POST /v1/not-a-contract-route");
     // And it is classified as protected, so the behavioural test above is what would fail for it.
-    expect(isPublicRoute("POST", "/v1/plan")).toBe(false);
+    expect(isPublicRoute("POST", "/v1/not-a-contract-route")).toBe(false);
     // Covered, not missed — the claim V1 corrected, asserted rather than described.
-    expect((await app.inject({ method: "POST", url: "/v1/plan" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/v1/not-a-contract-route" })).statusCode)
+      .toBe(401);
     await app.close();
   });
 
