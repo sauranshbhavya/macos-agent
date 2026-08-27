@@ -469,6 +469,108 @@ describe("what the hook does not do", () => {
   });
 });
 
+describe("the multipart route, whose body the hook cannot hash", () => {
+  /**
+   * `/v1/transcriptions` is §4.4's `multipart/form-data` body, consumed inside the handler, so
+   * `request.body` is `undefined` at `preHandler` and the fingerprint falls back to the declared
+   * length. Two things are checked here that nothing else in the suite reaches: that the fallback
+   * really is the branch taken on a real multipart request, and that awaiting a store call at
+   * `preHandler` does not disturb a body the handler has not read yet — which is the failure mode
+   * the first, stream-teeing version of the fingerprint had, and it presented as a hang rather than
+   * as a red test.
+   */
+  const multipart = (audio: Buffer) => {
+    const boundary = "----sonnytestboundary";
+    return {
+      contentType: `multipart/form-data; boundary=${boundary}`,
+      payload: Buffer.concat([
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="meta"\r\n` +
+            `Content-Type: application/json\r\n\r\n{"task_id":"t","retention":"standard"}\r\n` +
+            `--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="a.m4a"\r\n` +
+            `Content-Type: audio/mp4\r\n\r\n`,
+          "utf8",
+        ),
+        audio,
+        Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
+      ]),
+    };
+  };
+
+  const send = (app: ReturnType<typeof build>, audio: Buffer) => {
+    const body = multipart(audio);
+    return app.inject({
+      method: "POST",
+      url: "/v1/transcriptions",
+      headers: {
+        authorization: authorization(),
+        "content-type": body.contentType,
+        "idempotency-key": KEY,
+      },
+      payload: body.payload,
+    });
+  };
+
+  it("claims a key on a multipart body, fingerprinting its declared length", async () => {
+    vi.stubGlobal("fetch", async () => {
+      upstreamCalls += 1;
+      return new Response(JSON.stringify({ text: "hello there" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = build();
+
+    // Two megabytes: past the size at which the stream-teeing fingerprint deadlocked, so this also
+    // stands as the regression pin for that.
+    const response = await send(app, Buffer.alloc(2_000_000, 0x41));
+
+    expect(response.statusCode).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(store.claims).toHaveLength(1);
+    expect(store.claims[0]!.route).toBe("POST /v1/transcriptions");
+    expect(store.claims[0]!.fingerprint).toMatch(/^POST \/v1\/transcriptions\nlen:\d+$/);
+    expect(store.completed).toHaveLength(1);
+    await app.close();
+  });
+
+  it("gives two different recordings of different lengths different fingerprints", async () => {
+    vi.stubGlobal("fetch", async () => {
+      upstreamCalls += 1;
+      return new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = build();
+
+    await send(app, Buffer.alloc(1000, 0x41));
+    await send(app, Buffer.alloc(1001, 0x41));
+
+    expect(store.claims[0]!.fingerprint).not.toBe(store.claims[1]!.fingerprint);
+    await app.close();
+  });
+
+  it("cannot tell two different recordings of the same length apart — the stated weakness", async () => {
+    // Pinned rather than left in prose, because it is the one place conflict detection is weaker
+    // than "different body" suggests, and a future change that fixed it should have to notice.
+    vi.stubGlobal("fetch", async () => {
+      upstreamCalls += 1;
+      return new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = build();
+
+    await send(app, Buffer.alloc(1000, 0x41));
+    await send(app, Buffer.alloc(1000, 0x5a));
+
+    expect(store.claims[0]!.fingerprint).toBe(store.claims[1]!.fingerprint);
+    await app.close();
+  });
+});
+
 describe("the fingerprint", () => {
   const request = (body: unknown, headers: Record<string, string> = {}) =>
     ({ body, headers }) as never;
