@@ -4,10 +4,35 @@ The agreement between the Mac app and the backend. Written for SONNY-124, agains
 `6f89a5d`. Every file:line and every measurement below was taken at that SHA and re-verified there;
 the tree will move, so re-check before relying on one.
 
+**Which half of this document you are reading matters, and it is stated here rather than left to be
+inferred** (added 2026-08-26, SONNY-288). Three kinds of text live in it and they age differently:
+
+- **Live contract.** The shapes — endpoints, request and response bodies, headers, error `code`
+  values, the versioning rule, idempotency, retention, the metering event and the timeout table.
+  These bind whatever the tree looks like, and every change to one is a dated row in section 14.
+- **A dated snapshot of the client.** Every `file:line` and every measured figure outside section 14
+  was read at `6f89a5d` **unless it stamps a SHA of its own**, and says nothing about the tree since.
+  A citation that has moved is a stale reading, not a changed contract. Four SHAs are cited in this
+  document, and **exactly one of them is not on `main`**: `e260575`, in 6.1 and 6.4, a branch head a
+  rebase replaced — which is why 6.1 pairs it with the post-rebase `b07bee8`. It still resolves, so
+  `git show` on it proves nothing; the check that separates the two cases is
+  `git merge-base --is-ancestor <sha> origin/main`, read with nothing between it and `$?`
+  (`for t in d3598a7 6f89a5d b07bee8 e260575; do git merge-base --is-ancestor $t origin/main; echo
+  "$t $?"; done` → `0`, `0`, `0`, `1`, run 2026-08-26). That is this repository's convention working:
+  a branch SHA records *when* a figure was measured, not a tree anyone is expected to fetch.
+- **A live board reading.** Section 13's table, and every sentence in the body that says a question
+  is some ticket's to answer. These describe who owes what, so they go stale as tickets close.
+  Section 13 carries the date it was last resolved against the board; read any owner named in the
+  body against that same date.
+
 **This document is host-agnostic.** No requirement in it comes from any hosting platform's published
-limits, and nothing in it presumes where the server runs. The host choice is deliberately held
-(SONNY-125, gated on SONNY-114), and it does not change anything written here. Where a number here
-constrains the host, it is derived from Sonny's own code and says so.
+limits, and nothing in it presumes where the server runs. The host choice was deliberately held when
+this was written (SONNY-125, gated on SONNY-114); **it was made on 2026-08-21 and nothing here
+changed** (updated 2026-08-26, SONNY-288) — the gateway runs on a VM, staged deploymind then Oracle
+Cloud then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2,
+and section 13's first row). Host-agnosticism is the property that made that survivable, so it is
+kept rather than spent. Where a number here constrains the host, it is derived from Sonny's own code
+and says so.
 
 **What binds what.** Twelve of row 12's fourteen tickets are written against this document. Where a
 ticket's own description conflicts with this contract, the ticket wins for that ticket's work and the
@@ -310,8 +335,16 @@ can change.
   the claim's own tolerance (section 5.3). It does not refuse to work.
 - The server never trusts a client-supplied timestamp for anything billable or expiring.
 
-The concrete skew tolerance is SONNY-135's to set and test at both edges; the mechanism is fixed
-here so that SONNY-127 and SONNY-135 use the same one.
+**The concrete skew tolerance is set, and it is 30 seconds** (updated 2026-08-26, SONNY-288). This
+line said it was SONNY-135's to set, which section 3.1 already contradicted by citing "the 30-second
+skew tolerance of §3.5". SONNY-127 supplied the value and SONNY-203 applies it to every verified
+access token: `export const EXPIRY_SKEW_TOLERANCE_SECONDS = 30;`
+(`grep -n 'EXPIRY_SKEW_TOLERANCE_SECONDS = ' server/src/auth/clock.ts` → `34:` at `d3598a7`). The
+mechanism was fixed here so SONNY-127 and SONNY-135 would use the same one, and they do.
+
+**This is not section 5.3's `skew_tolerance_seconds`.** That is a separate value carried inside the
+entitlement claim, it is still SONNY-135's to set, and section 13 keeps them as separate rows —
+conflating the two is how a set value gets read as an open question, which is what this line was.
 
 ### 3.6 The auth endpoint shapes
 
@@ -325,9 +358,15 @@ here so that SONNY-127 and SONNY-135 use the same one.
 ```
 
 **The response is identical whether or not that address has an account.** An endpoint that answers
-differently is an account-existence oracle for anyone who finds it. Code lifetime, per-address and
-per-source rate limits are SONNY-127's — an unlimited code endpoint is a free email-sending service
-for whoever finds that instead.
+differently is an account-existence oracle for anyone who finds it. Code lifetime and the
+per-address and per-source rate limits were SONNY-127's, **and it set them** (updated 2026-08-26,
+SONNY-288): a code lives 600 seconds, which is the `expires_in` above
+(`grep -n 'CODE_LIFETIME_SECONDS = ' server/src/auth/codes.ts` → `33:` at `d3598a7`), and the four
+limits are 3 per address per 15 minutes and 10 per source per hour on this route, 5 per address per
+15 minutes and 30 per source per hour on `email/verify`
+(`grep -nE 'export const CODE_(REQUEST|VERIFY)_PER_(ADDRESS|SOURCE)' server/src/auth/ratelimit.ts`
+→ 4 lines, `36`, `37`, `50`, `79`, at `d3598a7`). An unlimited code endpoint would have been a free
+email-sending service for whoever found it.
 
 `POST /v1/auth/email/verify` — exchange a code for tokens.
 
@@ -415,9 +454,16 @@ only path that joins two existing accounts.
 `POST /v1/auth/oauth/google` and `POST /v1/auth/oauth/apple` — the body is whatever the provider's
 flow yields and is SONNY-129's to fix, once that ticket has established which Sign in with Apple
 mechanism actually works for a Developer-ID-signed, non-App-Store Mac app. Both return the same token
-response of 3.2, and both land on the same account as an email sign-in for the same person, per the
-identity-linking rule SONNY-127 owns. This contract fixes the paths and the response so the sign-in
-surface does not have to be rebuilt when they arrive.
+response of 3.2. **Neither lands on an existing account on the strength of an email address**
+(corrected 2026-08-26, SONNY-288). This sentence said both "land on the same account as an email
+sign-in for the same person", which the `link_hint` table directly above it already contradicted.
+Under the rule SONNY-127 built, and the founder's decision of 2026-08-22 that rule 2 flags rather
+than links, a verified non-relay match creates a **new** account and returns
+`verified_email_matches_existing_account`; a Hide My Email relay matches nothing and returns
+`relay_address_may_belong_to_existing_account`; and rule 4 — a sign-in completed while already
+authenticated on the target account — is the only path that joins two existing accounts
+(`docs/sonny-identity-linking-rule.md` §1 and §4). This contract fixes the paths and the response so
+the sign-in surface does not have to be rebuilt when they arrive.
 
 `POST /v1/auth/refresh` — `{ "refresh_token": "…" }`, returning the token response of 3.2 with a new
 refresh token. Rotation, overlap and reuse detection are in 3.3.
@@ -425,8 +471,11 @@ refresh token. Rotation, overlap and reuse detection are in 3.3.
 `POST /v1/auth/signout` — no body. Revokes this session's refresh-token family server-side and
 returns `204`. The client clears its Keychain entry and touches nothing else (3.3).
 
-`GET /v1/health` — liveness and a build identifier, unauthenticated. Its shape is SONNY-126's; it is
-listed here only so nobody adds a second one.
+`GET /v1/health` — liveness and a build identifier, unauthenticated. Its shape was SONNY-126's, and
+that ticket closed on 2026-08-21 having built it: `{ "status", "version", "environment" }` with
+`Cache-Control: no-store` (updated 2026-08-26, SONNY-288;
+`grep -n 'app.get("/v1/health"' server/src/routes/health.ts` → `29:` at `d3598a7`). It is listed
+here only so nobody adds a second one.
 
 ---
 
@@ -436,7 +485,7 @@ listed here only so nobody adds a second one.
 
 | Method and path | Auth | Purpose | Owner |
 |---|---|---|---|
-| `GET /v1/meta` | none | Version negotiation, entitlement verification keys, server time | **no owner yet — see below** |
+| `GET /v1/meta` | none | Version negotiation, entitlement verification keys, server time | SONNY-204 — see below |
 | `GET /v1/health` | none | Liveness and build identifier | SONNY-126 |
 | `POST /v1/auth/email/start` | none | Request a sign-in code | SONNY-127 |
 | `POST /v1/auth/email/verify` | none | Exchange a code for tokens | SONNY-127 |
@@ -453,15 +502,17 @@ listed here only so nobody adds a second one.
 | `POST /v1/screen/analyze` | yes | Screen control | SONNY-131 |
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
 
-**`GET /v1/meta` and the version gate have no owning ticket, and that is a gap in row 12's ticket
-set rather than an open question here.** Writing section 8 is what exposed it. SONNY-126 builds "one
-health endpoint that returns a version identifier" and its non-goals say "any endpoint beyond health"
-explicitly, so `/v1/meta` is outside it; and pulling all fourteen row-12 tickets and searching them
-for `/v1/meta`, `api_version`, `minimum_supported_client`, `version.unsupported` and
-`Sonny-Deprecation` returns nothing outside this document. Three things therefore need an owner: the
-endpoint itself, the middleware that answers `410 version.unsupported` on every route, and the
-deprecation headers. Filed as **SONNY-155**, Backlog and untriaged, for the founder to assign;
-creation is memory, assignment is authority.
+**`GET /v1/meta` and the version gate had no owning ticket when this section was written. They have
+one now: SONNY-204** (updated 2026-08-26, SONNY-288). Writing section 8 is what exposed the gap.
+SONNY-126 builds "one health endpoint that returns a version identifier" and its non-goals say "any
+endpoint beyond health" explicitly, so `/v1/meta` was outside it; and pulling all fourteen row-12
+tickets and searching them for `/v1/meta`, `api_version`, `minimum_supported_client`,
+`version.unsupported` and `Sonny-Deprecation` returned nothing outside this document. Three things
+therefore needed an owner: the endpoint itself, the middleware that answers `410 version.unsupported`
+on every route, and the deprecation headers. That was filed as **SONNY-155**, a triage ticket, which
+closed on 2026-08-21 handing all three to **SONNY-204** ("Gateway: GET /v1/meta, the version gate,
+and the deprecation headers"). SONNY-204 sits in Backlog and none of the three is built, so every
+statement section 8 makes about them still describes work that has not started.
 
 ### 4.2 One body shape, two text routes
 
@@ -684,17 +735,21 @@ and metering are filed under; `DELETE` removes everything filed under it. A read
 
 ### 5.1 `task_id`
 
-`task_id` is `CompletedTaskRecord.id` — the field SONNY-115 adds. It does not exist at `6f89a5d`:
-`CompletedTaskRecord` (`TaskHistoryStore.swift:12`) has no identifier, and the type's own comment
-says so at `:27`. Until SONNY-115 merges there is nothing to put in this field, which is one reason
-the gateway tickets sit behind row D as well as behind this contract.
+`task_id` is `CompletedTaskRecord.id`, **and the field exists** (corrected 2026-08-26, SONNY-288).
+SONNY-115 merged on 2026-08-17 and added it: `public var id: String?`
+(`grep -n 'public var id: String?' Sources/MacAgentCore/TaskHistoryStore.swift` → `53:` at
+`d3598a7`). This paragraph read "Until SONNY-115 merges there is nothing to put in this field" — true
+of `6f89a5d`, where `CompletedTaskRecord` had no identifier and the type's own comment said so, and
+false since. The gateway tickets no longer sit behind row D for this reason; that dependency is
+satisfied, and it is the second of the two gaps SONNY-155 closed.
 
 **The id must be minted when the task starts, not when its record is written.** `CompletedTaskRecord`
 is written at completion, so an id that only appears in that initializer's default arrives after
-every request the task made. SONNY-115's field takes an id as a parameter, so this is a matter of the
-caller passing the dispatch-time id through rather than letting it default — but it is the kind of
-thing that is cheap now and expensive after the gateway lands. SONNY-130 and SONNY-131 build the
-requests that need it.
+every request the task made. The field takes an id as a parameter, defaulting to a fresh
+`UUID().uuidString` evaluated per call (`TaskHistoryStore.swift:135-136` at `d3598a7`), so this is a
+matter of the caller passing the dispatch-time id through rather than letting it default — but it is
+the kind of thing that is cheap now and expensive after the gateway lands. SONNY-130 and SONNY-131
+build the requests that need it.
 
 A request whose task has no id yet — a path that should not exist after SONNY-130, but might during
 it — sends a fresh UUID rather than omitting the field. An unattributed request still has to be
@@ -843,10 +898,21 @@ reply cannot become an unbounded client-side allocation.
 The server **must** accept `Content-Encoding: gzip` on requests and must apply size limits to the
 decoded body. It must honour `Accept-Encoding: gzip` on responses.
 
-The client does not compress today. SONNY-146 (filed, Backlog) measured 29–35% lossless recovery from
-deflating the finished vision body at `e260575`. Requiring the server to accept it now means the
-client can adopt it later without touching this contract or its version — which is exactly what
-section 8's additive rule is for.
+The client still does not compress, and that is now a measured decision rather than an open question
+(updated 2026-08-26, SONNY-288 — this line read "SONNY-146 (filed, Backlog)", and that ticket
+completed on 2026-08-18). SONNY-146 measured 29–35% lossless recovery from deflating the finished
+vision body at `e260575` — SONNY-114's fixture head, kept verbatim because a compression ratio
+cannot be restated at another SHA, and not an ancestor of `main` (6.1 carries the same stamp and its
+post-rebase pair `b07bee8`). It then built the encoder and a per-endpoint switch:
+`Sources/MacAgentCore/HTTPBodyCompression.swift`, and `compressesRequestBody` on the vision client,
+defaulting to `false` (`grep -n 'compressesRequestBody: Bool = false'
+Sources/MacAgentCore/VisionModelClient.swift` → `131:` at `d3598a7`). It is off because the route
+the client talks to today answers a gzip-encoded body with a `500`, measured live against it rather
+than assumed. The switch travels with the endpoint, so SONNY-131 flips both in one edit when the
+client is repointed at Sonny's own gateway — which is why this section obliges that gateway to accept
+the encoding before any client sends it. Requiring the server to accept it now means the client can
+adopt it later without touching this contract or its version, which is exactly what section 8's
+additive rule is for.
 
 ---
 
@@ -1117,8 +1183,11 @@ run misbehaved cannot be diagnosed from stored data. That is the feature working
 ### 10.2 Training consent
 
 `training_consent` is a field on the **user record**, values `"granted"` and `"not_granted"`,
-defaulting to `"not_granted"` — so a user whose consent was never written is excluded. SONNY-127 owns
-the field and its write path; SONNY-134 makes the snapshot builder honour it.
+defaulting to `"not_granted"` — so a user whose consent was never written is excluded. **SONNY-127
+built the field and deliberately did not build the write path** (updated 2026-08-26, SONNY-288 — this
+line assigned it both). Consent is captured on the website, so the write path is an authenticated
+endpoint the website calls, and what was owed was the gate rather than an in-app toggle; that gate is
+SONNY-203's and closed on 2026-08-22. SONNY-134 still makes the snapshot builder honour it.
 
 **It never appears on a request, and never in a response the app reads.** Both halves matter:
 
@@ -1276,30 +1345,41 @@ Three rules alongside the table:
 
 ## 13. What this contract deliberately leaves open
 
-Each item is genuinely undecided, and each names the ticket that closes it. Nothing here is a gap
-that was overlooked.
+Each item names the ticket that closes it, and nothing here was a gap that was overlooked. **Some of
+it has since been answered, and the table now says which.** The `Status` column was added on
+2026-08-26 (SONNY-288) because a table headed "what is still open" is read as current, and it had
+stopped being so. Of its nineteen rows, **four had been answered outright, three had been answered in
+part, one had acquired an owner, and eleven were still open** — and one of the four also attributed
+the refresh overlap window to a ticket that section 3.3 already said does not own it. Four plus three
+plus one plus eleven is the nineteen; every row below carries which of the four it is.
 
-| Open | Owner |
-|---|---|
-| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 |
-| **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **nobody yet** — SONNY-155, Backlog, untriaged (4.1) |
-| Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape |
-| Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 |
-| The per-user spend-cap mechanism, and what happens when two requests from one user race it | SONNY-125 names it, SONNY-135 implements it |
-| The identity-linking rule, and how it survives Hide My Email relay addresses | SONNY-127 |
-| Sign-in code lifetime, rate limits, and the refresh overlap window's length | SONNY-127 |
-| Literal user-facing copy for every `code` in section 7 | SONNY-128 (sign-in), SONNY-136 (everything else) |
-| The audio duration cap and its refusal | SONNY-130 |
-| Vision mid-loop failure behaviour: retry, abort, or a new typed error | SONNY-131 |
-| Failover trigger, fallback order, and whether the user is told | SONNY-132 |
-| Per-provider retention and training configuration values | SONNY-132, with SONNY-110's answer landing in it |
-| The exact retention window inside 30–90 days | SONNY-134 |
-| Snapshot lineage's concrete shape, and what the support lookup may see | SONNY-134 |
-| `grace_seconds` and `skew_tolerance_seconds` values | SONNY-135 |
-| Which capability keys are gated | SONNY-23 (row 18) |
-| Plans, prices, allowances, credit weights | SONNY-17 (row 13) |
-| Whether requests are compressed on the wire | SONNY-146 |
-| Enterprise or team entitlements | SONNY-107 (row 19) |
+**The `Status` column is a board reading, not a contract term.** It was resolved against Plane and
+against the tree at `d3598a7` on 2026-08-26, and it goes stale the way any board reading does; the
+`Open` and `Owner` columns are the durable halves. **Decided** does not mean built — it means the
+question this contract left open has an answer, recorded where the row says. **Open** means it has
+none.
+
+| Open | Owner | Status, resolved 2026-08-26 at `d3598a7` |
+|---|---|---|
+| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `113:`). The first real remote deploy is recorded as owed on SONNY-126 |
+| **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **SONNY-204** | **Owned, not built.** SONNY-155 was the triage ticket; it closed 2026-08-21 handing all three to SONNY-204, which sits in Backlog. This row read "**nobody yet** — SONNY-155, Backlog, untriaged" until 2026-08-26 (4.1) |
+| Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape | **Open.** SONNY-129 is in Backlog |
+| Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 | **Decided.** SONNY-126 closed 2026-08-21: TypeScript on Node >= 22, Fastify, Zod, Postgres via `pg`, a plain-SQL migration runner that refuses a file carrying no `-- @rollback` half (`ls server/src/db/migrations/*.sql \| wc -l` → 10), a containerized deploy path coupled to no host, and credential rotation as an ordered list so a rotation is three independently valid deploys (`server/README.md`). Two acceptance criteria — health on staging and production, a migration rolled back on staging — were deferred by the founder on 2026-08-21 because no remote environment exists; that is the row above |
+| The per-user spend-cap mechanism, and what happens when two requests from one user race it | SONNY-125 names it, SONNY-135 implements it | **Named and demonstrated; not implemented.** SONNY-125 settled the mechanism — reserve-then-settle in one statement, with the race and its residuals worked through against Postgres 17 (`docs/sonny-row-12-host-decision.md` §9, §9.3, §9.5). It is a property of Postgres, not of a host, so it survived the move off Edge Functions intact. SONNY-135 is in Backlog |
+| The identity-linking rule, and how it survives Hide My Email relay addresses | SONNY-127 | **Decided and built.** The key is `(provider, subject)`, never the email address; the rule is `docs/sonny-identity-linking-rule.md`, pinned by `server/test/linking.db.test.ts`, and the relay case is its §4. Decided 2026-08-21, with rule 2 amended by founder decision on 2026-08-22 to flag rather than link. SONNY-127 closed 2026-08-23. What remains is not the rule but surfacing `link_hint`, which is SONNY-128's and SONNY-129's (3.6) |
+| Sign-in code lifetime, rate limits, and the refresh overlap window's length | SONNY-127 for the first two; **the platform's** for the third | **Decided, all three.** A code lives 600 s and the four rate limits are set (3.6). The overlap window was never SONNY-127's: under the 2026-08-21 decision to serve auth from Supabase Auth it is the platform's, and it is 10 seconds (3.3, and section 14's 2026-08-21 row). This row still named SONNY-127 for it until 2026-08-26, contradicting 3.3 |
+| Literal user-facing copy for every `code` in section 7 | SONNY-128 (sign-in), SONNY-136 (everything else) | **Open.** SONNY-128 is In Progress; SONNY-136 is in Backlog |
+| The audio duration cap and its refusal | SONNY-130 | **Open.** Backlog |
+| Vision mid-loop failure behaviour: retry, abort, or a new typed error | SONNY-131 | **Open.** Backlog |
+| Failover trigger, fallback order, and whether the user is told | SONNY-132 | **Open.** Backlog |
+| Per-provider retention and training configuration values | SONNY-132, with SONNY-110's answer landing in it | **Open.** Both in Backlog |
+| The exact retention window inside 30–90 days | SONNY-134 | **Open.** Backlog |
+| Snapshot lineage's concrete shape, and what the support lookup may see | SONNY-134 | **Open.** Backlog |
+| `grace_seconds` and `skew_tolerance_seconds` **as carried in the entitlement claim (5.3)** | SONNY-135 | **Open.** Backlog. **Not the token-expiry clock skew of 3.5**, which is a different value, was SONNY-127's, and is set at 30 s — the two share a name and this row used to be read as covering both |
+| Which capability keys are gated | SONNY-23 (row 18) | **Open.** Backlog |
+| Plans, prices, allowances, credit weights | SONNY-17 planned it; **SONNY-212** implements | **Split: the shape is decided, the numbers are not.** Free plus exactly one paid tier, screen control as the only paid line, auto-top-up opt-in and off by default — founder, 2026-08-16, ratified 2026-08-21, and SONNY-17 closed that day as a planning ticket. The numbers are deliberately unset: they wait on a measured per-session screen-control cost that nothing records today (SONNY-133, Backlog) and on SONNY-162's web-research cost. They land on SONNY-212, Backlog, and the dollar amounts are the founders' own |
+| Whether requests are compressed on the wire | SONNY-146 | **Answered: not today, and the mechanism is built.** SONNY-146 closed 2026-08-18 with the gzip encoder and a per-endpoint switch, defaulted off because the route the client talks to answers a gzip-encoded body with a `500` (6.4). SONNY-131 flips it when the client is repointed at this gateway |
+| Enterprise or team entitlements | SONNY-107 (row 19) | **Open.** Backlog |
 
 ---
 
@@ -1316,3 +1396,4 @@ author's own drafting would bury the changes a downstream session actually has t
 |---|---|---|
 | 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
 | 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |
+| 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |
