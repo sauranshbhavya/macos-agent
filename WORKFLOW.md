@@ -373,12 +373,14 @@ the user to exactly one session. (Trigger: two mis-pasted prompts landed fix ins
 in reviewer terminals, which then implemented and pushed duplicate rounds of the same work.)
 
 **Review cycles are capped at three: the initial review, one fix round, one re-check.** The
-re-check is the last word. Anything still outstanding below the bar of user-visible impact
-or correctness — wording, test-name precision, a claim that is imprecise rather than wrong
-— is recorded on the ticket and left there, not carried into a fourth round. The cap bounds
-rounds of *review*, not the fix-in-branch rule: a defect found at any point is still fixed
-in the branch before merge. What the cap ends is the search for more. (Set by the user
-2026-08-05, after SONNY-44's review ran five rounds whose tail kept finding smaller things.)
+re-check is the last word **on finding things**; what may continue past it is verification of
+a named fix, under the scoped-round rule below. Anything still outstanding below the bar of
+user-visible impact or correctness — wording, test-name precision, a claim that is imprecise
+rather than wrong — is recorded on the ticket and left there, and is never a reason for another
+round. The cap bounds rounds of *review*, not the fix-in-branch rule: a defect found at any
+point is still fixed in the branch before merge. What the cap ends is the search for more.
+(Set by the user 2026-08-05, after SONNY-44's review ran five rounds whose tail kept finding
+smaller things.)
 The cap is a ceiling, not a quota: three cycles are the most a review may run, never a
 number it must reach — a cycle runs only when the one before it leaves that cycle something
 to do.
@@ -392,10 +394,89 @@ to do.
   defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
   rebases carrying conflict resolutions.
 
-The ceiling itself does not move, and the fix-in-branch rule is untouched either way. This
-composes with the depth scaling below: depth scales to the diff, cycle count to what the
+The ceiling itself does not move, and the fix-in-branch rule is untouched either way — nor
+does the scoped verification round below move it, because what that bounds is verification
+rather than the search. This composes with the depth scaling below: depth scales to the diff, cycle count to what the
 cycles actually find. (Decided by the user 2026-08-06, after full third-cycle reviewer
 sessions ran over mechanical fix rounds on PRs #30 and #31.)
+
+**A round past the cap is available to verify a named fix, and to do nothing else — the scoped
+verification round.** It exists because the cap was exempted on **every branch reviewed under the
+2026-08-17 ruling**, three for three, always for the same reason. What follows is the record of
+those three, then the rule they produced; the record is first because a rule derived from
+incidents reads differently from one derived from taste, and this one was exempted into existence.
+
+- **PR #65** (`fix/docx-conversion-defects`, SONNY-76 and SONNY-79). The cycle-3 re-check found
+  **F5**: the same-source skip introduced by the **F1** fix was keyed on the source alone, so a
+  later unit wanting the same document in a *different output folder* was silently suppressed and
+  the user told a PDF already existed where none did. Granted, fixed at `4268797` (code
+  `18c38ab`) by keying on the document-and-folder pair, and the granted re-check at that head
+  returned fixed with the folder-key reasoning surviving attack, searching for nothing outside F5.
+- **PR #67** (`feature/task-history-controls`). The cycle-3 re-check found **two defects inside
+  F4's own fix**: clicking the finished-task notification opened nothing unless Command Center
+  already sat on the Tasks page, and it left the request stranded so navigating there afterwards
+  did not open it either. Granted, fixed, and the narrow re-check at `6596a42` — a pre-rebase head
+  the ancestry check now rejects; the branch merged as `8942195` — found three things wrong in the
+  record or the test rather than in the code, all fixed before merge.
+- **PR #70** (`chore/sonny-75-mutation-harness`, SONNY-75). The cycle-3 re-check found **G1**: the
+  selftest's fault-injection seam sat before any mutant was applied, so the only death it could
+  inject arrived while nothing was mutated and the mid-mutant restore property could never fail —
+  in the branch whose entire thesis is that an unwatched guard is not a guard. Granted, scoped to
+  G1 and G2, fixed at `6ea303b`, and the cycle-4 re-check verified it by running both orderings on
+  copies: shipped, exit 0 with 58 passes; reversed, exit 1 with 5 failures, three in the
+  internal-error group and two in the byte-for-byte group.
+
+**"Three in one day" is the ruling's day rather than the rounds', and the difference is worth
+having straight** since the incidents are the evidence. The ruling was given once, on 2026-08-17,
+in response to the third instance, and all three grants are dated 2026-08-17 by the coordinator
+comments that record them. The rounds themselves span **2026-08-17 22:41 to 2026-08-18 18:18**
+(−04:00, from those comments' own timestamps): PR #65's ran and merged on the 17th, PR #67's and
+PR #70's ran on the 18th under a ruling given the day before.
+
+**The trigger was identical all three times, and it is structural rather than drift.** Two rules
+meet at the cap and disagree about what happens next. This section bounds review rounds at three.
+`CLAUDE.md`'s fix-in-branch rule requires any bug found during a branch's own testing to be fixed
+in that branch before merge, with no exception for when it was found. So a defect found in cycle 3
+*must* be fixed — and the fix is then production code, a test-integrity rebuild, or a rebase
+carrying a conflict resolution that nothing has read, which is exactly the list the third bullet above
+reserves the full re-check for. The rule described a case it had no cycles left to serve, so it had
+to be exempted every time that case arrived.
+
+**The founder's ruling, 2026-08-17, stated generally because he stated it generally:** *"in such
+cases if the three cycle review is done, we can make it 4/5 review cycle because it was an
+exception."* Reaffirmed on SONNY-170 on 2026-08-21: if the cap is genuinely exceeded because a real
+defect is still being found, do one more cycle — the cap is a target, not a wall, and a defect above
+the bar is fixed before merge regardless of which cycle finds it.
+
+**What that authorizes, in terms a session can apply to its own behaviour:**
+
+- **The trigger is narrow and checkable**: a fix round at or past the cap *left or introduced* a
+  defect above the user-visible-impact-or-correctness bar, in production code, in a test's
+  integrity, or in a rebase's resolution. A wording nit, a test-name imprecision, or a claim that is
+  imprecise rather than wrong is not a trigger — it is recorded on the ticket and left, exactly as
+  before. A session cannot self-certify its way into another round for one of those.
+- **Authorization is standing for the first such round**, so it needs no founder round-trip: that is
+  what the 2026-08-17 ruling settled, and it is what the three grants above were each doing by hand,
+  three times in under twenty hours. **A second consecutive scoped round is the founder's to grant**,
+  and that is what ends the sequence — the chain cannot extend itself twice without a human deciding
+  the trigger is real. (Nothing has needed a second yet: each of the three above ran once, and PR
+  #70's cycle-4 round, the only one that could have asked, explicitly escalated nothing.)
+- **The round verifies named changes and searches for nothing.** It names what it is verifying before
+  it starts. Anything it notices outside that scope is recorded and left, **whatever its severity**;
+  a belief that something outside the scope blocks the merge is a **stop-and-report to the founder**,
+  not an extension of the round. That property is the whole reason the cap survives being extended,
+  and all three rounds above had it.
+- **The wrong outcome is a cap of five, and this is not one.** Three was set on 2026-08-05 after
+  SONNY-44's review ran five rounds whose tail kept finding progressively smaller things, and a
+  numeric raise restores exactly that. Reviews may not run four or five cycles hunting; what
+  continues past three is verification of what the previous round changed, never the search the cap
+  ended.
+
+**So the ceiling on the search does not move, and only the ceiling on verification does.** The
+fix-in-branch rule is untouched in every direction, and so is the depth scaling below. (Recorded by
+SONNY-170 on 2026-08-28, from the three branches' own ticket comments and pull requests rather than
+from the rule — which is what the ticket asked for, since the rule is what had already been written
+three times and exempted three times.)
 
 **Interim reviews are scaled to what the ticket touched.** A ticket may be reviewed as it
 closes rather than only at PR time, by a fresh session under the same rules. A
