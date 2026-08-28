@@ -176,7 +176,7 @@ public actor EntitlementService {
             // Failure is deliberately swallowed: this is the *background* refresh, its whole point is
             // that the cached claim keeps working when it cannot run, and a caller asking whether it
             // is entitled is not asking about the network. `refreshNow()` is the form that reports.
-            try? await self?.refreshNow()
+            _ = try? await self?.refreshNow()
             await self?.clearRefreshTask()
         }
     }
