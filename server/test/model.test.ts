@@ -588,6 +588,49 @@ describe("POST /v1/search", () => {
     expect(response.json()["results"]).toEqual([]);
     await app.close();
   });
+
+  /**
+   * The other half of that boundary, and the sharper one (PR #143, cycle 2's N2).
+   *
+   * **This route is where an unreported stall does the most damage, and it was the one route with
+   * no test holding the fix.** The line above is SONNY-130's ratified decision — a body that arrived
+   * and is not JSON answers no results, because a search that finds nothing is an ordinary outcome
+   * and failing a whole task over telemetry-grade malformation is worse. An *aborted read* used to
+   * be collapsed into that same answer by `response.json().catch(() => null)`, so a provider that
+   * accepted the connection and then stopped sending reported "nothing found": a research task
+   * proceeding with no sources and telling the user nothing, which is a wrong **answer** rather than
+   * a wrong error.
+   *
+   * The two are separated by `readJSONBodyOrUnparsed`'s `error instanceof SyntaxError` predicate,
+   * and the reviewer probed that it is real on this runtime rather than rhetorical: undici rejects
+   * with a genuine `SyntaxError` on a complete non-JSON body and with an `AbortError` on an aborted
+   * read. This test and the one above it are the two sides, so reverting `tavily.ts` to the blanket
+   * swallow fails here — which it did not before, on the whole suite.
+   */
+  it("answers a stalled read with a retryable timeout, never with an empty result list", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      },
+    }));
+    const app = build();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/search",
+      headers: { authorization: authorization() },
+      payload: { task_id: "t", retention: "standard", query: "swift" },
+    });
+
+    expect(response.statusCode).toBe(504);
+    expect(response.json().error.code).toBe("provider.timeout");
+    expect(response.json().error.retryable).toBe(true);
+    // Stated as its own assertion rather than left implied by the status: the defect this pins was
+    // a 200 carrying an empty list, and that is the shape a regression would take.
+    expect(response.json()["results"]).toBeUndefined();
+    await app.close();
+  });
 });
 
 describe("POST /v1/transcriptions", () => {
