@@ -233,7 +233,7 @@ Known limitations / deferred scope:
 
 **F4 (Low) — the closed-account sweep selected only on retained content**, so an account closed with all-incognito usage, or whose content had already expired, and whose in-request wipe threw, was never picked up by any pass. Either residue selects it now.
 
-**F5 (Low) — the missing test.** Every `incognito` assertion in the suite was against one table. Eight tests were added, four of them the pins for the four fixes; **each was verified to fail with its own fix reverted and nothing else changed**, before the battery ran.
+**F5 (Low) — the missing test.** Every `incognito` assertion in the suite was against one table. **Twelve** tests were added (`git diff 8789d38 0a65151 -- server/test/content.test.ts server/test/content.db.test.ts | grep -cE '^\+ *it\('` → 12, with 0 removed by the same command reading `'^- *it\('`), four of them the pins for the four fixes; **each pin was verified to fail with its own fix reverted and nothing else changed**, before the battery ran. **This bullet said eight**, which was a count from memory and disagreed with the entry's own figures two paragraphs below it — the two content files go 71 → 83, and 71 + 8 is not 83. Recounted three ways that agree: the diff's added `it(` blocks, the per-file totals (`content.test.ts` 31 → 35, `content.db.test.ts` 40 → 48), and the pair's total. The rule this broke is the one about writing the command beside the number; the number was written without one, which is exactly when it goes wrong.
 
 Open questions (required, write "none" if true): none.
 

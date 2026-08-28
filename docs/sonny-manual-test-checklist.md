@@ -1609,13 +1609,25 @@ exists to test.
       finding:** a `404` from the delete, a `requests_deleted` of 0 for a task you just ran, or
       content still showing after the delete.
 
-- [ ] **(new 2026-08-28, SONNY-134) — after SONNY-280's resume steps (1)–(5).** Run one task with
-      **"Don't save this task"** on. Then `npm run support -- account <your account id>`: **`content`
-      must say 0 call(s) retained** for it, while `usage` shows the call — one more event than
-      before, on whichever route the task used. This is the guarantee the whole feature rests on and
-      the one most easily lost by accident: **any content at all appearing for that task is the
-      finding.** The accepted cost is deliberate and is not a finding — if that run misbehaves,
-      nothing stored can explain why, and that is the feature working.
+- [ ] **(new 2026-08-28, SONNY-134; command widened 2026-08-28 after PR #148's review) — after
+      SONNY-280's resume steps (1)–(5).** Run one task with **"Don't save this task"** on. Then check
+      **both** places this gateway can hold response content, because the review found the leak in
+      the second one and a check of the first alone would have passed straight over it:
+      <br>&nbsp;&nbsp;**(a)** `npm run support -- account <your account id>` — **`content` must say
+      0 call(s) retained** for it, while `usage` shows the call, one more event than before.
+      <br>&nbsp;&nbsp;**(b)** in `psql` against the same database:
+      `SELECT idempotency_key, state, response_body IS NOT NULL AS has_body FROM sonny.idempotency_key
+      ORDER BY claimed_at DESC LIMIT 5;` — the row for that run must read **`released` and `has_body`
+      = f**. A `completed` row with `has_body` = t is the finding, and it is the exact defect PR
+      #148's F1 measured. **Do not check this with a `LIKE` over `response_body::text`** — that
+      column is `bytea`, the cast gives hex, and the comparison answers a clean zero even when the
+      reply is sitting there; use `convert_from(response_body,'UTF8')` if you want to read one.
+      <br>This is the guarantee the whole feature rests on and the one most easily lost by accident:
+      **content appearing in either place for that task is the finding.** The accepted cost is
+      deliberate and is not a finding — if that run misbehaves, nothing stored can explain why, and
+      that is the feature working. A second accepted cost, also not a finding: a retry of an
+      incognito call re-runs rather than replaying, so you may see two provider calls for one
+      operation.
 
 - [ ] **(new 2026-08-28, SONNY-134) — after SONNY-280's resume steps (1)–(5). Read this row before
       running it: it is a judgement call, not a pass/fail.** Run
