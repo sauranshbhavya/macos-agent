@@ -193,7 +193,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// (SONNY-233).
     ///
     /// **The sentence was written by hand twice and was false both times.** Settings' detail line
-    /// named ten of the thirteen stores the wipe deletes and the confirmation dialog named nine —
+    /// named ten of the thirteen stores the wipe deleted then and the confirmation dialog named nine —
     /// two surfaces describing one destructive action, disagreeing with each other and with the
     /// wipe. Neither omission was noticed when it happened, because nothing connected the words to
     /// `LocalDataDeletionService.defaultStoreFileURLs()`: a store was added, its file was added to

@@ -35,7 +35,7 @@ extension View {
             Button("Cancel", role: .cancel) {}
         } message: {
             // **The list is `LocalDataDeletionCopy`'s, shared with Settings' own detail line**
-            // (SONNY-233). This literal named nine of the thirteen stores the wipe deletes — one
+            // (SONNY-233). This literal named nine of the thirteen the wipe deleted then — one
             // fewer than the line on the page behind it, so the two surfaces describing one
             // irreversible press disagreed with each other as well as with the wipe. What stays
             // written here is the part that is this dialog's alone: what the press does *not* take.

@@ -514,9 +514,9 @@ struct LocalStorageSecurityTests {
     /// (SONNY-233).
     ///
     /// The two surfaces that describe this button used to hold hand-written lists, and both were
-    /// false by omission: the Data page's detail line named ten of thirteen and the confirmation
-    /// dialog named nine — the dialog being the last thing a user reads before an irreversible
-    /// press. Nothing connected either sentence to the file list, so each new store went unnamed
+    /// false by omission: the Data page's detail line named ten of the thirteen there were then,
+    /// and the confirmation dialog named nine — the dialog being the last thing a user reads before
+    /// an irreversible press. Nothing connected either sentence to the file list, so each new store went unnamed
     /// silently. The sentence is derived now, and this is the assertion that it is complete.
     ///
     /// **The other half of the chain is the two tests above.** They pin that `LocalStore.allCases`
