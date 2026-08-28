@@ -175,7 +175,7 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 ### Branch: feature/row-12-gateway-vision
 Status: complete. **Acceptance criterion 1 is discharged in the two halves the coordinator's amendment of 2026-08-28 split it into**, and the founder-run half is owed — see Known limitations.
 Date: 2026-08-28
-Tickets: **SONNY-131** (the screen-control route moves behind the backend: server endpoint, client re-point, explicit timeouts, a decided mid-loop failure behaviour, and vision usage made visible to metering). Cut from `main` at `7f555cd` (PR #141's merge). Spawned **SONNY-316** (the four text routes adopt the shared deadline, failure and response-cap helpers), **SONNY-317** (§6.4's gzip, both halves, with the limit measured on the decoded body) and **SONNY-320** (a cancellation on the four text routes is reported to the user as a failure — the same defect this branch found and fixed on its own route). The board was read before each was filed, which PR #139's entry records as the lesson from a duplicate.
+Tickets: **SONNY-131** (the screen-control route moves behind the backend: server endpoint, client re-point, explicit timeouts, a decided mid-loop failure behaviour, and vision usage made visible to metering). Cut from `main` at `7f555cd` (PR #141's merge). Spawned **SONNY-316** (the four text routes adopt the shared deadline, failure and response-cap helpers), **SONNY-317** (§6.4's gzip, both halves, with the limit measured on the decoded body), **SONNY-320** (a cancellation on the four text routes is reported to the user as a failure — the same defect this branch found and fixed on its own route) and, from PR #144's fix round, **SONNY-323** (`scripts/mutate` cannot attribute a server-half kill — every vitest failure reads as a build failure, found by taking F4's instruction to run the battery through the tool). The board was read before each was filed, which PR #139's entry records as the lesson from a duplicate.
 Reviewed by: fresh session per WORKFLOW.md step 7, **one cycle**, at `a85798d`. **Seven findings, every one a record rather than a defect in the shipping path**, all seven taken in a single fix round along with two of the five recorded residuals — the round is itemised below the decisions. **What held under a hostile rerun**: the redaction non-bypass, attacked five ways and intact on all five; the mid-loop decision, with four of its tests broken by hand to check they fail; the route numbers; the payload ceiling in both directions; and ten mutants of the reviewer's own, all killed — including one that reverts the cancellation predicate and reproduces this branch's own defect verbatim, which is the branch's central claim re-proved by someone who did not write it. **The reviewer also ran `./scripts/deploy.sh local`**, which this session could not, closing the four things the substitute harness left uncovered. The coordinator verifies the fix round directly; no third cycle.
 
 Spec sections covered: §16.5's provider-agnostic routing for the fifth and last credential-bearing route; §16.3's "no provider key on the user's machine" for it. With this branch, **every one of the six clients §1.1 enumerates has moved or is deliberately local**: SONNY-130 took four, this takes the fifth, and `CerebrasPlanner` is `feature/row-12-provider-router`'s and untouched here.
@@ -226,7 +226,28 @@ a doc comment describing the move** (`git grep -n -o -E 'OPENCODE_API_KEY|openco
 form rather than one glob is PR #139's lesson: a pattern wide enough to be convenient was wide enough
 to be wrong.
 
-**Mutation battery on the server route: MUTATION_HEADLINE**
+**Mutation battery on the server route: 19 mutants, 19 killed, 0 survived, at `88cc9e7`**, through
+`scripts/mutate` with `MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts'`. Plan in the
+session's scratchpad; logs under `.build/mutate/88cc9e7-20260827T201011/`. The mutants: the image
+ceiling deleted and its `>` widened to `>=`; the base64 validation deleted; the route's `bodyLimit`
+deleted; the media type hardcoded to `image/png`; the usage block estimated instead of omitted; each
+of the three response-cap checks deleted in turn; the total-deadline race deleted; the upstream abort
+neutered; `provider.rejected` answered as `provider.unavailable`; `session_iteration` dropped from the
+schema; `.strict()` loosened on the body and again on the image object; `limit_bytes`/`actual_bytes`
+dropped from the 413; the oldest credential sent instead of the newest; the provider path changed; and
+the route mounted with `search`'s deadlines. **M02 is the reviewer's own boundary mutant** (PR #144,
+S1), folded in so this is one population rather than two.
+
+**The kill count is read off the nineteen per-mutant logs and not off the harness's summary, and that
+distinction is the finding underneath it.** `scripts/mutate` *runs* a server battery correctly, but
+its failure classifier reads swift-testing's log shapes only — so it saw no recognised suite output,
+concluded the mutant had not built, and printed `KILLED by the compiler — the suite never ran` with
+`No test evidence` beneath it, nineteen times. **The suite ran every time**: each log carries
+`RUN v4.1.11` and a `(26 tests | N failed)` line naming the test that killed it, against a baseline of
+`26 passed`. So the figure is real and each kill is attributable; what is missing is the harness's
+ability to say so. **SONNY-323** carries it. The misclassification fails in the safe direction for a
+kill — a survivor still exits 0 and is still reported `SURVIVED` — but it makes `UNATTRIBUTED`
+unreachable for the server half, which is the whole mechanism SONNY-224 built.
 
 Behavior added:
 - **`POST /v1/screen/analyze`**, §4.5's shape, authenticated by *not* appearing in `PUBLIC_ROUTES` — no line in `routes/screen.ts` mentions auth, and `gate.test.ts`'s population test is what would fail if it were ever classified public.
@@ -292,7 +313,13 @@ Known limitations / deferred scope:
 - **A cancellation on the four text routes is still reported as a failure** — the same defect this branch found and fixed on its own route, in files it may not touch. **SONNY-320**, and `SonnyBackendError.isCancellation`'s declaration says what it does not reach.
 - **`retention` is validated and still not honoured**, exactly as on the four text routes: nothing is stored at all, and SONNY-134 builds the content store together with §10.1's rule that retention is enforced where the storing happens. **Screen captures still reach a retention-bearing store — Sonny's own, for 30–90 days** (founder, 2026-08-16). Nothing in this branch changed that, and nothing in it should be read as claiming otherwise.
 - **Entitlement checks and metering are not stubbed on this route**, for SONNY-130's stated reason: a stub of an entitlement check is a check that has been written and does nothing. SONNY-135 and SONNY-133 own them. **The vision usage event's shape is proposed as a dated comment on SONNY-133**, per the amendment, so the two agree rather than each inventing one.
-- **No mutation battery was run through `scripts/mutate`.** The tree was dirty for most of this session and `scripts/mutate` refuses a dirty tree; it also refuses to run beside `scripts/warnings`, which this branch ran twice. MUTATION_LIMITS
+- **No mutation battery was run through `scripts/mutate`.** The tree was dirty for most of this session and `scripts/mutate` refuses a dirty tree; it also refuses to run beside `scripts/warnings`, which this branch ran twice. What was done instead is the same battery through the right tool, recorded above: **19 mutants, 19
+killed, 0 survived at `88cc9e7`**, with each kill attributed from its own log rather than from the
+harness's summary. **The first version of this battery was a scratchpad script, which `CLAUDE.md`
+forbids**, and PR #144's F4 is what sent it through `scripts/mutate` instead — where it immediately
+turned up SONNY-323. Beside it, the guards this branch leans on hardest were each shown to fail
+before they were trusted, the cancellation predicate most of all: it went red on three assertions
+before it existed.
 
 Open questions (required, write "none" if true): **none.**
 
