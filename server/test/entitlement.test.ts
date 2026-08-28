@@ -37,6 +37,7 @@ import {
 } from "../src/entitlement/store.js";
 import { parseEntitlementArguments } from "../src/entitlements.js";
 import { METERED_ROUTES } from "../src/metering/event.js";
+import type { MeteringStore } from "../src/metering/store.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore, testSigningKey } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -619,21 +620,112 @@ describe("which requests spend against the cap", () => {
   });
 
   it("spends against the cap on exactly the routes §11 meters, and no others", async () => {
-    // The population, not a sample: every metered route takes a hold, and the classification is read
-    // off `METERED_ROUTES` rather than listed here, so a sixth metered route is covered by existing.
+    // **The population, driven rather than described** (PR #152's review, F6). This asserted that
+    // `METERED_ROUTES` contained the one route it had sent, which is a claim about a map rather than
+    // about the hook — four of the five were never driven and no unmetered route was checked at all.
+    // It now sends a request to every metered route and asserts the hook asked for a hold on each,
+    // then sends an authenticated *unmetered* route and asserts it asked for none.
     const store = fakeEntitlementStore();
     const app = build(store);
+    const bodies: Record<string, Record<string, unknown>> = {
+      "POST /v1/plan": planBody(),
+      "POST /v1/research/synthesize": planBody(),
+      "POST /v1/search": { task_id: "task-1", retention: "standard", query: "sonny" },
+      "POST /v1/screen/analyze": {
+        task_id: "task-1",
+        retention: "standard",
+        session_id: "session-1",
+        session_iteration: 1,
+        prompt: "what is on screen",
+        image: { media_type: "image/png", data: Buffer.from("not-a-real-png").toString("base64") },
+      },
+    };
+
+    for (const key of METERED_ROUTES.keys()) {
+      // `POST /v1/transcriptions` is multipart and is exercised by `model.test.ts`; every other
+      // metered route is driven here with a body its own schema accepts.
+      if (key === "POST /v1/transcriptions") continue;
+      const [, url] = key.split(" ") as [string, string];
+      await app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: authorization() },
+        payload: bodies[key]!,
+      });
+    }
+    // Every admission so far asked for a hold, because every route driven is metered.
+    expect(store.calls.admitted.map((call) => call.metered)).toEqual(
+      store.calls.admitted.map(() => true),
+    );
+    expect(store.calls.admitted).toHaveLength(METERED_ROUTES.size - 1);
+
+    // And an authenticated route that is *not* metered asks for none, which is the half a
+    // one-route test could not say anything about.
+    const before = store.calls.admitted.length;
     await app.inject({
-      method: "POST",
-      url: "/v1/plan",
+      method: "GET",
+      url: "/v1/account/entitlements",
       headers: { authorization: authorization() },
-      payload: planBody(),
     });
-    const askedFor = store.calls.admitted[0]!;
-    expect(askedFor.metered).toBe(true);
-    expect([...METERED_ROUTES.keys()]).toContain("POST /v1/plan");
+    expect(store.calls.admitted.slice(before).map((call) => call.metered)).toEqual([false]);
     await app.close();
   });
+
+  it("writes §11's metering event before it charges the hold that cites it", async () => {
+    // **§9's "same transaction as the metering event" is reached by ordering here, and until now
+    // nothing held it** (PR #152's review, F3). `app.ts` argues the position at length — the two
+    // stores lease their own connections, so the transactions cannot be merged, and registering the
+    // entitlement hook after the metering one buys the property that matters: *a charge cannot exist
+    // without its audit row*. That is an argument about hook registration order, and a rebase that
+    // moved one `register…` call above the other would invert it with every test still green. This
+    // is the test that goes red instead. `server/src/app.ts` is one of the files that conflicted on
+    // the rebase this branch actually did.
+    const order: string[] = [];
+    const entitlements = fakeEntitlementStore();
+    const settle = entitlements.settle.bind(entitlements);
+    const recordingEntitlements = {
+      ...entitlements,
+      settle: async (reservationId: string, charge: boolean) => {
+        order.push("settle");
+        return settle(reservationId, charge);
+      },
+    };
+    const metering: MeteringStore = {
+      write: async () => {
+        order.push("metering");
+        return "written";
+      },
+    };
+
+    const app = buildApp(
+      testConfig({ credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }] }),
+      { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+      { entitlementStore: recordingEntitlements, meteringStore: metering },
+    );
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ output_text: "{}" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof globalThis.fetch;
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/plan",
+        headers: { authorization: authorization() },
+        payload: planBody(),
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    // Both happened — a test asserting only the order would pass if neither did — and the event is
+    // on disk before the charge that cites it.
+    expect(order).toEqual(["metering", "settle"]);
+    await app.close();
+  });
+
 });
 
 describe("what this ticket deliberately does not decide", () => {

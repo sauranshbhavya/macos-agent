@@ -177,7 +177,38 @@ export async function consume(
   return { allowed: true, count: result.rows[0]!.count, retryAfterSeconds };
 }
 
-/** Old windows are dead weight; nothing reads them once their window has passed. */
+/**
+ * The instant before which every window in this table is dead, given `now`.
+ *
+ * **Computed from the declared limits rather than written as a literal** (PR #152's review, F4). A
+ * literal would be a second copy of the longest window, and the one thing a sweep must never do is
+ * delete a window something is still counting against — which is what a stale literal would start
+ * doing the moment a limit's window grew. `ALL_LIMITS` is the population, so a sixth limit is
+ * covered by existing.
+ */
+export const ALL_LIMITS: readonly Limit[] = [
+  CODE_REQUEST_PER_ADDRESS,
+  CODE_REQUEST_PER_SOURCE,
+  CODE_VERIFY_PER_ADDRESS,
+  CODE_VERIFY_PER_SOURCE,
+  ACCOUNT_REQUESTS,
+];
+
+export function staleWindowsBefore(now: Date): Date {
+  const longest = Math.max(...ALL_LIMITS.map((limit) => limit.windowSeconds));
+  return new Date(now.getTime() - longest * 1000);
+}
+
+/**
+ * Old windows are dead weight; nothing reads them once their window has passed.
+ *
+ * **This had no caller outside a test until SONNY-135, and that stopped being tolerable when the
+ * load changed** (PR #152's review, F4). Before this branch the table took a row per sign-in
+ * attempt; the per-account limiter takes one per account per minute for the life of the deployment,
+ * which is an order of magnitude more and grows with users rather than with sign-ins.
+ * `npm run entitlements -- sweep` calls it now, beside the reservation sweep, so there is one
+ * command to schedule rather than two mechanisms with none.
+ */
 export async function sweep(client: pg.Client, olderThan: Date): Promise<number> {
   const result = await client.query(
     "DELETE FROM sonny.auth_rate_limit WHERE window_start < $1",

@@ -1,6 +1,12 @@
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { bucketKey } from "../src/auth/ratelimit.js";
+import {
+  ACCOUNT_REQUESTS,
+  ALL_LIMITS,
+  bucketKey,
+  staleWindowsBefore,
+  sweep as sweepRateLimitWindows,
+} from "../src/auth/ratelimit.js";
 import { up } from "../src/db/migrate.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
@@ -383,6 +389,50 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(await sweepExpiredReservations(client, NOW)).toBe(1);
       expect(await sweepExpiredReservations(client, NOW)).toBe(0);
       expect((await period()).reserved).toBe(0);
+    });
+  });
+
+  describe("the sweep an operator schedules", () => {
+    it("clears stale rate-limit windows as well as expired holds, from one command", async () => {
+      // **F4's answer, asserted rather than described.** The rate-limit table's sweep had no caller
+      // outside a test, and this branch multiplied what it holds — a row per account per minute
+      // rather than one per sign-in attempt. Both sweeps run from `npm run entitlements -- sweep`,
+      // so an operator has one thing to schedule.
+      await openPeriod(ACCOUNT, 10);
+      await reserve(client, {
+        accountId: ACCOUNT,
+        capUnits: 10,
+        amount: unitsForMeteredCall(),
+        now: new Date(NOW.getTime() - 10 * 60 * 1000),
+      });
+      const stale = new Date(NOW.getTime() - 48 * 60 * 60 * 1000);
+      const live = new Date(Math.floor(NOW.getTime() / 60000) * 60000);
+      await client.query(
+        `INSERT INTO sonny.auth_rate_limit (bucket, window_start, count)
+              VALUES ($1, $2, 3), ($1, $3, 1)`,
+        [bucketKey("acct", ACCOUNT, SALT), stale, live],
+      );
+
+      const reclaimed = await sweepExpiredReservations(client, NOW);
+      const windows = await sweepRateLimitWindows(client, staleWindowsBefore(NOW));
+
+      expect(reclaimed).toBe(1);
+      expect(windows).toBe(1);
+      // **The live window survives**, which is the direction that matters: deleting one something is
+      // still counting against would hand a caller a fresh allowance.
+      const left = await client.query<{ window_start: Date }>(
+        "SELECT window_start FROM sonny.auth_rate_limit ORDER BY window_start",
+      );
+      expect(left.rows).toHaveLength(1);
+      expect(left.rows[0]!.window_start.getTime()).toBe(live.getTime());
+    });
+
+    it("never deletes a window inside the longest limit's own span", () => {
+      // The boundary is computed from the declared limits, so a sixth limit with a longer window
+      // moves it rather than leaving a sweep that eats live rows.
+      const longest = Math.max(...ALL_LIMITS.map((limit) => limit.windowSeconds));
+      expect(staleWindowsBefore(NOW).getTime()).toBe(NOW.getTime() - longest * 1000);
+      expect(longest).toBeGreaterThanOrEqual(ACCOUNT_REQUESTS.windowSeconds);
     });
   });
 

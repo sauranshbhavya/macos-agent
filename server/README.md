@@ -328,7 +328,16 @@ it as a control**, because a race test with no control passes whether or not the
 a provider was reached, released if none was. A request the host kills between the two leaks its hold
 until `npm run entitlements -- sweep` reclaims it — the reservation's `expires_at` is 300 seconds,
 which clears §12's longest route deadline (105 s) by enough that a running request can never have its
-own hold swept out from under it.
+own hold swept out from under it. (If it could, the loss is not a double spend but a call charged to
+nobody: `AND NOT settled` makes the late settle a no-op, measured.)
+
+**`sweep` is the one command an operator schedules, and nothing schedules it yet.** It does two
+things: reclaims expired holds from `sonny.usage_reservation`, and deletes rate-limit windows from
+`sonny.auth_rate_limit` that nothing counts against any more. The second is here because the
+per-account limit changed that table's load by an order of magnitude — a row per account per minute
+rather than one per sign-in attempt — and its sweep had no caller outside a test. Both are safe to
+run repeatedly, and the cut-off is computed from the declared limits so it can never delete a window
+something is still counting against.
 
 **One metered call is one unit, and that is a consequence rather than a price.** A cost-weighted cap
 needs a credit weight, and credit weights are SONNY-212's. So the cap counts calls: it bounds a
@@ -344,7 +353,7 @@ npm run entitlements -- show <account-id>
 npm run entitlements -- grant <account-id> --plan <key> [--capability <key>]... [--cap <units>]
 npm run entitlements -- revoke <account-id>      # next claim carries no capabilities
 npm run entitlements -- restore <account-id>
-npm run entitlements -- sweep                    # reclaim holds whose request never came back
+npm run entitlements -- sweep                    # reclaim orphaned holds AND stale rate-limit windows
 npm run entitlements -- public-key               # the public half, for a client's shipped key set
 ```
 
