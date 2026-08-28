@@ -491,6 +491,54 @@ struct EntitlementServiceTests {
 
     @Test
     @MainActor
+    func aClaimStoredWithNoMarkIsStillJudgedAgainstAnObservedServerTime() async throws {
+        // **The case the observation answers and the persisted mark cannot** (found by mutant S6
+        // surviving twice at `0fefe0d` and `ede5009`: with a mark present the mark's own monotonic
+        // anchor carries everything the observation would, so deleting the observation changed
+        // nothing — and the first test written for it did not isolate the path either, because a
+        // fresh response also corrects §3.5's offset and `serverNow()` then carries the same truth).
+        //
+        // **`observedServerTime: nil` is a legacy state, not an impossible one**, which is what makes
+        // seeding it legitimate where the pair PR #152's F1 criticised was not: `StoredEntitlement`
+        // has always allowed it, an entitlement written by a build before this fix has it, and that
+        // is exactly the Mac an upgrade lands on. With no mark to anchor, the observation is the only
+        // thing standing between a rolled-back clock and a lapsed claim.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { fixture.unregister() }
+        let serverSays = Reported(instant: Self.issuedAt)
+        fixture.register { _ in
+            .reply(
+                statusCode: 500,
+                headers: ["Date": SonnyHTTPDate.formatter.string(from: serverSays.instant)],
+                body: Data()
+            )
+        }
+        let store = MemoryStore(StoredEntitlement(
+            compactClaim: signer.claim(subject: "test-user", issuedAt: Self.issuedAt),
+            observedServerTime: nil
+        ))
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+
+        // A hundred honest hours, then a response that confirms them. `refreshNow` fails, so no
+        // claim is adopted and no mark is written — a `Date` header is read before a status is.
+        clocks.advance(by: 100 * 60 * 60)
+        serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
+        _ = try? await service.refreshNow()
+
+        // Now the owner sets the Mac back. §3.5's offset moves with them; the observation does not.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+    }
+
+    @Test
+    @MainActor
     func aServerSayingMoreTimeHasPassedIsBelievedOverThisMacsOwnClock() async throws {
         // **The observation path, held independently of the persisted mark** (found by mutant S6
         // surviving at `0fefe0d`: deleting the observation from `effectiveNow` left the suite green,
