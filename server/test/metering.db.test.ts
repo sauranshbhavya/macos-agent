@@ -273,13 +273,17 @@ describeDb("the metering event table", () => {
       // and nine of them match zero rows. A test on one connection cannot fail here, which is why
       // this one opens its own.
       await takeKey();
-      const racers = await Promise.all(
-        Array.from({ length: 10 }, async () => {
-          const racer = new pg.Client({ connectionString: url });
-          await racer.connect();
-          return racer;
-        }),
-      );
+      // **Connected one at a time, and only the writes race.** Ten simultaneous connection
+      // handshakes against a container already carrying the rest of the suite is not what this test
+      // is about, and it made the test flake once in four full runs — a five-second timeout with no
+      // failing assertion, which is the shape that gets re-run and dismissed. Setup is sequential;
+      // the concurrency being asserted is `writeMeteringEvent`'s, and it is unchanged.
+      const racers: pg.Client[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        const racer = new pg.Client({ connectionString: url });
+        await racer.connect();
+        racers.push(racer);
+      }
       try {
         const outcomes = await Promise.all(
           racers.map((racer, index) =>

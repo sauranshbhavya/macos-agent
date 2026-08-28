@@ -1410,6 +1410,17 @@ so a sixth content-bearing route fails a population test until somebody classifi
 | refused at the auth gate (`401`) | no — `account_id` comes from the authenticated session, and the gate runs before the body is read |
 | an unmetered route | no |
 
+**The event is written before the response is flushed**, on the same hook the idempotency key's own
+bookkeeping uses and one place after it. The obvious home was after the response, and two things
+moved it: a process killed in that window drops a billing record for a provider call already paid
+for, which is exactly the direction this section exists to close; and nothing downstream can observe
+an after-the-response write, measured on Node v22 in both directions — a client's promise resolves
+before an async `onResponse` hook finishes, so "the client has its answer" and "the call is
+recorded" were unordered. The cost is one local `INSERT` on a request that already makes two database
+round trips for its key, beside a provider call section 12 measures in tens of seconds. A caller who
+disconnects while the handler is still running never reaches that hook at all, and is written from
+the response's `close` instead — which is the one path `outcome: client_cancelled` comes from.
+
 **`outcome`'s five values, against the four SONNY-131 proposed.** That ticket's hand-over named
 `served`, `client_cancelled`, `provider_failed` and `refused_before_upstream`; each maps onto a value
 above without loss — `ok`, `client_cancelled`, `provider_error`, `refused` — and `server_error` is

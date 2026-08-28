@@ -525,6 +525,12 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
   });
   beforeEach(async () => {
     await client.query("TRUNCATE sonny.idempotency_key");
+    // Every request in this block is on a metered route now (SONNY-133), so each leaves a metering
+    // row behind. Truncated here rather than left to the line below, because `sonny.metering_event`
+    // deliberately has **no** foreign key to `sonny.account` — 0012's header argues it, and the
+    // consequence is that the CASCADE below does not reach it. Without this, a count in one test
+    // reads the rows of every test before it.
+    await client.query("TRUNCATE sonny.metering_event");
     await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
     await client.query("INSERT INTO sonny.account (id) VALUES ($1)", [ACCOUNT]);
     await client.query(
@@ -606,14 +612,32 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
 
   it("writes at most one metering claim per key across a repeat and a re-run", async () => {
     // The store's own tests prove the claim is one-shot. This proves the key a *request* creates is
-    // the key SONNY-133 will find — the two halves have to name the same row, and nothing else in
-    // this suite would notice if the hook scoped or spelled it differently.
+    // the key SONNY-133 finds — the two halves have to name the same row, and nothing else in this
+    // suite would notice if the hook scoped or spelled it differently.
+    //
+    // **Rewritten by SONNY-133, the ticket that made it checkable** (2026-08-28). It used to take
+    // the claim itself and assert it was *available* — the only assertion on offer while nothing
+    // consumed it. The gateway consumes it now, so this is the stronger claim the test was always
+    // reaching for: the row a request creates is the row the metering hook claimed, under the same
+    // scope and the same key, and one logical operation leaves exactly one event.
     const app = build();
     await post(app, KEY);
 
-    expect(await claimMeteringEvent(client, at())).toBe(true);
+    // Taken during the request, by the gateway, rather than by this test.
+    expect(await meteringEventClaimed(client, at())).toBe(true);
+
+    // A repeat replays the stored response and runs nothing, so it changes neither the claim nor the
+    // count. `claimMeteringEvent` answering false is §9.2's second bullet from the outside: whatever
+    // asks next, this key's one event is spoken for.
     await post(app, KEY);
+    expect(await meteringEventClaimed(client, at())).toBe(true);
     expect(await claimMeteringEvent(client, at())).toBe(false);
+
+    const { rows } = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM sonny.metering_event WHERE idempotency_key = $1",
+      [KEY],
+    );
+    expect(rows[0]!.n).toBe(1);
     await app.close();
   });
 

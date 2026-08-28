@@ -19,9 +19,9 @@ import { meteredRoutes, type MeteredRoute, type MeteringOutcome } from "./event.
  * `usage.source` exists so a summary can say which of its numbers a provider measured, and summing
  * the two would erase exactly that. On `screen.analyze` it matters most, because that route reports
  * **neither**: `model/vision.ts` sends no estimate at all, since the dominant term is an image whose
- * cost is a function of pixel dimensions and a provider's tiling rule. `pixels` below is what prices
- * that route, and `tokensAreAbsent` is how a caller can see that a zero is an absence rather than a
- * measurement of zero.
+ * cost is a function of pixel dimensions and a provider's tiling rule. `pixels` below is what sizes
+ * that route, and `iterationsWithoutTokens` is how a caller sees that a zero is an absence rather
+ * than a measurement of zero.
  */
 
 /** How much of the table a query looks at. Every field optional; nothing here is required. */
