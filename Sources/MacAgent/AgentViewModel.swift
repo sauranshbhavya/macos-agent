@@ -4927,12 +4927,24 @@ final class AgentViewModel: ObservableObject {
     ///
     /// **Nothing can raise one today, and the guard is the point.** `stopVoiceRecordingAndTranscribe`
     /// runs the transcription in an unstructured `Task { }` that nothing stores, so
-    /// `cancelCurrentRun`'s `currentTask?.cancel()` cannot reach it, and no surface offers a stop
-    /// while it runs — `canCancel` is false throughout a *command* transcription (`isRunning` is
-    /// false and there is no `currentTask`), and the voice control reads "Transcribing" rather than
-    /// "Stop" (`voiceButtonTitle`). Whether a transcription should be stoppable at all is a product
-    /// question and SONNY-332's, not this seam's; what this seam does is make the day it becomes one
-    /// a change to the recording surface rather than a wrong sentence nobody was watching for.
+    /// `cancelCurrentRun`'s `currentTask?.cancel()` cannot reach it whatever the user presses. That
+    /// — not the absence of a control — is what makes a cancellation unraisable here. Whether a
+    /// transcription should be stoppable at all is a product question and SONNY-332's, not this
+    /// seam's; what this seam does is make the day it becomes one a change to the recording surface
+    /// rather than a wrong sentence nobody was watching for.
+    ///
+    /// **This used to add that `canCancel` is false throughout a *command* transcription, and that
+    /// is false in reachable states** (PR #151 review, F2). `canCancel`'s third term is
+    /// `isRunning && currentTask != nil`, and a recording does not block the scheduler: its guard
+    /// is `!isRunning, !isAwaitingApproval, clarificationQuestion == nil`, all three of which a live
+    /// recording satisfies, so a due routine fires mid-sentence and sets both. The mic stays
+    /// pressable by design while recording (`isVoiceControlDisabled` carries `!isRecordingVoice`,
+    /// so that an approval landing mid-sentence cannot trap the user in a live microphone), and
+    /// neither exit re-checks — so the transcription that follows runs with a live stop control.
+    /// `canSubmit` does not exclude `isRecordingVoice` either, so a row action started during the
+    /// recording can park an approval and make the *first* term true as well. None of that is a
+    /// defect today, because the press reaches the routine rather than the transcription; it is
+    /// only the reason the enumeration above says nothing about controls.
     ///
     /// The predicate is consulted here rather than as a `catch let error where …` arm above so that
     /// the whole non-success exit has one call site and one test seam; a second arm would give the

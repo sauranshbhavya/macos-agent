@@ -395,9 +395,19 @@ struct WidgetSessionApprovalPanelTests {
     /// decision the ticket carried rather than the fix it asked for. The blind spot is not those two
     /// panels; it is that a call-site count reads as coverage for every argument handed to a shared
     /// presentation helper. So the primary guard here is a property of the *population*: every
-    /// `stepLine` call in either file pairs `iteration:` with an expression ending in `.iteration`
-    /// and `maximumIterations:` with one ending in `.maximumIterations`. A fifth panel gets it
-    /// without anyone remembering to add a pin, which per-site asserts cannot offer.
+    /// `stepLine` call in the whole `MacAgent` target pairs `iteration:` with an expression ending
+    /// in `.iteration` and `maximumIterations:` with one ending in `.maximumIterations`. A fifth
+    /// panel gets it without anyone remembering to add a pin, which per-site asserts cannot offer.
+    ///
+    /// **The sweep reads `appSourceFiles()`, and it first read two hard-coded filenames — which is
+    /// the same defect one level up** (PR #151 review, F3). A scan whose population is a literal
+    /// list is a scan that answers about that list while its doc comment claims the tree; the
+    /// reviewer added a third file carrying the exact swap and all twelve tests passed. The
+    /// neighbouring guard on hand-written copies,
+    /// `bothSurfacesReadTheSessionsWordsFromOneOwnerAndNeitherHandWritesThem`, still reads those two
+    /// filenames for its `"Step \("` absence check; that is stated here rather than left to be
+    /// discovered, and it is a narrower hole — a third file would have to hand-write the sentence
+    /// rather than mis-order a call to the owner.
     ///
     /// **The guard is shown to flag the defect before the live sweep is believed**, the discipline
     /// `UntrustedContentBoundaryScalarMatchingTests` states after a scan that flagged 0 of 13
@@ -418,18 +428,24 @@ struct WidgetSessionApprovalPanelTests {
         #expect(!Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.iteration,\n    maximumIterations: 12\n"), "a literal is not the session's cap")
         #expect(!Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.iteration\n"), "a call that lost an argument")
 
-        // Then the live population, which is both files whole rather than four named regions — a
-        // fifth site anywhere in either of them is swept by the same rule.
-        var calls: [String] = []
-        for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
-            let inFile = Self.stepLineCalls(in: try MacAgentSource.read(file))
-            calls.append(contentsOf: inFile)
+        // Then the live population, which is the **whole app target** rather than a list of
+        // filenames. `appSourceFiles()` enumerates `Sources/MacAgent/` recursively, so a fifth site
+        // in a file that does not exist yet is swept by the same rule — which is the property this
+        // test claims, and which a two-filename loop did not have (PR #151 review, F3: the reviewer
+        // added `StepLineThirdFileProbe.swift` carrying the exact swap and this test passed).
+        // `RoutineDetailView.swift` is the standing precedent that a view here really does get split
+        // into a file of its own, so the third file is not hypothetical.
+        var calls: [(file: String, call: String)] = []
+        for url in try MacAgentSource.appSourceFiles() {
+            for call in Self.stepLineCalls(in: try MacAgentSource.read(url)) {
+                calls.append((file: MacAgentSource.relativePath(of: url), call: call))
+            }
         }
-        #expect(calls.count == 4, "the population the two counts above already fix at 3 + 1")
-        for call in calls {
+        #expect(calls.count == 4, "the whole-tree population, not a per-file count: \(calls.map(\.file))")
+        for (file, call) in calls {
             #expect(
                 Self.pairsItsArgumentsWithTheirOwnFields(call),
-                "a step line whose arguments do not pair with their own fields: \(call.trimmingCharacters(in: .whitespacesAndNewlines))"
+                "a step line whose arguments do not pair with their own fields, in \(file): \(call.trimmingCharacters(in: .whitespacesAndNewlines))"
             )
         }
     }
