@@ -179,6 +179,15 @@ struct AgentActionExecutorTests {
         }
 
         try await waitForLaunchSignal(at: launched)
+        // **The launch wait's own backstop is the cascade this test must not build on.** If the
+        // child never signalled, `waitForLaunchSignal` has recorded its issue and returned, and
+        // everything below would then be asserting about a process that never existed — which is
+        // how a starved wait turns into a confident-looking failure one step removed (SONNY-302,
+        // and the reason `scripts/mutate-untrusted-failures` distrusts that wording).
+        guard FileManager.default.fileExists(atPath: launched.path) else {
+            task.cancel()
+            return
+        }
         task.cancel()
 
         func sentinel() -> String? {
@@ -186,19 +195,44 @@ struct AgentActionExecutorTests {
         }
         // On its contents, not its existence: `>` creates the file when the redirection is set up,
         // so an existence check could pass on an empty file the trap had not finished writing.
-        try await HangBackstop.wait(for: "the cancelled child to report that it was signalled") {
+        let observations = try await HangBackstop.wait(for: "the cancelled child to report that it was signalled") {
             sentinel() == "terminated"
         }
         guard sentinel() == "terminated" else {
-            // `HangBackstop` has already recorded the issue, so this branch adds no assertion — it
-            // cleans up. Awaiting the task here would block for the child's whole 300 s, and
-            // returning without doing anything would leave the shell and its sleep running for the
-            // same 300 s. So the child is sent the signal the runner did not send, which its own
-            // trap turns into an orderly exit that also kills the sleep. Measured on the mutant that
-            // deletes `terminate()` from `ProcessBox.cancel`: without this, one `/bin/sh` and one
-            // `sleep` outlive the run, which under a mutation battery is per mutant.
+            // Awaiting the task here would block for the child's whole 300 s, and returning without
+            // doing anything would leave the shell and its sleep running for the same 300 s. So the
+            // child is sent the signal the runner did not send, which its own trap turns into an
+            // orderly exit that also kills the sleep. Measured on the mutant that deletes
+            // `terminate()` from `ProcessBox.cancel`: without this, one `/bin/sh` and one `sleep`
+            // outlive the run, which under a mutation battery is per mutant.
             if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap(pid_t.init) {
                 kill(pid, SIGTERM)
+            }
+            // **And a second issue, in wording no declaration excuses, because the one `HangBackstop`
+            // recorded cannot be read as evidence and this failure is.** Every signature that type
+            // emits is declared in `scripts/mutate-untrusted-failures`, correctly — a wait that
+            // times out may only be reporting the state of the shared main actor. So a test whose
+            // *only* failure is a backstop can never count as a mutation kill: measured, the mutant
+            // that deletes `terminate()` from `ProcessBox.cancel` came back **UNATTRIBUTED** rather
+            // than killed at `ba6a3e4`, on a run where this test had failed for exactly the right
+            // reason. Understating coverage is the safe direction and it is still a loss, since
+            // holding this property is the whole of SONNY-259.
+            //
+            // The condition is `HangBackstop`'s own rule rather than a second one invented here: a
+            // wait that ends without its condition holding ended either `.stuck` — past the deadline
+            // *and* past `observationFloor` — or `.starved`, and `.stuck` is checked first, so
+            // reaching the floor is exactly the case that type calls a real failure. Below it,
+            // nothing is recorded here and the declared starvation issue stands alone. Above it, the
+            // child had already signalled its own launch, so the process provably existed and 500+
+            // looks over 30+ seconds found it never reporting a signal — which is a statement about
+            // `AsyncProcessRunner` and not about the queue.
+            if observations >= HangBackstop.observationFloor {
+                Issue.record("""
+                    the runner did not terminate the child. It was cancelled after signalling its \
+                    own launch, and the SIGTERM handler that would have written its sentinel never \
+                    ran, checked \(observations) times. Only ProcessBox sends that signal, so this \
+                    is an assertion about AsyncProcessRunner rather than a report about the machine.
+                    """)
             }
             return
         }
