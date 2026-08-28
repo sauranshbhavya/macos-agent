@@ -1243,9 +1243,12 @@ answers 401.
       quotes: the ceiling is now the same number on both sides of the network, so seeing it means
       the two have come apart.
 - [ ] **(new 2026-08-28, SONNY-131)** Switch to **Safe mode** and start a session. The capture-review
-      panel must still appear before each send, showing the screenshot. The bytes now travel base64
-      inside JSON rather than as a `data:` URL, and this is the one place a shape change would show
-      as a blank frame.
+      panel must still appear before each send, showing the screenshot. **The reason to run it is
+      that this is the only place a human sees what is about to leave**, and the capture path is what
+      this ticket rewired around. (The parenthetical here used to say the panel is where a *wire*
+      shape change would show as a blank frame; PR #144's R4 corrected it. The panel is built from
+      `payload.redactedImageData` directly — `VisionSessionRunner.swift:366` — and never sees the
+      request body, so a change to the wire cannot blank it.)
 - [ ] **(new 2026-08-28, SONNY-131)** Put something secret-shaped on screen (an `sk-`-prefixed string
       in a text editor is enough) and start a Safe-mode session. The preview must show a solid black
       rectangle over it, hard-edged, no ghosting. **Redaction is upstream of everything this ticket
@@ -1255,11 +1258,19 @@ answers 401.
       *"Sonny couldn't finish this one. Try again."*. (That sentence really did appear here during
       this ticket, on a stop that reached a request already in flight, and the fix is the reason this
       row exists.)
-- [ ] **(new 2026-08-28, SONNY-131)** After a session, open **Tasks** and check its usage line.
-      Screen control has never appeared there before — this ticket is what makes it visible — so what
-      you should see is a screen-control entry with a call count. **Token numbers may be absent and
-      that is correct**: the gateway sends none unless the provider reported some, deliberately,
-      because an estimate built from the prompt text alone would leave out the image.
+- [ ] **(new 2026-08-28, SONNY-131; rewritten the same day after PR #144's F1)** After a session,
+      run `docker logs <the gateway container>` and count the `POST /v1/screen/analyze` lines. There
+      should be **one per iteration**, matching the step count the HUD showed. That is the whole of
+      what this ticket's metering requirement can be checked against from outside the app, and it is
+      a real check: one usage record per iteration is the decision, and the request count on the wire
+      is that decision made visible.
+      **Do not look in Tasks for a usage line — there is none, and that is not this ticket's to
+      build.** Nothing in the app renders `taskUsageSummary` (`git grep -n taskUsageSummary --
+      Sources` → 4 lines, all in `AgentViewModel.swift`, none of them a view), `CompletedTaskRecord`
+      carries no usage field, and Settings → Usage says so in the product's own words: *"Sonny tracks
+      approximate usage per task today, but a full summary isn't built yet."* The record exists and is
+      asserted by tests; **the surface is SONNY-133-adjacent work.** The first version of this row
+      sent you to Tasks to find something no view draws.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 

@@ -232,11 +232,23 @@ public extension SonnyBackendError {
     /// wrong sentence for someone who had just pressed stop. `aCancellationDuringASendIsNotReported
     /// AsASendFailure` is the test that found it.
     ///
-    /// **What it does not yet reach**, stated rather than left to be discovered: the four text
-    /// clients' own wrappers — `PlannerError.backend`, and the transcription and search equivalents —
-    /// do not conform to ``CarriesBackendError``, so a cancellation on those routes still reads as a
-    /// failure. Those files are SONNY-130's and are outside this ticket's region; **SONNY-320**
-    /// carries the four one-line conformances.
+    /// **What it does not yet reach**, stated rather than left to be discovered: the text clients'
+    /// own wrappers do not conform to ``CarriesBackendError``, so a cancellation on those routes
+    /// still reads as a failure. Those files are SONNY-130's and are outside this ticket's region;
+    /// **SONNY-320** carries them.
+    ///
+    /// **Three conformances, not four, and the population is the error type rather than the route**
+    /// (PR #144, F6). The population is four declarations —
+    /// `git grep -nE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4, anchored to the start
+    /// of a line so this sentence does not count itself, which the unanchored form does — and one of
+    /// them is ``VisionModelClientError``'s, which already conforms. The other three are
+    /// `PlannerError`, `TranscriptionError` and `TavilySearchError`. **`WebResearchSynthesizer.swift`
+    /// needs no edit**: it declares `WebResearchNoteDecodingError`, whose three cases are
+    /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote` — no `.backend` at all — and it
+    /// throws `PlannerError.backend` (`:407`), so conforming `PlannerError` once covers both
+    /// `/v1/plan` and `/v1/research/synthesize`. This said "the four" and SONNY-320's description
+    /// named that file, which would have sent its session looking for a fourth error type and
+    /// finding an unrelated decoding enum.
     static func isCancellation(_ error: any Error) -> Bool {
         if error is CancellationError { return true }
         if (error as? URLError)?.code == .cancelled { return true }

@@ -32,12 +32,33 @@ public enum SonnyBackendTimeouts {
     public static let search: TimeInterval = 30
     /// §12's longest client budget, shared with `researchSynthesis` (SONNY-131).
     ///
-    /// **The one row where the client timeout is doing visible work**, because a vision session
-    /// spends up to twelve of these in sequence: it is what decides whether a slow iteration ends as
-    /// the server's typed `504 provider.timeout` — which `VisionSessionRunner` can explain and which
-    /// `SonnyBackendClient` retries once — or as this client's own transport timeout, which it
-    /// cannot tell apart from a dead network. 120 s against the server's 105 s total is the fifteen
-    /// seconds §12 gives the long routes.
+    /// **What the margin buys is a retry, and nothing else the user can see** — which is worth
+    /// stating exactly, because the sentence that stood here claimed more and had it backwards
+    /// (PR #144, F7). A slow iteration that ends as the server's typed `504 provider.timeout` is
+    /// retried once by `SonnyBackendClient` (`SonnyBackendErrorCode.providerTimeout.maximumAttempts`
+    /// is 2); one that ends as this client's own transport timeout is not retried at all
+    /// (`attemptCeiling` returns `nil` for `.timedOut`). 120 s against the server's 105 s total is
+    /// the fifteen seconds §12 gives the long routes, and that fifteen seconds is what makes the
+    /// first outcome reachable instead of the second.
+    ///
+    /// **The user sees the same sentence either way, and that is a real gap rather than a nuance.**
+    /// Traced end to end at this head: server upstream (90 s) and server total (105 s) both arrive as
+    /// `504 provider.timeout` → `SignInFailure.backendUnreachable`; the client's own 120 s arrives as
+    /// `SonnyBackendError.timedOut` → the same case; and `SonnyBackendCopy.sentence` answers all
+    /// three with **"Sonny couldn't finish this one. Try again."**, which
+    /// `VisionSessionInterrupted` then suffixes with the step count. So the old claim — that the
+    /// client "cannot tell apart" a transport timeout from a dead network — is inverted twice over:
+    /// a dead network is `SonnyBackendError.offline`, which is the one case that *does* get its own
+    /// sentence ("You're offline. Everything Sonny does on this Mac still works."), and the two that
+    /// share one are the two the comment said were distinguishable.
+    ///
+    /// **One sentence for three deadline outcomes is defensible here and is not this file's to
+    /// change.** All three mean the same thing to a person — Sonny waited and gave up — and none
+    /// suggests a different action, so three sentences would be three ways to say "try again" and
+    /// would breach the standing rule that the product does not explain itself. What is *not*
+    /// defensible is a comment implying the app already distinguishes them. Making the unreachable
+    /// states distinguishable where it genuinely matters is SONNY-136's, and a dated comment on that
+    /// ticket says this route currently collapses three into one.
     public static let screenAnalyze: TimeInterval = 120
 }
 

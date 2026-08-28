@@ -6,16 +6,26 @@ import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "./upstr
  * The two things every model route does around its provider call: bound it in time, and turn what it
  * threw into one of §7.2's codes (SONNY-131).
  *
- * **This file exists because SONNY-131 needed both and could not import either.** Both functions
- * were written by SONNY-130 as private declarations inside `routes/model.ts`, which is on this
- * ticket's never-touch list — it is "the four text routes". Copying them into the vision route would
- * have given §12's deadline behaviour and §7.2's failure mapping two implementations that can drift,
- * which is the failure this repository already has a rule about. So they are here, the vision route
- * uses them, and **SONNY-316** is the ticket that points the four text routes at them and deletes
- * the private copies.
+ * **These are copies, and the originals are still in `routes/model.ts`.** Say that plainly, because
+ * the first version of this header did not (PR #144, F3): it argued that copying "would have given
+ * §12's deadline behaviour and §7.2's failure mapping two implementations that can drift" and then
+ * said "so they are here" — which reads as if the duplication had been avoided. It was created, on
+ * purpose, and it is real:
  *
- * Nothing here is new behaviour. The bodies are SONNY-130's, moved rather than rewritten, so a
- * reader comparing the two sees the same code and `SONNY-316` is a deletion rather than a merge.
+ * ```
+ * git grep -n "function withDeadlines"      -- server/src   ->  routing.ts:32, routes/model.ts:143
+ * git grep -n "function sendUpstreamFailure" -- server/src   ->  routing.ts:67, routes/model.ts:95
+ * ```
+ *
+ * **Why a copy rather than a move.** Both were private declarations inside `routes/model.ts`, which
+ * is on SONNY-131's never-touch list — it is "the four text routes" — so deleting them there was not
+ * that ticket's to do. **SONNY-316** is the ticket that points the four text routes at this file and
+ * deletes the originals, and until it lands there are genuinely two implementations of §12's
+ * deadline wrapper and §7.2's failure mapping. **Do not edit one of them and assume the other
+ * followed.**
+ *
+ * Nothing here is new behaviour: the bodies are byte-identical to SONNY-130's, so `SONNY-316` is a
+ * deletion rather than a merge.
  */
 
 /**
