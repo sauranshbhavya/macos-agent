@@ -203,7 +203,15 @@ struct SecretTextDetector {
         // the field, and `\b` would drop both. An unfolded letter (U+0416, which has no Latin twin)
         // is a letter too, so a look-alike glued to a Cyrillic word cannot fake the start of one
         // either. (Code points rather than pasted letters, per the conventions file.)
-        let contextual = /(?i)(?:^|[^\p{L}])(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{6,8})\b/
+        // **The value may be a separated pair as well as a run of digits (SONNY-278).** `\d{6,8}`
+        // alone could not see `code: 483-291` or `code: 483 291`, so a labelled code that renders
+        // with a separator reached the spaced-pair rule below at 0.55 or, when the separator sat
+        // straight after the colon, nothing at all. It is here rather than as a third pattern
+        // because it is the same question — a context word, then a value — and because the
+        // refusals below deliberately drop `code:483-291`, which this alternative catches. Measured
+        // over the corpus named at the spaced pair: widening this alternation added **0** matches
+        // the tree did not already have.
+        let contextual = /(?i)(?:^|[^\p{L}])(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{3}[ -]\d{3}|\d{6,8})\b/
         for match in text.matches(of: contextual) {
             let value = match.output.1
             results.append(SecretTextMatch(
@@ -217,8 +225,42 @@ struct SecretTextDetector {
         // word nearby the match is shape-only, so below threshold. The lookahead plus the manual
         // preceding-character check (Swift Regex has no lookbehind) keep this from firing inside
         // longer digit runs (phone numbers, card numbers).
+        //
+        // **Two further refusals, and both are measured rather than argued (SONNY-278).** A match
+        // here paints its whole observation line for the vision model — painting is per-observation
+        // and does not read confidence, so a 0.55 shape costs a line exactly as a 0.95 one does —
+        // and a developer's screen is full of two shapes this pattern could not tell from a code.
+        // Over this repository's own tracked Markdown and source laid out as screens (25 + 396
+        // files, 216 774 laid-out lines in 5 366 forty-two-line windows, at `d7d110e`, through the
+        // real detector) the whole `one_time_code` class fired **151** times and painted **143**
+        // lines in **98** screens. **99** of those matches were a `File.swift:129-131` line-range
+        // citation and **7** more were the tail of a thousands-separated number such as
+        // `1 011 740`. With both refusals the same corpus answers **45 matches, 41 painted lines,
+        // 34 screens**. The Markdown half — which is what the ticket was filed off — goes from
+        // **114 matches painting 109 lines in 70 of its 1 235 screens** to **11 painting 10 in 9**.
+        // The source half barely moves (37 -> 34) and should not: nearly all of what is left there
+        // is this repository's own test data, literal `code: 123456` lines that a detector is
+        // right to see.
+        //
+        // ``continuesASeparatedDigitGroup(_:in:)`` is the run guard one character wider:
+        // ``precededByDigitOrHyphen(_:in:)`` refuses a pair whose separator has already been
+        // crossed, and `146 835` inside `1 146 835` is preceded by a *space* that is itself
+        // preceded by a digit. ``isBoundToALocatorByAColon(_:in:)`` refuses a hyphenated pair whose
+        // immediately preceding character is `:` — what binds `129-131` to the file before it. A
+        // code is never presented that way, because a label puts a space after its colon; the one
+        // shape this newly misses is `code:483-291`, and the contextual rule above now catches that
+        // at 0.85 instead.
+        //
+        // **The hyphen itself stays, and that is the ticket's question answered with a
+        // measurement.** Dropping it was the obvious fix and is the wrong one: `Your code is
+        // 483-291` has no six contiguous digits for the contextual rule and no space for the
+        // spaced one, so nothing else in this file would see it. The cost was never the hyphen; it
+        // was the colon in front of it.
         let spacedPair = /\b(\d{3}[ -]\d{3})\b(?![\d-])/
-        for match in text.matches(of: spacedPair) where !Self.precededByDigitOrHyphen(match.range, in: text) {
+        for match in text.matches(of: spacedPair)
+        where !Self.precededByDigitOrHyphen(match.range, in: text)
+            && !Self.continuesASeparatedDigitGroup(match.range, in: text)
+            && !Self.isBoundToALocatorByAColon(match.range, in: text) {
             let value = match.output.1
             results.append(SecretTextMatch(
                 detectionClass: .oneTimeCode,
@@ -273,6 +315,37 @@ struct SecretTextDetector {
         guard range.lowerBound > text.startIndex else { return false }
         let before = text[text.index(before: range.lowerBound)]
         return before.isNumber || before == "-"
+    }
+
+    /// Whether the match continues a longer separated digit group — `146 835` inside `1 146 835`
+    /// (SONNY-278).
+    ///
+    /// The space is the only separator this has to look for: a hyphen in that position is already
+    /// refused by ``precededByDigitOrHyphen(_:in:)``, so a branch for it here would be one no input
+    /// can reach.
+    ///
+    /// **Only the left side, and that is a measurement rather than an omission.** The symmetric
+    /// check — refusing a pair *followed* by a separator and a digit — refused **0** additional
+    /// matches over the corpus named at ``oneTimeCodeMatches(in:)``, and it would refuse a genuine
+    /// pair of codes printed side by side. An unmeasured guard that can only lose true positives is
+    /// worse than no guard.
+    private static func continuesASeparatedDigitGroup(_ range: Range<String.Index>, in text: String) -> Bool {
+        guard range.lowerBound > text.startIndex else { return false }
+        let separatorIndex = text.index(before: range.lowerBound)
+        guard text[separatorIndex] == " ", separatorIndex > text.startIndex else { return false }
+        return text[text.index(before: separatorIndex)].isNumber
+    }
+
+    /// Whether a **hyphenated** pair is bound to what precedes it by a colon with no space —
+    /// `CerebrasPlanner.swift:129-131`, `linking.db.test.ts:773-783` (SONNY-278).
+    ///
+    /// Hyphenated only, deliberately: `Code:483 291` is a label with its space in the ordinary
+    /// place and stays a match, and every colon-bound false positive in the measured corpus was
+    /// hyphenated. The colon has to be *immediately* before the digits — `Code: 483-291` is
+    /// preceded by a space and is untouched.
+    private static func isBoundToALocatorByAColon(_ range: Range<String.Index>, in text: String) -> Bool {
+        guard text[range].contains("-"), range.lowerBound > text.startIndex else { return false }
+        return text[text.index(before: range.lowerBound)] == ":"
     }
 
     static func passesLuhn(_ digits: [Int]) -> Bool {
