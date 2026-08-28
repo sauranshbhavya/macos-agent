@@ -2102,6 +2102,23 @@ here can answer, because no test calls a model.
       `UNTRUSTED_OBSERVED_CONTENT_...` line back at you**, or one that has stopped summarizing the
       page at all.
 
+### Redaction stops blacking out line-range citations (new 2026-08-28, SONNY-278)
+
+The one-time-code shape used to fire on every `File.swift:129-131` you had on screen, and a match
+blacks out **the whole line** for the vision model. This is visible in the pre-send review panel, so
+it is checkable rather than a claim.
+
+- [ ] **(SONNY-278)** Put a window in front that is full of line-range citations — this repository's
+      changelog, a GitHub diff, a review comment, an editor with a stack trace — and start a
+      screen-control session on it in **Safe** mode so the pre-send review panel appears. Look at the
+      thumbnail and at the "N possible secrets were blacked out" line. **The finding is a black bar
+      over a line whose only digits are a `something:129-131` citation, or a thousands-separated
+      number like `1 011 740`.** Before this change those painted; now they should not.
+- [ ] **(SONNY-278, the other direction)** With a real six-digit code visible on screen — a
+      verification code in a mail or messages window, however it is spelled: `483291`, `483 291` or
+      `483-291` — start the same session. **The code must still be blacked out.** A code that reaches
+      the thumbnail unpainted is the more serious finding of the two.
+
 ## 8. How to report back
 
 For each real finding, give me:
