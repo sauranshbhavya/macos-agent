@@ -92,8 +92,8 @@ struct MemorySettingsTests {
                 #expect(!noun.contains("saved"), "\(category.title) still infers its unit")
             }
 
-            // A copied singular is the mistake this catches: nine nouns written by hand, and the
-            // one that reads "2 copied item" is invisible to a test that only checks presence.
+            // A copied singular is the mistake this catches: the nouns are written by hand, and
+            // one reading "2 copied item" is invisible to a test that only checks presence.
             #expect(category.singularNoun != category.pluralNoun, "\(category.title) is not pluralised")
         }
     }

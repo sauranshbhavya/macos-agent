@@ -819,8 +819,8 @@ struct MemoryCommandCenterTests {
 
     /// **Every row's detail names its unit, checked over the whole population** (SONNY-243).
     ///
-    /// The row the founder reported is one of nine, and the sentence they all share is built in one
-    /// place — so what this guards against is a tenth row, or a row wired to something other than
+    /// The row the founder reported is one of the page's rows, and the sentence they all share is
+    /// built in one place — so what this guards against is a tenth row, or a row wired to something other than
     /// `MemoryCategory.countedEntries(_:)`. Asserted on the empty fixture because the empty detail
     /// is the count and nothing else, which is the whole of what is under test here; the populated
     /// forms are pinned by the tests around it.
@@ -2291,7 +2291,7 @@ struct MemoryCommandCenterTests {
     /// **Both surfaces that say what the wipe takes read one derived sentence** (SONNY-233).
     ///
     /// They held hand-written lists and both were false by omission — Settings' detail line named
-    /// ten of the thirteen stores the wipe deletes and the confirmation dialog named nine, so the
+    /// ten of the thirteen stores the wipe deleted then and the confirmation dialog named nine, so the
     /// two surfaces describing one irreversible press disagreed with each other as well as with the
     /// wipe. `LocalDataDeletionCopy.everythingItTakes` is derived from `LocalStore.allCases` through
     /// an exhaustive switch, and `LocalStorageSecurityTests.theWipesOwnSentenceNamesEveryStoreItDeletes`

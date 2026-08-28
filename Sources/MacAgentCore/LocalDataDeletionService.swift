@@ -42,8 +42,8 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 /// **One sentence, derived from the population, read by both surfaces that state it.** Settings' Data
 /// page carries a detail line under "Delete Sonny local data" and the confirmation dialog carries a
 /// message; both enumerate what goes, and both were written by hand. At the head this ticket was
-/// picked up the detail line named ten of the thirteen stores the wipe deletes and the dialog named
-/// nine — the dialog being the last thing a user reads before an irreversible press. Neither was
+/// picked up the detail line named ten of the thirteen stores the wipe deleted then and the dialog
+/// named nine — the dialog being the last thing a user reads before an irreversible press. Neither was
 /// noticed going stale, because nothing tied the words to
 /// `LocalDataDeletionService.defaultStoreFileURLs()`: a store landed, its file went into the wipe,
 /// and the sentence stayed as it was. SONNY-233 was filed against the detail line alone; the dialog

@@ -106,7 +106,7 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     /// one of them was wrong.
     ///
     /// **Naming the unit is the repair, and it is applied to every row rather than to the one that
-    /// was reported.** A single row reading "1 folder" among eight reading "N saved" is the same
+    /// was reported.** A single row reading "1 folder" among neighbours reading "N saved" is the same
     /// defect the report is about — words that differ from their neighbours' for a reason the reader
     /// cannot see. And "saved" was not merely unitless: this page groups its rows by
     /// `LocalStoreKind`, and for the whole `.trace` half nobody saved anything — a task history row,
@@ -153,7 +153,8 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// The plural of `singularNoun`. Spelled out rather than derived: an "-s" rule is a guess about
-    /// English that holds for today's nine nouns and for no reason that will keep holding.
+    /// English that happens to hold for every noun here today and for no reason that will keep
+    /// holding.
     var pluralNoun: String {
         switch self {
         case .routines:
