@@ -146,6 +146,23 @@ export async function insertMeteringEvent(
  * The rollback on a lost claim matters as much as the commit: the `BEGIN` has already happened by
  * the time the claim comes back, and leaving that transaction open would hold the connection for the
  * life of the pool lease.
+ *
+ * **Neither `ROLLBACK` below can be caught by a test, and both stay** — recorded because they are
+ * the two survivors of this ticket's mutation battery and the next reader deserves the reason rather
+ * than a coverage gap to close. Both are *equivalent mutants*, for two different reasons, and
+ * neither reason is "nobody wrote the test":
+ *
+ * - **The lost-claim path has written nothing**, because `claimMeteringEvent`'s `UPDATE` matched
+ *   zero rows. `COMMIT` and `ROLLBACK` are the same statement over an empty transaction.
+ * - **The `catch` path's transaction is already aborted.** Every throw inside the `try` comes from
+ *   Postgres — the two statements are the only things in it — and Postgres answers `COMMIT` on an
+ *   aborted transaction with a rollback. Measured on postgres:17 rather than recalled: `BEGIN;
+ *   INSERT (ok); INSERT (violates a CHECK); COMMIT;` prints `ROLLBACK` where the commit was, and
+ *   the successful insert is gone — `SELECT count(*)` is 0.
+ *
+ * What *is* covered is the property those two lines exist for, and a sharper mutant proves it:
+ * splitting this into two transactions — commit the claim, then begin again to insert — is killed by
+ * `gives the claim back when the insert fails, so the event is not lost with it`.
  */
 export async function writeMeteringEvent(
   client: pg.Client,
