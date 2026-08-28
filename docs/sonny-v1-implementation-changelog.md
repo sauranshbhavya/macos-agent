@@ -182,7 +182,7 @@ Reviewed by: **not yet — the coordinator verifies this directly per the kickof
 
 Spec sections covered: **none, and that is not a gap**. This is delivery tooling; `docs/sonny-major-release-spec.md` describes the product and has nothing to say about the mutation harness. `CLAUDE.md`'s Commands section and `scripts/mutate --help` are this change's specification, and both are updated.
 
-Files changed, 3: `scripts/mutate`, `CLAUDE.md`, and this file. Nothing under `Sources/`, `Tests/` or `server/` — which is why the verification below needs its own paragraph rather than the usual pair of commands.
+Files changed, 3 (`git diff --name-only origin/main...HEAD | wc -l` at `bf7c143`): `scripts/mutate`, `CLAUDE.md`, and this file. Nothing under `Sources/`, `Tests/` or `server/` — which is why the verification below needs its own paragraph rather than the usual pair of commands.
 
 Tests, and **why each is owed by a diff that touches neither half's code**:
 
