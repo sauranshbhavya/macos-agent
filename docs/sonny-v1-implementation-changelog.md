@@ -175,8 +175,8 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 ### Branch: feature/row-12-gateway-vision
 Status: complete. **Acceptance criterion 1 is discharged in the two halves the coordinator's amendment of 2026-08-28 split it into**, and the founder-run half is owed — see Known limitations.
 Date: 2026-08-28
-Tickets: **SONNY-131** (the screen-control route moves behind the backend: server endpoint, client re-point, explicit timeouts, a decided mid-loop failure behaviour, and vision usage made visible to metering). Cut from `main` at `7f555cd` (PR #141's merge). Spawned **SONNY-316** (the four text routes adopt the shared deadline, failure and response-cap helpers), **SONNY-317** (§6.4's gzip, both halves, with the limit measured on the decoded body), **SONNY-320** (a cancellation on the four text routes is reported to the user as a failure — the same defect this branch found and fixed on its own route) and, from PR #144's fix round, **SONNY-323** (`scripts/mutate` cannot attribute a server-half kill — every vitest failure reads as a build failure, found by taking F4's instruction to run the battery through the tool). The board was read before each was filed, which PR #139's entry records as the lesson from a duplicate.
-Reviewed by: fresh session per WORKFLOW.md step 7, **one cycle**, at `a85798d`. **Seven findings, every one a record rather than a defect in the shipping path**, all seven taken in a single fix round along with two of the five recorded residuals — the round is itemised below the decisions. **What held under a hostile rerun**: the redaction non-bypass, attacked five ways and intact on all five; the mid-loop decision, with four of its tests broken by hand to check they fail; the route numbers; the payload ceiling in both directions; and ten mutants of the reviewer's own, all killed — including one that reverts the cancellation predicate and reproduces this branch's own defect verbatim, which is the branch's central claim re-proved by someone who did not write it. **The reviewer also ran `./scripts/deploy.sh local`**, which this session could not, closing the four things the substitute harness left uncovered. The coordinator verifies the fix round directly; no third cycle.
+Tickets: **SONNY-131** (the screen-control route moves behind the backend: server endpoint, client re-point, explicit timeouts, a decided mid-loop failure behaviour, and vision usage made visible to metering). Cut from `main` at `7f555cd` (PR #141's merge) and **rebased once**, onto `60ad133` (PR #142's merge, SONNY-300's idempotency key), after the fix round. **Every figure below is measured at `4b5c69d`, the rebased head, and none is carried across it** — the one exception is argued where it appears, and it is a tree identity rather than a translation. Spawned **SONNY-316** (the four text routes adopt the shared deadline, failure and response-cap helpers), **SONNY-317** (§6.4's gzip, both halves, with the limit measured on the decoded body), **SONNY-320** (a cancellation on the four text routes is reported to the user as a failure — the same defect this branch found and fixed on its own route) and, from PR #144's fix round, **SONNY-323** (`scripts/mutate` cannot attribute a server-half kill — every vitest failure reads as a build failure, found by taking F4's instruction to run the battery through the tool). The board was read before each was filed, which PR #139's entry records as the lesson from a duplicate.
+Reviewed by: fresh session per WORKFLOW.md step 7, **one cycle**, at `a85798d` — **a head the rebase below has since replaced, named here as history and deliberately carrying no figure of its own**, which is the distinction `CLAUDE.md` draws and the shape PR #137's entry uses for its four. **Seven findings, every one a record rather than a defect in the shipping path**, all seven taken in a single fix round along with two of the five recorded residuals — the round is itemised below the decisions. **What held under a hostile rerun**: the redaction non-bypass, attacked five ways and intact on all five; the mid-loop decision, with four of its tests broken by hand to check they fail; the route numbers; the payload ceiling in both directions; and ten mutants of the reviewer's own, all killed — including one that reverts the cancellation predicate and reproduces this branch's own defect verbatim, which is the branch's central claim re-proved by someone who did not write it. **The reviewer also ran `./scripts/deploy.sh local`**, which this session could not, closing the four things the substitute harness left uncovered. The coordinator verifies the fix round directly; no third cycle.
 
 Spec sections covered: §16.5's provider-agnostic routing for the fifth and last credential-bearing route; §16.3's "no provider key on the user's machine" for it. With this branch, **every one of the six clients §1.1 enumerates has moved or is deliberately local**: SONNY-130 took four, this takes the fifth, and `CerebrasPlanner` is `feature/row-12-provider-router`'s and untouched here.
 
@@ -197,20 +197,25 @@ Files changed:
 - `Tests/MacAgentCoreTests/VisionModelClientTests.swift` — migrated. `ModelRouteNumbersTests.swift`, `SonnyLiveGatewayTests.swift`, `Tests/MacAgentTestSupport/RecordedBackendRequests.swift`, `Tests/MacAgentTests/VisionSessionRunTests.swift` — extended.
 - `docs/sonny-backend-api-contract.md` (§6.4, §12, §13 and its change log), `docs/sonny-manual-test-checklist.md`.
 
-Tests: all re-measured at **`2926169`**, the head after PR #144's fix round, every exit code read with
-nothing between it and `$?`.
+Tests: all re-measured at **`4b5c69d`**, the rebased head, every exit code read with nothing between
+it and `$?`.
 
-**Every figure below has been taken three times — at `1c26581`, at `7aa28ba` and here — and re-taken
-rather than carried at each move.** The fix round touched **six** files under `Sources/` and
-`server/src/` (`git diff --stat 7aa28ba..HEAD -- Sources server/src` → 6 files) and every changed line
-in them is a comment or blank — the same diff filtered to lines that are neither prints nothing — so
-the numbers were expected to be identical and are. The run was made anyway, because "comment-only" is
-a claim about a diff and the suite is what settles whether a source-scanning test disagreed. Two in this tree read source as text — `RedactedPayloadStructureTests`
-and `onlyTheServiceProducesPayloadsInTheLiveModule` — so a comment really can move a count here.
+**Every figure below has been taken four times — at `1c26581`, `7aa28ba`, `2926169` and here — and
+re-taken rather than carried at each move**, the last of them because a rebase moves the tree: the
+new base carries `main`'s own changes, so a figure measured at the old one was never true of this
+one. The three earlier heads are non-ancestral now and this entry stamps none of them with a number.
 
-**Swift: 2316 tests in 159 suites, exit 0** (the flagged command in `CLAUDE.md`). The run reports two *known* issues, both `HangBackstopTests`' own deliberate `withKnownIssue` arms, which arrived on `main` with PR #138 and are not this branch's. **The baseline was measured rather than read off a neighbouring entry**: a detached worktree at `7f555cd`, the commit this branch was cut from, answers **2301 in 159**, exit 0, with the same two known issues — so this branch is **+15 tests and +0 suites**. **`swift build` exit 0.** **`scripts/warnings`: 0 warnings**, exit 0, its stamp read off the report's own header: **`2926169 (clean)`**.
+**The fix round's own claim is kept and re-derived at the rebased head rather than carried across it.**
+It touched **six** files under `Sources/` and `server/src/` — `git diff --stat ff46b69~1..HEAD --
+Sources server/src` → 6 files — and every changed line in them is a comment or blank: the same diff
+filtered to lines that are neither prints **0**. The suite was run anyway, then and now, because
+"comment-only" is a claim about a diff and the suite is what settles whether a source-scanning test
+disagreed. Two in this tree read source as text — `RedactedPayloadStructureTests` and
+`onlyTheServiceProducesPayloadsInTheLiveModule` — so a comment really can move a count here.
 
-**Server: `npm run build` exit 0, `npm run typecheck` exit 0, `npm test` exit 0 with 265 passed, 131 skipped (396)** and no `DATABASE_URL`. The same detached worktree at `7f555cd` answers **239 passed, 131 skipped (370)**, so this branch is **+26 tests** — which is exactly `test/screen.test.ts`' own 26, the three edits to `model.test.ts`, `gate.test.ts` and `support/config.ts` having extended existing assertions rather than added tests. **`npm run check:secrets` clean over 459 tracked files**, 12 patterns, 8 baselined fixtures, exit 0; `./scripts/check-secrets-selftest.sh` **43 passed, 0 failed**, exit 0.
+**Swift: 2316 tests in 159 suites, exit 0** (the flagged command in `CLAUDE.md`). The run reports two *known* issues, both `HangBackstopTests`' own deliberate `withKnownIssue` arms, which arrived on `main` with PR #138 and are not this branch's. **The Swift baseline is 2301 in 159 and the rebase did not move it, which is a tree identity rather than a translation**: it was measured in a detached worktree at `7f555cd`, this branch's original base, and PR #142 changed no Swift file — `git rev-parse 7f555cd:Sources 60ad133:Sources` prints `a0ed6b9` twice and the same over `Tests` prints `d2f701e` twice, so the tree that 2301 was measured on *is* the tree at the new base. That is the one case where repointing a citation is safe, and it is the opposite of translating a figure across a rebase, which this entry does nowhere. So the branch is **+15 tests and +0 suites** against either base. **`swift build` exit 0.** **`scripts/warnings`: 0 warnings**, exit 0, its stamp read off the report's own header: **`4b5c69d (clean)`**.
+
+**Server: `npm run build` exit 0, `npm run typecheck` exit 0, `npm test` exit 0 with 302 passed, 163 skipped (465)** and no `DATABASE_URL`. **The server baseline genuinely moved with the rebase and was re-measured rather than adjusted**: a detached worktree at `60ad133`, the new base, answers **276 passed, 163 skipped (439)**, so this branch is **+26 tests** — the same delta as at the old base, and exactly `test/screen.test.ts`' own 26, the three edits to `model.test.ts`, `gate.test.ts` and `support/config.ts` having extended existing assertions rather than added tests. **`npm run check:secrets` clean over 465 tracked files**, 12 patterns, 8 baselined fixtures, exit 0; `./scripts/check-secrets-selftest.sh` **43 passed, 0 failed**, exit 0.
 
 **`swift build -c release` exit 0, and the shipping binary carries no vendor name.**
 `strings .build/release/MacAgent | grep -c <token>` answers **0** for each of `OPENCODE_API_KEY`,
@@ -218,7 +223,7 @@ and `onlyTheServiceProducesPayloadsInTheLiveModule` — so a comment really can 
 — `com.sonny.account`, `screen.analyze` and `/v1/screen/analyze` — so the method finds strings that
 are there. In the source those five tokens survive at **five occurrences across four lines, every one
 a doc comment describing the move** (`git grep -n -o -E 'OPENCODE_API_KEY|opencode|luna' -- Sources`
-→ 5 lines at `2926169`; each one's line begins with `//` or `///`).
+→ 5 lines at `4b5c69d`; each one's line begins with `//` or `///`).
 
 **Every file on the never-touch list is untouched, checked per file rather than by one pattern** —
 `git diff --quiet origin/main...HEAD -- <path>` is silent for `LocalRedactionService.swift`,
@@ -227,9 +232,9 @@ a doc comment describing the move** (`git grep -n -o -E 'OPENCODE_API_KEY|openco
 form rather than one glob is PR #139's lesson: a pattern wide enough to be convenient was wide enough
 to be wrong.
 
-**Mutation battery on the server route: 19 mutants, 19 killed, 0 survived, at `88cc9e7`**, through
+**Mutation battery on the server route: 19 mutants, 19 killed, 0 survived, at `4b5c69d`**, through
 `scripts/mutate` with `MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts'`. Plan in the
-session's scratchpad; logs under `.build/mutate/88cc9e7-20260827T201011/`. The mutants: the image
+session's scratchpad; logs under `.build/mutate/4b5c69d-20260827T202423/`. The mutants: the image
 ceiling deleted and its `>` widened to `>=`; the base64 validation deleted; the route's `bodyLimit`
 deleted; the media type hardcoded to `image/png`; the usage block estimated instead of omitted; each
 of the three response-cap checks deleted in turn; the total-deadline race deleted; the upstream abort
@@ -306,6 +311,37 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 - **F7 — three deadline outcomes produce one user-facing sentence, and the comment implied they did not.** Traced independently before the finding was accepted: `SonnyBackendError.timedOut` and the `provider.timeout` code both reach `SignInFailure.backendUnreachable`, and `SonnyBackendCopy` answers it with "Sonny couldn't finish this one. Try again." The old sentence claimed the client "cannot tell apart" a transport timeout from a dead network, which is inverted twice over: `offline` is the one case that *does* get a sentence of its own. The comment now says what the margin actually buys — a retry, since `providerTimeout.maximumAttempts` is 2 while `attemptCeiling` returns `nil` for `.timedOut` — and argues that one sentence for three deadline outcomes is right here, because three ways to say "try again" would breach the standing rule that the product does not explain itself. A dated comment on **SONNY-136** carries the half that is that ticket's.
 - **Two residuals were taken rather than left**, both the same class as the findings and both inside text this round was already rewriting: **R3**, a doc comment writing `makeLiveVisionEnvironment()` without the parameter it had gained; and **R4**, the Safe-mode checklist row's parenthetical claiming the pre-send panel is where a *wire* shape change would show, when the panel is built from `payload.redactedImageData` directly (`VisionSessionRunner.swift:366`) and never sees the request body. The row is worth running; its stated reason was not true. **R1, R2 and R5 stand as recorded residuals on PR #144** and are deliberately not taken here: R5 is the `HTTPBodyCompression` decision the reviewer agreed with, R2 is thin rather than absent coverage of the 120 s `timeoutInterval`, and R1 — that `modelRouteResponse` is module-internal, so the vision endpoint is reachable with arbitrary `Data` from any file in `MacAgentCore` — is the one the reviewer said is worth a ticket, which is the coordinator's to route rather than this session's to file for itself.
 
+**The rebase onto PR #142, and the two things it is worth saying about.** `main` moved while this
+branch's fix round was in review, so it was rebased onto `60ad133` before merge, per WORKFLOW.md's
+one-branch-at-a-time rule. **Two files conflicted and both were the same shape** — an insertion at a
+shared anchor, resolved keep-both rather than pick-a-side, which is what SONNY-114's own rebase
+recorded for the identical collision. They resolve in *opposite orders on purpose*, which is worth
+saying so it does not read as an accident: the changelog is newest-first so this entry sits above
+SONNY-300's, and `docs/sonny-manual-test-checklist.md` is read top to bottom by a founder walking it,
+so its new section sits below. Nothing was dropped from either side — `git diff origin/main --
+docs/sonny-v1-implementation-changelog.md` has **0** deleted lines.
+
+**And the conflict list was not treated as the population, because `CLAUDE.md` says it is not one.**
+PR #142 changed `buildApp`'s signature, adding a third defaulted `overrides` parameter, and
+`server/src/app.ts` merged *clean* — which is exactly the shape that broke PR #111: two files
+individually merge-clean and jointly incoherent. So the tree was enumerated for the changed signature
+rather than read off the conflict list (`git grep -n 'buildApp('` over `server/`, every call site
+inspected; the parameter is defaulted, so this branch's own `buildApp(config, auth)` calls in
+`test/screen.test.ts` are unaffected), and both halves' full commands were re-run. `npm run typecheck`
+in particular, since `npm run build` compiles only `src/` and is silent about a broken test target —
+the trap PR #137's rebase hit in this same file.
+
+**What PR #142 gives this route for free, and it is worth knowing rather than rediscovering.**
+`registerIdempotency` is installed on the root instance, so it covers every `POST` this app and its
+descendants serve — `/v1/screen/analyze` included, by existing rather than by wiring. That branch's
+own comment names SONNY-131 as one of the routes it was built to cover in advance. Nothing here was
+changed for it and nothing here should be: the client already mints one key per logical operation
+(`modelRouteResponse`, §9.1) and the shared client reuses it across retries, which is the half §9.2
+needs from this side. **`SonnyVisionModelClient` therefore has at-most-once metering behaviour it did
+not have when this branch's tests were written**, and the 302-test server suite that now runs includes
+SONNY-300's coverage of it.
+
+
 Known limitations / deferred scope:
 - **Acceptance criterion 1's founder half is owed, and the mechanical half was run.** The coordinator's amendment of 2026-08-28 discharges "against staging" against a credentialed `./scripts/deploy.sh local` with an upstream stub, per the pattern PR #139 established; the staging run rides with SONNY-192, and `./scripts/deploy.sh staging` still exits 3 because no host exists. **`deploy.sh local` itself could not be used and that is a shared-machine fact rather than a defect**: another lane's container already held port 8080 and the name `sonny-gateway-local`, and taking either would have stopped a session that was running. What ran instead exercises everything that container would, short of the image build — the real `buildApp` with `AuthDeps`, the real gate, the real attribution query against a real Postgres (its own container on its own port, with the ten migrations applied and one seeded identity), the real screen route and the real vision adapter with `visionBaseUrl` pointed at a localhost stub, driven by the Mac's own `SonnyVisionModelClient` through `SonnyLiveGatewayTests`. **With no provider variable set anywhere** (`env | grep -cE '^(OPENAI|TAVILY|ANTHROPIC|CEREBRAS|VISION|OPENCODE)_API_KEY='` → **0**): `/v1/health` served, `POST /v1/screen/analyze` unauthenticated answered **401 `auth.unauthenticated`** while `POST /v1/no-such-route` answered **404**, so it is a real route rather than the not-found handler; and with a session, **`/v1/screen/analyze` SERVED**, the four text routes answering `502 provider.unavailable` because only the vision credential was configured — which is the route table not changing shape with the environment, demonstrated rather than described. **What the stub upstream received** is the whole claim in one line: `{"url":"/v1/responses","auth":"Bearer vk-harness-key","model":"harness-vision-model","contentTypes":["input_text","input_image"],"imagePrefix":["data:image/png;base64,iVBORw0KGgoAAAANSU"]}` — the gateway's own credential, the gateway's configured model, and a real redacted capture, none of which the Mac named. **The payload could not have been hand-built**: `RedactedPayload`'s initializer is `fileprivate`, so the only way that suite obtains one is to run a capture through the real `LocalRedactionService`, which is the structural non-bypass doing its job in a test as well as in production. The harness is not committed.
 - **The manual items are the founder's**, six rows in `docs/sonny-manual-test-checklist.md`, and **they cannot be run against a container built from `main` alone**: the section's setup note says so in the same words the SONNY-130 section above it uses. A packaged app run against a gateway with no `VISION_API_KEY` answers `502 provider.unavailable` on every iteration, which is the correct answer and not a test of anything.
@@ -315,7 +351,7 @@ Known limitations / deferred scope:
 - **`retention` is validated and still not honoured**, exactly as on the four text routes: nothing is stored at all, and SONNY-134 builds the content store together with §10.1's rule that retention is enforced where the storing happens. **Screen captures still reach a retention-bearing store — Sonny's own, for 30–90 days** (founder, 2026-08-16). Nothing in this branch changed that, and nothing in it should be read as claiming otherwise.
 - **Entitlement checks and metering are not stubbed on this route**, for SONNY-130's stated reason: a stub of an entitlement check is a check that has been written and does nothing. SONNY-135 and SONNY-133 own them. **The vision usage event's shape is proposed as a dated comment on SONNY-133**, per the amendment, so the two agree rather than each inventing one.
 - **No mutation battery was run through `scripts/mutate`.** The tree was dirty for most of this session and `scripts/mutate` refuses a dirty tree; it also refuses to run beside `scripts/warnings`, which this branch ran twice. What was done instead is the same battery through the right tool, recorded above: **19 mutants, 19
-killed, 0 survived at `88cc9e7`**, with each kill attributed from its own log rather than from the
+killed, 0 survived at `4b5c69d`**, with each kill attributed from its own log rather than from the
 harness's summary. **The first version of this battery was a scratchpad script, which `CLAUDE.md`
 forbids**, and PR #144's F4 is what sent it through `scripts/mutate` instead — where it immediately
 turned up SONNY-323. Beside it, the guards this branch leans on hardest were each shown to fail
