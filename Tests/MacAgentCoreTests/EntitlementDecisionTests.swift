@@ -133,37 +133,17 @@ struct EntitlementDecisionTests {
 
     // MARK: - The instant a claim is judged at
 
-    @Test
-    func aClockSetBackwardsCannotUndoAnExpiryThisMacHasAlreadySeen() {
-        // **The whole point of persisting a high-water mark.** `SonnyBackendClient`'s offset lives in
-        // memory, so a relaunch with no network leaves server time equal to the local clock — and a
-        // user who sets that clock back a week would otherwise resurrect a claim that has lapsed.
-        let expiry = Self.issuedAt.addingTimeInterval(24 * 60 * 60)
-        let wellPastGrace = expiry.addingTimeInterval(72 * 60 * 60 + 3600)
-        let clockSetBack = Self.issuedAt.addingTimeInterval(60)
-
-        // Without the mark, the backward clock reads as current and the claim is honoured.
-        #expect(Self.decide(at: EntitlementJudgement.effectiveNow(
-            serverNow: clockSetBack, highWaterMark: nil
-        )) == .entitled)
-        // With it, the later of the two decides, and the claim is refused.
-        #expect(Self.decide(at: EntitlementJudgement.effectiveNow(
-            serverNow: clockSetBack, highWaterMark: wellPastGrace
-        )) == .refused(.lapsed))
-    }
-
-    @Test
-    func aClockSetForwardIsNotClampedByTheHighWaterMark() {
-        // Stated because it is the half a reader would assume is symmetric and is not: the mark is a
-        // floor, never a ceiling. There is no upper bound this Mac could know, and a forward clock is
-        // absorbed by the grace window until it is not — which is the fail-closed direction.
-        let ahead = Self.issuedAt.addingTimeInterval(3600)
-        #expect(EntitlementJudgement.effectiveNow(serverNow: ahead, highWaterMark: Self.issuedAt)
-            == ahead)
-        // A day forward, which is the founder's own manual check, still lands inside the grace
-        // window — so "nothing breaks in a surprising way" is a property rather than a hope.
-        #expect(Self.decide(at: Self.issuedAt.addingTimeInterval(24 * 60 * 60 + 3600)) == .entitled)
-    }
+    // **The two tests that stood here are gone, and their subject moved to the service** (PR #152's
+    // review, F1). They called `EntitlementJudgement.effectiveNow(serverNow:highWaterMark:)` with a
+    // mark placed well past the claim's expiry and asserted that the later of the two won — which is
+    // true of `max` and says nothing about the product, because the only writer of that mark could
+    // never produce such a pair. The function is deleted; the property is now held by
+    // `EntitlementServiceTests.aClockRolledBackOfflineCannotReEnterALapsedWindow` and its two
+    // neighbours, which drive `refreshNow()` and then move a wall clock and a monotonic clock
+    // independently — which is what a user setting their Mac back actually does.
+    //
+    // What stays here is the pure half a pure test can hold: how an instant, once arrived at, is
+    // judged against a claim.
 
     // MARK: - When to fetch a new one
 

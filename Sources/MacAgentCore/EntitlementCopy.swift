@@ -26,11 +26,18 @@ public enum EntitlementCopy {
             // Signed in and never online since. Connecting once is the whole of what is needed, and
             // it is the only thing the user can do.
             return "Connect once so Sonny can check your plan."
-        case .unreadableClaim, .claimIsForAnotherSession:
-            // Both are recovered the same way and neither is the user's doing, so they share a
-            // sentence — the same call `SonnyBackendError` makes for its four unreachable states,
-            // and for the same reason: "there is exactly one thing a user can do about all of them."
-            return "Sonny couldn't check your plan. Sign in again."
+        case .unreadableClaim:
+            // Nothing the user did, and nothing they can do beyond letting it reconnect — which
+            // `decision(for:)` now starts before it returns this.
+            return "Sonny couldn't check your plan. Try again in a moment."
+        case .claimIsForAnotherSession:
+            // **Its own sentence, and the shared one it used to get was actively wrong** (PR #152's
+            // review, F2). This is the second person signing in on a Mac the first one used; they
+            // met the previous user's cached claim and were told "Sign in again", which is exactly
+            // what they had just done and which could not have helped. The stale claim is cleared
+            // and a refresh is started before this returns, so the true answer is that it is being
+            // sorted out — which is what the sentence now says.
+            return "Sonny is catching up with your plan. Try again in a moment."
         case .clockUnusable:
             // The one refusal with a real, specific action behind it, which is why it is not folded
             // into the sentence above.

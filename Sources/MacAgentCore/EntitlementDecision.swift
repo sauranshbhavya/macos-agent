@@ -39,25 +39,16 @@ public enum EntitlementRefusal: Equatable, Sendable {
 /// these four values and nothing else, and a test that had to build an actor, a Keychain and a
 /// network client to ask one of them would be testing the wiring instead of the rule.
 public enum EntitlementJudgement {
-    /// The instant to judge a claim at.
+    /// **`effectiveNow` used to live here and is deliberately gone** (SONNY-135, PR #152's review,
+    /// F1). It took a `serverNow` and a `highWaterMark` and answered the later of the two, and its
+    /// doc claimed that "moving the Mac's clock back cannot undo an expiry" — a property two values
+    /// cannot have on their own, because the mark it was handed was always the cached claim's own
+    /// issue time and could therefore never land past `honouredUntil`. The two tests that held it
+    /// passed a mark the production writer could not produce, so they were green and silent.
     ///
-    /// **The later of server time and the highest server instant this Mac has ever seen.** Expiry is
-    /// checked against a clock the user controls, and `SonnyBackendClient`'s offset (§3.5) only
-    /// corrects drift *since the last response* — it lives in memory, so a relaunch with no network
-    /// leaves it at zero and server time collapses onto the local clock. Taking the later of the two
-    /// means moving the Mac's clock backwards cannot undo an expiry that has already been observed.
-    ///
-    /// **It deliberately does not clamp the other way.** A clock set *forward* still reads as later,
-    /// and it is absorbed by the grace window and the claim's own tolerance rather than by this — and
-    /// past those it refuses, which is the fail-closed direction. Clamping forward movement would
-    /// need an upper bound this Mac has no way to know.
-    public static func effectiveNow(
-        serverNow: Date,
-        highWaterMark: Date?
-    ) -> Date {
-        guard let highWaterMark else { return serverNow }
-        return max(serverNow, highWaterMark)
-    }
+    /// The instant a claim is judged at is now computed in `EntitlementService.effectiveNow`, where
+    /// the inputs that make it trustworthy actually live: an instant a server reported, carried
+    /// forward by a monotonic clock. What stays pure and testable here is the judgement below.
 
     public static func judge(
         claim: EntitlementClaim,
