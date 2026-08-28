@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ANTHROPIC_VERSION,
@@ -268,6 +269,90 @@ describe("prunedSchema", () => {
   });
 });
 
+/**
+ * The real plan schema, through the real prune (PR #143, F9).
+ *
+ * **The branch shipped with no test running the schema the product actually sends.** Every
+ * `prunedSchema` case was a hand-written miniature, so the one input that matters in production was
+ * the one input nothing exercised — and the schema turned out to be made of a shape the miniatures
+ * never used. `Tests/MacAgentCoreTests/AgentPlanSchemaFixtureTests.swift` is what keeps this file
+ * in step with `AgentPlanSchema.schema()`: it re-serializes the schema and fails if the fixture has
+ * drifted, so this side can read a plain JSON file and still be reading the real thing.
+ */
+describe("the real plan schema meets the prune", () => {
+  const planSchema: unknown = JSON.parse(
+    readFileSync(new URL("./fixtures/agent-plan-schema.json", import.meta.url), "utf8"),
+  );
+
+  /** Every node in a schema, so an assertion can be about the whole tree rather than the top. */
+  function nodes(value: unknown): Record<string, unknown>[] {
+    if (Array.isArray(value)) return value.flatMap(nodes);
+    if (typeof value !== "object" || value === null) return [];
+    const record = value as Record<string, unknown>;
+    return [record, ...Object.values(record).flatMap(nodes)];
+  }
+
+  it("is the shape the prune exists for, before the prune runs", () => {
+    // Asserted on the input, so this file says out loud what it is defending against rather than
+    // only that the output is clean. 53 rather than the 27 PR #143's F9 counted: that figure is
+    // source occurrences, and `stepSchema` is embedded twice — for `steps` and for `routineSteps`.
+    const unions = nodes(planSchema).filter((node) => Array.isArray(node["type"]));
+    expect(unions).toHaveLength(53);
+    // One `minItems`, on the top-level `steps` array. The nested `routineSteps` does not carry one,
+    // which is why this is 1 rather than the 2 an embedded-twice `stepSchema` would suggest —
+    // `minItems` sits on the property that *holds* the steps, and only `steps` is required non-empty.
+    expect(nodes(planSchema).filter((node) => "minItems" in node)).toHaveLength(1);
+  });
+
+  it("comes out carrying no keyword the structured-output subset rejects", () => {
+    const pruned = nodes(prunedSchema(planSchema));
+    for (const keyword of [
+      "minItems",
+      "maxItems",
+      "uniqueItems",
+      "minLength",
+      "maxLength",
+      "pattern",
+      "minimum",
+      "maximum",
+      "multipleOf",
+    ]) {
+      expect(pruned.filter((node) => keyword in node), keyword).toHaveLength(0);
+    }
+  });
+
+  it("comes out with every type union rewritten as an anyOf, and none left", () => {
+    const pruned = nodes(prunedSchema(planSchema));
+    expect(pruned.filter((node) => Array.isArray(node["type"]))).toHaveLength(0);
+    // The 53 unions become 53 `anyOf`s; the schema has none of its own to add to the count.
+    expect(pruned.filter((node) => Array.isArray(node["anyOf"]))).toHaveLength(53);
+  });
+
+  it("keeps an enum on the node whose type it split, so the field stays as narrow as it was", () => {
+    // `mediaProvider` is `{"type":["string","null"], "enum":[…,null]}`. Splitting the type and
+    // dropping the enum would widen what the model may return on that field.
+    const step = (
+      (
+        (prunedSchema(planSchema) as Record<string, Record<string, Record<string, unknown>>>)[
+          "properties"
+        ]!["steps"]! as unknown as Record<string, Record<string, Record<string, unknown>>>
+      )["items"]!["properties"]! as unknown as Record<string, Record<string, unknown>>
+    )["mediaProvider"]!;
+    expect(step["anyOf"]).toEqual([{ type: "string" }, { type: "null" }]);
+    expect(Array.isArray(step["enum"])).toBe(true);
+    expect(step["enum"]).toContain(null);
+  });
+
+  it("gives every object node additionalProperties false", () => {
+    const pruned = nodes(prunedSchema(planSchema));
+    const objects = pruned.filter(
+      (node) => node["type"] === "object" || typeof node["properties"] === "object",
+    );
+    expect(objects.length).toBeGreaterThan(0);
+    for (const node of objects) expect(node["additionalProperties"]).toBe(false);
+  });
+});
+
 describe("the reply the seam returns", () => {
   it("returns the first text block and the provider's reported usage", async () => {
     stubUpstream(() =>
@@ -324,14 +409,61 @@ describe("failure translation", () => {
     }
   });
 
-  it("maps 400 and 401 to rejected, so the router does not fail over", async () => {
-    for (const status of [400, 401, 403]) {
+  /**
+   * **`401`, `402` and `403` are about our account, so the router tries the next provider** (PR
+   * #143, F1). This test asserted the opposite until that review: it named 400, 401 and 403
+   * together as refusals, which meant an expired key or a billing cap took every text route down
+   * while a healthy second provider sat configured and unused.
+   */
+  it("maps 401, 402 and 403 to unavailable — an account fact, not a request fact", async () => {
+    for (const status of [401, 402, 403]) {
+      stubUpstream(() => jsonResponse({ error: "nope" }, status));
+      await expect(makeAnthropicTextAdapter(settings)(request())).rejects.toBeInstanceOf(
+        ProviderUnavailable,
+      );
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("maps a status that is genuinely about the request to rejected, so the router does not", async () => {
+    // Failing these over would try every configured vendor with a body all of them refuse, and
+    // spend the route's whole deadline arriving at the same answer more slowly.
+    for (const status of [400, 404, 409, 422]) {
       stubUpstream(() => jsonResponse({ error: "nope" }, status));
       await expect(makeAnthropicTextAdapter(settings)(request())).rejects.toBeInstanceOf(
         ProviderRejected,
       );
       vi.unstubAllGlobals();
     }
+  });
+
+  /**
+   * The reviewer's probe shape, as a test (PR #143, F2).
+   *
+   * A provider that writes headers and then stalls resolves the `fetch` and rejects `json()` with an
+   * `AbortError` when the deadline fires. Swallowed to `null`, that used to read as "answered
+   * without text output" — a refusal, not retryable, and not failed over. It is a timeout.
+   */
+  it("reports a read aborted after headers as a timeout, not as a refusal", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      },
+    }));
+    await expect(makeAnthropicTextAdapter(settings)(request())).rejects.toBeInstanceOf(
+      ProviderTimedOut,
+    );
+  });
+
+  it("reports a complete body that is not JSON as unavailable, so another provider is tried", async () => {
+    // A CDN or proxy error page under a 200 is an intermediary answering for the provider, which is
+    // transient. A body that parses and carries no usable answer is the genuine refusal, above.
+    stubUpstream(() => new Response("<html>not json</html>", { status: 200 }));
+    await expect(makeAnthropicTextAdapter(settings)(request())).rejects.toBeInstanceOf(
+      ProviderUnavailable,
+    );
   });
 
   it("maps 408 and 504 to timed out", async () => {
