@@ -84,7 +84,7 @@ what it is missing: a timing-sensitive test whose failure matches no signature r
 exactly as before. `UntrustedFailureDeclarationTests` holds the direction that is checkable, that a
 declaration's `source` still appears under `Tests/` **at the number of sites it declares** — a count,
 because a presence check alone let a reword of one of six copies of a backstop pass unnoticed (F4);
-the other direction is judgment. **Four seams have been found in the classifier; two stay open and
+the other direction is judgment. **Five seams have been found in the classifier; two stay open and
 are written down where it lives rather than fixed**: tests sharing a function name across suites
 merge, since neither log line names a suite, and a mutant that *traps* the test process names no
 test at all. **The third is closed** (SONNY-305): swift-testing names a failing test on two line
@@ -132,6 +132,32 @@ pre-fix script reported `KILLED (build failure)` for both above a baseline line 
 with no tally at all, and this one reports the covered mutant `KILLED by 2 test(s)` and names both,
 reports the unparseable one `KILLED before any test ran — every test file failed to load`, and
 reads the baseline as `PASSED  63 passed (63)`.
+**The fifth is the mirror of SONNY-224's manufactured kill — a manufactured NON-kill** (SONNY-315,
+found in PR #139's cycle-2 battery at `157ef03`). swift-testing records a *known* issue — what
+`withKnownIssue` produces, which is expected and not red at all — on a line reading `Test <name>
+recorded a known issue at File.swift:174:55: Issue recorded`, and that line carries none of the four
+verbs the classifier ended an issue block on. So when one arrived between a killing test's issue line
+and that test's failure line, everything indented under it was read as the *killing* test's own
+message — and one of those lines is a declared signature, because the backstop's own wording is
+declared, so the mutant came back `UNATTRIBUTED`. A real kill excused: it understates coverage and
+sends the reader hunting for a test that already exists. `HangBackstopTests` emits that line on every
+single run by design, so the ingredient is always present and only the interleaving varies, which is
+what lets this survive being investigated — the battery that found it reported R1 unattributed, then
+`--only R1` named the killing test, then a second full battery was clean. Any mutant can hit it; it
+depends on where a parallel suite's output lands rather than on what the mutant is. The boundary's
+verb is now `recorded` rather than `recorded an issue`, so every kind of record line swift-testing
+writes closes the block it interrupts and the known issue's detail is attributed to nothing at all.
+**The half of the fix that is worth reading is the other direction**, because ending a block sooner
+is exactly how PR #112's F3 manufactured a kill: the same interleaving around a genuinely *declared*
+failure must still excuse it, and on the signature it recorded itself. Before the fix that log did
+reach `UNATTRIBUTED` — but naming the known issue's signature rather than the failing test's, and
+that pair of assertions is what tells the fix from the defect in `selftest`. **What no version of
+this can do**, stated rather than implied: a message actually *split* by an interleaved record line
+loses everything after the split, signature included. Nothing in a log distinguishes a split message
+from a foreign event, so the choice is which of the two to be wrong about — and swift-testing emits
+an event's lines together, measured on a 2305-test run of this suite where both multi-line
+known-issue events came out contiguous and every interleaving sat between events, while being wrong
+about the observed case was costing real kills.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
