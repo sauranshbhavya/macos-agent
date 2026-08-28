@@ -77,6 +77,11 @@ describe("which routes the gate challenges", () => {
     const protectedRoutes = routes.filter((route) => !isPublicRoute(route.method, route.url));
     expect(protectedRoutes.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       "DELETE /v1/account",
+      // SONNY-134's, and it arrives here the same way as every other: `routes/tasks.ts` mentions
+      // auth nowhere. It is the one route a user can call to destroy their own retained content,
+      // so being challenged is not a formality — an unauthenticated caller could otherwise delete
+      // any task whose client-minted id they could guess.
+      "DELETE /v1/tasks/:task_id",
       "POST /v1/auth/signout",
       // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
       // whole of what deny-by-default means — no line in the four routes' own file mentions auth.

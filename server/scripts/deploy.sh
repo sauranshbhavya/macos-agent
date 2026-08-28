@@ -209,6 +209,16 @@ PASSTHROUGH_SETTINGS=(
   TAVILY_TRAINING
   VISION_DATA_RETENTION
   VISION_TRAINING
+  # SONNY-134's two, on this array's own rule: they change what the gateway does with a request, they
+  # are not credentials, and both have real defaults. **The first is the one that matters**: without
+  # it here, `CONTENT_RETENTION_DAYS` is unsettable on any deployment, so the founder's confirmed
+  # thirty days would be a number the container could never be told — which is how a configurable
+  # window ends up being one value forever. Measured rather than reasoned: with
+  # `CONTENT_EXPIRY_SWEEP_SECONDS=60` in the launching shell and neither name on this list, the
+  # container swept once at startup and not again, and an already-expired row planted in its database
+  # was still there seventy-five seconds later.
+  CONTENT_RETENTION_DAYS
+  CONTENT_EXPIRY_SWEEP_SECONDS
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --

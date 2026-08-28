@@ -9,6 +9,9 @@ import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerMetering } from "./metering/hook.js";
 import { postgresMeteringStore, type MeteringStore } from "./metering/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
+import { registerContent } from "./content/hook.js";
+import { postgresContentStore, type ContentStore } from "./content/store.js";
+import { registerTaskRoutes } from "./routes/tasks.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
 import { describeRouting, modelProvidersFrom } from "./model/providers.js";
@@ -83,6 +86,17 @@ export interface AppOverrides {
   readonly idempotencyStore?: KeyStore;
   readonly meteringStore?: MeteringStore;
   readonly logStream?: NodeJS.WritableStream;
+  /**
+   * **`contentStore` exists for the third time and the same reason** (SONNY-134). Contract §10's
+   * store is Postgres, so without a seam every behaviour §10.1 names — an incognito run leaving
+   * nothing anywhere, a request that declared no `retention` storing nothing, voice audio and a
+   * provider's error body landing on the content clock — would be verified only in
+   * `npm run test:db`, and the run this repository gates on would be silent about the guarantee
+   * that a run marked "Don't save this task" is never stored. With it those tests drive the whole
+   * real app and assert what a client's request actually retained; `content.db.test.ts` proves the
+   * SQL, the clock and the structural exclusions underneath.
+   */
+  readonly contentStore?: ContentStore;
 }
 
 export function buildApp(
@@ -283,6 +297,44 @@ export function buildApp(
   const meteringStore =
     overrides.meteringStore ?? (auth ? postgresMeteringStore(auth.withConnection) : undefined);
   registerMetering(app, config, meteringStore ? { store: meteringStore } : undefined);
+
+  /**
+   * Contract §10's content store, on THIS instance for the fourth time and the same reason
+   * (SONNY-134).
+   *
+   * **Registered after the metering hook, and the order carries one real consequence.** Fastify runs
+   * `onSend` hooks in registration order and both modules have one, so this captures the payload the
+   * client is actually being sent — after the idempotency hook has stored or released it and after
+   * metering has measured it. The *write* is not in `onSend` at all: it is in `onResponse`, after the
+   * response has left, which is the deliberate opposite of the call metering makes about its own
+   * write. `content/hook.ts` carries both halves of that reasoning — what is lost differs in kind
+   * (money against a debugging copy), and what it costs differs by three orders of magnitude (a row
+   * of integers against a megabyte screenshot, twelve times a screen-control session).
+   *
+   * **Nothing here consults `retention` and nothing here needs to.** §10.1 puts the guarantee at the
+   * storage layer, so the hook refuses before it reads a body and the table refuses under it. This
+   * line's only job is that the hook is installed on `app` and not on a scope, which is the same
+   * property the gate, the key store and the metering hook each depend on.
+   *
+   * Takes the same `withConnection` the other three take, and answers `undefined` for a health-only
+   * deployment — which has no database, and no content-bearing route it could reach either, since
+   * every one of the five is authenticated.
+   */
+  const contentStore =
+    overrides.contentStore ?? (auth ? postgresContentStore(auth.withConnection) : undefined);
+  registerContent(app, config, contentStore ? { store: contentStore } : undefined);
+
+  /**
+   * `DELETE /v1/tasks/{task_id}` (SONNY-134), contract §4.6 — the user's own delete reaching the
+   * server's copy.
+   *
+   * Mounted here rather than beside the auth routes below because it is not an auth route and does
+   * not want that block's `if (auth)` gate: `app.ts`'s standing argument is that the route table
+   * must not change shape with the environment. It is a `DELETE`, so it passes through neither the
+   * idempotency hook nor the metering hook — both are `POST`-only — which is why nothing about
+   * metering's shape changes on this branch.
+   */
+  registerTaskRoutes(app, auth ? { withConnection: auth.withConnection } : undefined);
 
   /**
    * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),

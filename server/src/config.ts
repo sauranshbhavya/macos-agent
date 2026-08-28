@@ -88,6 +88,37 @@ const schema = z.object({
   RATE_LIMIT_SALT: nonEmpty.optional(),
 
   /**
+   * How long retained request and response content is kept, in days (SONNY-134). Contract §10.3.
+   *
+   * **Thirty, confirmed by the founder on 2026-08-28** — the short end of the 30–90 range his
+   * retention decision of 2026-08-16 names, and the number this repository's prose had already been
+   * assuming in three places while nothing had settled it. It is configurable because the range is
+   * the founder's to move within, and it is bounded at both ends because neither a zero nor a value
+   * outside the disclosed range should be reachable by a typo in an environment file.
+   *
+   * **Changing it never reaches content already stored.** `sonny.retained_content.expires_at` is
+   * written from this value at insert, so a row carries the window it was kept under; raising the
+   * setting applies to what arrives afterwards and cannot silently extend the life of a screenshot
+   * a user was told would be gone in thirty days. `content/record.ts` states the same thing beside
+   * the function that computes it.
+   *
+   * The *other* clock has no variable here at all, deliberately: derived metrics and usage are kept
+   * indefinitely (§10.3), and a number naming their lifetime would be a lifetime nothing enforces.
+   */
+  CONTENT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+
+  /**
+   * How often the running gateway sweeps expired content, in seconds.
+   *
+   * Hourly by default, which is far more often than a thirty-day clock needs and is chosen for what
+   * it does to the *evidence*: a sweep logs every pass, so an operator reading a fresh deployment's
+   * output sees within the hour whether expiry runs at all, rather than inferring it from an absence
+   * of complaints a month later. The floor of sixty seconds exists so a misconfiguration cannot turn
+   * this into a busy loop against the database.
+   */
+  CONTENT_EXPIRY_SWEEP_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+
+  /**
    * The Supabase project's **JWT secret**, which is what every access token this gateway accepts is
    * signed with (SONNY-203; founder decision of 2026-08-21, Sauransh with Bhavya).
    *
@@ -246,6 +277,8 @@ export interface Config {
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
   readonly trustProxy: boolean | string[];
   readonly rateLimitSalt: string;
+  readonly contentRetentionDays: number;
+  readonly contentExpirySweepSeconds: number;
   readonly supabaseJwtSecret: string | undefined;
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
@@ -431,6 +464,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: value.LOG_LEVEL,
     trustProxy: parseTrustedProxies(value.TRUSTED_PROXIES),
     rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
+    contentRetentionDays: value.CONTENT_RETENTION_DAYS,
+    contentExpirySweepSeconds: value.CONTENT_EXPIRY_SWEEP_SECONDS,
     supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
