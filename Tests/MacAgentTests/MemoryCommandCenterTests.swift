@@ -770,10 +770,72 @@ struct MemoryCommandCenterTests {
         #expect(presentation.title == "Output locations")
         #expect(presentation.count == 2)
         #expect(presentation.isRecording)
-        #expect(presentation.detailText == "2 saved · newest Today, \(expectedTime(for: now))")
+        #expect(presentation.detailText == "2 folders · newest Today, \(expectedTime(for: now))")
         // The published list is the store's ranked order, so the sheet's first row is the folder
         // Sonny would actually suggest first.
         #expect(fixture.viewModel.outputLocations.map(\.name) == ["Invoices", "Reports"])
+    }
+
+    /// **The row and its sheet name different units, so neither number reads as an answer to the
+    /// other** (SONNY-243).
+    ///
+    /// This is the pair the founder reported on 2026-08-23: the row said `1 saved` and the sheet
+    /// said `Desktop · ~/Desktop · 2 times`, and the only reading available was that one of them
+    /// was wrong. Both were right and always will be — the row counts folders, the sheet's number
+    /// counts one folder's uses — so the fix is words, not arithmetic, and this is the assertion
+    /// that the words are there. It also pins the invariant that made "1 versus 2" misread in the
+    /// first place: the row's count *is* the number of rows the sheet lists, on this row exactly as
+    /// on every other one.
+    @Test
+    func theOutputLocationsRowCountsFoldersWhileItsSheetSaysHowOftenEachWasUsed() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let desktop = try fixture.makeOutputFolder("Desktop")
+        // One folder, written into twice — the founder's exact case.
+        for name in ["a.md", "b.md"] {
+            try fixture.outputLocationStore.recordOutputs(
+                atPaths: [desktop.appendingPathComponent(name).path],
+                recordedAt: now
+            )
+        }
+        fixture.viewModel.refreshMemoryEntries()
+
+        let row = MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel, now: now)
+        let entries = MemoryEntryPresentation.entries(for: .outputLocations, viewModel: fixture.viewModel, now: now)
+
+        #expect(row.detailText == "1 folder · newest Today, \(expectedTime(for: now))")
+        #expect(row.count == 1)
+        // The pattern the rest of the page establishes, holding here too: the headline number is
+        // the number of things the sheet then lists.
+        #expect(entries.count == row.count)
+
+        let detail = try #require(entries.first).detail
+        #expect(detail.contains("used 2 times"), "\(detail)")
+        // The bare form is what made the pair read as a contradiction; a use count with no verb in
+        // front of it sits in the same shape as an entry count.
+        #expect(!detail.contains("· 2 times"), "\(detail)")
+    }
+
+    /// **Every row's detail names its unit, checked over the whole population** (SONNY-243).
+    ///
+    /// The row the founder reported is one of nine, and the sentence they all share is built in one
+    /// place — so what this guards against is a tenth row, or a row wired to something other than
+    /// `MemoryCategory.countedEntries(_:)`. Asserted on the empty fixture because the empty detail
+    /// is the count and nothing else, which is the whole of what is under test here; the populated
+    /// forms are pinned by the tests around it.
+    @Test
+    func everyMemoryRowsDetailNamesWhatItCounts() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        for category in MemoryCategory.allCases {
+            let row = MemoryRowPresentation.row(for: category, viewModel: fixture.viewModel, now: now)
+            #expect(row.count == 0, "\(category.title)")
+            #expect(row.detailText == "0 \(category.pluralNoun)", "\(category.title)")
+            #expect(!row.detailText.contains("saved"), "\(category.title) still infers its unit")
+        }
     }
 
     @Test
@@ -1357,7 +1419,7 @@ struct MemoryCommandCenterTests {
     /// all thirteen stores. The count really is zero — `loadMemoryEntries` empties the list rather
     /// than leaving it stale — so a fix gated on entries existing reproduces the dead end exactly.
     @Test
-    func anUnreadableRowSaysSoInsteadOfZeroSavedAndKeepsItsDeleteLive() throws {
+    func anUnreadableRowSaysSoInsteadOfACountOfZeroAndKeepsItsDeleteLive() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
@@ -1373,7 +1435,7 @@ struct MemoryCommandCenterTests {
         // The control, in both directions: a genuinely empty row is still an empty row.
         let empty = MemoryRowPresentation.row(for: .snippets, viewModel: fixture.viewModel)
         #expect(empty.readability == .readable)
-        #expect(empty.detailText == "0 saved")
+        #expect(empty.detailText == "0 snippets")
         #expect(!empty.canDelete)
     }
 
@@ -2278,7 +2340,7 @@ struct MemoryCommandCenterTests {
         let row = MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel)
         #expect(row.readability == .partlyUnreadable)
         #expect(row.count == 2, "the tasks are readable and the row must still say so")
-        #expect(row.detailText == "2 saved · part can't be read")
+        #expect(row.detailText == "2 tasks · part can't be read")
         #expect(row.canDelete)
 
         // The confirmation keeps the sentence that names what goes, and adds the one that names
@@ -2465,7 +2527,7 @@ struct MemoryCommandCenterTests {
     /// **A store that breaks while the page is open says so without the user navigating away.**
     ///
     /// This is SONNY-239 and SONNY-246 meeting each other: the row's damaged state comes from a probe,
-    /// and a probe that only ran on `onAppear` would leave the page reading `0 saved` with a greyed
+    /// and a probe that only ran on `onAppear` would leave the page reading a count of zero with a greyed
     /// Delete for the whole of a session — which is the founder's screenshot, arrived at from the
     /// staleness side.
     @Test
@@ -2999,7 +3061,7 @@ struct MemoryCommandCenterTests {
         #expect(presentation.count == 2)
         #expect(presentation.isRecording)
         // The newest of the two, not the first written.
-        #expect(presentation.detailText == "2 saved · newest Today, \(expectedTime(for: now))")
+        #expect(presentation.detailText == "2 snippets · newest Today, \(expectedTime(for: now))")
     }
 
     @Test
@@ -3014,7 +3076,7 @@ struct MemoryCommandCenterTests {
             now: Date(timeIntervalSince1970: 1_700_000_000)
         )
 
-        #expect(presentation.detailText == "0 saved")
+        #expect(presentation.detailText == "0 workspaces")
         #expect(!presentation.isRecording)
     }
 
