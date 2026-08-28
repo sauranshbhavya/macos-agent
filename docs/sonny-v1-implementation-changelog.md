@@ -205,6 +205,15 @@ re-taken rather than carried at each move**, the last of them because a rebase m
 new base carries `main`'s own changes, so a figure measured at the old one was never true of this
 one. The three earlier heads are non-ancestral now and this entry stamps none of them with a number.
 
+**What a reviewer's ancestry sweep will find, said in advance so exit 1 and exit 128 do not read as
+defects.** Four of the hex tokens in this entry are commits the rebase replaced —
+`1c26581`, `7aa28ba`, `2926169` and, on the Reviewed-by line, `a85798d` — and `git merge-base
+--is-ancestor <sha> HEAD` exits **1** on each, by design: every one is named as *when* something
+happened and none carries a figure. Two more are not commits at all: `a0ed6b9` and `d2f701e` are the
+**tree** hashes of `Sources/` and `Tests/`, quoted as the evidence that the Swift baseline did not
+move, so `--is-ancestor` exits **128** on them rather than 0 or 1. Everything this entry stamps a
+number with — `7f555cd`, `60ad133`, `ff46b69` and `4b5c69d` — exits 0.
+
 **The fix round's own claim is kept and re-derived at the rebased head rather than carried across it.**
 It touched **six** files under `Sources/` and `server/src/` — `git diff --stat ff46b69~1..HEAD --
 Sources server/src` → 6 files — and every changed line in them is a comment or blank: the same diff
