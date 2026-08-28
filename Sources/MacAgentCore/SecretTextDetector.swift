@@ -236,7 +236,7 @@ struct SecretTextDetector {
         // lines in **98** screens. **99** of those matches were a `File.swift:129-131` line-range
         // citation and **7** more were the tail of a thousands-separated number such as
         // `1 011 740`. With both refusals the same corpus answers **45 matches, 41 painted lines,
-        // 34 screens**. The Markdown half — which is what the ticket was filed off — goes from
+        // 34 screens** (at `37e7748`, the commit that added them). The Markdown half — which is what the ticket was filed off — goes from
         // **114 matches painting 109 lines in 70 of its 1 235 screens** to **11 painting 10 in 9**.
         // The source half barely moves (37 -> 34) and should not: nearly all of what is left there
         // is this repository's own test data, literal `code: 123456` lines that a detector is
