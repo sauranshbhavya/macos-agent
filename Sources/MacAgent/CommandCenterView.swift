@@ -4744,8 +4744,11 @@ enum MemoryDeletionCopy {
     /// The sheet's title when the row's file will not read.
     ///
     /// The empty-state title it replaces — "No output locations yet" — is the same lie the row's
-    /// "0 saved" was: a store that has never been used and a store that will not open are different
-    /// facts, and the sheet is the surface a user opens *because* the row said zero.
+    /// count of zero was: a store that has never been used and a store that will not open are
+    /// different facts, and the sheet is the surface a user opens *because* the row said zero.
+    /// (This quoted `0 saved`, a string the product can no longer produce, and was missed by
+    /// SONNY-243's sweep of the live comments — PR #155 review, F5. The point is unchanged; only
+    /// the string it named is, and it now says the thing rather than one row's spelling of it.)
     static func unreadableTitle(for category: MemoryCategory) -> String {
         "Sonny can't read your \(category.title.lowercased())"
     }

@@ -523,6 +523,10 @@ struct LocalStorageSecurityTests {
     /// and `LocalDataDeletionService.defaultStoreFileURLs()` describe one population; this pins that
     /// the sentence names all of `allCases`. Together: every file the wipe deletes is named in the
     /// words that describe it.
+    ///
+    /// **And the words themselves, by value** (PR #155 review, F1). Completeness and correctness are
+    /// different claims: a sentence can name all thirteen stores and name one of them wrongly, and
+    /// until the table below existed nothing in the suite could tell the difference.
     @Test
     func theWipesOwnSentenceNamesEveryStoreItDeletes() {
         // Split back into items rather than searching for substrings: "clipboard history" is a
@@ -532,18 +536,37 @@ struct LocalStorageSecurityTests {
             .replacingOccurrences(of: ", and ", with: ", ")
             .components(separatedBy: ", ")
 
+        // **The whole table by value, in order** (PR #155 review, F1). The three assertions below
+        // this one are structural and the first of them reads `deletionCopyName` on *both* sides —
+        // so between them they could not see a wrong word at all, which is the same blindness this
+        // branch's own W4 mutant exposed for a duplicated name. It is not a hypothetical gap: the
+        // reviewer's V1 changed `.visionSessionJournal`'s arm to "screen activity" and the whole
+        // suite stayed green, while that exact phrase is the reason this branch rejected deriving
+        // the sentence from Memory rows instead. Thirteen literals is the same shape
+        // `theWipeReachesEveryLocalStore` uses for the thirteen file names, and for the same reason:
+        // this is a destructive action's disclosure, and a copy pass over it should have to say so.
+        #expect(items == [
+            "records of what Sonny did on screen",
+            "routines",
+            "workspaces",
+            "clipboard history",
+            "clipboard settings",
+            "snippets",
+            "recent artifacts",
+            "Shortcut run history",
+            "task history",
+            "what past tasks planned",
+            "allowed apps",
+            "common output locations",
+            "unfinished tasks"
+        ])
+
+        // Structure, over the population rather than over the literals above — so a fourteenth store
+        // fails here as well as in the table, and says which rule it broke.
         #expect(items == LocalStore.allCases.map(\.deletionCopyName))
         #expect(items.count == LocalStore.allCases.count)
         #expect(Set(items).count == items.count, "two stores share a name and one of them is invisible")
         #expect(!items.contains(""), "a store is named by nothing at all")
-
-        // The three that were missing when this was filed, by value — so the ticket's own finding is
-        // readable here rather than only in its history.
-        #expect(items.contains("what past tasks planned"))
-        #expect(items.contains("allowed apps"))
-        #expect(items.contains("unfinished tasks"))
-        // And the one the dialog alone had lost.
-        #expect(items.contains("common output locations"))
     }
 
     /// The join, at the sizes the product cannot reach today and a successor might.
