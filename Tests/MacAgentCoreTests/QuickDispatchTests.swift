@@ -500,7 +500,7 @@ struct QuickDispatchTests {
 private struct FailingPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("Planner should not be called for quick routine/workspace dispatch.")
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }
 

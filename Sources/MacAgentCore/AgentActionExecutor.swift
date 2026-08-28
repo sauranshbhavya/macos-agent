@@ -132,6 +132,9 @@ public final class AgentActionExecutor {
     private let fileManager: FileManager
     private let now: () -> Date
     private let hotKeyReady: () -> Bool
+    /// See `CapabilityExecutionContext.modelAccessReadiness` for why this is a closure and why its
+    /// default is `.undetermined`.
+    private let modelAccessReadiness: () -> ModelAccessReadiness
     private let visionSession: VisionSessionEnvironment?
 
     public init(
@@ -173,6 +176,7 @@ public final class AgentActionExecutor {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
+        modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
         // `nil` means this executor has no screen-control wiring, which is the honest state for
         // `MacAgentCore` on its own and for every test that is not about vision. A vision session
         // reaching an executor built this way fails loudly with `visionUnavailable` rather than
@@ -214,6 +218,7 @@ public final class AgentActionExecutor {
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
+        self.modelAccessReadiness = modelAccessReadiness
         self.visionSession = visionSession
     }
 
@@ -1722,6 +1727,7 @@ public final class AgentActionExecutor {
             fileManager: fileManager,
             now: now,
             hotKeyReady: hotKeyReady,
+            modelAccessReadiness: modelAccessReadiness,
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             taskScope: scope,

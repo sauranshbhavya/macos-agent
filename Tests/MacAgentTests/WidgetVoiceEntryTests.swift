@@ -10,15 +10,16 @@ import MacAgentCore
 /// `.disabled(!viewModel.canUseVoice && ...)`, a disabled SwiftUI button never runs its action, and
 /// so the guard that already held the right message could not be reached from the one surface most
 /// people press. (That message named the variable when this was written; SONNY-177 made it
-/// provider-neutral, and the tests below take it from the constant rather than quoting it.)
+/// provider-neutral, and SONNY-136 deleted it outright along with the variable.)
 ///
 /// What is pinned here is the split that fixes it, not the API key. `canUseVoice` folded one
 /// **actionable** failure the user can go and fix together with five **transient** ones that clear
-/// on their own, and only the transient half may ever disable a control. SONNY-136 deletes every
-/// provider environment variable, so the actionable half's current contents are temporary; the rule
-/// is not. Every test below that needs a configuration failure states one through
-/// `voiceConfigurationBlockerOverride` rather than reaching for the key, so these keep meaning the
-/// same thing after that lands.
+/// on their own, and only the transient half may ever disable a control. **SONNY-136 has now landed
+/// and the prediction held**: it deleted every provider environment variable and with it the one
+/// actionable reason this split ever carried, and not one test here changed meaning, because every
+/// test that needs a configuration failure states one through `voiceConfigurationBlockerOverride`
+/// with a literal of its own rather than reaching for the shipped constant. The rule outlived its
+/// only instance, which is what it was written to do.
 ///
 /// **Nothing here ever presses the mic with voice actually available.** A press that gets past the
 /// guard reaches `AVCaptureDevice.requestAccess`, which a `swift test` process has no bundle
@@ -38,7 +39,7 @@ struct WidgetVoiceEntryTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let button = try makeViewModel(root: root)
-        button.voiceConfigurationBlockerOverride = { AgentViewModel.missingAPIKeyVoiceMessage }
+        button.voiceConfigurationBlockerOverride = { Self.aConfigurationProblem }
         // The press has to reach the action at all before anything else here means anything.
         #expect(button.isVoiceControlDisabled == false)
         // `#require`, not `#expect`: see the note on the suite. If voice were somehow available the
@@ -46,14 +47,14 @@ struct WidgetVoiceEntryTests {
         try #require(button.canUseVoice == false)
         button.toggleVoiceRecording(origin: .widget)
 
-        #expect(button.errorMessage == AgentViewModel.missingAPIKeyVoiceMessage)
+        #expect(button.errorMessage == Self.aConfigurationProblem)
         #expect(button.errorIsPersistent)
         // Refused before the recorder, so no microphone prompt and no half-started recording.
         #expect(button.isRecordingVoice == false)
         #expect(button.isPreparingVoiceRecording == false)
 
         let hotKey = try makeViewModel(root: root)
-        hotKey.voiceConfigurationBlockerOverride = { AgentViewModel.missingAPIKeyVoiceMessage }
+        hotKey.voiceConfigurationBlockerOverride = { Self.aConfigurationProblem }
         try #require(hotKey.canUseVoice == false)
         hotKey.beginPushToTalkVoice()
 
@@ -63,38 +64,41 @@ struct WidgetVoiceEntryTests {
         #expect(hotKey.isPreparingVoiceRecording == false)
     }
 
+    /// The configuration failure this file states when it needs one.
+    ///
+    /// **A literal here rather than `AgentViewModel.missingAPIKeyVoiceMessage`, which SONNY-136
+    /// deleted.** That constant was the default answer of a property whose live answer had already
+    /// been `nil` since SONNY-130 — a shipped sentence nothing in `Sources/` could produce, naming a
+    /// condition that can no longer occur — so it went with the environment variable it was about.
+    /// Nothing in this file was ever about its wording: what is pinned is that an *actionable*
+    /// refusal reaches the user through both doors and does not disable the control, and any
+    /// sentence serves for that.
+    private static let aConfigurationProblem = "Sonny has no transcription provider configured."
+
     /// The words themselves, once, so a rewrite of the copy is a deliberate act rather than a
-    /// silent one. Every other assertion in this file compares against the constant, which would
-    /// stay true no matter what the constant said.
+    /// silent one.
     ///
-    /// **The last two expectations are the rule rather than the sentence** — SONNY-177, founder
-    /// decision 2026-08-19, wording approved the same day. No provider name and no
-    /// environment-variable name, because other providers are coming and SONNY-136 deletes the
-    /// variable this used to name; and, since dropping that name costs the reader the most specific
-    /// thing the message could have told them, the instruction has to survive. The exact-match above
-    /// goes stale the next time the copy changes, by design. Those two should not.
+    /// **This asserted two messages until SONNY-136 and now asserts one.** The other was
+    /// `missingAPIKeyVoiceMessage`, and the rule it carried — SONNY-177, founder decision
+    /// 2026-08-19: no provider name and no environment-variable name in anything a user reads —
+    /// did not go with it. It moved to the copy that is still shown, where
+    /// `SonnyBackendCopyTests.noSentenceNamesAProviderOrAnEnvironmentVariable` holds it over every
+    /// sentence `SonnyBackendCopy` and `SignInCopy` can produce, which is a wider population than
+    /// one constant ever was.
     ///
-    /// Checking for "relaunch" is a crude stand-in and knowingly so: nothing here can decide whether
-    /// a sentence is actionable, only that the half of the instruction most easily lost in a rewrite
-    /// is still present.
+    /// The em-dash assertion stays here because it is about *this* string, and the exact match goes
+    /// stale the next time the founder rewords it, by design.
     @Test
-    func theConfigurationMessageNamesNoProviderAndStillSaysWhatToDo() {
-        #expect(
-            AgentViewModel.missingAPIKeyVoiceMessage
-                == "No API key is set up. Add one, then relaunch Sonny."
-        )
-        // The hint's other variant, pinned in the same place. SONNY-179's wording, given verbatim by
-        // the founder; SONNY-177 shipped "Speak your command — or hold Ctrl-Opt-Space anywhere".
+    func theHoverReminderIsTheFoundersOwnWordingAndCarriesNoEmDash() {
+        // SONNY-179's wording, given verbatim by the founder; SONNY-177 shipped
+        // "Speak your command — or hold Ctrl-Opt-Space anywhere".
         #expect(
             AgentViewModel.micHoverShortcutReminder == "Click to speak or hold Ctrl-Opt-Space."
         )
         // The em dash is the thing the founder asked to be rid of, so it is asserted as an absence
         // and not merely implied by the literal above — a later reword may not quietly bring one
-        // back, and neither message may carry one.
+        // back.
         #expect(!AgentViewModel.micHoverShortcutReminder.contains("—"))
-        #expect(!AgentViewModel.missingAPIKeyVoiceMessage.contains("—"))
-        #expect(!AgentViewModel.missingAPIKeyVoiceMessage.contains("OPENAI"))
-        #expect(AgentViewModel.missingAPIKeyVoiceMessage.contains("relaunch"))
     }
 
     /// SONNY-177. The hover hint is one condition with two answers, and a view may read neither half
@@ -170,9 +174,9 @@ struct WidgetVoiceEntryTests {
 
         #expect(viewModel.voiceConfigurationBlocker == nil)
         #expect(viewModel.canUseVoice)
-        // And the message it used to return is still declared, for `feature/row-12-degradation` to
-        // remove with the rest of the environment-variable surface.
-        #expect(AgentViewModel.missingAPIKeyVoiceMessage == "No API key is set up. Add one, then relaunch Sonny.")
+        // The message it used to return is gone as well (SONNY-136), and with it the last thing in
+        // this file that named a credential. What is left is the seam and the rule.
+        #expect(viewModel.micHoverHintPresentation.message == AgentViewModel.micHoverShortcutReminder)
     }
 
     /// The half the fix must not have broken. Each of these clears on its own, the user can do
@@ -319,7 +323,10 @@ struct WidgetVoiceEntryTests {
     /// a rule a reader would otherwise be the only thing enforcing.
     @Test
     func noDisabledPredicateInTheAppGatesOnAnActionableFailure() throws {
-        let forbidden = ["canUseVoice", "hasAPIKey", "voiceConfigurationBlocker"]
+        // `hasAPIKey` was the third term and SONNY-136 deleted the property, so forbidding it here
+        // would forbid a symbol that cannot exist. The two that remain are the composite and the
+        // actionable half itself, which are the two a future `.disabled` would reach for.
+        let forbidden = ["canUseVoice", "voiceConfigurationBlocker"]
         var offenders: [String] = []
         let files = try Self.appSourceFiles()
         // The scan means nothing if it did not really find the module.

@@ -93,8 +93,8 @@
 
 >>> signature the run never finished
 >>> source the run never finished
->>> sites 1
->>> reason MemoryCommandCenterTests' own copy of the view-model hang backstop, which asserts its deadline inline rather than recording an issue.
+>>> sites 2
+>>> reason The view-model hang backstop in the two suites that assert their deadline inline rather than recording an issue: MemoryCommandCenterTests' own copy, and BackendOutageTests' (SONNY-136), which needed its own because it also has to answer an approval — a routine's plan carries requiresConfirmation, so its loop presses start() again while isAwaitingApproval and cannot use waitForViewModelToBecomeIdle. Same construct, same 30 s HangBackstop.deadlockDeadline, same reason it says nothing about a mutant: reaching it means a wait ran out of wall clock, which is a measurement of the shared main actor's queue depth. Raised from 1 to 2 rather than reworded, per this file's own guidance for the more-than-declared direction.
 
 >>> signature Expectation failed: (elapsed →
 >>> source #expect(elapsed < .seconds(

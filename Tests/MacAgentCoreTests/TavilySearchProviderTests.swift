@@ -260,7 +260,10 @@ struct TavilySearchProviderTests {
 
         #expect(!SonnyBackendError.isCancellation(TavilySearchError.backend(.offline)))
         #expect(!SonnyBackendError.isCancellation(TavilySearchError.backend(.notSignedIn)))
-        #expect(!SonnyBackendError.isCancellation(TavilySearchError.missingAPIKey))
+        // `TavilySearchError.missingAPIKey` was the third non-cancellation checked here and it no
+        // longer exists (SONNY-136): the type has one case now, so every value it can hold is a
+        // `.backend`, and the two above are the population rather than a sample of it.
+        #expect(!SonnyBackendError.isCancellation(TavilySearchError.backend(.timedOut(after: 90))))
     }
 
     @MainActor

@@ -131,27 +131,30 @@ struct OpenAIPlannerTests {
         #expect(sent.authorization == "Bearer test-access-token")
     }
 
+    /// **No provider name reaches the system prompt at all, which is the count this test was
+    /// written to watch move.**
+    ///
+    /// It was `theOnlyProviderNameLeftInTheSystemPromptIsTheOneTheDegradationBranchRemoves`, and it
+    /// asserted exactly one occurrence of "openai": `PermissionReadinessCapabilityAdapter`'s tool
+    /// description said *"Show readiness for OpenAI key, …"*, describing a readiness row that
+    /// genuinely still read `OPENAI_API_KEY`. SONNY-130 left it deliberately, on the reasoning that
+    /// the sentence was accurate about something that had not moved yet; SONNY-136 moved it, so the
+    /// count is zero and the name says so.
+    ///
+    /// **The system prompt is where this matters most**, and it is worth stating rather than
+    /// leaving as an inherited habit: the prompt folds in every capability's description and side
+    /// effects (`ToolRegistry.plannerDescription`), so a provider name written into any adapter's
+    /// metadata is a provider name sent to whichever provider `MODEL_ROUTE_PLAN` happens to pick —
+    /// which is the thing §4.2 says the client must not know about.
     @Test
-    func theOnlyProviderNameLeftInTheSystemPromptIsTheOneTheDegradationBranchRemoves() throws {
-        // **Recorded as a test rather than left for a reader to discover.** The system prompt folds
-        // in every capability's description and side effects (`ToolRegistry.plannerDescription`), and
-        // one of them still names a provider: `PermissionReadinessCapabilityAdapter` describes a
-        // readiness check that genuinely still reads `OPENAI_API_KEY`, and removing that key check —
-        // with the "export a variable" strings beside it — is `feature/row-12-degradation`'s, which
-        // cannot run until both gateways land. So the sentence is accurate about a thing that has
-        // not moved yet, and this ticket's never-touch list says to leave it.
-        //
-        // `WebResearchMarkdownCapabilityAdapter`'s was the other one and it was **corrected**, not
-        // left: it said fetched page content is sent "to OpenAI", which this branch made false, and
-        // it is a claim a user reads before approving an egress rather than a stale variable name.
-        //
-        // This test fails when either half changes, which is the point: the day the degradation
-        // branch removes the key check, this expectation is what says the count has moved.
+    func noProviderNameReachesTheSystemPrompt() throws {
         let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default).lowercased()
-        #expect(prompt.components(separatedBy: "openai").count - 1 == 1)
-        #expect(prompt.contains("show readiness for openai key"))
+        #expect(prompt.components(separatedBy: "openai").count - 1 == 0)
+        // The readiness tool is still described, and now by its real subject. Asserted so that
+        // "zero occurrences of openai" cannot be satisfied by the description disappearing.
+        #expect(prompt.contains("show readiness for the sonny account"))
         #expect(!prompt.contains("content to openai"))
-        for forbidden in ["api.openai.com", "gpt-", "anthropic", "cerebras", "tavily"] {
+        for forbidden in ["api.openai.com", "gpt-", "anthropic", "cerebras", "tavily", "opencode"] {
             #expect(!prompt.contains(forbidden), "the system prompt names \(forbidden)")
         }
     }

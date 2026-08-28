@@ -88,14 +88,9 @@ struct SonnyBackendCopyTests {
         // §7.1: the client never displays `message`. Checked across every code the taxonomy has,
         // rather than on the handful a test happened to think of.
         let secret = "SERVER-AUTHORED-SENTENCE-9137"
-        let codes: [SonnyBackendErrorCode] = [
-            .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
-            .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,
-            .limitRate, .limitSpend, .requestInvalid, .requestTooLarge, .providerUnavailable,
-            .providerTimeout, .providerRejected, .serverError, .serverUnavailable,
-            .resourceNotFound, .idempotencyConflict, .versionUnsupported, .unknown("brand.new"),
-        ]
-        for code in codes {
+        // The same list `noSentenceNamesAProviderOrAnEnvironmentVariable` walks — one population,
+        // so a code added to one test's reach is added to both (SONNY-136).
+        for code in Self.everyWireCode {
             let sentence = SonnyBackendCopy.sentence(for: Self.apiError(code, message: secret))
             #expect(!sentence.contains(secret), "\(code.wire) leaked the server's message")
             // Nor the wire code, nor a status: neither is a thing to show a user.
@@ -130,6 +125,124 @@ struct SonnyBackendCopyTests {
         // And a timeout's own duration is not a thing to put in front of a user.
         #expect(!SonnyBackendCopy.sentence(for: .timedOut(after: 90)).contains("90"))
     }
+
+    /// **SONNY-136's fourth requirement, as one table.** The ticket names four states a user can be
+    /// in when the backend does not answer — not signed in; signed in but offline; the backend
+    /// reachable and failing; and over a limit — and asks that each produce its own human message.
+    ///
+    /// **Asserted as a set as well as one by one, which is the half a per-case test cannot do.**
+    /// Four `#expect`s on four literals all still pass if two of the literals are the same string,
+    /// and "each produces its own" is exactly the property that would then be false. So the
+    /// distinctness is checked directly.
+    ///
+    /// **`.unreachable` and a 5xx share the third state on purpose**, and the reason is
+    /// `SignInFailure.backendUnreachable`'s own: "One case, because there is exactly one thing a
+    /// user can do about all of them." A DNS failure, a refused connection and a `server.error` are
+    /// different events and the same situation. The state that must stay separate is `offline`,
+    /// because it is the only one where everything local still works, and telling a user the wrong
+    /// one of those two is what §7.2 case 7 calls a real failure of the error-handling-is-UX rule.
+    ///
+    /// **The fifth row is what this build actually shows today.** `SonnyBackendHost.productionBaseURL`
+    /// is still `nil`, so on a packaged app launched from Finder every backend call fails at
+    /// `backendNotConfigured` before a URL is built — which is the state the founder's manual pass
+    /// will meet until SONNY-192 chooses a host, and it is separate from all four.
+    @Test
+    func eachOfTheFourUnreachableStatesGetsItsOwnHumanSentence() {
+        let notSignedIn = SonnyBackendCopy.sentence(for: .notSignedIn)
+        let offline = SonnyBackendCopy.sentence(for: .offline)
+        let failing = SonnyBackendCopy.sentence(for: Self.apiError(.serverError, status: 500))
+        let overALimit = SonnyBackendCopy.sentence(for: Self.apiError(.limitRate, status: 429))
+
+        #expect(notSignedIn == "Sign in to Sonny to run this.")
+        #expect(offline == "You're offline. Everything Sonny does on this Mac still works.")
+        #expect(failing == "Sonny couldn't finish this one. Try again.")
+        #expect(overALimit == "Too many requests just now. Try again shortly.")
+
+        #expect(
+            Set([notSignedIn, offline, failing, overALimit]).count == 4,
+            "the four states collapsed onto fewer than four sentences"
+        )
+
+        // The third state, reached the two other ways it can be reached — a transport failure and
+        // this client's own timeout — answers the same sentence, deliberately.
+        #expect(SonnyBackendCopy.sentence(for: .unreachable("connection refused")) == failing)
+        #expect(SonnyBackendCopy.sentence(for: .timedOut(after: 120)) == failing)
+
+        // A spend cap is over-a-limit too and is *not* the rate limit's sentence: only one of the
+        // two clears by waiting, so only one may say so.
+        let spend = SonnyBackendCopy.sentence(for: Self.apiError(.limitSpend, status: 429))
+        #expect(spend == "You're out of allowance for this period.")
+        #expect(spend != overALimit)
+
+        // And the state this build is in until a host exists.
+        let unconfigured = SonnyBackendCopy.sentence(for: .backendNotConfigured)
+        #expect(unconfigured == "This build has no Sonny account service.")
+        #expect(!Set([notSignedIn, offline, failing, overALimit]).contains(unconfigured))
+    }
+
+    /// No sentence the user can be shown names a model provider or an environment variable.
+    ///
+    /// **Founder decision, 2026-08-19, in his own words: "why mention OPENAI_API_KEY, because down
+    /// the line we will have other providers as well."** SONNY-177 applied it to one constant;
+    /// SONNY-136 removed the last strings that broke it — `PlannerError.missingAPIKey`,
+    /// `TranscriptionError.missingAPIKey`, `TavilySearchError.missingAPIKey`,
+    /// `VisionModelClientError.missingAPIKey`, and the readiness row's two halves — and this is
+    /// where the rule now lives, over the whole population of sentences rather than over one of
+    /// them.
+    ///
+    /// **The population is enumerated rather than sampled.** `SignInFailure` is `CaseIterable` and
+    /// every wire code is listed here, so a code added later that maps to new words is covered the
+    /// moment it is added to `SonnyBackendErrorCode`; the transport cases are listed explicitly
+    /// because `SonnyBackendError` carries associated values and cannot be `CaseIterable`.
+    ///
+    /// The environment-variable check is a *shape* rather than a list of names: any
+    /// `SCREAMING_SNAKE` token of two or more parts, so a sentence naming a variable this test has
+    /// never heard of fails just the same.
+    @Test
+    func noSentenceNamesAProviderOrAnEnvironmentVariable() {
+        let providers = ["OpenAI", "Cerebras", "Tavily", "OpenCode", "Anthropic", "GPT", "Whisper"]
+        let variableShape = try! NSRegularExpression(pattern: "[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{2,}")
+
+        var sentences: [String] = SignInFailure.allCases.map(SignInCopy.message(for:))
+        sentences.append(SignInCopy.codeNotArriving)
+        sentences.append(SignInCopy.signedOutLocallyOnly)
+        for transport: SonnyBackendError in [
+            .offline, .unreachable("DNS"), .notSignedIn, .timedOut(after: 90), .cancelled,
+            .undecodableResponse("body"), .backendNotConfigured,
+        ] {
+            sentences.append(SonnyBackendCopy.sentence(for: transport))
+        }
+        for code in Self.everyWireCode {
+            sentences.append(SonnyBackendCopy.sentence(for: Self.apiError(code)))
+        }
+        // The scan is worthless if the list came back short; §7.2 alone has more than a dozen cases.
+        #expect(sentences.count > 30, "only \(sentences.count) sentences were collected")
+
+        for sentence in sentences {
+            #expect(!sentence.isEmpty)
+            for provider in providers {
+                #expect(
+                    !sentence.localizedCaseInsensitiveContains(provider),
+                    "\"\(sentence)\" names \(provider)"
+                )
+            }
+            let range = NSRange(sentence.startIndex..., in: sentence)
+            #expect(
+                variableShape.firstMatch(in: sentence, range: range) == nil,
+                "\"\(sentence)\" carries an environment-variable-shaped token"
+            )
+        }
+    }
+
+    /// Every code the taxonomy has. Shared by the two tests that need the whole population rather
+    /// than the handful either happened to think of.
+    private static let everyWireCode: [SonnyBackendErrorCode] = [
+        .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
+        .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,
+        .limitRate, .limitSpend, .requestInvalid, .requestTooLarge, .providerUnavailable,
+        .providerTimeout, .providerRejected, .serverError, .serverUnavailable,
+        .resourceNotFound, .idempotencyConflict, .versionUnsupported, .unknown("brand.new"),
+    ]
 
     @Test
     func aRateLimitAndASpendCapSayDifferentThingsBecauseOnlyOneClearsByWaiting() {

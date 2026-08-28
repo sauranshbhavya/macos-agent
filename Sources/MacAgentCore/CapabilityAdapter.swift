@@ -184,6 +184,17 @@ public struct CapabilityExecutionContext {
     /// as `now` — the real value lives in the UI layer and changes after launch, so a snapshot
     /// or a hardcoded `true` would misreport an actual Control-Option-Space conflict.
     public var hotKeyReady: () -> Bool
+    /// Whether a Sonny session is held on this Mac, for the readiness row that replaced the
+    /// `OPENAI_API_KEY` one (SONNY-136).
+    ///
+    /// **A closure, and defaulted to `.undetermined` rather than to `.signedIn`.** It is a closure
+    /// for exactly `hotKeyReady`'s reason: the real answer lives in the UI layer and changes after
+    /// launch, so a snapshot taken at construction misreports a sign-in or a sign-out that happened
+    /// since. It defaults to `.undetermined` because a context built by something that has no
+    /// account wiring — `MacAgentCore` on its own, and every test that is not about readiness —
+    /// genuinely does not know, and `.signedIn` would be a default that reports readiness nobody
+    /// checked.
+    public var modelAccessReadiness: () -> ModelAccessReadiness
     /// The browser this execution should prefer for every URL it opens *on the injected
     /// browser-opener seam*, or `nil` for the system default. `.playMedia` is on a different seam
     /// and does not consult this — **decided, not pending** (SONNY-51, founder 2026-08-20): a media
@@ -320,6 +331,7 @@ public struct CapabilityExecutionContext {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
+        modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
         // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
@@ -369,6 +381,7 @@ public struct CapabilityExecutionContext {
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
+        self.modelAccessReadiness = modelAccessReadiness
         self.preferredBrowser = preferredBrowser
         self.claimedEarlierInThisRun = claimedEarlierInThisRun
         self.taskScope = taskScope

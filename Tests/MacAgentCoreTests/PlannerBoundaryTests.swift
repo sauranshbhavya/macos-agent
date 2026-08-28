@@ -651,7 +651,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the path that would be revealed.
   examples: Reveal the zip in Finder | Show the generated Markdown in Finder
 - show_permission_readiness: Show permission readiness
-  description: Show readiness for OpenAI key, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.
+  description: Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.
   required fields: none
   side effects: none
   dry run: Show permission readiness without requesting new permissions.
