@@ -36,21 +36,34 @@
 # Format, one record per entry, directives at column 0. Comments and blank lines are ignored.
 #
 #   >>> signature   literal text, matched as a substring of the issue a failing test recorded.
-#   >>> source      literal text that must still exist under Tests/. This is what keeps the
-#                   signature honest: `UntrustedFailureDeclarationTests` fails the suite when a
-#                   `source` stops matching, which is what happens the moment someone rewords the
-#                   helper a signature was written for. A signature that silently stops matching is
-#                   the same defect as a listed test name that no longer exists — it stops
+#   >>> source      literal text that must still exist in one of the two test trees. This is what
+#                   keeps the signature honest: `UntrustedFailureDeclarationTests` fails the suite
+#                   when a `source` stops matching, which is what happens the moment someone rewords
+#                   the helper a signature was written for. A signature that silently stops matching
+#                   is the same defect as a listed test name that no longer exists — it stops
 #                   protecting, and nothing says so.
-#   >>> sites       how many times that `source` appears in the test tree, asserted exactly. The
-#                   `source` check alone only asks whether the text survives *somewhere*, and four
-#                   of the six records below have more than one site — so rewording one of six
-#                   copies left the suite green while that copy's failures went back to counting as
-#                   kills, measured by rewording one (PR #112 review, F4). A count is what makes the
-#                   reword visible. When this number changes, the change itself is the question:
-#                   a new test using the same helper is fine and the number goes up; a site that
-#                   stopped matching is a signature that stopped protecting, and needs its own
-#                   record or its own fix.
+#                   **Two trees, `Tests/` and `server/test/`** (SONNY-334). This harness has read
+#                   vitest's log shapes as well as swift-testing's since SONNY-323 and matches a
+#                   signature against the text a failure recorded without knowing what produced it,
+#                   so a record may perfectly well be written for a server-half failure. The guard
+#                   could only see `Tests/`, so the first such record would have been counted zero
+#                   times and failed the suite with a message blaming the record for a blindness in
+#                   the scan.
+#   >>> sites       how many times that `source` appears across those trees, asserted exactly, and
+#                   never zero. The `source` check alone only asks whether the text survives
+#                   *somewhere*, and most records below have more than one site — so rewording one
+#                   of six copies left the suite green while that copy's failures went back to
+#                   counting as kills, measured by rewording one (PR #112 review, F4). A count is
+#                   what makes the reword visible. When this number changes, the change itself is
+#                   the question: a new test using the same helper is fine and the number goes up; a
+#                   site that stopped matching is a signature that stopped protecting, and needs its
+#                   own record or its own fix.
+#                   **Zero is refused on its own terms** (SONNY-334). `found == sites` is satisfied
+#                   by a scan that finds nothing when a record declares nothing, so zeroing the
+#                   count was a way to make any failure of that check go green while leaving a
+#                   record whose source protects nothing — the exact defect the count was added for,
+#                   through the one door it did not watch. A source with no site left has stopped
+#                   protecting anything and belongs deleted, not zeroed.
 #   >>> reason      one line: why a failure like this says nothing about a mutant.
 #
 # What belongs here: a hang backstop, a wall-clock ceiling, anything whose failure is a statement
@@ -87,3 +100,8 @@
 >>> source #expect(elapsed < .seconds(
 >>> sites 2
 >>> reason A wall-clock ceiling. It measures the machine, not the code: the redaction ceiling was measured at 1465 ms idle and 11742 ms with a cold build alongside, at 98c50c8, against a bound that was 5000 ms at the time. The ceiling is worth keeping as a tripwire for a pathological regression; its loss under load is worth nothing as evidence about a mutant.
+
+>>> signature This is a server-suite hang backstop, not a timing assertion
+>>> source This is a server-suite hang backstop, not a timing assertion
+>>> sites 1
+>>> reason The first server-half record, and the first whose source lives under server/test/ rather than Tests/ — which the guard could not see until SONNY-334 (SONNY-335, SONNY-241). It is the bound auth.db.test.ts's two sign-in concurrency tests wait under, replacing vitest's default 5000 ms testTimeout, which they met three times under battery load and were each time counted as killing a mutant their request path cannot reach. Sixty seconds is 24x the worst those tests have been measured at under deliberate load (2527 ms at a one-minute load average of 155, with 40 CPU-bound node processes running) and 12x what the reported failures met, so a run that reaches it never finished rather than being slow — but a wall clock on work another process owns is a statement about the machine whatever the margin, which is what this file exists for, so it is declared. The Swift half's observation floor was tried here and rejected on measurement rather than on taste: at four load levels up to a load average of 194 the event loop ticked at 167-178 per second against a nominal 200, including the run where one of these tests took ten times its unloaded cost, so a floor set below the healthy population would have called that run a deadlock. What this record costs is a mutant that genuinely hangs one of those two tests and breaks nothing else: it comes back UNATTRIBUTED rather than KILLED, which is true. What it does not cost is a mutant that makes one of them wrong — underHangBackstop rethrows the body's own error untouched, so an assertion failure carries none of this wording, and backstop.test.ts asserts the thrown object is identical rather than merely equal.
