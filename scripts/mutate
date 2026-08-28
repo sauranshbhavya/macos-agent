@@ -2091,7 +2091,7 @@ printf "      Tests  26 passed (26)\n"'
   printf '\n==> A vitest failure is a named kill, not a build failure\n'
   st_run "$vitest_kills_the_mutant" "$root/kill.plan"
   st_eq "the battery exits 0" "$ST_EXIT" "0"
-  st_contains "the baseline tally is read from vitest own summary line" "$ST_OUT" \
+  st_contains "the baseline tally is read from vitest's own summary line" "$ST_OUT" \
               "PASSED  26 passed (26)"
   st_contains "the kill is counted and attributed" "$ST_OUT" "KILLED by 1 test(s)"
   st_contains "and the test is named with its file and describe block" "$ST_OUT" \
