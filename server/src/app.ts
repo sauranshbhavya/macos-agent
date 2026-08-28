@@ -6,6 +6,8 @@ import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
 import { registerIdempotency } from "./idempotency/hook.js";
 import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
+import { registerMetering } from "./metering/hook.js";
+import { postgresMeteringStore, type MeteringStore } from "./metering/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
@@ -59,6 +61,13 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  * real app — the gate, the account scope, the error envelope, the routes — against a store the test
  * controls, and `idempotency.db.test.ts` proves the SQL underneath separately.
  *
+ * **`meteringStore` exists for exactly the reason `idempotencyStore` does** (SONNY-133). Contract
+ * §11's event is a Postgres row, so without a seam every behaviour §11 names — the per-route field
+ * values, the incognito case, the retry that must not double-count — would be verified only in
+ * `npm run test:db`, and the run this repository gates on would be silent about what every call
+ * costs. With it those tests drive the whole real app and assert the event a client's request
+ * actually produced; `metering.db.test.ts` proves the SQL and the at-most-once claim underneath.
+ *
  * **`logStream` exists because two behaviours were unpinned** (SONNY-132, PR #143's F3). A mutation
  * battery on the provider router killed nineteen of twenty mutants; the three that survived were all
  * on the *recording* half — `recordServingProvider` gutted, the provider it records hard-coded, and
@@ -72,6 +81,7 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  */
 export interface AppOverrides {
   readonly idempotencyStore?: KeyStore;
+  readonly meteringStore?: MeteringStore;
   readonly logStream?: NodeJS.WritableStream;
 }
 
@@ -221,6 +231,58 @@ export function buildApp(
     overrides.idempotencyStore ??
     (auth ? postgresKeyStore(auth.withConnection) : undefined);
   registerIdempotency(app, idempotencyStore ? { store: idempotencyStore } : undefined);
+
+  /**
+   * Contract §11's metering event, on THIS instance for the third time and the same reason
+   * (SONNY-133).
+   *
+   * **Registered after the idempotency hook, and this time the order really is load-bearing.**
+   * Fastify runs `onSend` hooks in registration order, and both modules have one: the idempotency
+   * hook's stores or releases the key's response, and this one writes the metering event and reads
+   * `request.idempotency` to decide whether this request may spend the key's one metering claim — a
+   * replay and a `409` wrote nothing and must not take a claim from the request that did the work.
+   * That state is set in `preHandler`, so it is there either way; what this line's position decides
+   * is that the key's own bookkeeping settles before the event that cites it is written.
+   *
+   * **A window between the two survives, it loses money rather than duplicating it, and this branch
+   * chose the order on readability after reversing `onResponse` on exactly that criterion** — so it
+   * is written down here rather than left for the next session to re-derive (PR #147's review, F6).
+   * Both directions traced:
+   *
+   * - **As built** — the key completes, then the event is written. A process killed between the two
+   *   leaves a `completed` key row with a stored response and `metering_claimed_at` still NULL. The
+   *   client's retry replays that stored response, so `ClaimState` is `replayed` and the metering
+   *   hook returns without asking the store. The provider call was paid for and is **never metered,
+   *   ever**.
+   * - **Reversed** — the event is written, then the key completes. A kill between them leaves an
+   *   event and a key still `in_flight`; the lease expires, the retry genuinely re-runs and calls
+   *   the provider a second time, and its claim is already taken so the second call goes unbilled.
+   *   The first call *is* recorded.
+   *
+   * So neither order is free, and the reversed one loses less. **It is not changed here**, because
+   * the window is one database round trip wide and strictly narrower than the `onResponse` window
+   * this branch already removed — the change would be trading a known small residual for a reordering
+   * whose own failure mode (a re-run the gateway pays for and does not record) is not obviously
+   * better, and the ticket that has to weigh that is the one that owns the spend cap.
+   *
+   * **What the single transaction in `writeMeteringEvent` does and does not close**, since it is easy
+   * to read as covering this. It closes claim-versus-insert: the claim cannot be taken without the
+   * event landing, which is the direction that would lose an event permanently. It cannot close the
+   * gap above, because the key's completion and the metering write are two transactions on two
+   * connections by construction — `KeyStore` and `MeteringStore` each lease their own — and merging
+   * them would put the metering write inside the key store's transaction, which is the coupling
+   * SONNY-300's seam exists to avoid.
+   *
+   * **The gate's `onRequest` runs before both**, because it is registered before both, which is
+   * what makes `request.auth` available by the time the event is built.
+   *
+   * Takes the same `withConnection` the gate and the key store take, and answers `undefined` for a
+   * health-only deployment — which has no database, and no metered route it could reach either,
+   * since every one of the five is authenticated.
+   */
+  const meteringStore =
+    overrides.meteringStore ?? (auth ? postgresMeteringStore(auth.withConnection) : undefined);
+  registerMetering(app, config, meteringStore ? { store: meteringStore } : undefined);
 
   /**
    * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),

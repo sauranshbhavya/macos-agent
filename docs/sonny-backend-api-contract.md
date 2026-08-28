@@ -1362,34 +1362,75 @@ Consequences this contract carries:
 What the server records per call. Not a request field — section 2.4.1 says which parts the client
 supplies. It holds no content, so it can outlive content on the longer clock.
 
+**Built on 2026-08-28 by SONNY-133** as `sonny.metering_event`
+(`server/src/db/migrations/0012_metering_records_what_every_call_cost.sql`). Six rows below moved as
+it was built; each says how, and section 14 carries the row.
+
 | Field | Type | Source | Notes |
 |---|---|---|---|
 | `event_id` | string | server | |
 | `request_id` | string | server | Same value as the `Sonny-Request-Id` header |
-| `idempotency_key` | string | client header | One event per key, ever (9.2) |
-| `user_id` | string | server | From the authenticated session |
+| `idempotency_key` | string, nullable | client header | One event per key, ever (9.2). **Nullable since 2026-08-28**: 9.2 serves a `POST` carrying no key, and such a request is metered anyway — dropping the event would make it free — with no at-most-once guarantee, because there is no key for one to be about |
+| `account_id` | string | server | From the authenticated session. **Named `user_id` until 2026-08-28**; the column is `account_id` because section 5 makes the account the billable identity and one person can hold two Supabase users on one account |
 | `occurred_at` | timestamp | server | |
 | `route` | enum | server | `plan`, `research.synthesize`, `transcription`, `search`, `screen.analyze` |
-| `provider` | string | server | Which provider actually served it. Required for failover accounting (SONNY-132) and never returned to the client |
-| `model` | string | server | Server-side only, for the same reason |
+| `provider` | string, nullable | server | Which provider actually served it. Required for failover accounting (SONNY-132) and never returned to the client. **Nullable since 2026-08-28**: a request refused before any upstream call has no provider, and naming one would be an invention |
+| `failed_over` | string list | server | **Added 2026-08-28.** The providers tried before the one that served, from `ProviderAttribution.failedOver` (SONNY-132). A failover spends a second upstream call, and nothing else records that it happened |
+| `model` | string, nullable | server | Server-side only, for the same reason. Nullable on a refusal, and on `search`, which is a provider with no model |
 | `input_tokens` | int, nullable | provider | |
 | `output_tokens` | int, nullable | provider | |
 | `total_tokens` | int, nullable | provider | |
-| `token_source` | enum | server | `reported` or `estimated`, mirroring `AIUsageTokenSource` (`TaskUsage.swift:20`) |
+| `token_source` | enum, nullable | server | `reported` or `estimated`, mirroring `AIUsageTokenSource` (`TaskUsage.swift:20`). **Nullable since 2026-08-28**, and `screen.analyze`'s normal state: that route reports tokens only when the provider did and estimates nothing, so a null here is an absence and never a measured zero |
 | `image_bytes` | int, nullable | server | `screen.analyze` only |
 | `image_pixel_width` | int, nullable | client | `screen.analyze` only. Vision token cost tracks pixels, not bytes |
 | `image_pixel_height` | int, nullable | client | |
+| `image_media_type` | string, nullable | client | **Added 2026-08-28.** Which of 4.5 rule 2's two formats this capture was. Roughly half of real captures are each, and the byte figure beside it cannot be read without knowing which |
 | `audio_duration_seconds` | number, nullable | provider or server | `transcription` only. Maps to `AIUsageRecord.audioDurationSeconds` |
-| `request_bytes` | int | server | Decoded size |
-| `response_bytes` | int | server | |
+| `request_bytes` | int, nullable | server | Decoded size. **Nullable since 2026-08-28**: null when the request declared no `Content-Length`, where `0` would read as an empty body. Nothing in the gateway decodes a `Content-Encoding` (6.4), so a declared length *is* the decoded size |
+| `response_bytes` | int, nullable | server | **Nullable since 2026-08-28**: null for a payload that is neither a string nor a buffer, which no route produces today |
 | `duration_ms` | int | server | Total, server-observed |
-| `upstream_duration_ms` | int | server | Time waiting on the provider |
+| `upstream_duration_ms` | int, nullable | server | Time waiting on the provider. **Nullable since 2026-08-28**: null when no upstream call was made, where `0` would read as a provider that answered instantly |
 | `outcome` | enum | server | `ok`, `provider_error`, `server_error`, `refused`, `client_cancelled` |
 | `task_id` | string, nullable | client | Section 5.1 |
 | `session_id` | string, nullable | client | Section 5.2 |
 | `session_iteration` | int, nullable | client | |
-| `retention` | enum | client | `standard` or `none`. Recorded so an incognito run's *usage* is visible while its content is not |
-| `client_version` | string | client header | |
+| `retention` | enum, nullable | client | `standard` or `none`. Recorded so an incognito run's *usage* is visible while its content is not. **Nullable since 2026-08-28**: a request refused before its body was read declared none |
+| `client_version` | string, nullable | client header | Bounded at 100 characters before it is stored, because a header is caller-controlled |
+
+**Which requests produce an event, decided when it was built** (SONNY-133, 2026-08-28). A metered
+route is one of the five above; every other `POST` this gateway serves is declared unmetered by name,
+so a sixth content-bearing route fails a population test until somebody classifies it either way.
+
+| request | event |
+|---|---|
+| metered route, authenticated, holding the key's claim | yes, if this key's one metering claim is free (9.2) |
+| metered route, authenticated, carrying no `Idempotency-Key` | yes, unconditionally |
+| metered route, authenticated, replayed from the key store | no — the original wrote it, and this one ran nothing |
+| metered route, `409 idempotency.conflict` | no — and this one is not merely "free": taking the key's one claim would leave the request that *is* doing the work with nothing to spend |
+| refused at the auth gate (`401`) | no — `account_id` comes from the authenticated session, and the gate runs before the body is read |
+| an unmetered route | no |
+
+**The event is written before the response is flushed**, on the same hook the idempotency key's own
+bookkeeping uses and one place after it. The obvious home was after the response, and two things
+moved it: a process killed in that window drops a billing record for a provider call already paid
+for, which is exactly the direction this section exists to close; and nothing downstream can observe
+an after-the-response write, measured on Node v22 in both directions — a client's promise resolves
+before an async `onResponse` hook finishes, so "the client has its answer" and "the call is
+recorded" were unordered. The cost is one local `INSERT` on a request that already makes two database
+round trips for its key, beside a provider call section 12 measures in tens of seconds. A caller who
+disconnects while the handler is still running never reaches that hook at all, and is written from
+the response's `close` instead — which is the one path `outcome: client_cancelled` comes from.
+
+**`outcome`'s five values, against the four SONNY-131 proposed.** That ticket's hand-over named
+`served`, `client_cancelled`, `provider_failed` and `refused_before_upstream`; each maps onto a value
+above without loss — `ok`, `client_cancelled`, `provider_error`, `refused` — and `server_error` is
+the fifth its four had nowhere to put, this gateway's own bug rather than a provider's or a refusal.
+The distinction that proposal insisted on survives in full and is why `refused` and `provider_error`
+are separate: a `413` over the image ceiling, a `400` on validation and a `502` from a route with no
+configured adapter all happen before anything is spent, and an event that could not tell them from a
+failed provider call would bill for a request that never left the gateway. The mapping is keyed on
+the error `code` and never on a status, which is 9.3's own rule — `502` carries two codes with
+opposite meanings.
 
 **Per-session screen-control cost** — the figure SONNY-17's credit weight waits on — is the sum over
 events sharing a `session_id`. Nothing in the product records it today: `AIUsageCallKind`
@@ -1410,10 +1451,24 @@ reason the metering exists.
 Two things it must not lose:
 
 - **The local per-task summary keeps working.** `TaskUsageRecorder` feeds
-  `AgentViewModel.taskUsageSummary`, a live UI surface. Server-side metering is the billable truth;
-  where the two disagree the server is authoritative, and the local summary must not silently go
-  blank. SONNY-130 and SONNY-133 both carry this.
-- **Usage outlives content.** The two clocks are the point (10.3).
+  `AgentViewModel.taskUsageSummary`. Server-side metering is the billable truth; where the two
+  disagree the server is authoritative, and the local summary must not silently go blank. SONNY-130
+  and SONNY-133 both carry this. **"A live UI surface" was wrong when this was written and is
+  corrected here** (2026-08-28, SONNY-133): no view reads that property — PR #144's F1 measured it,
+  and Settings → Usage says so in the product's own words. What the sentence protects is unchanged
+  and is now pinned end to end by
+  `PlannerConstructionTests.whatARunRecordsReachesThePublishedUsageSummary`; the surface itself is
+  SONNY-214's. **Two honest reasons the two sides differ**, recorded so a difference is not chased as
+  a defect: a call refused before any upstream is on the server's side only, because the client
+  records beside a reply it received; and a retry that genuinely re-ran under one key is metered once
+  server-side (9.2) and counted twice locally, because the client saw two calls.
+- **Usage outlives content.** The two clocks are the point (10.3). Nothing in the gateway deletes or
+  ages a metering row, and the table holds no content column at all — asserted as the whole column
+  set rather than as a search for likely names, so adding one fails a test rather than a review.
+- **A founder can read it without a UI.** `npm run usage -- sessions | routes | span`, over
+  `server/src/metering/query.ts`. It is a command and not a surface by decision (2026-08-28): the
+  usage UI is SONNY-214's, and what this row owes is the pre-launch measurement SONNY-17's numbers
+  come from. It prints tokens, bytes, pixels, iterations, durations and outcomes, and never a price.
 
 ---
 
@@ -1607,5 +1662,6 @@ record rather than a tidy list.
 | 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `f65e72e`, where the settings block is `:34-39`. | SONNY-130 |
 | 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |
 | 2026-08-28 | **6.4's forward-looking sentence is corrected, 12's third rule is answered, and 13's two rows follow both.** §6.4 said the client's `compressesRequestBody` switch "travels with the endpoint, so SONNY-131 flips both in one edit when the client is repointed at Sonny's own gateway". That reads as a one-line optimisation and is a `400` on **every** screen-control request: the gateway implements no request decompression, and Fastify hands a gzip-encoded body to the JSON parser as bytes. Found by SONNY-130 (PR #139, F9) and left as a note on SONNY-131; corrected here because a note on a ticket is not where the next reader meets it. §6.4's obligation is unchanged — the server still **must** accept the encoding — and it now says plainly that none of its three parts is implemented and that **SONNY-317** owns all of them together with the client switch, because the end-to-end test needs both sides at once. §12's third rule — "which of retry, abort-with-partial-history, or a new typed error the session takes is SONNY-131's" — is answered: **abort at the failing iteration, keep what the session did, report it as a typed error**, with no retry at the loop level because §9.3's per-code budget is already spent one layer down and a second loop would mint a fresh idempotency key per attempt, which §9.1 forbids. Section 13's mid-loop row moves from Open to Decided-and-built, and its compression row's owner moves from SONNY-131 to SONNY-317 with the wrong sentence named. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved — §4.5, §6.1's table and §12's table are byte-identical, and `/v1/screen/analyze` was already in all three. Landed in `b3c2021`, whose own tree carries this row with the reference unfilled — the row names the commit the change landed in, and that commit cannot contain its own hash. | SONNY-131 |
+| 2026-08-28 | **11 — the metering event is built, and the section now describes a table rather than a plan.** `sonny.metering_event` exists (`server/src/db/migrations/0012_metering_records_what_every_call_cost.sql`), every one of the five model routes writes to it, and the vision route — which recorded usage nowhere at all — is the reason the section exists. Six rows of 11's table moved: `user_id` is **renamed `account_id`**, because section 5 makes the account the billable identity and one person can hold two Supabase users on one account; `failed_over` and `image_media_type` are **added**, the first because a failover spends a second upstream call nothing else records and the second because half of real captures are each format and the byte figure cannot be read without knowing which; and `idempotency_key`, `provider`, `model`, `token_source`, `request_bytes`, `response_bytes`, `upstream_duration_ms`, `retention` and `client_version` become **nullable**, each with the null's meaning stated in its own row — the alternative in every case was a zero or an invented value that reads as a measurement. Three things are stated that 11 left open and building it settled: which requests produce an event at all (a table of six cases, of which the `409` row is the one that is not merely "free"), that SONNY-131's four proposed outcome values map onto 11's five without loss, and that the founder query path is a **command** (`npm run usage`) rather than a surface — the usage UI is SONNY-214's. 11's "a live UI surface" is corrected: no view reads `taskUsageSummary`, which PR #144's F1 measured; the rule it protects is unchanged and is now pinned end to end by a test. **No shape changed on the wire**: 11 is what the *server records*, not a request or a response — no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 2.4, 4.5 and 12's tables are byte-identical. | SONNY-133 |
 | 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `f8f5c75`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `f8f5c75` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `f8f5c75` as at `5ad846f`. | SONNY-297 |
 | 2026-08-28 | **9.2 — two founder decisions recorded, and one implementation limit stated.** The gateway implemented no `Idempotency-Key` handling at all until this ticket, so 9.2 had never been built against; building it surfaced a conflict between 9.2's first sentence and 9.3's retryable list that cannot be resolved by reading either more carefully. A stored *retryable* failure is now released rather than replayed, so a same-key retry re-runs — without which a `429` is a twenty-four-hour ban on that operation and a `503` during a deploy freezes every request in flight. The at-most-once metering guarantee is untouched and is what makes the release safe: the claim survives it, so the re-attempt cannot bill again. A `POST` with no key is served rather than refused, because 9.1 is the client's obligation and the only client meets it. And conflict detection on `POST /v1/transcriptions` is by declared body length rather than by body, because a multipart body is consumed inside the handler and buffering it would take 6.1's audio ceiling away from the guard that fires while the part is still streaming. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved. **9.3's `email/verify` row gains one clause and is the only table cell edited** — it read "the idempotency record returns the original *result*, including the original failure", which the carve-out above makes untrue for the retryable subset, and a reader arriving at 9.3 alone would have taken the pre-decision behaviour. This row claimed 9.3 was byte-identical until PR #142's review found the contradiction that claim was concealing (F3). Two further limits are now stated in 9.2 rather than left to a code comment: a streaming response gets none of these guarantees, and a claim's lease can be outlived on the one route whose body read is unbounded. | SONNY-300 |

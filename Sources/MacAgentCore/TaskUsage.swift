@@ -133,6 +133,36 @@ public struct AIUsageRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// What this run has spent, as the app itself counted it.
+///
+/// **This is an approximation, and the server's metering event is the billable truth** (SONNY-133;
+/// `docs/sonny-backend-api-contract.md` §11 states it as a rule: "Server-side metering is the
+/// billable truth; where the two disagree the server is authoritative, and the local summary must
+/// not silently go blank"). Both halves matter and they pull in opposite directions, so both are
+/// written down here rather than left to be inferred:
+///
+/// - **Where the two disagree, the server wins.** Since SONNY-133 every call is recorded server-side
+///   in `sonny.metering_event`, from the gateway's own view of the exchange — which provider served,
+///   what it reported, how long it took, whether the caller was still there. Nothing on this side
+///   ever reports a number *to* the server: §2.4.1 forbids it ("a client-reported bill is not a
+///   bill"), so this summary cannot become the bill by accident.
+/// - **And it must keep populating anyway.** A summary that quietly stopped filling looks exactly
+///   like a task that cost nothing, and it is the surface a user can actually see. It is fed by the
+///   four recording clients — `OpenAIPlanner`, `WebResearchSynthesizer`, `OpenAITranscriber` and
+///   `SonnyVisionModelClient` — through the recorder each run owns, and
+///   `PlannerConstructionTests.whatARunRecordsReachesThePublishedUsageSummary` pins the whole path
+///   out to `AgentViewModel.taskUsageSummary`.
+///
+/// **Two honest reasons the two sides will differ, so a difference is not read as a defect.** A call
+/// the gateway refused before reaching a provider is recorded there and not here, because this side
+/// records beside a reply it received; and a retry that re-ran under one idempotency key is metered
+/// once on the server (§9.2's at-most-once claim) and counted twice here, because this side saw two
+/// calls. Neither is a discrepancy to chase — the server's number is the one that decides anything.
+///
+/// **Nothing persists this.** It lives in memory for the length of one run: `TaskUsageRecorder` is a
+/// lock around an array with `reset()` per run, and `CompletedTaskRecord` has no usage field. So no
+/// raw value here is frozen by a file format, and the server's table is the first thing anywhere
+/// that keeps usage past a process (PR #144's F2 corrected the claim that it was otherwise).
 public struct TaskUsageSummary: Codable, Equatable, Sendable {
     public static let empty = TaskUsageSummary(records: [])
 
