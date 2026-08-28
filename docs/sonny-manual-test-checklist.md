@@ -1754,6 +1754,23 @@ already proves.
       the SONNY-226 row above deliberately — that one asks about paragraph structure after the
       prompt fold, this one about the source-and-timestamp contract §4A.2 sets.)
 
+### The approval panel names the file a nested routine will write (new 2026-08-28, SONNY-218)
+
+One row, and it is the only founder-visible thing on `fix/three-small-client-defects`. SONNY-264's
+half of that branch changes no surface at all: it refuses an output path that leads out of
+`~/Desktop`/`~/Documents` with the same sentence that has always been shown for a path the user
+named, and reproducing it needs a symbolic link planted by hand.
+
+- [ ] **(SONNY-218)** Save a routine that creates a draft — "teach Sonny a routine called Notes that
+      drafts a note" — then ask, in one command, for **a note *and* that routine**: "draft a note
+      called Note, then run the Notes routine". Read the approval panel before approving: its
+      "Will include:" lines must name **two different files**, the second ending `-2.md`. Approve,
+      and both of those exact files must exist afterwards. The bug this fixes is the panel naming
+      one filename twice while the run wrote two — so a panel that shows the same name twice, or a
+      filename on disk that the panel never mentioned, is the finding. Worth running the two steps
+      in the other order too ("run the Notes routine, then draft a note called Note"), which is a
+      different code path and had the same defect.
+
 ## 8. How to report back
 
 For each real finding, give me:
