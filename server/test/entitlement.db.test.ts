@@ -2,7 +2,10 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ACCOUNT_REQUESTS,
-  ALL_LIMITS,
+  CODE_REQUEST_PER_ADDRESS,
+  CODE_REQUEST_PER_SOURCE,
+  CODE_VERIFY_PER_ADDRESS,
+  CODE_VERIFY_PER_SOURCE,
   bucketKey,
   staleWindowsBefore,
   sweep as sweepRateLimitWindows,
@@ -428,9 +431,19 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
     });
 
     it("never deletes a window inside the longest limit's own span", () => {
-      // The boundary is computed from the declared limits, so a sixth limit with a longer window
-      // moves it rather than leaving a sweep that eats live rows.
-      const longest = Math.max(...ALL_LIMITS.map((limit) => limit.windowSeconds));
+      // **Written out by name rather than read off `ALL_LIMITS`** (cycle 3's N3). The first version
+      // computed the expected value from the same array the implementation reads, so both sides
+      // moved together and a limit missing from the array was invisible — and the direction that
+      // failure takes is the one the test above calls the one that matters: a sweep deleting a
+      // window something is still counting against hands a caller a fresh allowance. The population
+      // itself is held by `theSweepsCutOffCoversEveryDeclaredLimit` below.
+      const longest = Math.max(
+        CODE_REQUEST_PER_ADDRESS.windowSeconds,
+        CODE_REQUEST_PER_SOURCE.windowSeconds,
+        CODE_VERIFY_PER_ADDRESS.windowSeconds,
+        CODE_VERIFY_PER_SOURCE.windowSeconds,
+        ACCOUNT_REQUESTS.windowSeconds,
+      );
       expect(staleWindowsBefore(NOW).getTime()).toBe(NOW.getTime() - longest * 1000);
       expect(longest).toBeGreaterThanOrEqual(ACCOUNT_REQUESTS.windowSeconds);
     });

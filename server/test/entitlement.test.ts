@@ -36,6 +36,8 @@ import {
   unprovisioned,
 } from "../src/entitlement/store.js";
 import { parseEntitlementArguments } from "../src/entitlements.js";
+import { readFile } from "node:fs/promises";
+import { ALL_LIMITS } from "../src/auth/ratelimit.js";
 import { METERED_ROUTES } from "../src/metering/event.js";
 import type { MeteringStore } from "../src/metering/store.js";
 import { testConfig } from "./support/config.js";
@@ -642,8 +644,13 @@ describe("which requests spend against the cap", () => {
     };
 
     for (const key of METERED_ROUTES.keys()) {
-      // `POST /v1/transcriptions` is multipart and is exercised by `model.test.ts`; every other
-      // metered route is driven here with a body its own schema accepts.
+      // **`POST /v1/transcriptions` is excluded and is therefore uncovered, which is the honest
+      // wording** (cycle 3, F6's residual). This said it was "exercised by `model.test.ts`", and
+      // that file injects the fake store but never reads `store.calls` — so **no test anywhere
+      // asserts that route takes a hold**. It is multipart, so driving it here means building a
+      // form body for a property every other route states in one line. The implementation is
+      // population-driven (`meteredRouteFor` reads the map), so the route is covered by the code
+      // and not by this test; the assertion below is `size - 1` for exactly that reason.
       if (key === "POST /v1/transcriptions") continue;
       const [, url] = key.split(" ") as [string, string];
       await app.inject({
@@ -741,6 +748,27 @@ describe("what this ticket deliberately does not decide", () => {
     // those weights land in; until they do, the estimate and the actual are the same number, which
     // is why a settle takes a boolean rather than an amount.
     expect(unitsForMeteredCall()).toEqual({ units: 1 });
+  });
+
+  it("theSweepsCutOffCoversEveryDeclaredLimit", async () => {
+    // **The population, read off the source rather than off the array that claims to be it** (cycle
+    // 3's N3). `ALL_LIMITS`' own doc says "a sixth limit is covered by existing", and nothing held
+    // that: the test named for it read `ALL_LIMITS` on both sides, so a limit declared and left out
+    // of the array was invisible — the reviewer added one with a day-long window and the whole suite
+    // stayed green. A window the sweep does not know about is a window it deletes while something is
+    // still counting against it.
+    //
+    // The same shape `test/support/routes.ts` uses: ask the source, not the list.
+    const source = await readFile(
+      new URL("../src/auth/ratelimit.ts", import.meta.url),
+      "utf8",
+    );
+    const declared = [...source.matchAll(/^export const ([A-Z_]+): Limit = /gm)].map((m) => m[1]!);
+
+    // The scan really scanned: a regex that matched nothing would pass every assertion below.
+    expect(declared.length).toBeGreaterThanOrEqual(5);
+    expect(declared).toContain("ACCOUNT_REQUESTS");
+    expect(ALL_LIMITS).toHaveLength(declared.length);
   });
 
   it("theCommandRefusesToInventAPlan", () => {
