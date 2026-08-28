@@ -358,19 +358,6 @@ struct SonnyBackendClientTests {
         #expect(SonnyBackendClient.proactiveRefreshMargin == 180)
     }
 
-    /// **§3.5: expiry arithmetic runs in server time, and the offset has to be applied where it
-    /// changes an answer.**
-    ///
-    /// The first version of this test could not fail. It stored an expiry through the same clock it
-    /// later compared against, so a mutant that dropped the offset entirely shifted both sides by
-    /// the same amount and cancelled — `scripts/mutate`'s M8 survived it at `14b8a3d`. The offset
-    /// only matters when the stored expiry is an *absolute* instant learned under one clock and
-    /// judged under another, which is exactly what a relaunch produces: a session comes back off
-    /// the Keychain, and the process that reads it has learned no offset yet.
-    ///
-    /// So: a stored expiry sixty seconds ahead of *this Mac's* clock, and a server whose `Date`
-    /// header puts it an hour behind that. Judged locally the token is inside the 180-second margin
-    /// and gets refreshed for nothing; judged in server time it has an hour of life and does not.
     /// **What this client will vouch for only ever moves forward** (SONNY-135, and the mutant S19
     /// that survived at `0fefe0d` without it).
     ///
@@ -408,6 +395,19 @@ struct SonnyBackendClientTests {
         #expect(abs(await harness.client.serverNow().timeIntervalSince(earlier)) < 1)
     }
 
+    /// **§3.5: expiry arithmetic runs in server time, and the offset has to be applied where it
+    /// changes an answer.**
+    ///
+    /// The first version of this test could not fail. It stored an expiry through the same clock it
+    /// later compared against, so a mutant that dropped the offset entirely shifted both sides by
+    /// the same amount and cancelled — `scripts/mutate`'s M8 survived it at `14b8a3d`. The offset
+    /// only matters when the stored expiry is an *absolute* instant learned under one clock and
+    /// judged under another, which is exactly what a relaunch produces: a session comes back off
+    /// the Keychain, and the process that reads it has learned no offset yet.
+    ///
+    /// So: a stored expiry sixty seconds ahead of *this Mac's* clock, and a server whose `Date`
+    /// header puts it an hour behind that. Judged locally the token is inside the 180-second margin
+    /// and gets refreshed for nothing; judged in server time it has an hour of life and does not.
     @Test
     func expiryIsJudgedAgainstTheServerClockAndNotTheLocalOne() async throws {
         let localNow = Date(timeIntervalSince1970: 1_800_000_000)

@@ -120,7 +120,12 @@ public actor EntitlementService {
         // told to sign in again — which is what they just did. Clearing gives `discardLocally` its
         // caller and the refresh below gives them a claim of their own.
         if claim.subject != session.userID {
-            try? store.clear()
+            // **`discardLocally()` rather than `store.clear()`, so the three sentences that say this
+            // is its caller are true** (cycle 3's N1 note). The behaviour is identical — that method
+            // is one line — and a comment claiming a call that is not made is the shape this
+            // repository files findings about; the reader asking "what can clear this" is asking a
+            // question the answer to which had better be a real call.
+            try? discardLocally()
             startRefresh()
             return .refused(.claimIsForAnotherSession)
         }

@@ -183,8 +183,16 @@ export async function consume(
  * **Computed from the declared limits rather than written as a literal** (PR #152's review, F4). A
  * literal would be a second copy of the longest window, and the one thing a sweep must never do is
  * delete a window something is still counting against — which is what a stale literal would start
- * doing the moment a limit's window grew. `ALL_LIMITS` is the population, so a sixth limit is
- * covered by existing.
+ * doing the moment a limit's window grew.
+ *
+ * **`ALL_LIMITS` is the population, and it is a list rather than a derivation, so something has to
+ * hold it** (cycle 3's N3). The sentence that stood here — "a sixth limit is covered by existing" —
+ * was true of `staleWindowsBefore` and false of the array it reads: a limit declared in this file
+ * and left out of the array is invisible to both, and the test named for it read `ALL_LIMITS` on
+ * both sides, so a reviewer's sixth limit with a day-long window left the whole suite green.
+ * `theSweepsCutOffCoversEveryDeclaredLimit` counts `: Limit =` declarations in this file's source
+ * against `ALL_LIMITS.length`, which is the shape `test/support/routes.ts` uses for the same
+ * problem — ask the source, not the list.
  */
 export const ALL_LIMITS: readonly Limit[] = [
   CODE_REQUEST_PER_ADDRESS,

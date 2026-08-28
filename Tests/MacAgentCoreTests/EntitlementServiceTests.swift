@@ -492,17 +492,21 @@ struct EntitlementServiceTests {
     @Test
     @MainActor
     func aClaimStoredWithNoMarkIsStillJudgedAgainstAnObservedServerTime() async throws {
-        // **The case the observation answers and the persisted mark cannot** (found by mutant S6
-        // surviving twice at `0fefe0d` and `ede5009`: with a mark present the mark's own monotonic
-        // anchor carries everything the observation would, so deleting the observation changed
-        // nothing — and the first test written for it did not isolate the path either, because a
-        // fresh response also corrects §3.5's offset and `serverNow()` then carries the same truth).
+        // **A stored entitlement with no mark, which is a decoder's state and not an older build's**
+        // (corrected 2026-08-28, PR #152's cycle-3 re-check). This comment said `observedServerTime:
+        // nil` was "a legacy state ... a build before this fix wrote it, so an upgrade lands on
+        // exactly that Mac", and **both halves were false**: `EntitlementStore.swift` was added by
+        // this branch's own `23fac5b` and has never shipped, so no Mac holds an entitlement written
+        // by an older build; and every version of `adopt` computes the mark from a **non-optional**
+        // `Date`, so no version of the writer could produce `nil` either. What genuinely produces it
+        // is a *decoder* meeting JSON with the key absent — a hand-written or foreign Keychain item —
+        // which is a real state and is the honest reason to seed it.
         //
-        // **`observedServerTime: nil` is a legacy state, not an impossible one**, which is what makes
-        // seeding it legitimate where the pair PR #152's F1 criticised was not: `StoredEntitlement`
-        // has always allowed it, an entitlement written by a build before this fix has it, and that
-        // is exactly the Mac an upgrade lands on. With no mark to anchor, the observation is the only
-        // thing standing between a rolled-back clock and a lapsed claim.
+        // **The producible guard for the same line is `aStaleMarkIsOverruledByOneFreshObservation`
+        // below**, where `adopt` writes the mark and nothing is seeded at all. This test is kept for
+        // the half only it reaches: **no mark and no observation**, which is where `persistMark`
+        // skips its interval guard and is the one state a wall clock could be written into the mark
+        // from (cycle 3's N2, and the mutant that survived the test named for that property).
         let signer = Signer()
         let clocks = MovableClocks(wall: Self.issuedAt)
         let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
@@ -526,8 +530,27 @@ struct EntitlementServiceTests {
             monotonicNow: clocks.monotonic
         )
 
-        // A hundred honest hours, then a response that confirms them. `refreshNow` fails, so no
-        // claim is adopted and no mark is written — a `Date` header is read before a status is.
+        // **First: no mark, no observation, and a wall clock a year forward.** This is the one state
+        // in which nothing but `serverNow()` is available to write down, so it is the only state a
+        // forward wall clock could poison the mark from — and `persistMark` skips its interval guard
+        // when there is no floor, so it writes on the first decision. The answer must still be a
+        // refusal, which is fail-closed and correct; what must **not** happen is that the year is
+        // recorded, because the Mac would then refuse for a year after the clock was put right, with
+        // nothing in the product to clear it. Cycle 3's N2: the mutant that seeds `serverNow()` here
+        // survived `anHonestlyForwardClockIsNotWrittenIntoTheMark`, because that test always has an
+        // observation and the next line overwrites the seed.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60))
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+        #expect(store.current?.observedServerTime == nil)
+
+        // Put the clock right, and the claim comes back — which a recorded year would not have
+        // allowed, and which is the whole reason the wall clock is excluded from the mark.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(60))
+        #expect(await service.decision(for: Self.capability) == .entitled)
+
+        // **Then the observation half.** A hundred honest hours, then a response that confirms them.
+        // `refreshNow` fails, so no claim is adopted and no mark is written by `adopt` — a `Date`
+        // header is read before a status is looked at, so the observation lands anyway.
         clocks.advance(by: 100 * 60 * 60)
         serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
         _ = try? await service.refreshNow()
@@ -535,6 +558,69 @@ struct EntitlementServiceTests {
         // Now the owner sets the Mac back. §3.5's offset moves with them; the observation does not.
         clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
         #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+    }
+
+    @Test
+    @MainActor
+    func aStaleMarkIsOverruledByOneFreshObservation() async throws {
+        // **The producible state that guards the observation path, with nothing seeded** (cycle 3's
+        // S6 ruling). `adopt` writes the mark at issue time, the app is closed and reopened after a
+        // long gap, one response arrives, and the owner then sets the clock back: the persisted mark
+        // is stale, the observation is fresh, and the observation is the only thing that refuses.
+        // Under the mutant that drops the observation this answers `entitled`.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let serverSays = Reported(instant: Self.issuedAt)
+        let store = MemoryStore()
+
+        // The first run: a real refresh, so the mark is whatever `adopt` writes and nothing else.
+        let first = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        first.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: serverSays.instant)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        _ = try await EntitlementService(
+            client: first.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        ).refreshNow()
+        first.unregister()
+        let markAfterAdopt = try #require(store.current?.observedServerTime)
+        #expect(abs(markAfterAdopt.timeIntervalSince(Self.issuedAt)) < 1)
+
+        // The Mac is off for a hundred hours — no process, so nothing advances the mark — and comes
+        // back with its clock set back to an hour after the claim was issued.
+        clocks.advance(by: 100 * 60 * 60)
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
+        serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
+
+        let second = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { second.unregister() }
+        second.register { _ in
+            .reply(
+                statusCode: 500,
+                headers: ["Date": SonnyHTTPDate.formatter.string(from: serverSays.instant)],
+                body: Data()
+            )
+        }
+        let relaunched = EntitlementService(
+            client: second.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        // One response. It fails, so no claim is adopted; the `Date` header is still read.
+        _ = try? await relaunched.refreshNow()
+
+        #expect(await relaunched.decision(for: Self.capability) == .refused(.lapsed))
     }
 
     @Test
