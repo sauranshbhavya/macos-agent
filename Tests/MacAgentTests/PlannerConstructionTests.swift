@@ -196,7 +196,7 @@ struct PlannerConstructionTests {
     func cancellingWhileATaskIsBeingPlannedIsRecordedAsACancelAndNotAsAFailure() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let taskHistoryStore = makeTaskHistoryStore(root: root)
         let viewModel = try makeViewModel(
             root: root,
             // The exact shape the gateway produces: `SonnyBackendClient` maps both
@@ -235,7 +235,7 @@ struct PlannerConstructionTests {
     func aPlannerFailureThatIsNotACancellationStillReadsAsAFailure() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let taskHistoryStore = makeTaskHistoryStore(root: root)
         let viewModel = try makeViewModel(
             root: root,
             plannerError: PlannerError.backend(.timedOut(after: 30)),
@@ -278,7 +278,7 @@ struct PlannerConstructionTests {
         for shape in shapes {
             let root = try makeDirectory()
             defer { try? FileManager.default.removeItem(at: root) }
-            let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+            let taskHistoryStore = makeTaskHistoryStore(root: root)
             let viewModel = try makeViewModel(root: root, plannerError: shape, taskHistoryStore: taskHistoryStore)
 
             viewModel.command = "tell me something delightful about penguins"
@@ -484,6 +484,24 @@ private func makeViewModel(
             return RecordingStubPlanner(usage: plannerUsage, recorder: recorder)
         },
         userDefaults: userDefaults
+    )
+}
+
+/// The task-history store these tests read their assertions out of, built with the **same injected
+/// key manager the fixture gives every other store** (PR #151 review, F7).
+///
+/// The three call sites first wrote `TaskHistoryStore(fileURL:)` and let `LocalStorageEncryption`
+/// `.shared` supply its own deterministic test key — which works, because that fallback detects a
+/// test process, and which `.claude/rules/macagentcore-conventions.md` says not to rely on: *"new
+/// tests should still prefer an explicitly injected key manager over relying on that fallback."*
+/// One helper rather than three repeated arguments, so a fourth call site cannot reintroduce the
+/// omission by copying a neighbour.
+private func makeTaskHistoryStore(root: URL) -> TaskHistoryStore {
+    TaskHistoryStore(
+        fileURL: root.appendingPathComponent("task-history.json"),
+        encryption: LocalStorageEncryption(
+            keyManager: FixedLocalStorageKeyManager(bytes: Data(repeating: 0x5A, count: 32))
+        )
     )
 }
 
