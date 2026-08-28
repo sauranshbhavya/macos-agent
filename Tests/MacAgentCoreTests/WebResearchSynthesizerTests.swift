@@ -204,6 +204,56 @@ struct WebResearchSynthesizerTests {
         #expect((messages[1]["text"] as? String)?.contains("Observed one.") == false)
     }
 
+    /// **A stop is not a failure, on the route that has no error type of its own** (SONNY-320).
+    ///
+    /// This is the fourth text route and the reason SONNY-320 was three conformances rather than
+    /// four: `/v1/research/synthesize` throws `PlannerError.backend` rather than declaring a
+    /// `backend` case of its own, so `PlannerError`'s single conformance covers this route and
+    /// `/v1/plan` both. That claim is checkable rather than argued — this test conforms nothing and
+    /// passes because the planner's conformance reaches here.
+    ///
+    /// **Synthesis is the last thing a research run does**, after every source has been fetched, so
+    /// a stop landing here is a stop on a run the user has already waited through. Reading
+    /// *"Sonny couldn't finish this one. Try again."* at that moment is the worst version of the
+    /// defect: it invites a retry of the whole run they just stopped.
+    @Test
+    @MainActor
+    func aStopWhileASynthesisIsInFlightIsACancellationRatherThanAFailure() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return .failure(URLError(.cancelled))
+        }
+        defer { fixture.unregister() }
+
+        let prompt = WebResearchSynthesisPrompt(
+            trustedPlan: AgentPlan(summary: "Summarize.", requiresConfirmation: true, steps: []),
+            systemText: "SYSTEM",
+            trustedUserInstructionText: "Summarize.",
+            observedContentTexts: ["Observed text."]
+        )
+        let recorder = TaskUsageRecorder()
+
+        do {
+            _ = try await OpenAIWebResearchSynthesizer(
+                client: fixture.client,
+                taskContext: ModelRouteFixtures.standardContext,
+                usageRecorder: recorder
+            ).synthesize(prompt: prompt)
+            Issue.record("Expected the stopped request to surface as PlannerError.backend(.cancelled).")
+        } catch let error as PlannerError {
+            #expect(error == .backend(.cancelled))
+            #expect(SonnyBackendError.isCancellation(error), "a stop is not a failure to report")
+            #expect(try recorded.only.path == "/v1/research/synthesize")
+        }
+
+        // A stop is not billable: the usage record is written after a reply decodes, and no reply
+        // arrived. Cancelling therefore leaves the task's usage line untouched rather than adding a
+        // zero-token request to it.
+        #expect(recorder.snapshot().requestCount == 0)
+    }
+
     @Test
     func observedContentNeutralizesDelimitersHiddenInsideURLsWithoutCorruptingThem() throws {
         let hostileLinkURL = try #require(

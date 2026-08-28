@@ -1,6 +1,6 @@
 import Foundation
 
-public enum TranscriptionError: Error, LocalizedError, Equatable {
+public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackendError {
     /// **Unreachable since SONNY-130 and deliberately kept.** No transcriber reads a provider key
     /// any more; removing the case and the sentence naming the variable is
     /// `feature/row-12-degradation`'s, and it cannot run until both gateways land.
@@ -16,6 +16,24 @@ public enum TranscriptionError: Error, LocalizedError, Equatable {
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence, never the
     /// server's own `message` (§7.1).
     case backend(SonnyBackendError)
+
+    /// ``CarriesBackendError``: so a cancellation raised inside the shared client is still
+    /// recognisable after this type wraps it (SONNY-320), the same one line the other two text
+    /// wrappers carry.
+    ///
+    /// **What this route does not yet have is anything that presses stop**, stated here rather than
+    /// left for a reader to assume from the conformance. `AgentViewModel.stopVoiceRecordingAndTranscribe`
+    /// runs the transcription in an unstructured `Task { }` that nothing stores, so
+    /// `cancelCurrentRun`'s `currentTask?.cancel()` cannot reach it, and its own `catch` calls
+    /// `setError(error.localizedDescription)` without asking
+    /// ``SonnyBackendError/isCancellation(_:)`` at all. Both halves are SONNY-327's. The
+    /// conformance is still right and still belongs here: the population this ticket fixed is the
+    /// error type, and a type that answers the question wrongly is a trap for the caller that
+    /// eventually asks it.
+    public var backendError: SonnyBackendError? {
+        guard case .backend(let error) = self else { return nil }
+        return error
+    }
 
     public var errorDescription: String? {
         switch self {
