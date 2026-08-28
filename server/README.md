@@ -26,6 +26,8 @@ Run from `server/`.
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
 | `npm run revocations` | What provider-side revocation is still owed on closed accounts. Exit 1 when any is. See "Owed revocations" below. |
 | `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
+| `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
+| `npm run snapshots -- build\|list\|trace\|sweep` | Build the documented corpus training reads from, see which snapshots hold a task's content, or run the content-expiry sweep by hand. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
@@ -82,6 +84,123 @@ docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 pos
 DATABASE_URL="postgres://postgres:postgres@localhost:55433/postgres" npm test
 docker rm -f sonny-gw-db
 ```
+
+## Retention: what is kept, for how long, and how it goes (SONNY-134)
+
+The backend retains **full request and response content** — request text, voice audio, redacted
+screenshots, the served response, and provider error bodies — for **30 days**, disclosed on the
+website's terms and privacy pages, for three named purposes: debugging and support, product
+analytics, and training or fine-tuning a model. Founder decision, 2026-08-16; the thirty days is his
+confirmation of 2026-08-28, from the 30–90 range that decision names. Contract §10.
+
+**Nothing here may be read as "this system does not retain screen content." It does.** What it does
+not do is let the provider retain it too — that is SONNY-110's, and a different claim.
+
+### Two clocks, and a third
+
+| What | Where | Clock |
+|---|---|---|
+| Request and response content | `sonny.retained_content` | `CONTENT_RETENTION_DAYS`, 30 by default |
+| Usage and derived metrics | `sonny.metering_event` | Indefinite. That table holds no content, which is what lets it outlive it |
+| Training snapshots | `sonny.training_snapshot` | Its own `expires_at`, **NULL unless a build asks for one** |
+
+The third is NULL because §10.3 puts snapshots on a "separately-consented lifecycle" and no founder
+has set a number. NULL means none is set, not "never expires by policy"; `expireSnapshots` skips
+those rows, and the day a number exists the sweep that enforces it already runs.
+
+**A row carries the window it was written under.** `expires_at` is computed at insert from
+`CONTENT_RETENTION_DAYS`, never at read — so raising the setting applies to what arrives afterwards
+and cannot extend the life of content a user was told would be gone in thirty days.
+
+### The clock actually runs
+
+The gateway sweeps on a timer (`CONTENT_EXPIRY_SWEEP_SECONDS`, hourly by default), logs every pass,
+and writes a row to `sonny.content_deletion` for every pass that took something. `npm run snapshots
+-- sweep` runs one by hand. `npm run support -- deletions` is where "did the clock run, and what did
+it take" is answered after the fact — for expiry sweeps, task deletes and account deletes alike.
+
+**Four things happen on that sweep, not one.** Expired content; any training snapshot that has
+reached a clock of its own; **the idempotency store's stored response bodies past their twenty-four
+hours** (`pruneExpiredResponses`, which had no production call site until PR #148's review measured
+that a body back-dated thirty days survived a full sweep — SONNY-318 keeps the policy question of
+whether the *rows* should ever go, and they must not simply be deleted, since a row carries the
+metering claim that stops a key billing twice); and the content of one closed account whose
+in-request wipe could not finish.
+
+### The second place response content lives
+
+`sonny.idempotency_key.response_body` holds the served response for twenty-four hours so a retry can
+be replayed (§9.2). That makes it the one place outside `sonny.retained_content` holding response
+content, and two rules follow:
+
+- **An incognito run stores no body there.** For `retention: "none"` the key is claimed and fenced
+  exactly as always and the response is withheld, so a repeat re-executes rather than replaying. That
+  is a deliberate §9.2 deviation with its own contract row; §9.2 carries what it costs.
+- **`DELETE /v1/account` clears an account's stored bodies**, and the sweep prunes expired ones. A
+  *per-task* delete cannot reach them, because that table has no `task_id` to key on.
+
+### Three ways content stops being kept
+
+- **`DELETE /v1/tasks/{task_id}`** — the user's own delete, from the app. Founder decision via
+  SONNY-14: delete means deleted everywhere. It removes the live content **and every training
+  snapshot member copied from it**, and records which snapshots it touched. A task with nothing
+  stored answers 200 with `requests_deleted: 0`, never 404; 404 is reserved for a task belonging to
+  someone else.
+- **`DELETE /v1/account`** — content, snapshot membership, and the account's stored idempotency
+  response bodies (SONNY-319). Usage survives, deliberately. If the wipe cannot finish inside the
+  request — the account is closed by then, so the caller cannot retry — the sweep takes it on the
+  next pass, which is also what reaches accounts closed before this existed.
+- **The content clock**, above.
+
+### Incognito is never stored, and that is structural
+
+A run started with **"Don't save this task"** sends `retention: "none"`, and three separate things
+have to fail before a byte of it is kept:
+
+1. `content/hook.ts` refuses before it reads a body, decodes a capture or opens a connection.
+2. `sonny.retained_content` carries a `CHECK` admitting exactly one value of `retention`, so the
+   insert is refused even if something above it is wrong.
+3. The snapshot builder's `FROM` names that table and nothing else — **so there is no `retention`
+   filter in it to drop.** Deleting every predicate in the build statement widens the snapshot to
+   every consenting account's content and still cannot reach one incognito run.
+   `content.db.test.ts` runs exactly that unfiltered statement and asserts it.
+
+**Metering runs either way.** Incognito changes what is stored, never what is billed.
+
+### Training reads from snapshots, never from the live store
+
+`npm run snapshots -- build --label <name>` copies eligible content into
+`sonny.training_snapshot_member` and seals the snapshot. A member holds **a copy plus the
+`content_id` it came from**, not a pointer — the copy because the live store is on a 30-day clock and
+the snapshot is not, and the lineage because a deletion request has to be traceable to the snapshots
+it touched after the source row is gone. That is the requirement §10.3 says cannot be retrofitted
+once anything has been trained on.
+
+Consent is honoured twice: the builder joins `sonny.account` and requires `training_consent` (which
+defaults to false and is `NOT NULL`, so a user whose consent was never written is excluded), and a
+trigger on the member table refuses the row anyway. `npm run snapshots -- trace --account <id>
+--task <id>` says which snapshots hold one task's content without deleting anything.
+
+### What the support lookup may see
+
+Decided on SONNY-134, 2026-08-28, rather than left to whoever has database access:
+
+- `npm run support -- account <uuid>` reads freely — account state, how it signs in, what it has
+  been calling, **how many content rows are held and of what kinds**. Never content, and never the
+  email address behind an identity.
+- `npm run support -- content --request <id> --operator <name> --reason "<text>"` is the one command
+  that reads content. It refuses without both flags, writes a `sonny.content_access` row whether or
+  not it finds anything, and prints blobs as sizes rather than bytes.
+- `npm run support -- accesses` reads that log back.
+
+**It is a discipline and a trace, not a boundary.** Anyone who can run these commands holds
+`DATABASE_URL` and can read the same rows from `psql`, leaving nothing behind. What it buys today is
+that a lookup made through the product leaves a record; what it buys later is that the control
+already exists the day a support surface is something other than a founder's terminal.
+
+Entitlement plan and tier are not in the report because they do not exist: §5.3's signed entitlement
+claim is SONNY-135's. The report says so rather than printing an empty section that reads like "no
+entitlements".
 
 ## Reading what a call cost (SONNY-133)
 

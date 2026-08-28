@@ -2,6 +2,7 @@ import { acceptedKeys, type Config } from "../config.js";
 import { RESPONSE_LIMIT_BYTES } from "./limits.js";
 import {
   ProviderRejected,
+  providerErrorDetail,
   upstreamStatusError,
   upstreamTransportError,
   type UpstreamUsage,
@@ -261,10 +262,11 @@ export function makeVisionAdapter(settings: VisionSettings): VisionProvider {
     }
 
     if (!response.ok) {
-      // The provider's own body is deliberately not read into the thrown message. §7.1 makes
-      // `message` a field the support lookup reads, and a provider error body can echo the request
-      // back — which on this route is a prompt describing the user's screen.
-      throw upstreamStatusError(response.status, "vision");
+      // The body reaches the content store and never the thrown message. §7.1 makes `message` a
+      // field the support lookup reads, and a provider error body can echo the request back — which
+      // on this route is a prompt describing the user's screen. §10.3 puts it on the content clock
+      // instead, where the same `retention` rule governs it as governs the capture it describes.
+      throw upstreamStatusError(response.status, "vision", await providerErrorDetail(response));
     }
 
     const parsed = await readBoundedJSON(response, RESPONSE_LIMIT_BYTES);

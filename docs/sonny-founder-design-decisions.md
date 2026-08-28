@@ -286,6 +286,19 @@ be discovered.
   pages. Three named purposes, all chosen deliberately: debugging and support, product analytics, and
   training or fine-tuning a model. The coordinator recommended metadata-only and set out the case
   against; the founder decided otherwise with that case in front of him.
+  - **The number inside that range is thirty days** (founder, 2026-08-28, at the start of SONNY-134's
+    implementation). The 2026-08-16 decision fixed the range and left the number to be confirmed;
+    three documents had been assuming thirty in prose while nothing had settled it, so it was asked
+    before the expiry work began rather than inherited from the prose. It is
+    `CONTENT_RETENTION_DAYS`, and it applies from the moment a row is written rather than at read
+    time — raising it later reaches nothing already stored.
+  - **A support lookup may see account state and usage freely, and content only on the record**
+    (founder-facing decision taken on SONNY-134, 2026-08-28, because requirement 9 assigned it to
+    that ticket rather than leaving it to whoever has database access). Reading one call's content
+    needs an operator and a reason and writes an access row. It is stated in the code as a discipline
+    and a trace rather than a boundary: anyone who can run the command holds the database credential
+    and can read the same rows leaving nothing behind, and a tool that implied otherwise would be
+    worse than none.
   - **This deviates from §16.5's "Request logging excludes sensitive content by default."** §16.5's
     other four requirements are met in full. Named as a deviation so a later reader does not have to
     reconcile the two on their own.

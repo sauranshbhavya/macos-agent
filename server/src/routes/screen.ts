@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { errorBody } from "../errors.js";
+import { noteContent } from "../content/hook.js";
 import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import {
   BODY_LIMIT_BYTES,
@@ -41,14 +42,16 @@ import { ProviderRejected } from "../model/upstream.js";
  *   GROUP BY** rather than a second event shape (SONNY-133): twelve iterations are twelve events
  *   sharing one value, which is the only shape available to a server that holds no session and whose
  *   last iteration does not know it is the last.
- * - **It does not honour `retention`, and validates it anyway.** §2.4.2 makes an omitted `retention` a
- *   loud `400` rather than a guess in either direction. Nothing is stored at all — there is no
- *   content store yet, and SONNY-134 builds it together with §10.1's rule that retention is enforced
- *   where the storing happens. Validating now makes the client's half real and testable from the day
- *   it ships; claiming the guarantee now would be claiming a promise nothing keeps. **It is recorded
- *   on the metering event**, which is §10.1's other half: "metering runs either way — incognito
- *   changes what is stored, never what is billed", and an event that dropped `retention: "none"`
- *   requests would make exactly those runs free.
+ * - **It validates `retention` and does not itself honour it** (updated 2026-08-28, SONNY-134).
+ *   §2.4.2 makes an omitted `retention` a loud `400` rather than a guess in either direction. This
+ *   bullet used to continue "nothing is stored at all — there is no content store yet", which was
+ *   true of SONNY-131 and is not true now: this route's capture and reply are stored, on the 30-day
+ *   content clock, when the caller said `standard`. What is unchanged is that no line in this file
+ *   decides that, because §10.1 puts the decision where the storing happens; `content/hook.ts` reads
+ *   the field, and this route deposits only the provider that served. **It is also recorded on the
+ *   metering event**, which is §10.1's other half: "metering runs either way — incognito changes
+ *   what is stored, never what is billed", and an event that dropped `retention: "none"` requests
+ *   would make exactly those runs free.
  *
  * **What it does do that it did not before: it feeds the metering event** (SONNY-133). This is the
  * route §11 exists for — it is the one call the product will charge for, and it recorded nothing
@@ -222,6 +225,9 @@ export function registerScreenRoutes(app: FastifyInstance, vision: VisionProvide
         // so there is no chain to fail over and `failedOver` is empty by construction rather than by
         // luck. `app.ts` records why the two have not been collapsed and who owns doing it.
         noteMetering(request, { provider: "vision", failedOver: [], usage: result.usage });
+        // The same fact on the content row (SONNY-134), so a retained capture and reply say which
+        // provider produced it without a join to a table on a different clock.
+        noteContent(request, { provider: "vision" });
 
         const body: Record<string, unknown> = {
           request_id: request.id,

@@ -1,5 +1,6 @@
 import {
   estimatedTextUsage,
+  providerErrorDetail,
   estimateTextTokens,
   ProviderRejected,
   readJSONBody,
@@ -141,10 +142,13 @@ export function makeOpenAITextAdapter(
     }
 
     if (!response.ok) {
-      // The provider's own body is deliberately not read into the thrown message. §7.1 makes
-      // `message` a field the support lookup reads, and a provider error body can carry the
-      // request back verbatim — which on these routes is the user's own command.
-      throw upstreamStatusError(response.status, "openai");
+      // **The body is read now, and it still does not reach the thrown message** (SONNY-134). §7.1
+      // makes `message` a field the support lookup reads, and a provider error body can carry the
+      // request back verbatim — which on these routes is the user's own command — so `message` is
+      // still the status and nothing else. What changed is that the body has somewhere to go:
+      // §10.3 puts it in the content store on the content clock rather than in an unclassified log
+      // or nowhere, and `providerErrorDetail` carries it there on the error itself.
+      throw upstreamStatusError(response.status, "openai", await providerErrorDetail(response));
     }
 
     const parsed: unknown = await readJSONBody(response, "openai");
@@ -238,7 +242,12 @@ export function makeOpenAITranscriptionAdapter(
       throw upstreamTransportError(error, "openai");
     }
 
-    if (!response.ok) throw upstreamStatusError(response.status, "openai");
+    if (!response.ok) {
+      // The body reaches the content store and never the thrown message; the text route above
+      // carries the reasoning. It matters more here than there: this route's request content is the
+      // user's own voice.
+      throw upstreamStatusError(response.status, "openai", await providerErrorDetail(response));
+    }
 
     const parsed: unknown = await readJSONBody(response, "openai");
     const text =

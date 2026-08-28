@@ -1,5 +1,6 @@
 import {
   estimatedTextUsage,
+  providerErrorDetail,
   ProviderRejected,
   readJSONBody,
   reportedTokenUsage,
@@ -257,11 +258,11 @@ export function makeAnthropicTextAdapter(
     }
 
     if (!response.ok) {
-      // The provider's own body is deliberately not read into the thrown message, for the reason
-      // `openai.ts` gives: §7.1 makes `message` a field the support lookup reads, and a provider
-      // error body can carry the request back verbatim — which on these routes is the user's own
-      // command.
-      throw upstreamStatusError(response.status, "anthropic");
+      // The body is read into the content store and not into the thrown message, for the reason
+      // `openai.ts` gives at length: §7.1 makes `message` a field the support lookup reads, and a
+      // provider error body can carry the request back verbatim — which on these routes is the
+      // user's own command. §10.3 is where it goes instead.
+      throw upstreamStatusError(response.status, "anthropic", await providerErrorDetail(response));
     }
 
     const parsed: unknown = await readJSONBody(response, "anthropic");
