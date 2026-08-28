@@ -1159,8 +1159,8 @@ looks similar.
 ### 9.2 What the server guarantees
 
 - The key is stored with its response for **24 hours**. Within that window, a repeat of the same key
-  returns the stored response. **Except when that response was a retryable failure** — see the two
-  decisions below.
+  returns the stored response. **Except when that response was a retryable failure, and except when
+  the request asked not to be stored** — see the decisions below.
 - **A metering event is written at most once per idempotency key, ever.** That single sentence is
   what makes a client retry unable to double-bill a user, and it is the reason the key is required
   rather than optional.
@@ -1170,7 +1170,11 @@ looks similar.
 - A key seen while its original request is still in flight gets `409 idempotency.conflict` with
   `retryable: true` and a `Retry-After`, rather than a second upstream call.
 
-#### Two decisions taken when this was built (founder, 2026-08-28, SONNY-300)
+#### Three decisions, and the third arrived later
+
+The first two are the founder's, taken on 2026-08-28 when this was built (SONNY-300). The third is
+SONNY-134's, taken on 2026-08-28 when PR #148's review measured what this section costs section 10.1
+(F1).
 
 **A stored *retryable* failure is released rather than replayed.** The four sentences above and
 section 9.3 cannot both be read literally: 9.3 marks `limit.rate`, `provider.unavailable`,
@@ -1185,6 +1189,28 @@ client answers by refreshing and retrying the original request.
 metering claim is a mark on the key that a release does not clear, so the re-attempt finds it taken
 and writes no second event. The re-attempt's own usage therefore goes unbilled — the direction the
 second bullet above chooses deliberately, since "unable to double-bill a user" errs toward the user.
+
+**An incognito response body is not stored, so a repeat of an incognito call re-runs** (SONNY-134,
+2026-08-28). This table holds the served response for twenty-four hours, which makes it the one place
+in the gateway keeping response content outside the route that produced it — and until PR #148's
+review the key store had no notion of `retention` at all. Measured: `POST /v1/plan` with
+`retention: "none"` and an `Idempotency-Key` left the content store empty, correctly, and left the
+model's reply verbatim in `sonny.idempotency_key`, outside the content clock, outside consent, and
+outside what a `DELETE /v1/tasks/{task_id}` can reach. Section 10.1's promise and this section's
+first bullet cannot both hold for such a request, and **10.1 wins: it is the promise the user was
+given**, and its rule is that the guarantee is enforced where the storing happens rather than at the
+call site.
+
+**Exactly one of the four bullets above changes, and only for `retention: "none"`.** The claim, the
+lease, the fencing token and the fingerprint are written as for any other request, so a concurrent
+repeat still gets its `409`, a key reused with a different body still conflicts, and
+`metering_claimed_at` still makes the metering event at-most-once. What a client loses is the replay:
+a repeat inside the window re-executes, so the provider is called a second time and — because the
+metering claim survives, exactly as it does for the released retryable above — **that second call is
+unbilled and the gateway pays for it.** That is the same trade the first decision already makes,
+bounded here to incognito retries. The rule is keyed on an explicit `"none"` and not on "anything
+that is not `standard`", because the four auth routes carry no content and have no `retention` field
+to declare; widening it would strip replay from them for nothing.
 
 **A `POST` carrying no `Idempotency-Key` is served, not refused.** 9.1 makes the header the client's
 obligation and the Mac client sends it on every `POST`; enforcing it server-side would refuse a shape
@@ -1288,6 +1314,15 @@ to be dropped by accident — which is why SONNY-133 carries an acceptance crite
 
 The accepted cost, recorded so it is not later read as a defect: a user reporting that an incognito
 run misbehaved cannot be diagnosed from stored data. That is the feature working.
+
+**A second accepted cost, found by PR #148's review and paid deliberately** (F1, 2026-08-28). §9.2's
+key store keeps the served response for twenty-four hours, which is storing — so for
+`retention: "none"` it keeps none, and a repeat of an incognito call re-executes instead of replaying.
+§9.2 carries the full record and what it does and does not cost; the short version is that only the
+replay changes, and the second provider call it can cause goes unbilled to the user. **Every place
+this gateway stores anything now reads the same one function**, because two readings of `retention`
+would let the two stores disagree about what the user asked for, and the one that got it wrong would
+be the one nobody was looking at.
 
 ### 10.2 Training consent
 
@@ -1709,3 +1744,4 @@ record rather than a tidy list.
 | 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `f8f5c75`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `f8f5c75` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `f8f5c75` as at `5ad846f`. | SONNY-297 |
 | 2026-08-28 | **9.2 — two founder decisions recorded, and one implementation limit stated.** The gateway implemented no `Idempotency-Key` handling at all until this ticket, so 9.2 had never been built against; building it surfaced a conflict between 9.2's first sentence and 9.3's retryable list that cannot be resolved by reading either more carefully. A stored *retryable* failure is now released rather than replayed, so a same-key retry re-runs — without which a `429` is a twenty-four-hour ban on that operation and a `503` during a deploy freezes every request in flight. The at-most-once metering guarantee is untouched and is what makes the release safe: the claim survives it, so the re-attempt cannot bill again. A `POST` with no key is served rather than refused, because 9.1 is the client's obligation and the only client meets it. And conflict detection on `POST /v1/transcriptions` is by declared body length rather than by body, because a multipart body is consumed inside the handler and buffering it would take 6.1's audio ceiling away from the guard that fires while the part is still streaming. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved. **9.3's `email/verify` row gains one clause and is the only table cell edited** — it read "the idempotency record returns the original *result*, including the original failure", which the carve-out above makes untrue for the retryable subset, and a reader arriving at 9.3 alone would have taken the pre-decision behaviour. This row claimed 9.3 was byte-identical until PR #142's review found the contradiction that claim was concealing (F3). Two further limits are now stated in 9.2 rather than left to a code comment: a streaming response gets none of these guarantees, and a claim's lease can be outlived on the one route whose body read is unbounded. | SONNY-300 |
 | 2026-08-28 | **10 — retention is built, and the two questions 13 left open under it are answered.** The content store exists (`server/src/db/migrations/0013_content_is_kept_on_its_own_clock.sql`) and holds request text, voice audio, redacted screenshots, the served response and provider error bodies. **The content clock is 30 days**, confirmed by the founder on 2026-08-28 from the 30–90 range his 2026-08-16 decision names — 10.3 and 11's own header had both been assuming it in prose while nothing had settled it, so 13's row moves from Open to Decided and built. **Snapshot lineage's shape and the support lookup's reach**, 13's other SONNY-134 row, are answered in that row and in `server/README.md`. Two sentences elsewhere in this document stopped being true and are corrected where they live rather than only here: 4.6 and 10.1 described SONNY-134's rules in the future tense, and `routes/auth.ts`' own comment said `DELETE /v1/account` "does not reach retained content", which it now does — content, training-snapshot membership, and the account's stored idempotency response bodies (SONNY-319, filed by SONNY-300 and closed here). **Two things this row does not claim.** 10.2's boolean-versus-strings divergence is unchanged and still recorded rather than reconciled; honouring the field was SONNY-134's and the spelling was not. And 10.1's `retention` field, 2.4's table and 2.4.2's no-default rule are untouched — the client's half shipped with SONNY-130 and SONNY-131 and this ticket is the server keeping the promise it already made. **No shape changed on the wire**: no request body, response body, header, error `code`, size limit or timeout moved, and 4.6's response shape is served exactly as written — the one new route, `DELETE /v1/tasks/{task_id}`, was already in 4.1's table and in 4.6 with SONNY-134 named as its owner. | SONNY-134 |
+| 2026-08-28 | **9.2 gains a third decision, and 10.1 a second accepted cost: an incognito response body is not stored, so a repeat of an incognito call re-runs.** PR #148's review measured what 10.1 and 9.2 cost each other (F1): the key store keeps the served response for twenty-four hours and had no notion of `retention`, so `POST /v1/plan` with `retention: "none"` and an `Idempotency-Key` left the content store empty and left **the model's reply verbatim** in `sonny.idempotency_key` — outside the content clock, outside consent, and outside what `DELETE /v1/tasks/{task_id}` reaches. The two promises cannot both hold for such a request and 10.1 wins, because it is the one the user was given and because its own rule is that the guarantee lives where the storing happens. **Exactly one of 9.2's four bullets changes and only for `retention: "none"`** — the claim, the lease, the fencing token and the fingerprint are unchanged, so the `409`s and the at-most-once metering guarantee are untouched; what goes is the replay, and the second provider call a retry then makes is unbilled, which is the same trade 9.2's first decision already makes. Keyed on an explicit `"none"` rather than on "not `standard`", so the four auth routes keep replay. **No shape changed on the wire**: no endpoint, request body, response body, header, error `code`, size limit or timeout moved, and 2.4's table and 2.4.2's no-default rule are byte-identical — a client cannot tell this apart from a retry that re-ran for any other reason, which 9.3 already permits. | SONNY-134 |

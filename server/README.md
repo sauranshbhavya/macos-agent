@@ -119,6 +119,26 @@ and writes a row to `sonny.content_deletion` for every pass that took something.
 -- sweep` runs one by hand. `npm run support -- deletions` is where "did the clock run, and what did
 it take" is answered after the fact — for expiry sweeps, task deletes and account deletes alike.
 
+**Four things happen on that sweep, not one.** Expired content; any training snapshot that has
+reached a clock of its own; **the idempotency store's stored response bodies past their twenty-four
+hours** (`pruneExpiredResponses`, which had no production call site until PR #148's review measured
+that a body back-dated thirty days survived a full sweep — SONNY-318 keeps the policy question of
+whether the *rows* should ever go, and they must not simply be deleted, since a row carries the
+metering claim that stops a key billing twice); and the content of one closed account whose
+in-request wipe could not finish.
+
+### The second place response content lives
+
+`sonny.idempotency_key.response_body` holds the served response for twenty-four hours so a retry can
+be replayed (§9.2). That makes it the one place outside `sonny.retained_content` holding response
+content, and two rules follow:
+
+- **An incognito run stores no body there.** For `retention: "none"` the key is claimed and fenced
+  exactly as always and the response is withheld, so a repeat re-executes rather than replaying. That
+  is a deliberate §9.2 deviation with its own contract row; §9.2 carries what it costs.
+- **`DELETE /v1/account` clears an account's stored bodies**, and the sweep prunes expired ones. A
+  *per-task* delete cannot reach them, because that table has no `task_id` to key on.
+
 ### Three ways content stops being kept
 
 - **`DELETE /v1/tasks/{task_id}`** — the user's own delete, from the app. Founder decision via
