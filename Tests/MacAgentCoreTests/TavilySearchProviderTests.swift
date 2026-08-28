@@ -230,6 +230,39 @@ struct TavilySearchProviderTests {
         #expect(AIUsageCallKind(rawValue: "planner") == .planner)
     }
 
+    /// **A stop is not a failure** (SONNY-320).
+    ///
+    /// A search runs inside the step loop, so a stop mid-search reaches `performStart`'s catch,
+    /// which asks `SonnyBackendError.isCancellation`. Before the conformance that answered `false`
+    /// and the deliberate stop was written to task history as a failed run with a red banner over
+    /// it. **The one path this does not cover is the fetch loop that consumes these results**: it
+    /// swallows a cancelled fetch as a skipped source before any predicate is consulted, which is
+    /// SONNY-328 and is a different mechanism in a different file.
+    @Test
+    @MainActor
+    func aStopWhileASearchIsInFlightIsACancellationRatherThanAFailure() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return .failure(URLError(.cancelled))
+        }
+        defer { fixture.unregister() }
+
+        do {
+            _ = try await Self.provider(fixture).search(query: "swift", limit: 3)
+            Issue.record("Expected the stopped request to surface as TavilySearchError.backend(.cancelled).")
+        } catch let error as TavilySearchError {
+            #expect(error == .backend(.cancelled))
+            #expect(SonnyBackendError.isCancellation(error), "a stop is not a failure to report")
+            #expect(recorded.all.count == 1)
+        }
+
+        #expect(!SonnyBackendError.isCancellation(TavilySearchError.backend(.offline)))
+        #expect(!SonnyBackendError.isCancellation(TavilySearchError.backend(.notSignedIn)))
+        #expect(!SonnyBackendError.isCancellation(TavilySearchError.missingAPIKey))
+    }
+
     @MainActor
     private static func provider(_ fixture: SignedInBackendFixture) -> TavilySearchProvider {
         TavilySearchProvider(client: fixture.client, taskContext: ModelRouteFixtures.standardContext)

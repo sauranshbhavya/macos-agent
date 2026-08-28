@@ -1,6 +1,6 @@
 import Foundation
 
-public enum TavilySearchError: Error, Equatable, LocalizedError {
+public enum TavilySearchError: Error, Equatable, LocalizedError, CarriesBackendError {
     /// **Unreachable since SONNY-130 and deliberately kept.** No search provider reads a vendor key
     /// any more; removing the case and the sentence naming the variable is
     /// `feature/row-12-degradation`'s, which cannot run until both gateways land.
@@ -10,6 +10,16 @@ public enum TavilySearchError: Error, Equatable, LocalizedError {
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence, never the
     /// server's own `message` (§7.1).
     case backend(SonnyBackendError)
+
+    /// ``CarriesBackendError``: so a cancellation raised inside the shared client is still
+    /// recognisable after this type wraps it (SONNY-320). A search runs inside the step loop, so a
+    /// stop mid-search reaches `performStart`'s catch, which asks
+    /// ``SonnyBackendError/isCancellation(_:)`` — without this it answered `false` and a deliberate
+    /// stop was written to task history as a failed run.
+    public var backendError: SonnyBackendError? {
+        guard case .backend(let error) = self else { return nil }
+        return error
+    }
 
     public var errorDescription: String? {
         switch self {

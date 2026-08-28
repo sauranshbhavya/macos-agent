@@ -232,23 +232,32 @@ public extension SonnyBackendError {
     /// wrong sentence for someone who had just pressed stop. `aCancellationDuringASendIsNotReported
     /// AsASendFailure` is the test that found it.
     ///
-    /// **What it does not yet reach**, stated rather than left to be discovered: the text clients'
-    /// own wrappers do not conform to ``CarriesBackendError``, so a cancellation on those routes
-    /// still reads as a failure. Those files are SONNY-130's and are outside this ticket's region;
-    /// **SONNY-320** carries them.
+    /// **Every wrapper in the tree conforms now** (SONNY-320). Until then only the vision route's
+    /// did, so the fourth shape above was recognised on one route and hidden on the other four; a
+    /// stop on any of them read as a failure. The population is
+    /// the error *type* rather than the route — four declarations,
+    /// `git grep -nE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 at `PLACEHOLDER_SHA`,
+    /// anchored to the start of a line so this sentence does not count itself, which the unanchored
+    /// form does — and they answer for five routes, because **`WebResearchSynthesizer.swift`
+    /// declares no error of its own**: `WebResearchNoteDecodingError` there has three cases,
+    /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote`, and no `.backend` at all, so
+    /// `/v1/research/synthesize` throws `PlannerError.backend` and one conformance covers it and
+    /// `/v1/plan` both. That is PR #144's F6: SONNY-320's description said "four files" and named
+    /// that one, which would have sent its session looking for a fifth error type and finding an
+    /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
+    /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
+    /// (`git grep -nE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 at
+    /// `PLACEHOLDER_SHA`, anchored for the same reason and against the same trap: the unanchored
+    /// form answers six — the four, plus the protocol's own declaration, plus this very sentence).
     ///
-    /// **Three conformances, not four, and the population is the error type rather than the route**
-    /// (PR #144, F6). The population is four declarations —
-    /// `git grep -nE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4, anchored to the start
-    /// of a line so this sentence does not count itself, which the unanchored form does — and one of
-    /// them is ``VisionModelClientError``'s, which already conforms. The other three are
-    /// `PlannerError`, `TranscriptionError` and `TavilySearchError`. **`WebResearchSynthesizer.swift`
-    /// needs no edit**: it declares `WebResearchNoteDecodingError`, whose three cases are
-    /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote` — no `.backend` at all — and it
-    /// throws `PlannerError.backend` (`:407`), so conforming `PlannerError` once covers both
-    /// `/v1/plan` and `/v1/research/synthesize`. This said "the four" and SONNY-320's description
-    /// named that file, which would have sent its session looking for a fourth error type and
-    /// finding an unrelated decoding enum.
+    /// **What it still does not reach is a caller that never asks it, not a shape it cannot see**,
+    /// and the two known ones are filed rather than left here. The voice route's `catch` calls
+    /// `setError(error.localizedDescription)` without consulting this at all, and nothing can cancel
+    /// a transcription to begin with — **SONNY-327**, and `TranscriptionError.backendError` says the
+    /// same at its own declaration. The web-research source-fetch loop matches `CancellationError`
+    /// alone while the `URLSession` beneath it raises `URLError(.cancelled)`, so a stop there is
+    /// swallowed as a skipped source before any predicate is consulted — **SONNY-328**. Both are
+    /// call-site defects: no conformance can fix a question nobody asks.
     static func isCancellation(_ error: any Error) -> Bool {
         if error is CancellationError { return true }
         if (error as? URLError)?.code == .cancelled { return true }

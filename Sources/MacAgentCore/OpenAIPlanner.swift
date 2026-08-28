@@ -11,7 +11,7 @@ public extension Planning {
     }
 }
 
-public enum PlannerError: Error, LocalizedError, Equatable {
+public enum PlannerError: Error, LocalizedError, Equatable, CarriesBackendError {
     /// **Unreachable since SONNY-130 and deliberately kept.** Nothing constructs a planner from an
     /// environment variable any more, so nothing can throw this — but removing the case, and the
     /// sentence naming the variable, is `feature/row-12-degradation`'s, which cannot run until both
@@ -28,6 +28,20 @@ public enum PlannerError: Error, LocalizedError, Equatable {
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence for it, never
     /// the server's own `message` (§7.1).
     case backend(SonnyBackendError)
+
+    /// ``CarriesBackendError``: so a cancellation raised inside the shared client is still
+    /// recognisable after this type wraps it (SONNY-320). Without it a user who pressed stop while
+    /// a plan was in flight is told *"Sonny couldn't finish this one. Try again."*, because
+    /// ``SonnyBackendError/isCancellation(_:)`` cannot see through the wrapper and every caller
+    /// that asks it takes the failure branch.
+    ///
+    /// **One property answers for two routes.** `WebResearchSynthesizer` throws this same case
+    /// rather than declaring a `backend` of its own, so `/v1/plan` and `/v1/research/synthesize`
+    /// are both covered here — the population is the error type, not the route.
+    public var backendError: SonnyBackendError? {
+        guard case .backend(let error) = self else { return nil }
+        return error
+    }
 
     public var errorDescription: String? {
         switch self {
