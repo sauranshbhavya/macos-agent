@@ -40,12 +40,23 @@ import { it } from "vitest";
  * tests.** The first version kept the probe at run time and printed its count in the message as
  * evidence for a reader. It was removed, because a periodic timer is the one part of a deadline
  * that can perturb what the deadline is guarding, and these two tests measure a race between three
- * database transactions. Measured through `scripts/mutate` over the same mutant — R1, the
- * per-address advisory lock deleted — the plus-tag test caught it in **6 of 10** runs with the
- * probe in place against **8 of 9** on the copy without it, which is not a decisive difference at
- * that sample size and is the wrong side of one to keep for diagnostics whose number was already
- * measured as unable to support a verdict. What is left in the wait is one `setTimeout` that does
- * nothing until it fires.
+ * database transactions. Measured over the same mutant — R1, the per-address advisory lock deleted
+ * from `src/auth/codes.ts` — by running `scripts/mutate <plan> --only R1` repeatedly and counting
+ * the runs whose report named the plus-tag test as a killer. Three arms:
+ *
+ * - **5 of 9** with the probe in place;
+ * - **8 of 10** with it removed;
+ * - **8 of 9** valid runs on `main`'s own copy of `auth.db.test.ts` grafted onto this branch — a
+ *   tenth is excluded there because its baseline went red, and that run is the flake this branch
+ *   fixes, reproduced.
+ *
+ * Not a decisive difference at that sample size, and the wrong side of an undecidable question to
+ * be on for a diagnostic whose number was already measured as unable to support a verdict. What is
+ * left in the wait is one `setTimeout` that does nothing until it fires. (This paragraph said
+ * "6 of 10 ... against 8 of 9 on the copy without it" until PR #156's review, F1: a pair that was
+ * never measured, reassigning `main`'s arm to the without-probe one and putting the two arms one
+ * run apart rather than three — in the file a session comes to when deciding whether to put the
+ * probe back.)
  *
  * **So what is left is time, and the honest use of it is a bound rather than a threshold.** A
  * genuine hang never finishes; a slow machine finishes late. Nothing but waiting longer tells them

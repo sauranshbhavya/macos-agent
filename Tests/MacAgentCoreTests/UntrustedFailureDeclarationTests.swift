@@ -388,8 +388,36 @@ struct UntrustedFailureDeclarationTests {
         let acceptedWhenItMatches = Self.siteCountProblem(for: positive, occurrences: 1, in: trees) == nil
         #expect(acceptedWhenItMatches, "a record whose declared count matches what the scan found was refused")
 
-        let refusedWhenItDoesNot = Self.siteCountProblem(for: positive, occurrences: 2, in: trees) != nil
+        let mismatch = Self.siteCountProblem(for: positive, occurrences: 2, in: trees)
+        let refusedWhenItDoesNot = mismatch != nil
         #expect(refusedWhenItDoesNot, "a record whose declared count is short of what the scan found was accepted")
+
+        // **The message names every tree the scan reads, and that is a deliverable rather than a
+        // courtesy** (SONNY-334's description: it should stop saying "under Tests/" when it means
+        // "under the trees this scan knows"). Until PR #156's review pointed it out, nothing
+        // asserted the wording at all — both callers checked only `nil` versus non-`nil`, so
+        // reverting it to the single-tree sentence broke nothing, and the wrong sentence is what
+        // sends a reader to lower a healthy record's count. Safe to assert on the string itself:
+        // nothing this function returns quotes a declaration, which is the whole point of it
+        // pointing at a record by line number.
+        // The *first line* specifically, which is the sentence that carried the defect: it is where
+        // the message says where a source was looked for, and it said "under Tests/" while the scan
+        // read both trees. Asserting over the whole message instead is not the same check and was
+        // tried first — the closing sentence names the trees too, so reverting the count sentence
+        // alone left that version green, which is the shape of a test that reads as protection and
+        // is not.
+        let countSentence = mismatch?.split(separator: "\n").first.map(String.init) ?? ""
+        for tree in trees {
+            let namesThisTree = countSentence.contains(tree.name)
+            #expect(
+                namesThisTree,
+                """
+                the count check's failure message does not name \(tree.name) in the sentence that \
+                reports the count. A reader who lowers a record's count on the strength of that \
+                sentence is doing the one thing this check exists to stop.
+                """
+            )
+        }
     }
 
     @Test
