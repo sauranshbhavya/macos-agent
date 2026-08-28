@@ -3273,6 +3273,195 @@ struct AgentActionExecutorTests {
         #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// **SONNY-328 — a stop reaching a source fetch is a stop, not an unreachable source.**
+    ///
+    /// The loop's whole point is that one dead source must not sink the ones that loaded, and the
+    /// arm keeping a stop out of that swallow matched `CancellationError` alone. The fetch beneath
+    /// it is `URLSession.data(for:)`, which raises `URLError(.cancelled)` when its task is cancelled
+    /// — the fact `SonnyBackendError.isCancellation`'s own doc comment states, and the reason
+    /// `SonnyBackendClient.transportError` maps that code to `.cancelled` at all — so a stop fell
+    /// into the general catch. What the user got was one of two wrong endings, and this test pins
+    /// the first: some source had already loaded, so the loop carried on cancelling the rest, the
+    /// run completed, a Markdown file was written, and the note named the cancelled sources as
+    /// *skipped*. A stop that produced a saved artifact.
+    ///
+    /// **Reproduced through the real `PublicWebPageLoader` with a stub fetcher rather than a stub
+    /// loader**, so the error travels the path it travels in production — out of the fetcher,
+    /// through `load`, into the loop's catch. The ticket was derived by reading and asked for this
+    /// before the fix; run against the arm it replaces, the run completes and writes the file.
+    @Test
+    func aStopDuringASourceFetchEndsTheRunRatherThanBeingSwallowedAsASkippedSource() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let loaded = URL(string: "https://example.com/one")!
+        let stopped = URL(string: "https://example.com/two")!
+        let neverReached = URL(string: "https://example.com/three")!
+        let pages = [
+            loaded.absoluteString: readablePage(url: loaded, title: "First Source"),
+            neverReached.absoluteString: readablePage(url: neverReached, title: "Third Source")
+        ]
+        let fetcher = StoppableWebPageFetcher(
+            pages: pages,
+            stoppingAt: [stopped.absoluteString],
+            with: URLError(.cancelled)
+        )
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(title: "Comparison", summary: "", keyPoints: [], citations: [])
+        )
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: PublicWebPageLoader(
+                fetcher: fetcher,
+                robotsChecker: AllowingRobotsChecker(),
+                extractor: StaticReadableWebExtractor(pages: pages)
+            ),
+            webResearchSynthesizer: synthesizer
+        )
+
+        var thrown: (any Error)?
+        do {
+            _ = try await executor.execute(
+                plan: webComparisonPlan(urls: [loaded, stopped, neverReached], output: output)
+            ) { _, _ in }
+            Issue.record("A stop during a source fetch must not complete the run.")
+        } catch {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(SonnyBackendError.isCancellation(error), "the predicate the stop has to reach recognises it")
+        #expect((error as? URLError)?.code == .cancelled, "rethrown as it arrived, not reminted as a bare CancellationError")
+        #expect(
+            fetcher.attempted == [loaded.absoluteString, stopped.absoluteString],
+            "the loop ends at the stop — every source after it was being cancelled too"
+        )
+        #expect(synthesizer.prompts.isEmpty, "nothing is synthesized from a run the user stopped")
+        #expect(!FileManager.default.fileExists(atPath: output.path), "and nothing is written")
+    }
+
+    /// **The second wrong ending, and it is the louder one** (SONNY-328). A stop cancels every
+    /// request it reaches, so when it arrives before any source has loaded the swallow leaves
+    /// `pages` empty and the loop throws `WebResearchError.allSourcesFailed` — which is a
+    /// cancellation by no shape at all, so `SonnyBackendError.isCancellation` answers false and
+    /// `performStart`'s catch takes the failure branch: every step marked failed, a red banner, and
+    /// a `.failed` row in task history for a deliberate stop.
+    ///
+    /// Asserted as *not* that error rather than only as a cancellation, because the two are
+    /// distinguishable and the wrong one is what shipped.
+    @Test
+    func aStopBeforeAnySourceLoadsIsACancellationRatherThanEverySourceHavingFailed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let stopped = URL(string: "https://example.com/one")!
+        let alsoStopped = URL(string: "https://example.com/two")!
+        let pages = [
+            stopped.absoluteString: readablePage(url: stopped, title: "First Source"),
+            alsoStopped.absoluteString: readablePage(url: alsoStopped, title: "Second Source")
+        ]
+        let fetcher = StoppableWebPageFetcher(
+            pages: pages,
+            stoppingAt: [stopped.absoluteString, alsoStopped.absoluteString],
+            with: URLError(.cancelled)
+        )
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: PublicWebPageLoader(
+                fetcher: fetcher,
+                robotsChecker: AllowingRobotsChecker(),
+                extractor: StaticReadableWebExtractor(pages: pages)
+            ),
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(title: "Unused", summary: "", keyPoints: [], citations: [])
+            )
+        )
+
+        var thrown: (any Error)?
+        do {
+            _ = try await executor.execute(
+                plan: webComparisonPlan(urls: [stopped, alsoStopped], output: output)
+            ) { _, _ in }
+            Issue.record("A stop before any source loaded must not complete the run.")
+        } catch {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(SonnyBackendError.isCancellation(error))
+        #expect(!(error is WebResearchError), "a stop is not every source failing")
+        #expect(fetcher.attempted == [stopped.absoluteString], "and the second cancelled request is never made")
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+
+        // The control, on the same seam: an ordinary unreachable source is still swallowed and
+        // named, which is what the loop exists for. Without it, "throws a cancellation" would pass
+        // just as well over an arm that rethrew everything and abandoned per-source tolerance.
+        let unreachable = URL(string: "https://example.com/missing")!
+        let tolerant = try await makeExecutor(
+            root: root,
+            webPageLoader: PublicWebPageLoader(
+                fetcher: StoppableWebPageFetcher(pages: pages, stoppingAt: [], with: URLError(.cancelled)),
+                robotsChecker: AllowingRobotsChecker(),
+                extractor: StaticReadableWebExtractor(pages: pages)
+            ),
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(title: "Comparison", summary: "", keyPoints: ["Point"], citations: [])
+            )
+        ).execute(
+            plan: webComparisonPlan(urls: [stopped, unreachable], output: output)
+        ) { _, _ in }
+        #expect(tolerant.summary.contains("Skipped 1 unreachable source"))
+        #expect(FileManager.default.fileExists(atPath: output.path))
+    }
+
+    /// **The robots check is a second `URLSession` call on the same swallowed path** (SONNY-328,
+    /// the sibling the ticket asked to be checked while here). `PublicWebPageLoader.load` calls
+    /// `robotsChecker.canFetch` *before* the fetch, and `URLSessionRobotsTXTChecker` fetches
+    /// `/robots.txt` with its own session — so a stop can land there too, and it arrives in the same
+    /// catch wearing the same `URLError(.cancelled)`.
+    ///
+    /// This is the test that says the fix belongs at the loop's arm rather than at the fetcher: one
+    /// predicate covering everything `load` can raise, not a special case for the page request.
+    @Test
+    func aStopReachingTheRobotsCheckIsAStopToo() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let stopped = URL(string: "https://example.com/one")!
+        let second = URL(string: "https://example.com/two")!
+        let pages = [
+            stopped.absoluteString: readablePage(url: stopped, title: "First Source"),
+            second.absoluteString: readablePage(url: second, title: "Second Source")
+        ]
+        let fetcher = StoppableWebPageFetcher(pages: pages, stoppingAt: [], with: URLError(.cancelled))
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: PublicWebPageLoader(
+                fetcher: fetcher,
+                robotsChecker: StoppingRobotsChecker(stoppingAt: stopped.absoluteString, with: URLError(.cancelled)),
+                extractor: StaticReadableWebExtractor(pages: pages)
+            ),
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(title: "Unused", summary: "", keyPoints: [], citations: [])
+            )
+        )
+
+        var thrown: (any Error)?
+        do {
+            _ = try await executor.execute(
+                plan: webComparisonPlan(urls: [stopped, second], output: output)
+            ) { _, _ in }
+            Issue.record("A stop reaching the robots check must not be swallowed either.")
+        } catch {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(SonnyBackendError.isCancellation(error))
+        #expect(fetcher.attempted.isEmpty, "the stop landed before any page was requested")
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
     /// A "broken URL" reaches one of two different paths, and the distinction matters when
     /// reading live behavior: a *syntactically invalid* URL is rejected while the plan is being
     /// validated, before any fetch happens, so nothing is written; an *unreachable but valid*
@@ -6792,6 +6981,63 @@ private struct StaticWebPageFetcher: WebPageFetching {
             html: page.readableText,
             retrievedAt: page.retrievedAt
         )
+    }
+}
+
+/// Serves fixture pages the way `StaticWebPageFetcher` does, and raises a chosen error for one URL
+/// — a stop landing on a request already in flight (SONNY-328). Records what it was asked for, in
+/// order, so a test can assert the loop ended at the stop rather than carrying on to the sources
+/// after it, each of which would have been cancelled too.
+///
+/// An empty `stoppingAt` raises nothing and makes this a plain `StaticWebPageFetcher` that counts
+/// its calls — which is what the control arms need. A stop cancels every request it reaches, so a
+/// test reproducing one names every source it would have touched, not just the first.
+@MainActor
+private final class StoppableWebPageFetcher: WebPageFetching {
+    let pages: [String: ReadableWebPage]
+    let stoppingAt: Set<String>
+    let error: any Error
+    private(set) var attempted: [String] = []
+
+    init(pages: [String: ReadableWebPage], stoppingAt: Set<String>, with error: any Error) {
+        self.pages = pages
+        self.stoppingAt = stoppingAt
+        self.error = error
+    }
+
+    func fetch(_ url: URL) async throws -> FetchedWebPage {
+        attempted.append(url.absoluteString)
+        if stoppingAt.contains(url.absoluteString) {
+            throw error
+        }
+        guard let page = pages[url.absoluteString] else {
+            throw WebResearchError.noReadableContent(url.absoluteString)
+        }
+        return FetchedWebPage(
+            requestedURL: url,
+            html: page.readableText,
+            retrievedAt: page.retrievedAt
+        )
+    }
+}
+
+/// The same idea one call earlier: `PublicWebPageLoader.load` consults robots.txt before it fetches
+/// the page, over a second `URLSession`, so a stop can arrive from there instead (SONNY-328).
+@MainActor
+private struct StoppingRobotsChecker: RobotsTXTChecking {
+    let stoppingAt: String
+    let error: any Error
+
+    init(stoppingAt: String, with error: any Error) {
+        self.stoppingAt = stoppingAt
+        self.error = error
+    }
+
+    func canFetch(_ url: URL, userAgent: String) async throws -> Bool {
+        if url.absoluteString == stoppingAt {
+            throw error
+        }
+        return true
     }
 }
 

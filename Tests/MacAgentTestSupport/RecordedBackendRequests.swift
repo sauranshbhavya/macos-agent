@@ -56,7 +56,32 @@ public final class RecordedBackendRequests: @unchecked Sendable {
         return recorded
     }
 
+    /// The one request this suite's stub saw, and it now checks that there was exactly one.
+    ///
+    /// **It read `try #require(all.first, "expected exactly one request, saw \(all.count)")`, which
+    /// passes for one request and for fifty** (SONNY-331). `all.first` is non-nil at any count at or
+    /// above one, so the sentence a reader takes the guarantee from could only ever be printed when
+    /// the array was *empty* — the one case where "saw N" reads `saw 0`, and so the one case where
+    /// it could never appear beside a count that disproved it. The name compounded it: `try
+    /// recorded.only` reads at a call site as "the one request", and that is how it was read.
+    ///
+    /// What it cost is worth keeping, because a mutation score could not have surfaced it.
+    /// SONNY-320 added a cancellation test to each of the four text routes; three pinned the count
+    /// beside their `only` read and the fourth relied on this. A mutant giving
+    /// `SonnyBackendError.cancelled` a retry budget — which the contract's §9.3 says it must never
+    /// have — therefore failed three of the four instead of four, and was still killed. A weak test
+    /// among stronger siblings is invisible to a battery; a reviewer reading the assertion found it.
+    ///
+    /// The message now names the paths as well as the count, because "saw 3" does not say which
+    /// three, and the reason a second request is there is usually visible in its path.
     public var only: RecordedBackendRequest {
-        get throws { try #require(all.first, "expected exactly one request, saw \(all.count)") }
+        get throws {
+            let requests = all
+            try #require(
+                requests.count == 1,
+                "expected exactly one request, saw \(requests.count): \(requests.map(\.path))"
+            )
+            return try #require(requests.first)
+        }
     }
 }
