@@ -94,6 +94,20 @@
 # It is also intermittent — the same mutant at the same tree attributed cleanly when run alone — so
 # the obvious check says "flake" and the gap survives. Both shapes are read now.
 #
+# The fifth, closed by SONNY-323: this script read one test framework's log shapes, and this
+# repository has had two halves since SONNY-126. A server-half battery runs correctly — the mutants
+# apply, vitest really runs, the tree is restored — and then every kill it found is reported "KILLED
+# by the compiler — the suite never ran ... No test evidence: this says the mutant does not build,
+# not that it is covered". The verdict and the count are right and the sentence beside them is
+# false: SONNY-131 reports nineteen mutants that way and SONNY-133 twelve, every one of them killed
+# by named tests its own log lists plainly, including the one that would have let a client's retry
+# bill twice. Two things follow, and the second is why this is numbered beside the other routes
+# rather than filed as a wording defect. A reader who believes the report concludes the battery
+# proved nothing about coverage. And with no failure ever classified, mutate-untrusted-failures
+# cannot reach that half at all — so a flaky vitest test manufactures a kill there exactly the way
+# PR #109's R9 did before the third route was closed, and UNATTRIBUTED can never be reported.
+# Both formats are read now, chosen by what the log looks like rather than by a flag.
+#
 # Exit codes
 #   0  the battery ran and every mutant was killed
 #   2  the battery ran and at least one mutant SURVIVED, or came back UNATTRIBUTED — both are
@@ -337,6 +351,15 @@ What this does and does not prevent:
       A flaky BASELINE was the harmless direction by comparison — it aborted the run, which cost a
       rerun and told no lies. It now aborts only when something real is red; a baseline red purely
       on declared failures prints them and continues, because none of them can manufacture a kill.
+    * TWO TEST FRAMEWORKS ARE READ, AND ONLY TWO. swift-testing's console output, for the app half
+      under Sources/ and Tests/, and vitest's, for the server half under server/ — chosen by what
+      the log looks like rather than by a flag, so a plan never has to declare which half it is
+      (SONNY-323). What is read of vitest is its error summary (the ` FAIL  <file> > <suite> >
+      <test>` entries and the message under each) and its `Tests` line; the default reporter and
+      `--reporter=dot` both print those, measured on this repository's server suite. A suite command
+      whose output carries neither framework's shapes is not refused — it is reported as a run that
+      named no test, which is the same thing this harness says about a mutant that trapped the test
+      process, and it names the log to read.
     * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
       running batteries at once share nothing and are not refused.
     * MUTATE_TEST_CMD replaces the suite command outright. If the replacement invokes SwiftPM it
@@ -780,13 +803,52 @@ run_suite() {
   return "$code"
 }
 
+# Did any test run at all, or did the tree not even build? The whole "KILLED by the compiler"
+# branch hangs off this one question, and the two halves of this repository answer it on different
+# lines — swift-testing under Sources/ and Tests/, vitest under server/ (SONNY-323).
+#
+# swift-testing prints "Test run started." before it loads anything, so its absence means the
+# compile failed. vitest prints its own banner just as early, and then — the part a single tell
+# would miss — prints "Tests  no tests" when every test file failed to transform, which is the same
+# condition arriving through a different door: the mutant did not build, and nothing ran.
 suite_started() {
-  grep -q 'Test run started\.' "$1"
+  if grep -q 'Test run started\.' "$1"; then
+    return 0
+  fi
+  if ! vitest_started "$1"; then
+    return 1
+  fi
+  ! vitest_ran_no_tests "$1"
+}
+
+# vitest's own two tells, measured on this repository's server suite rather than written from
+# memory. `npx vitest run test/screen.test.ts` with src/model/limits.ts made merely wrong prints
+# " RUN  v4.1.11 <dir>" and "      Tests  1 failed | 25 passed (26)"; with the same file made
+# unparseable it prints the same banner, a "Failed Suites" heading, " FAIL  test/screen.test.ts
+# [ test/screen.test.ts ]" and "      Tests  no tests". Both halves are load-bearing. Without the
+# banner check a command that died before vitest ever started — `npm run build && npx vitest run`
+# with the build red — would read as a suite that ran. Without the "no tests" check a mutant that
+# breaks the parse would be reported killed by a "test" named `test/x.test.ts [ test/x.test.ts ]`,
+# which is a file that failed to load wearing a test's name.
+vitest_started() {
+  grep -q '^[[:space:]]*RUN[[:space:]][[:space:]]*v[0-9]' "$1"
+}
+
+vitest_ran_no_tests() {
+  grep -qE '^[[:space:]]*Tests[[:space:]]+no tests([[:space:]]|$)' "$1"
 }
 
 run_tally() {
+  local tally
   # -E, not BRE: BSD sed has no \| alternation and would silently print nothing.
-  sed -nE 's/^.*Test run with (.*) (passed|failed) after .*$/\1/p' "$1" | tail -1
+  tally="$(sed -nE 's/^.*Test run with (.*) (passed|failed) after .*$/\1/p' "$1" | tail -1)"
+  if [[ -n "$tally" ]]; then
+    printf '%s' "$tally"
+    return 0
+  fi
+  # vitest's summary line instead: "      Tests  26 passed (26)". Reached only when the swift form
+  # matched nothing, so a swift log can never be read by this second pattern.
+  sed -nE 's/^[[:space:]]*Tests[[:space:]]+([^[:space:]].*)$/\1/p' "$1" | tail -1
 }
 
 # One line per failing test: "Test <name> failed after 0.001 seconds with 1 issue." A
@@ -805,7 +867,9 @@ run_tally() {
 # run is reported instead of ending the battery mid-sentence (SONNY-224, founder decision after
 # PR #112's review recorded it).
 # When that line is absent for every failing test, the issue lines are read instead — see the
-# comment below (SONNY-305).
+# comment below (SONNY-305). A vitest log has neither shape and falls through the same way, which is
+# how the server half is named at all: the fallback delegates to `classify_failures`, and that is
+# where both frameworks are read (SONNY-323).
 failing_tests() {
   local named
   named="$(sed -n 's/^.*[[:space:]]Test \(.*\) failed after .*$/\1/p' "$1" \
@@ -923,10 +987,88 @@ issue_re = re.compile(r"Test (.+?) recorded an issue\b.*? at \S+:\d+:\d+: (.*)$"
 # and the cost is over-capture — an open block absorbs a few lines it should not — which can only
 # make a failure look MORE declared than it is. Undercounting a kill is the safe direction; the
 # truncation this replaces was the other one.
+#
+# The verb is `recorded`, not `recorded an issue`, and that one word is SONNY-315 (found in PR #139's
+# cycle-2 battery at 157ef03). A KNOWN issue's record line — `Test <name> recorded a known issue at
+# File.swift:174:55: Issue recorded`, which swift-testing prints for every `withKnownIssue` — carries
+# none of the four old verbs, so it did not end a block. HangBackstopTests emits one on every single
+# run by design, and when it landed between a killing test's issue line and that test's failure line,
+# its detail lines — a declared signature among them — were read as the KILLING test's own message.
+# The mutant came back UNATTRIBUTED: a real kill excused, which is the mirror of the manufactured
+# kill this whole mechanism exists to stop, and it understates coverage and sends the reader hunting
+# for a test that already exists. It depends on where a parallel suite's output lands rather than on
+# what the mutant is, so any mutant can hit it and re-running usually does not: PR #139's battery
+# reported it once, then `--only` named the killing test, then a second full battery was clean.
+#
+# What the widened verb costs, since a boundary that fires too eagerly is PR #112's F3 in the other
+# direction: within a line that already begins — after a prefix carrying no letters — with `Test ` or
+# `Suite ` and a non-space, the verb set now admits any "recorded". A message line of exactly that
+# shape carrying the word "recorded" and none of the other four would end its own block early. That
+# is narrower than what it buys, which is every "recorded ..." event kind swift-testing has or grows
+# rather than the one wording seen so far.
+#
+# It does not, and cannot, protect a message SPLIT by an interleaved record line: everything after
+# the split is dropped, so a signature there would be lost and the failure would count as evidence.
+# What makes that safe in practice is that swift-testing emits an event's lines together — measured
+# on a real 2305-test run of this repository's suite, where both multi-line known-issue events came
+# out contiguous, and where every interleaving is between events. Nothing here can tell a split
+# message from a foreign event, so the choice is which of the two to be wrong about; being wrong
+# about the observed one was costing real kills.
 boundary_re = re.compile(
-    r"^[^A-Za-z]*(?:Test|Suite) \S.*?\b(?:started|passed|failed|skipped|recorded an issue)\b"
+    r"^[^A-Za-z]*(?:Test|Suite) \S.*?\b(?:started|passed|failed|skipped|recorded)\b"
 )
 failed_re = re.compile(r"^.*\sTest (.*) failed after ")
+
+# ── vitest, the server half's suite (SONNY-323) ─────────────────────────────────────────────────
+# This repository has had two halves since SONNY-126, and this classifier read one framework's
+# shapes — so a server-half battery named no test at all, every kill it found was reported "KILLED
+# by the compiler ... No test evidence", and nothing it produced could ever be UNATTRIBUTED. The
+# count was right and the sentence beside it was false.
+#
+# vitest's error summary is the shape worth reading, because it has the same structure
+# swift-testing's issue lines do — a line naming the test, then the failure's own message on the
+# lines under it — which is why this needs no second classifier, only a second way to open a block:
+#
+#      FAIL  test/screen.test.ts > the screen route's numbers > derives §6.1's body limit ...
+#     AssertionError: expected 3000001 to be 3000000 // Object.is equality
+#     ...
+#     [a rule of U+23AF and an [n/m] counter, which is what closes the block]
+#
+# Read instead of the progress section's "× <test name> 3ms" lines, which SONNY-323 suggested and
+# which cannot do this job: they carry no message, so nothing there can be matched against a
+# declaration and every vitest failure would be evidence by default; and they name the test without
+# its file or its describe block, which is the same merge that costs the swift path a name when two
+# suites share a function name. The two sections agree on what failed — every failing test appears
+# once in each — so reading only the one that carries the evidence loses nothing.
+#
+# Names are deliberately NOT put through base(). A vitest test name is prose and may contain a
+# parenthesis, so splitting on "(" would truncate it and merge tests that differ after it. The swift
+# form needs base() because a parameterized test's two log lines disagree about the parameter list;
+# vitest prints one line and has no such disagreement.
+vitest_fail_re = re.compile(r"^\s*FAIL\s\s+(\S.*?)\s*$")
+
+# An entry counts only INSIDE that section, and this gate is not caution — it is a measurement. A
+# failing test's console output is echoed into the log above the section, under a `stdout |
+# test/x.test.ts > …` header and then verbatim, so a test that logs a line shaped like an entry
+# would otherwise mint a failing test that never existed: evidence out of nothing, which is the
+# direction that manufactures a kill. Reproduced on this repository's own server suite with a
+# throwaway test that prints ` FAIL  test/made-up.test.ts > a suite > a test that does not exist`
+# and then fails; the line arrives at column 0 exactly as an entry does, and only its position
+# separates them. (The code frame vitest prints under the real entry quotes that same source line,
+# but it arrives prefixed with `      5|` and matches nothing here.)
+#
+# The section opens on vitest's own heading and closes at the run summary, which is the first line
+# after which nothing can be an entry. A log carrying no heading yields no vitest names at all and
+# is reported as a run that named no test — the safe direction, and the same thing this harness says
+# about a trapped process.
+vitest_failures_heading_re = re.compile(r"^\u23af{2,} Failed (?:Tests|Suites)\b")
+vitest_summary_re = re.compile(r"^\s*Test Files\s")
+
+# What closes one of those entries. Anchored at the start of the line and requiring the rule itself,
+# rather than the weaker "a line carrying no letters" the swift boundary can afford: the blank lines
+# inside a failure's own diff would match that, and ending a block early is the direction that drops
+# a declared signature and manufactures a kill (PR #112's F3).
+vitest_boundary_re = re.compile(r"^\u23af{3,}")
 
 
 def base(name):
@@ -958,6 +1100,7 @@ issue_order = []
 
 current_name = None
 current_text = []
+in_vitest_failures = False
 
 
 def flush():
@@ -971,6 +1114,35 @@ def flush():
 with open(log_path, encoding="utf-8", errors="replace") as handle:
     for raw in handle:
         line = raw.rstrip("\n")
+
+        # vitest first. The heading is checked before the rule that closes an entry, because the
+        # heading is itself a rule and would otherwise be read as one.
+        if vitest_failures_heading_re.match(line):
+            flush()
+            in_vitest_failures = True
+            continue
+        if vitest_summary_re.match(line):
+            flush()
+            in_vitest_failures = False
+            continue
+        # Its FAIL line both names a failing test and opens that test's block, so it does the work
+        # swift-testing splits across two line shapes. There is no separate per-test summary line to
+        # merge in afterwards.
+        vitest = vitest_fail_re.match(line) if in_vitest_failures else None
+        if vitest:
+            flush()
+            current_name = vitest.group(1)
+            if current_name not in failing:
+                failing[current_name] = current_name
+                order.append(current_name)
+            # Empty, not seeded with the name: a signature matches a failure's MESSAGE, and the text
+            # on this line is what failed, not why.
+            current_text = []
+            continue
+        if vitest_boundary_re.match(line):
+            flush()
+            continue
+
         match = issue_re.search(line)
         if match:
             flush()
@@ -1279,7 +1451,17 @@ battery() {
     elif ! suite_started "$log"; then
       outcome="KILLED (build failure)"
       killed=$((killed + 1))
-      printf '    KILLED by the compiler — the suite never ran  (%ds)\n' "$elapsed"
+      # Two ways to reach this, and naming the wrong one is how a report stops being believed. The
+      # swift half fails to compile and never prints a line of its own. The server half gets as far
+      # as vitest's banner and then loads nothing, because the mutant left a file that will not
+      # parse — there is no compiler in that path to blame, so it is not blamed (SONNY-323). A
+      # vitest banner in a log that reached this branch means exactly that case: `suite_started`
+      # only refuses a banner-carrying log when it also says "no tests".
+      if vitest_started "$log"; then
+        printf '    KILLED before any test ran — every test file failed to load  (%ds)\n' "$elapsed"
+      else
+        printf '    KILLED by the compiler — the suite never ran  (%ds)\n' "$elapsed"
+      fi
       printf '    No test evidence: this says the mutant does not build, not that it is covered.\n'
     else
       names="$(failing_tests "$log")"
@@ -1881,6 +2063,135 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_contains "and named there" "$ST_OUT" "aRunThatNeverSettled()"
   st_absent "the mutant is not unattributed" "$ST_OUT" "UNATTRIBUTED"
 
+  # ── The server half (SONNY-323) ───────────────────────────────────────────────────────────────
+  # vitest's shapes, copied out of real runs of this repository's own server suite rather than
+  # written from memory: `npx vitest run test/screen.test.ts` with src/model/limits.ts made merely
+  # wrong, and with the same file made unparseable. Before SONNY-323 every one of these logs was
+  # reported "KILLED by the compiler — the suite never ran", which is what SONNY-131's nineteen
+  # mutants and SONNY-133's twelve came back as.
+  #
+  # The rule of U+23AF is vitest's own, and it is what closes an entry — the fixtures carry it for
+  # the same reason the swift ones carry the Suite-level failure line: a stand-in exercising a shape
+  # no reporter emits is how PR #112's F3 got in.
+  local vitest_kills_the_mutant='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf " ❯ test/period.test.ts (26 tests | 1 failed) 271ms\n"
+  printf "     × labels the hour before noon as morning 3ms\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/period.test.ts > the period label > labels the hour before noon as morning\n"
+  printf "AssertionError: expected \"Afternoon\" to be \"Morning\" // Object.is equality\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 25 passed (26)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  26 passed (26)\n"'
+
+  printf '\n==> A vitest failure is a named kill, not a build failure\n'
+  st_run "$vitest_kills_the_mutant" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the baseline tally is read from vitest's own summary line" "$ST_OUT" \
+              "PASSED  26 passed (26)"
+  st_contains "the kill is counted and attributed" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test is named with its file and describe block" "$ST_OUT" \
+              "test/period.test.ts > the period label > labels the hour before noon as morning"
+  st_absent "it is not reported as a build failure" "$ST_OUT" "the suite never ran"
+  st_absent "nor as a run that named nothing" "$ST_OUT" "named no test"
+  st_absent "nor as unattributed" "$ST_OUT" "UNATTRIBUTED"
+
+  # A line a test PRINTED, which is not a failing test however much it looks like one. Measured on
+  # this repository's server suite with a throwaway test that logs an entry-shaped line and then
+  # fails: vitest echoes a failing test's console output above the error summary, under a
+  # `stdout | <file> > <test>` header, and the echoed line arrives at column 0 exactly as a real
+  # entry does. Run against this branch's first vitest reader, which had no section gate, this
+  # fixture reports KILLED by 2 test(s) and names a test that does not exist — evidence out of
+  # nothing, which is the direction that manufactures a kill.
+  local vitest_echoes_a_fake_entry='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "stdout | test/period.test.ts > the period label > labels the hour before noon as morning\n"
+  printf " FAIL  test/made-up.test.ts > a suite > a test that does not exist\n"
+  printf " ❯ test/period.test.ts (26 tests | 1 failed) 271ms\n"
+  printf "     × labels the hour before noon as morning 3ms\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/period.test.ts > the period label > labels the hour before noon as morning\n"
+  printf "AssertionError: expected \"Afternoon\" to be \"Morning\" // Object.is equality\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 25 passed (26)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  26 passed (26)\n"'
+
+  printf '\n==> A line a test printed is not a failing test, however much it looks like one\n'
+  st_run "$vitest_echoes_a_fake_entry" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the real failure is the only one counted" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and it is the one named" "$ST_OUT" "labels the hour before noon as morning"
+  st_absent "the printed line is not named as evidence" "$ST_OUT" "made-up"
+
+  # The other direction, and the one that keeps the arm above from being satisfied by reading any
+  # red vitest log as a kill. A mutant that leaves a file the transformer cannot parse gets vitest's
+  # banner, a "Failed Suites" heading, a FAIL entry naming the FILE, and "Tests  no tests" — no test
+  # ran, so there is no test evidence, and a report claiming a named test caught it would be
+  # inventing one out of a load error.
+  local vitest_loads_nothing='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf " ❯ test/period.test.ts (0 test)\n"
+  printf "⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/period.test.ts [ test/period.test.ts ]\n"
+  printf "Error: Transform failed with 1 error:\n"
+  printf "[PARSE_ERROR] Unexpected token\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  no tests\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  26 passed (26)\n"'
+
+  printf '\n==> A vitest run that loaded no test file is a build failure, not a named kill\n'
+  st_run "$vitest_loads_nothing" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the outcome says nothing ran" "$ST_OUT" "every test file failed to load"
+  st_contains "and says what that does and does not prove" "$ST_OUT" "not that it is covered"
+  st_contains "and the summary carries it" "$ST_OUT" "KILLED (build failure)"
+  st_absent "the file that failed to load is not dressed up as a test that caught it" "$ST_OUT" \
+            "KILLED by 1 test(s)"
+  st_absent "and no compiler is blamed where there is none" "$ST_OUT" "KILLED by the compiler"
+
+  # The whole point of reading vitest at all, rather than only the naming: with nothing classified,
+  # mutate-untrusted-failures could not reach the server half, so a flaky test there manufactured a
+  # kill exactly as PR #109's R9 did. The signature below is a real record from that file. It is one
+  # of the swift half's, because no server-half signature is declared today — which is the answer to
+  # the question SONNY-323 asked, whether that file needs a notion of which suite a signature
+  # belongs to: it matches the text a failure recorded and knows nothing about what produced it, so
+  # a server-half record needs no new mechanism here.
+  local vitest_untrusted_only='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/period.test.ts > the period label > waits for the run to settle\n"
+  printf "Error: did not become idle before timeout\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 25 passed (26)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  26 passed (26)\n"'
+
+  printf '\n==> A vitest failure on a declared signature is unattributed, the same as a swift one\n'
+  st_run "$vitest_untrusted_only" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is still named" "$ST_OUT" "waits for the run to settle"
+  st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_contains "and the summary counts it as unattributed" "$ST_OUT" \
+              "0 killed, 0 survived, 1 unattributed"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
+
   printf '\n==> A baseline red only on declared failures continues instead of costing the whole run\n'
   st_run "$untrusted_baseline" "$root/kill.plan"
   st_eq "the battery still exits 0" "$ST_EXIT" "0"
@@ -1942,6 +2253,70 @@ printf "◇  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
               "did not become idle before timeout"
   st_absent "the first line of the message did not end the block" "$ST_OUT" "KILLED"
+
+  # SONNY-315, found in PR #139's cycle-2 battery at 157ef03. A KNOWN issue is not a failure, and
+  # its detail lines are not the message of whatever test was mid-issue when it arrived.
+  # HangBackstopTests records one on every run by design, so the ingredient is always present and
+  # only the interleaving varies — which is why the battery that reported this saw it once, named
+  # the killing test when re-run with --only, and came back clean on the next full run.
+  #
+  # The wrapped line with no glyph in front of it is not decoration: that is how the real suite
+  # prints a message's continuation, measured on a 2305-test run, and it is the line the declared
+  # signature sits on.
+  local known_issue_between_a_kill_and_its_summary='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test labelIsMorningBeforeNoon() recorded an issue at Fixture.swift:5:9: Expectation failed: (label) == \"Morning\"\n"
+  printf "↳  // And it is its own label, not the one before it.\n"
+  printf "✘  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() recorded a known issue at HangBackstopTests.swift:174:55: Issue recorded\n"
+  printf "↳  timed out after 13.4s waiting for: something that never happens.\n"
+  printf "   This deadline is a deadlock backstop, not a timing assertion — it fires only after enough looks.\n"
+  printf "↳  the backstop must fire when the condition never becomes true\n"
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 19.325 seconds with 1 issue.\n"
+  printf "✔  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() passed after 53.423 seconds with 1 known issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 19.4 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A concurrent known issue does not excuse the test it interrupted\n'
+  st_run "$known_issue_between_a_kill_and_its_summary" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the kill is counted" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test that caught it is named" "$ST_OUT" "labelIsMorningBeforeNoon()"
+  st_absent "the known issue did not excuse it" "$ST_OUT" "UNATTRIBUTED"
+  st_absent "and the signature that is not its own is nowhere in the report" "$ST_OUT" \
+            "deadlock backstop"
+
+  # The other direction, and the reason this fix is not simply "end a block sooner". The same
+  # interleaving around a genuinely DECLARED failure must still excuse it, on the signature IT
+  # recorded — a boundary that truncated the interrupted test's own message would turn load into a
+  # manufactured kill, which is the failure PR #112's F3 was. Before SONNY-315 this log did reach
+  # UNATTRIBUTED, and reached it for the wrong reason: the report named the known issue's signature
+  # rather than the failing test's own, so the two assertions below are what separate the fix from
+  # the defect.
+  local declared_failure_then_a_known_issue='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() recorded a known issue at HangBackstopTests.swift:174:55: Issue recorded\n"
+  printf "↳  timed out after 13.4s waiting for: something that never happens.\n"
+  printf "   This deadline is a deadlock backstop, not a timing assertion — it fires only after enough looks.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 1.2 seconds with 1 issue.\n"
+  printf "✔  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() passed after 53.423 seconds with 1 known issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 1.3 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> and a declared failure it interrupts is still excused, on its own signature\n'
+  st_run "$declared_failure_then_a_known_issue" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is named" "$ST_OUT" "aRunThatNeverSettled()"
+  st_contains "and the signature shown is the one it recorded itself" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_absent "not the one belonging to the known issue beside it" "$ST_OUT" "deadlock backstop"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
 
   # F1. The guard on the declaration file cannot be excused by the declaration file. Its failure
   # message quoted the signature it had caught going missing, the classifier matched it, and the

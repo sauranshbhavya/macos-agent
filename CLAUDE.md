@@ -84,7 +84,7 @@ what it is missing: a timing-sensitive test whose failure matches no signature r
 exactly as before. `UntrustedFailureDeclarationTests` holds the direction that is checkable, that a
 declaration's `source` still appears under `Tests/` **at the number of sites it declares** — a count,
 because a presence check alone let a reword of one of six copies of a backstop pass unnoticed (F4);
-the other direction is judgment. **Three seams have been found in the classifier; two stay open and
+the other direction is judgment. **Five seams have been found in the classifier; two stay open and
 are written down where it lives rather than fixed**: tests sharing a function name across suites
 merge, since neither log line names a suite, and a mutant that *traps* the test process names no
 test at all. **The third is closed** (SONNY-305): swift-testing names a failing test on two line
@@ -109,6 +109,64 @@ worse than the defect**: teaching only `failing_tests` to read the issue lines l
 list and the battery exits 2 instead of 0 — a correctly counted kill turned into a finding. Both
 readers changed; the fallback delegates to the classifier so one regex answers for both, and
 `selftest` has an arm on each direction.
+**The fourth is closed as well, and it is different in kind from the other three** (SONNY-323):
+those are gaps inside swift-testing's format, and this was a format the classifier had never been
+taught at all. `Sources/` and `Tests/` are one half of this repository and `server/` is the other,
+and a vitest log carries none of the line shapes above — so a server-half battery applied its
+mutants, ran the suite, restored the tree, and then reported every kill it found as `KILLED by the
+compiler — the suite never ran`, with `No test evidence: this says the mutant does not build, not
+that it is covered` beneath it. SONNY-131 reports reading that on nineteen mutants and SONNY-133 on
+twelve, both recovering the real evidence by hand out of the per-mutant logs. The verdict and the
+count were right and the sentence beside them was false, which is bad enough; what makes it a route
+to a false *measurement* rather than a wording defect is that with no failure ever classified,
+`mutate-untrusted-failures` could not reach that half at all — a flaky vitest test manufactured a
+kill there exactly the way PR #109's R9 did, and `UNATTRIBUTED` could never be reported. Both
+formats are read now, chosen by what the log looks like rather than by a flag, so a plan never has
+to declare which half it is: what is read of vitest is its error summary (` FAIL  <file> > <suite> >
+<test>` and the message under each) and its `Tests` line, and the progress section's `×` lines are
+deliberately not read, because they carry no message to match a declaration against and name the
+test without its file or describe block. **An entry also counts only inside that section**, which is
+a measurement rather than caution: vitest echoes a *failing* test's console output above the summary,
+under a `stdout | <file> > <test>` header and then the line verbatim at column 0 — so a test that
+logs an entry-shaped line mints a failing test that never existed, which this branch shipped for one
+commit and found by writing a throwaway test that does exactly that.
+
+Measured at `c401d4d` by running one two-mutant plan over `server/src/model/limits.ts` through both
+versions of the script, at that one head, with the same suite command
+(`MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts'`): this one
+reports the covered mutant `KILLED by 2 test(s)` and names both, reports the unparseable one
+`KILLED before any test ran — every test file failed to load`, and reads the baseline as
+`PASSED  63 passed (63)`; `main`'s copy reports `KILLED (build failure)` for both, above a baseline
+line reading `PASSED` with no tally at all. The two formats also cannot be mistaken for each other
+on anything this repository produces: each one's patterns match **0** lines of the other's real logs
+— the flagged suite's own 5108-line log, and the three vitest logs that battery wrote (22, 73 and 68
+lines) plus a 49-line probe of a test that prints an entry-shaped line.
+**The fifth is the mirror of SONNY-224's manufactured kill — a manufactured NON-kill** (SONNY-315,
+found in PR #139's cycle-2 battery at `157ef03`). swift-testing records a *known* issue — what
+`withKnownIssue` produces, which is expected and not red at all — on a line reading `Test <name>
+recorded a known issue at File.swift:174:55: Issue recorded`, and that line carries none of the four
+verbs the classifier ended an issue block on. So when one arrived between a killing test's issue line
+and that test's failure line, everything indented under it was read as the *killing* test's own
+message — and one of those lines is a declared signature, because the backstop's own wording is
+declared, so the mutant came back `UNATTRIBUTED`. A real kill excused: it understates coverage and
+sends the reader hunting for a test that already exists. `HangBackstopTests` emits that line on every
+single run by design, so the ingredient is always present and only the interleaving varies, which is
+what lets this survive being investigated — the battery that found it reported R1 unattributed, then
+`--only R1` named the killing test, then a second full battery was clean. Any mutant can hit it; it
+depends on where a parallel suite's output lands rather than on what the mutant is. The boundary's
+verb is now `recorded` rather than `recorded an issue`, so every kind of record line swift-testing
+writes closes the block it interrupts and the known issue's detail is attributed to nothing at all.
+**The half of the fix that is worth reading is the other direction**, because ending a block sooner
+is exactly how PR #112's F3 manufactured a kill: the same interleaving around a genuinely *declared*
+failure must still excuse it, and on the signature it recorded itself. Before the fix that log did
+reach `UNATTRIBUTED` — but naming the known issue's signature rather than the failing test's, and
+that pair of assertions is what tells the fix from the defect in `selftest`. **What no version of
+this can do**, stated rather than implied: a message actually *split* by an interleaved record line
+loses everything after the split, signature included. Nothing in a log distinguishes a split message
+from a foreign event, so the choice is which of the two to be wrong about — and swift-testing emits
+an event's lines together, measured on a 2305-test run of this suite where both multi-line
+known-issue events came out contiguous and every interleaving sat between events, while being wrong
+about the observed case was costing real kills.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
