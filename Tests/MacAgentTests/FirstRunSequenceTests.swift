@@ -70,6 +70,10 @@ struct FirstRunSequenceTests {
                 }
             }
         }
+        // Derived rather than spelled, so a third step raises the expectation along with the loop
+        // instead of leaving it passing over a third of the space.
+        #expect(Self.everySkipSet.count == 4)
+        #expect(combinationsChecked == 2 * 2 * 2 * Self.everySkipSet.count * 2)
         #expect(combinationsChecked == 64)
         // A property nothing can satisfy is a property nothing holds: the loop has to reach the case
         // it is about. **Nine of the sixty-four answer `.screenAccess`**, and the figure is counted
@@ -112,7 +116,8 @@ struct FirstRunSequenceTests {
     /// beside it, so the test cannot pass by agreeing with itself about what a relaunch is.
     @Test
     func asecondLaunchOverTheSameMacResumesRatherThanRestarting() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
         let relauncher = NoOpRelauncher()
         let screenAccess = makeHermeticScreenAccessModel(
             screenRecordingGranted: false,
@@ -120,7 +125,7 @@ struct FirstRunSequenceTests {
             relauncher: relauncher
         )
 
-        let firstLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let firstLaunch = suite.makeCoordinator()
         firstLaunch.begin(isSignedIn: true, screenRecordingGranted: false, accessibilityTrusted: false)
         #expect(firstLaunch.presentedStep == .screenAccess)
 
@@ -131,7 +136,7 @@ struct FirstRunSequenceTests {
 
         // The process that comes back shares only the two things that survive it: the Keychain, and
         // this suite.
-        let secondLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let secondLaunch = suite.makeCoordinator()
         secondLaunch.begin(isSignedIn: true, screenRecordingGranted: true, accessibilityTrusted: false)
 
         #expect(secondLaunch.presentedStep == .screenAccess)
@@ -145,7 +150,9 @@ struct FirstRunSequenceTests {
     /// view's `onChange` firing during layout would do exactly that.
     @Test
     func nothingIsDecidedBeforeTheKeychainHasBeenRead() {
-        let coordinator = makeHermeticFirstRunCoordinator()
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
 
         #expect(coordinator.presentedStep == nil)
         #expect(coordinator.hasBegun == false)
@@ -163,7 +170,9 @@ struct FirstRunSequenceTests {
     /// sequence the user had already skipped out of during this launch.
     @Test
     func beginningTwiceDoesNotReopenASequenceTheUserLeft() {
-        let coordinator = makeHermeticFirstRunCoordinator()
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
         coordinator.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         coordinator.skipCurrentStep()
         coordinator.skipCurrentStep()
@@ -180,7 +189,9 @@ struct FirstRunSequenceTests {
     /// step is still the real one.
     @Test
     func skippingSignInMovesToScreenAccessRatherThanEndingTheSequence() {
-        let coordinator = makeHermeticFirstRunCoordinator()
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
         coordinator.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         #expect(coordinator.presentedStep == .signIn)
 
@@ -194,13 +205,14 @@ struct FirstRunSequenceTests {
     /// the next launch of the app on the same Mac.
     @Test
     func aDeclinedStepIsNotAskedAgainOnThisLaunchOrTheNext() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let firstLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let firstLaunch = suite.makeCoordinator()
         firstLaunch.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         firstLaunch.skipCurrentStep()
         #expect(firstLaunch.presentedStep == .screenAccess)
 
-        let secondLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let secondLaunch = suite.makeCoordinator()
         secondLaunch.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
 
         #expect(secondLaunch.presentedStep == .screenAccess, "the declined step is behind us; the outstanding one is not")
@@ -211,18 +223,19 @@ struct FirstRunSequenceTests {
     /// not something this sequence has to keep offering.
     @Test
     func decliningEveryStepEndsTheSequenceAndLeavesItEnded() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let firstLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let firstLaunch = suite.makeCoordinator()
         firstLaunch.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         firstLaunch.skipCurrentStep()
         firstLaunch.skipCurrentStep()
         #expect(firstLaunch.presentedStep == nil)
 
-        let secondLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let secondLaunch = suite.makeCoordinator()
         secondLaunch.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
 
         #expect(secondLaunch.presentedStep == nil)
-        #expect(makeHermeticFirstRunStoreOver(suite).hasFinished)
+        #expect(suite.store.hasFinished)
     }
 
     /// Skipping with nothing on screen does nothing at all. The sheet's own dismissal routes here,
@@ -230,15 +243,16 @@ struct FirstRunSequenceTests {
     /// is no longer presented.
     @Test
     func skippingWithNothingPresentedRecordsNothing() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let coordinator = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
         coordinator.begin(isSignedIn: true, screenRecordingGranted: true, accessibilityTrusted: true)
         #expect(coordinator.presentedStep == nil)
 
         coordinator.skipCurrentStep()
 
         #expect(coordinator.presentedStep == nil)
-        #expect(makeHermeticFirstRunStoreOver(suite).skippedSteps.isEmpty)
+        #expect(suite.store.skippedSteps.isEmpty)
     }
 
     // MARK: - Completing it, once
@@ -248,8 +262,9 @@ struct FirstRunSequenceTests {
     /// a derivation. Signing out is not a new first run.
     @Test
     func completingTheSequenceOnceMeansItNeverRunsAgainEvenAfterSigningOut() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let firstLaunch = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let firstLaunch = suite.makeCoordinator()
         firstLaunch.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         #expect(firstLaunch.presentedStep == .signIn)
 
@@ -258,7 +273,7 @@ struct FirstRunSequenceTests {
         firstLaunch.refresh(isSignedIn: true, screenRecordingGranted: true, accessibilityTrusted: true)
         #expect(firstLaunch.presentedStep == nil)
 
-        let afterSigningOut = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let afterSigningOut = suite.makeCoordinator()
         afterSigningOut.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
 
         #expect(afterSigningOut.presentedStep == nil)
@@ -269,13 +284,14 @@ struct FirstRunSequenceTests {
     /// than being asked again the launch after.
     @Test
     func aMacThatIsAlreadySetUpIsNeverWalkedThroughTheSequence() {
-        let suite = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let coordinator = makeHermeticFirstRunCoordinator(suiteName: suite)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
 
         coordinator.begin(isSignedIn: true, screenRecordingGranted: true, accessibilityTrusted: true)
 
         #expect(coordinator.presentedStep == nil)
-        #expect(makeHermeticFirstRunStoreOver(suite).hasFinished)
+        #expect(suite.store.hasFinished)
     }
 
     // MARK: - The store
@@ -285,13 +301,14 @@ struct FirstRunSequenceTests {
     /// case is being asked again.
     @Test
     func anUnrecognisedStoredStepIsDroppedRatherThanGuessedAt() {
-        let suiteName = "com.sonny.tests.firstRun.\(UUID().uuidString)"
-        let defaults = try! #require(UserDefaults(suiteName: suiteName))
-        defaults.set(["signIn", "somethingAVersionFromTheFutureWrote"], forKey: "com.sonny.state.firstRunSkippedSteps")
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        suite.userDefaults.set(
+            ["signIn", "somethingAVersionFromTheFutureWrote"],
+            forKey: "com.sonny.state.firstRunSkippedSteps"
+        )
 
-        let store = FirstRunStore(userDefaults: defaults)
-
-        #expect(store.skippedSteps == [.signIn])
+        #expect(suite.store.skippedSteps == [.signIn])
     }
 
     /// The two keys are read the way the Preferences convention requires and written where a wipe
@@ -308,6 +325,30 @@ struct FirstRunSequenceTests {
         // the explicit `object(forKey:) as? Bool`.
         #expect(MacAgentSource.count(of: ".bool(forKey:", inText: source) == 0)
         #expect(MacAgentSource.count(of: "object(forKey: Keys.hasFinished) as? Bool ?? false", inText: source) == 1)
+
+        // **The guarantee this test is named for, rather than the mechanism it rests on** (PR #159's
+        // review, F6). Everything above says the flag lives in `UserDefaults`; none of it says the
+        // flag survives. `LocalDataDeletionService` operates on file URLs through three doors, so a
+        // wipe cannot reach a `UserDefaults` domain — but a single
+        // `UserDefaults.standard.removeObject(forKey: "com.sonny.state.firstRunFinished")` added to
+        // it tomorrow would restart first run for a user who finished it, and every assertion above
+        // would still pass. So: no file in either target removes a default, by any route.
+        var removalSites: [String: Int] = [:]
+        for url in try MacAgentSource.appSourceFiles() + MacAgentSource.coreSourceFiles() {
+            let text = try MacAgentSource.read(url)
+            let count = MacAgentSource.count(of: "removeObject(forKey:", inText: text)
+                + MacAgentSource.count(of: "removePersistentDomain", inText: text)
+            if count > 0 { removalSites[url.lastPathComponent] = count }
+        }
+        #expect(removalSites.isEmpty, "something in the product now clears a default: \(removalSites)")
+        // A zero from a search that cannot find anything is not a measurement: the same scan over a
+        // token that is present answers, so the population really is being read.
+        var writeSites: [String: Int] = [:]
+        for url in try MacAgentSource.appSourceFiles() + MacAgentSource.coreSourceFiles() {
+            let count = MacAgentSource.count(of: "UserDefaults", inText: try MacAgentSource.read(url))
+            if count > 0 { writeSites[url.lastPathComponent] = count }
+        }
+        #expect(writeSites.count >= 5, "the scan found nothing at all: \(writeSites)")
     }
 
     // MARK: - What the sequence says
@@ -322,7 +363,9 @@ struct FirstRunSequenceTests {
 
         // And the label on screen follows the step, which is what makes the second one reachable at
         // all: it is only ever shown after the first has been declined.
-        let coordinator = makeHermeticFirstRunCoordinator()
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let coordinator = suite.makeCoordinator()
         coordinator.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
         #expect(coordinator.presentedStep.map(FirstRunCopy.deferralLabel(for:)) == "Sign in later")
         coordinator.skipCurrentStep()
@@ -349,10 +392,27 @@ struct FirstRunSequenceTests {
         }
         #expect(sentences.count == SignInFailure.allCases.count, "two failures share a sentence")
 
-        // The other surface has no error channel to leak one through.
-        let onboarding = try MacAgentSource.read("ScreenAccessOnboarding.swift")
-        #expect(MacAgentSource.count(of: "throws", inText: onboarding) == 0)
-        #expect(MacAgentSource.count(of: "localizedDescription", inText: onboarding) == 0)
+        // One surface has no error channel at all; the other has one and must render only the
+        // sentences above. `SignInView.swift` is scanned too (PR #159's review, F6) — a direct
+        // `error.localizedDescription` added to that view would pass the `allCases` half untouched,
+        // because the mapping would still be complete and simply no longer be what is displayed.
+        for file in ["ScreenAccessOnboarding.swift", "SignInView.swift", "FirstRunSequence.swift"] {
+            let source = try MacAgentSource.read(file)
+            #expect(MacAgentSource.count(of: "localizedDescription", inText: source) == 0, "\(file)")
+        }
+        #expect(MacAgentSource.count(of: "throws", inText: try MacAgentSource.read("ScreenAccessOnboarding.swift")) == 0)
+
+        // And the one place a sign-in failure is drawn renders the mapped sentence and nothing else.
+        // `localizedDescription` is the obvious leak and the scan above covers it; this covers the
+        // rest of the family — `String(describing:)`, a debug description, the error itself — by
+        // pinning what that block draws rather than listing what it may not.
+        let messages = try MacAgentSource.braceBlock(
+            of: try MacAgentSource.read("SignInView.swift"),
+            openedBy: "private var messages: some View {"
+        )
+        #expect(MacAgentSource.count(of: "Text(SignInCopy.message(for: failure))", inText: messages) == 1)
+        #expect(MacAgentSource.count(of: "Text(notice)", inText: messages) == 1)
+        #expect(MacAgentSource.count(of: "Text(", inText: messages) == 2, "a third thing is drawn here")
     }
 
     // MARK: - What the sequence deliberately does not contain
@@ -387,28 +447,100 @@ struct FirstRunSequenceTests {
 
     // MARK: - Where the sequence is wired
 
-    /// **First run is decided after the Keychain read, in the same task, and nowhere else.** A scan
-    /// rather than a runtime assertion because `applicationDidFinishLaunching` cannot be driven in a
-    /// test process — see `MacAgentSource`'s own doc for what a textual scan can and cannot hold.
-    /// Both halves matter: `begin` inside the task that awaits `restore()`, and exactly one `begin`
-    /// call in the whole target so a second one cannot be added outside it.
+    /// **The launch path routes the first-run decision through one method, and that method reads the
+    /// Keychain before it decides.** A scan rather than a runtime assertion because
+    /// `applicationDidFinishLaunching` cannot be called in a test process — see `MacAgentSource`'s
+    /// own doc for what a textual scan can and cannot hold.
+    ///
+    /// **What this holds and what it deliberately does not** (PR #159's review, F3). It holds
+    /// *shape*: one decision path, inside the launch method, awaiting the read before deciding. It
+    /// says nothing about the *values* handed to `begin`, and two edits that keep this shape and
+    /// break the value reproduce the same user-visible bug — a read hoisted above the `await`, and a
+    /// literal `false`. Both survived this scan when it was the only pin. The value is held
+    /// behaviourally instead, by
+    /// `ProductShellTests.theLaunchDecidesFirstRunOnTheSessionTheKeychainActuallyHeld`, which drives
+    /// the real method over a seeded Keychain. Neither replaces the other: that test cannot see a
+    /// second decision path added elsewhere, and this one cannot see a stale value.
+    ///
+    /// The region is anchored on the extracted method by name rather than on the first `Task {` in
+    /// the file. There is exactly one such block today, so the old anchor was correct — and an
+    /// earlier `Task` added later would have made this fail loudly against the wrong block, with a
+    /// message pointing at the wrong thing.
     @Test
-    func theLaunchPathDecidesFirstRunOnlyAfterTheKeychainHasBeenRead() throws {
+    func theLaunchPathHasOneFirstRunDecisionAndItAwaitsTheKeychainRead() throws {
         let delegate = try MacAgentSource.read("AppDelegate.swift")
-        let launchTask = try MacAgentSource.braceBlock(of: delegate, openedBy: "Task {")
 
-        #expect(launchTask.contains("await accountModel.restore()"))
-        #expect(launchTask.contains("firstRunCoordinator.begin("))
-        let restoreOffset = try #require(launchTask.range(of: "await accountModel.restore()")).lowerBound
-        let beginOffset = try #require(launchTask.range(of: "firstRunCoordinator.begin(")).lowerBound
+        // The launch method delegates; it does not carry a second copy of the decision.
+        let launch = try MacAgentSource.braceBlock(
+            of: delegate,
+            openedBy: "func applicationDidFinishLaunching(_ notification: Notification) {"
+        )
+        #expect(MacAgentSource.count(of: "decideFirstRunAfterRestoringTheSession()", inText: launch) == 1)
+        #expect(MacAgentSource.count(of: "firstRunCoordinator.begin(", inText: launch) == 0)
+
+        let decision = try MacAgentSource.braceBlock(
+            of: delegate,
+            openedBy: "func decideFirstRunAfterRestoringTheSession() async {"
+        )
+        #expect(decision.contains("await accountModel.restore()"))
+        #expect(decision.contains("firstRunCoordinator.begin("))
+        let restoreOffset = try #require(decision.range(of: "await accountModel.restore()")).lowerBound
+        let beginOffset = try #require(decision.range(of: "firstRunCoordinator.begin(")).lowerBound
         #expect(restoreOffset < beginOffset, "first run is decided before the Keychain is read")
 
+        // And there is exactly one `begin` in the whole target, so a second decision path cannot be
+        // added beside this one.
         var beginSites: [String: Int] = [:]
         for url in try MacAgentSource.appSourceFiles() {
             let count = MacAgentSource.count(of: ".begin(", inText: try MacAgentSource.read(url))
             if count > 0 { beginSites[MacAgentSource.relativePath(of: url)] = count }
         }
         #expect(beginSites == ["AppDelegate.swift": 1], "found \(beginSites)")
+    }
+
+    /// **Command Center presents the sequence, and the two controls that decline a step both reach
+    /// `skipCurrentStep()`.** Without this, deleting the entire first-run sheet compiles and leaves
+    /// the whole suite green — the sequence is simply never shown to anybody, on any launch — and so
+    /// does turning the hosted dialog's close control into a no-op. Both were live mutants in PR
+    /// #159's review (M4 and M5, both SURVIVED); acceptance criterion 1 was pinned at the resolver
+    /// and nowhere else, which is a claim about a function rather than about the product.
+    ///
+    /// A scan is the right instrument rather than a fallback: this repository has no view-inspection
+    /// harness, which is why every UI property in it is a source scan.
+    @Test
+    func commandCenterPresentsTheSequenceAndBothDecliningControlsReachTheSameCall() throws {
+        // M4: the sheet exists, in exactly one place, on the shared coordinator.
+        #expect(try Self.sitesOf("FirstRunSequenceView(") == ["CommandCenterView.swift": 1])
+
+        let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
+        let presentation = try MacAgentSource.region(
+            of: commandCenter,
+            from: ".sheet(isPresented: Binding(",
+            to: "FirstRunSequenceView("
+        )
+        // What decides whether it is on screen is the coordinator's own step, not a local flag that
+        // could be set anywhere.
+        #expect(presentation.contains("firstRunCoordinator.presentedStep != nil"))
+        // And the sheet's own dismissal — Escape, a drag — declines the step rather than losing it.
+        #expect(presentation.contains("firstRunCoordinator.skipCurrentStep()"))
+
+        // M5: the hosted dialog's close control, which is the *primary* declining mechanism, routes
+        // to the same call rather than to a setter that discards it.
+        let sequence = try MacAgentSource.read("FirstRunSequence.swift")
+        let skipBinding = try MacAgentSource.braceBlock(
+            of: sequence,
+            openedBy: "private var skipBinding: Binding<Bool> {"
+        )
+        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: skipBinding) == 1)
+        // Both dialogs are handed that binding, so neither can close without declining.
+        let stepContent = try MacAgentSource.braceBlock(
+            of: sequence,
+            openedBy: "private var stepContent: some View {"
+        )
+        #expect(MacAgentSource.count(of: "isPresented: skipBinding", inText: stepContent) == 2)
+        // The deferral button is the second route and reaches the same call — three in the file, and
+        // no fourth way to decline that does something else.
+        #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 2)
     }
 
     /// **Both dialogs have exactly two doors each: the manual one, and the sequence.** An exact map
@@ -456,12 +588,17 @@ struct FirstRunSequenceTests {
 
     // MARK: - Helpers
 
-    static let everySkipSet: [Set<FirstRunStep>] = [
-        [],
-        [.signIn],
-        [.screenAccess],
-        [.signIn, .screenAccess]
-    ]
+    /// **Derived from `allCases`, not written out** (PR #159's review, F7). A literal four-element
+    /// array survives a third step: the power set becomes eight, the loop still runs 64
+    /// combinations, `combinationsChecked == 64` still passes, and the exhaustive property quietly
+    /// stops being exhaustive. `theSequenceIsSignInThenScreenAccessAndNothingElse` would catch the
+    /// third step — in a different function — but a property test that cannot see its own
+    /// incompleteness is the wrong shape for the one assertion the ordering rests on.
+    static var everySkipSet: [Set<FirstRunStep>] {
+        FirstRunStep.allCases.reduce(into: [Set<FirstRunStep>]([[]])) { sets, step in
+            sets += sets.map { $0.union([step]) }
+        }
+    }
 
     static func stepOnAFreshMac(
         isSignedIn: Bool,
@@ -485,9 +622,4 @@ struct FirstRunSequenceTests {
         }
         return sites
     }
-}
-
-@MainActor
-private func makeHermeticFirstRunStoreOver(_ suiteName: String) -> FirstRunStore {
-    makeHermeticFirstRunStore(suiteName: suiteName)
 }

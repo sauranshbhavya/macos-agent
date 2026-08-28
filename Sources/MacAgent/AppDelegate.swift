@@ -133,26 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("Sonny could not register push-to-talk hotkey: \(error.localizedDescription)")
         }
 
-        // Reads the Keychain and touches no network, so the app comes back signed in on a relaunch
-        // with no connection — including the relaunch macOS forces after a Screen Recording grant,
-        // which is the case SONNY-128 exists for.
-        //
-        // **First run is decided inside this task, after that read, and nowhere else** (SONNY-137).
-        // `restore()` is asynchronous and everything below runs before it finishes, so a decision
-        // taken outside this closure would be taken against `isSignedIn == false` for every launch —
-        // including the one right after the Screen Recording grant, where the user would be handed a
-        // sign-in step for the account they had just signed into. That is the exact failure the
-        // sequence exists to prevent, arriving through the front door.
-        // `FirstRunCoordinator.begin` decides once; every later change of state goes through
-        // `refresh`, which does nothing until it has.
-        Task {
-            await accountModel.restore()
-            firstRunCoordinator.begin(
-                isSignedIn: accountModel.isSignedIn,
-                screenRecordingGranted: screenAccessModel.screenRecordingGranted,
-                accessibilityTrusted: screenAccessModel.accessibilityTrusted
-            )
-        }
+        // The Keychain read and the first-run decision, in that order and in one place — see
+        // `decideFirstRunAfterRestoringTheSession()` for why they are one method.
+        Task { await decideFirstRunAfterRestoringTheSession() }
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
@@ -179,6 +162,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         widgetController.show()
 
         print("Sonny is running. Click the Sonny item in the macOS menu bar to open it.")
+    }
+
+    /// Reads the Keychain, then decides first run on what it found. **One method because the two
+    /// halves are one decision, and separating them is the failure this sequence exists to prevent.**
+    ///
+    /// `restore()` reads the Keychain and touches no network, so the app comes back signed in on a
+    /// relaunch with no connection — including the relaunch macOS forces after a Screen Recording
+    /// grant, which is the case SONNY-128 exists for.
+    ///
+    /// **What goes wrong if the order or the freshness slips** (SONNY-137). `restore()` is
+    /// asynchronous, and everything after the `Task` in `applicationDidFinishLaunching` runs before
+    /// it finishes. So a decision taken beside that task rather than inside it — or taken inside it
+    /// on a value read *before* the `await`, or on a literal — is taken against `isSignedIn ==
+    /// false` for every launch, including the one right after the Screen Recording grant, where it
+    /// hands a sign-in step to a user who signed in a minute ago. All three shapes produce the same
+    /// user-visible bug and only one of them changes the statement order, which is why this is
+    /// driven by a test rather than pinned by a scan of two lines
+    /// (`ProductShellTests.theLaunchDecidesFirstRunOnTheSessionTheKeychainActuallyHeld`; PR #159's
+    /// review, F3, where two mutants that kept the order and broke the value both survived).
+    ///
+    /// Internal rather than `private` so that test can drive it: `applicationDidFinishLaunching`
+    /// cannot be called in a test process, and this is the part of it that has to be right.
+    /// `FirstRunCoordinator.begin` decides once; every later change of state goes through `refresh`,
+    /// which does nothing until it has.
+    func decideFirstRunAfterRestoringTheSession() async {
+        await accountModel.restore()
+        firstRunCoordinator.begin(
+            isSignedIn: accountModel.isSignedIn,
+            screenRecordingGranted: screenAccessModel.screenRecordingGranted,
+            accessibilityTrusted: screenAccessModel.accessibilityTrusted
+        )
     }
 
     /// Only post a system notification when neither surface already showing the same state inline

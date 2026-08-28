@@ -109,6 +109,18 @@ enum FirstRunSequence {
 /// reason the memory switches do — a wipe that reset this would restart first run for a user who
 /// had already been through it.
 ///
+/// **The negative that follows, stated because the positive above reads as if something clears it**
+/// (PR #159's review, F6): *nothing in the product resets first run at all.*
+/// `LocalDataDeletionService`'s three doors all operate on file URLs, and no file in either target
+/// removes a `UserDefaults` key by any route —
+/// `FirstRunSequenceTests.theSequencesStateSurvivesInUserDefaultsAndNotInALocalStore` asserts that
+/// as an empty population, with a positive control beside it so the zero is a measurement. So the
+/// only reset that exists is deleting these two keys by hand, or a fresh macOS user account, and
+/// `docs/sonny-manual-test-checklist.md` leads its first-run section with exactly that. That is
+/// deliberate: the one case where clearing the flag would change anything is a user who declined a
+/// step and then wiped, who would be re-asked for a permission they had refused because they
+/// deleted their task history.
+///
 /// **`userDefaults` has no default**, for SONNY-240's reason applied to something small: a default
 /// resolving to `.standard` is invisible at every call site that predates the parameter, and a test
 /// that reached it would flip the founder's own "first run is over" flag in the one domain every
