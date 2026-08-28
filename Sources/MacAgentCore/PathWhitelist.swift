@@ -209,6 +209,37 @@ public struct PathWhitelist: Sendable {
         return wouldHaveBeenAllowed ? asTyped.path : nil
     }
 
+    /// The one door for "append a generated filename to a folder that has already been validated"
+    /// (SONNY-264). It composes the path and then validates **the composed path**, which is the
+    /// thing the bytes go to, rather than trusting the check the folder passed a moment earlier.
+    ///
+    /// **A validated folder does not validate a leaf appended to it.** The folder was resolved when
+    /// it was checked; the leaf is appended afterwards, and a leaf can itself be a symbolic link.
+    /// The shape that matters is a *dangling* one — a link whose target does not exist — because
+    /// `fileExists` follows it to a target that is not there and reports the path absent, so it is
+    /// the one link shape nothing upstream of this has already resolved. `validateOutputPath`
+    /// refuses it when it leads out of the roots and follows it when it stays inside, which is
+    /// exactly what the user-named branch of every one of these callers already did.
+    ///
+    /// **What this was worth, said at its real size rather than the ticket's.** SONNY-264 was filed
+    /// as a live escape through `/usr/bin/zip`, and it is not one end to end. Measured against a
+    /// tree carrying the pre-fix composition, `AgentActionExecutor` refuses that plan at both
+    /// `prepare` and `execute` and the link's target is never created — because
+    /// `resolveDefaultOutputs` pins the generated path into the step's `outputPath` and the next
+    /// pass through the adapter takes the user-named branch, which has always validated. What was
+    /// really exposed was the dry-run `preview`, which does not resolve and did name a path the
+    /// boundary refuses, and the docx destinations, which are never pinned into a step at all.
+    ///
+    /// **So the reason every site routes through here is not that each one leaks today.** It is that
+    /// three of the four were correct only by an ordering nothing states and no test holds, and the
+    /// fourth was correct only because the two converters shipped today happen not to follow a
+    /// dangling leaf link. Both are properties of the callers, re-derivable only by reading them
+    /// all; validating where the path is composed is a property of this file. The writer measurements
+    /// that decide which is which are recorded on `canonicalURL` below.
+    public func validateOutputFile(named leafName: String, in validatedFolder: URL) throws -> URL {
+        try validateOutputPath(validatedFolder.appendingPathComponent(leafName).path)
+    }
+
     public func defaultOutputFile(name: String, extension ext: String, in rawFolder: String? = nil) throws -> URL {
         let folder: URL
         if let rawFolder, !rawFolder.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -216,7 +247,7 @@ public struct PathWhitelist: Sendable {
         } else {
             folder = roots[0]
         }
-        return folder.appendingPathComponent("\(name).\(ext)")
+        return try validateOutputFile(named: "\(name).\(ext)", in: folder)
     }
 
     /// Resolves a user-supplied output path, falling back to a generated default file.
@@ -246,7 +277,7 @@ public struct PathWhitelist: Sendable {
                 let url = try validateInsideWhitelist(rawPath)
                 let values = try url.resourceValues(forKeys: [.isDirectoryKey])
                 if values.isDirectory == true {
-                    return url.appendingPathComponent("\(defaultName).\(ext)")
+                    return try validateOutputFile(named: "\(defaultName).\(ext)", in: url)
                 }
                 return try validateOutputPath(rawPath)
             }
@@ -299,21 +330,40 @@ public struct PathWhitelist: Sendable {
     /// the path that was checked and the path the bytes go to are the same path.
     ///
     /// **That last sentence used to be written without its condition, and it was false four times**
-    /// (PR #111's review, F1). A leaf appended to an already-validated folder never goes through a
-    /// `validate...` method at all, and four places do exactly that — `defaultOutputFile` and
+    /// (PR #111's review, F1). A leaf appended to an already-validated folder never went through a
+    /// `validate...` method at all, and four places did exactly that — `defaultOutputFile` and
     /// `resolveOutputPath`'s directory branch, both above this comment in this file, plus
-    /// `LargestFilesZipCapabilityAdapter` and `FileInventory`'s PDF destinations. **SONNY-264 owns
-    /// all four**; this comment owns saying so rather than asserting the opposite. What makes it a
-    /// coverage gap rather than a hole is that an unvalidated leaf matters only to a writer that
-    /// follows a leaf symlink, and Foundation's `.atomic` replaces one instead of following it.
+    /// `LargestFilesZipCapabilityAdapter` and `FileInventory`'s PDF destinations. **SONNY-264 closed
+    /// all four**, and the condition is what stays: it is true of a path that goes *through* one of
+    /// these methods, and a composed path is one only because every composition site now routes
+    /// through `validateOutputFile(named:in:)`. The sites that append a generated leaf are that
+    /// method's callers plus `DocxConversionCapabilityAdapter.records`, which validates the
+    /// destination `FileInventory` composed for it rather than the folder it was composed from.
+    /// `git grep -cE 'try [A-Za-z.]*validateOutputFile\(' -- Sources` answers 3 lines in 2 files —
+    /// the two above plus the zip adapter's — and `git grep -cE 'validateOutputPath\(record' --
+    /// Sources` answers 1, the docx one. The `try ` is load-bearing rather than decoration: dropped,
+    /// the same pattern answers 5, picking up this method's declaration and the prose mention in the
+    /// paragraph above. Neither command matches itself, and not because anyone was careful — a
+    /// pattern written into prose escapes its parenthesis, so what sits in this file is
+    /// `validateOutputFile\(` and a search for a literal `(` steps straight over it. That is
+    /// `CLAUDE.md`'s own trap, working in the harmless direction for once.
+    /// Nothing mechanical enforces that a *fifth* site joins them; what a reader gets instead is one
+    /// name to grep for.
     ///
     /// **Two limits, stated rather than left to be found.** A component created between this
     /// resolution and the write is not seen — the check is a check, and closing that would mean
-    /// opening the output file without following links at the writers that follow one: `/usr/bin/zip`
-    /// and Microsoft Word via Apple Events both follow a leaf link, and *any* writer follows a
-    /// directory component mid-path, an atomic write included, because it puts its temporary file in
-    /// the destination's parent. (The first telling of this said "the two writers" and named zip and
-    /// the mid-path case; Word is a third and follows both — F2, and also SONNY-264's.) And
+    /// opening the output file without following links at the writer that follows one —
+    /// `/usr/bin/zip` — and *any* writer follows a directory component mid-path, an atomic write
+    /// included, because it puts its temporary file in the destination's parent. (The first telling of this said "the two writers" and named zip and
+    /// the mid-path case; PR #111's F2 added Microsoft Word as a third, and **that is wrong and is
+    /// corrected here by measurement, not by argument** — SONNY-264. Word never opens the
+    /// destination: `MicrosoftWordDocumentConverter` has it save to a fresh path under
+    /// `/private/tmp` and reaches the destination with `FileManager.moveItem(at:to:)`. Measured on
+    /// Darwin 25.5.0 against a dangling leaf link pointing outside a root, four writers side by
+    /// side: `/usr/bin/zip -q <link> a.txt` exits 0 and creates the target out there;
+    /// `Data.write(to:)` with no options does the same; `Data.write(to:options: .atomic)` replaces
+    /// the link and the bytes stay inside; `moveItem` throws `NSCocoaErrorDomain` 516 and touches
+    /// nothing. So zip is the one, as the first telling had it.) And
     /// resolution does not always converge: a link that points at itself, or a chain longer than the
     /// budget below, leaves a path that is not an answer. **That case is refused, not returned** —
     /// see `CanonicalPath`, and the review finding that says why in as many words.

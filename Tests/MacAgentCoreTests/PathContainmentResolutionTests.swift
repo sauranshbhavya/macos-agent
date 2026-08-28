@@ -430,6 +430,132 @@ struct PathContainmentResolutionTests {
                 == SymlinkTree.physicalPath(of: tree.outside.appendingPathComponent("later.md"))
         )
     }
+
+    // MARK: - A leaf appended to a folder that was already validated
+
+    /// SONNY-264, at the level of bytes, for the first of the two sites inside `PathWhitelist`.
+    ///
+    /// `defaultOutputFile` validates the *folder* and then appends the generated filename, so before
+    /// the fix the leaf never met a `validate...` method. A dangling symbolic link planted at that
+    /// name is the shape nothing upstream catches — `fileExists` follows it to a target that is not
+    /// there and reports the path absent, so no resolution ever ran on it — and the URL handed back
+    /// was a link pointing out of the boundary.
+    ///
+    /// Written without `.atomic`, deliberately, for the same reason
+    /// `aSymlinkLeafPointingOutsideIsRefusedRatherThanCreatingItsTargetOutThere` is: the writer on
+    /// the far side of a generated zip name is `/usr/bin/zip`, which opens the path and follows the
+    /// link. An atomic-only write replaces the link instead and would report this hole as closed.
+    @Test
+    func aGeneratedDefaultFilenameThatIsALinkOutOfTheRootIsRefusedRatherThanWrittenThrough() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let target = tree.outside.appendingPathComponent("note.md")
+        try FileManager.default.createSymbolicLink(
+            at: tree.root.appendingPathComponent("note.md"),
+            withDestinationURL: target
+        )
+
+        let attempt = tree.attemptWrite(atomically: false) {
+            try tree.whitelist.defaultOutputFile(name: "note", extension: "md")
+        }
+
+        #expect(attempt.landedAt == nil, "bytes reached \(attempt.landedAt ?? "") through an accepted path")
+        #expect(tree.isOutsideWhitelist(attempt.error), "expected a containment refusal, got \(attempt.errorText)")
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+    }
+
+    /// The other direction, and the reason the fix is a validation rather than a refusal of links: a
+    /// generated leaf that is a link *staying inside* the root is followed, and the bytes land at its
+    /// target. This is what `validateOutputPath` has always done for a user-named path; the generated
+    /// one now behaves identically instead of being a second, unexamined rule.
+    @Test
+    func aGeneratedDefaultFilenameThatIsALinkStayingInsideIsFollowedToItsTarget() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let real = tree.root.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let target = real.appendingPathComponent("note.md")
+        try FileManager.default.createSymbolicLink(
+            at: tree.root.appendingPathComponent("note.md"),
+            withDestinationURL: target
+        )
+
+        let attempt = tree.attemptWrite(atomically: false) {
+            try tree.whitelist.defaultOutputFile(name: "note", extension: "md")
+        }
+
+        #expect(attempt.errorText == "none")
+        #expect(attempt.accepted?.path == real.appendingPathComponent("note.md").path)
+        #expect(attempt.landedAt == SymlinkTree.physicalPath(of: target))
+    }
+
+    /// The second site inside `PathWhitelist`: `resolveOutputPath` given a path that is an existing
+    /// *directory* appends the generated name inside it, which is the same composition by a different
+    /// door. `CreateLocalDraftCapabilityAdapter` and `WebResearchMarkdownCapabilityAdapter` both
+    /// reach it whenever a plan names a folder rather than a file.
+    @Test
+    func theDirectoryBranchOfResolveOutputPathValidatesTheLeafItAppends() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let target = tree.outside.appendingPathComponent("draft.md")
+        try FileManager.default.createSymbolicLink(
+            at: tree.root.appendingPathComponent("draft.md"),
+            withDestinationURL: target
+        )
+
+        let attempt = tree.attemptWrite(atomically: false) {
+            try tree.whitelist.resolveOutputPath(
+                rawPath: tree.root.path,
+                defaultName: "draft",
+                extension: "md",
+                fileManager: .default
+            )
+        }
+
+        #expect(attempt.landedAt == nil, "bytes reached \(attempt.landedAt ?? "") through an accepted path")
+        #expect(tree.isOutsideWhitelist(attempt.error), "expected a containment refusal, got \(attempt.errorText)")
+        #expect(!FileManager.default.fileExists(atPath: target.path))
+    }
+
+    /// The ordinary case through that same branch, so the refusal above is not paid for by breaking
+    /// every draft written into a folder. Asserted on the composed path and on where the bytes went,
+    /// because a returned URL that is never written through proves nothing about the write.
+    @Test
+    func theDirectoryBranchStillComposesTheGeneratedNameInsideTheFolder() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+
+        let attempt = tree.attemptWrite(atomically: false) {
+            try tree.whitelist.resolveOutputPath(
+                rawPath: tree.root.path,
+                defaultName: "draft",
+                extension: "md",
+                fileManager: .default
+            )
+        }
+
+        #expect(attempt.errorText == "none")
+        #expect(attempt.accepted?.lastPathComponent == "draft.md")
+        #expect(attempt.landedAt == SymlinkTree.physicalPath(of: tree.root.appendingPathComponent("draft.md")))
+    }
+
+    /// A leaf that is not a link at all still has to reach the containment check, because
+    /// `appendingPathComponent` will happily compose `..` out of the folder. Nothing generates such a
+    /// name today — every caller passes a slug or a timestamp — so this pins the property rather than
+    /// a reachable defect, and it is the one assertion here that would still fail if
+    /// `validateOutputFile` were reduced to a plain `appendingPathComponent`.
+    @Test
+    func aGeneratedLeafThatClimbsOutOfTheFolderIsRefusedByContainment() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+
+        let attempt = tree.attemptWrite(atomically: false) {
+            try tree.whitelist.validateOutputFile(named: "../escaped.md", in: tree.root)
+        }
+
+        #expect(attempt.landedAt == nil, "bytes reached \(attempt.landedAt ?? "") through an accepted path")
+        #expect(tree.isOutsideWhitelist(attempt.error), "expected a containment refusal, got \(attempt.errorText)")
+    }
 }
 
 // MARK: - Fixture
@@ -468,12 +594,19 @@ private struct SymlinkTree {
     /// validated path: Foundation's atomic write, which replaces a symlink at the leaf, and an
     /// ordinary `open` — `/usr/bin/zip`, an app told to save somewhere — which follows it.
     func attemptOutput(at rawPath: String, atomically: Bool = true) -> OutputAttempt {
+        attemptWrite(atomically: atomically) { try whitelist.validateOutputPath(rawPath) }
+    }
+
+    /// The same proof for a URL the whitelist **composes** rather than one it is handed — the
+    /// generated-leaf sites SONNY-264 closed. Split out of `attemptOutput` rather than copied, so
+    /// every test here decides where the bytes went by the same two lines.
+    func attemptWrite(atomically: Bool = true, producing url: () throws -> URL) -> OutputAttempt {
         var attempt = OutputAttempt()
         do {
-            let url = try whitelist.validateOutputPath(rawPath)
-            attempt.accepted = url
-            try Data("bytes".utf8).write(to: url, options: atomically ? [.atomic] : [])
-            attempt.landedAt = Self.physicalPath(of: url)
+            let target = try url()
+            attempt.accepted = target
+            try Data("bytes".utf8).write(to: target, options: atomically ? [.atomic] : [])
+            attempt.landedAt = Self.physicalPath(of: target)
         } catch {
             attempt.error = error
         }

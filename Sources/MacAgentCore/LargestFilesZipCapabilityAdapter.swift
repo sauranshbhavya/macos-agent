@@ -151,7 +151,24 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         if let rawOutput = zipStep?.outputPath, !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             outputURL = try context.whitelist.validateOutputPath(rawOutput)
         } else {
-            outputURL = folder.appendingPathComponent("largest-files-\(Timestamp.fileSafe(context.now())).zip")
+            // Through the whitelist, not appended straight onto `folder` (SONNY-264). The folder was
+            // validated; the leaf was not, and this destination's writer is the one in the tree that
+            // follows a leaf symlink — `ProcessZipArchiver` hands the path to `/usr/bin/zip`, which
+            // opens it. The user-named branch three lines above always validated; this one now does
+            // the same thing by the same call.
+            //
+            // **What that was worth is smaller than the ticket says, and measuring it is what says
+            // so.** Against a tree carrying the pre-fix composition, a dangling link planted at this
+            // exact generated name is still refused by both `prepare` and `execute`, and its target
+            // is never created: `resolveDefaultOutputs` pins this path into the step's `outputPath`,
+            // and the next pass through `spec` therefore takes the validated branch above. The route
+            // that really was exposed is the dry run — `AgentActionExecutor.preview(plan:)` does not
+            // resolve, so on that tree it reported the link's own path as where the archive would go.
+            // What this line buys is that the property no longer depends on being asked twice.
+            outputURL = try context.whitelist.validateOutputFile(
+                named: "largest-files-\(Timestamp.fileSafe(context.now())).zip",
+                in: folder
+            )
         }
 
         return LargestFileSpec(folder: folder, count: count, outputURL: outputURL)
