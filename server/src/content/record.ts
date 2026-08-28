@@ -134,11 +134,30 @@ export function requestContentOf(route: MeteredRoute, body: unknown): RequestCon
  *
  * `null` rather than `undefined` throughout, for the reason `MeteringEvent` gives: each of these is
  * bound to a column and the two would otherwise be one more thing to normalise at the boundary.
- *
- * `retention` is absent by construction. The table admits one value, the writer has already
- * answered `isStorable`, and a field here would be a third place the same fact was written down.
  */
 export interface RetainedContent {
+  /**
+   * What the caller actually declared, carried through **unnarrowed**, so the table's CHECK is a
+   * backstop rather than a decoration (PR #148's review, F3).
+   *
+   * **This field was absent, and its absence is what made the second of the three layers do
+   * nothing.** The reasoning for leaving it out read well — the table admits one value, the writer
+   * has already answered `isStorable`, and a field here would be a third place the same fact was
+   * written down — and it was wrong in the way that matters: with the column unbound, every
+   * production insert took the column's default, so **a wrong `isStorable` would have stored an
+   * incognito row labelled `standard` and the CHECK would have passed it.** The layer's own claim
+   * was "if something above this is ever wrong, the insert is refused rather than served", and it
+   * could not have been.
+   *
+   * **So the declared value is bound, and it is deliberately not narrowed to `"standard"` by the
+   * `isStorable` guard above it.** A narrowing type predicate would return the field to decoration
+   * from the other direction: the compiler would guarantee the literal, and a wrong guard would once
+   * again write a `standard` label over an incognito call. Carrying `DeclaredRetention` means a
+   * wrong guard writes `'none'` and the CHECK refuses it, and an `undefined` — a request that
+   * declared nothing, which must not be stored either — binds NULL against a NOT NULL column and is
+   * refused too. Both wrong answers become constraint violations rather than rows.
+   */
+  readonly retention: DeclaredRetention;
   readonly requestId: string;
   readonly accountId: string;
   readonly taskId: string | null;

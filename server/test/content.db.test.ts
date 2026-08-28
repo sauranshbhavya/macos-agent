@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   accountSupportView,
   contentForRequest,
@@ -99,6 +99,10 @@ function content(overrides: Partial<RetainedContent> = {}): RetainedContent {
     sessionId: "session-1",
     sessionIteration: 1,
     route: "screen.analyze",
+    // Bound explicitly by the writer since PR #148's F3, so the fixture has to carry it — and a
+    // test that wants to prove the CHECK is a backstop overrides it to `"none"` and expects a
+    // constraint violation from the real writer rather than from a hand-written statement.
+    retention: "standard",
     expiresAt: contentExpiryFrom(new Date(), RETENTION_DAYS),
     provider: "vision",
     providerRequestId: "req_vision_1",
@@ -326,6 +330,124 @@ describeDb("the content store, its clocks, and what reaches training", () => {
     });
   });
 
+  describe("the second storing place: sonny.idempotency_key", () => {
+    /**
+     * The whole app over this connection, with a stubbed provider so a route can actually succeed.
+     *
+     * **A successful response is required and this is not a detail** (PR #148's review, F1/F5). With
+     * no credential the plan route answers `502 provider.unavailable`, which is one of §9.3's
+     * retryable codes and is therefore *released* rather than stored — so a test built on it would
+     * have found an empty `response_body` and passed whether or not the incognito guard existed.
+     */
+    const CREDENTIALS = [{ provider: "openai" as const, keys: ["sk-test-openai-key"] }];
+    const SUPABASE_USER = "6f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a7766";
+
+    const app = () =>
+      buildApp(testConfig({ databaseUrl: url, credentials: CREDENTIALS }), {
+        provider: new UnusedAuthProvider(),
+        withConnection: async (work) => work(client),
+      });
+
+    beforeEach(async () => {
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, link_method, supabase_user_id)
+         VALUES ($1, 'email', $2, 'primary', $3)`,
+        [CONSENTING, "second-store@example.test", SUPABASE_USER],
+      );
+      vi.stubGlobal("fetch", async () =>
+        new Response(
+          JSON.stringify({
+            output_text: '{"secret":"THE-MODEL-REPLY"}',
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const plan = async (retention: "standard" | "none", key: string) =>
+      app().inject({
+        method: "POST",
+        url: "/v1/plan",
+        headers: {
+          authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}`,
+          "idempotency-key": key,
+        },
+        payload: {
+          task_id: "task-second-store",
+          retention,
+          messages: [{ role: "user", text: "Open Safari" }],
+          response_schema_name: "agent_plan",
+          response_schema: { type: "object" },
+        },
+      });
+
+    const storedBody = async (key: string): Promise<string | null> => {
+      const { rows } = await client.query<{ state: string; body: Buffer | null }>(
+        `SELECT state, response_body AS body FROM sonny.idempotency_key
+          WHERE account_scope = $1 AND idempotency_key = $2`,
+        [CONSENTING, key],
+      );
+      if (rows.length === 0) throw new Error("no idempotency row at all — the claim should survive");
+      return rows[0]!.body === null ? null : rows[0]!.body.toString("utf8");
+    };
+
+    it("keeps no response body for an incognito call, and keeps the row", async () => {
+      // The measured defect, as a test. Before the fix this row's `response_body` held the model's
+      // reply verbatim — outside the content clock, outside consent, and outside what a per-task
+      // delete can reach.
+      const key = randomUUID();
+      const response = await plan("none", key);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain("THE-MODEL-REPLY");
+
+      expect(await storedBody(key)).toBeNull();
+      // `retained_content` is empty too, which is the guarantee the three layers already had.
+      expect(await contentRows()).toHaveLength(0);
+      // And the call is still metered, because incognito changes what is stored and not what is
+      // billed — the row that survives is what makes that at-most-once.
+      const { rows: metered } = await client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM sonny.metering_event WHERE task_id = 'task-second-store'",
+      );
+      expect(metered[0]!.count).toBe("1");
+    });
+
+    it("keeps a standard call's response body, so the guard is not simply off", async () => {
+      const key = randomUUID();
+      await plan("standard", key);
+      expect(await storedBody(key)).toContain("THE-MODEL-REPLY");
+    });
+  });
+
+  describe("the retention CHECK is a backstop the production writer can actually trip", () => {
+    it("refuses an incognito row written through the real writer, not just a hand-written one", async () => {
+      // **PR #148's F3.** The writer omitted the column, so every insert took the table's default
+      // and the CHECK could only ever refuse a statement the gateway cannot emit. Now the declared
+      // value is bound, so a wrong `isStorable` one layer up becomes a constraint violation.
+      await expect(
+        insertRetainedContent(client, content({ retention: "none" })),
+      ).rejects.toThrow(/retention/);
+      expect(await contentRows()).toHaveLength(0);
+    });
+
+    it("refuses a row that declared nothing, which must not be stored either", async () => {
+      // §2.4.2 at the storage layer, as a constraint rather than only as a guard: an explicit NULL
+      // against a NOT NULL column with no default.
+      await expect(
+        insertRetainedContent(client, content({ retention: undefined })),
+      ).rejects.toThrow(/retention/);
+      expect(await contentRows()).toHaveLength(0);
+    });
+
+    it("stores the declared value rather than a default, so the column is not decoration", async () => {
+      await insertRetainedContent(client, content());
+      expect((await contentRows())[0]!["retention"]).toBe("standard");
+    });
+  });
+
   describe("training consent", () => {
     it("takes only consenting accounts, and excludes one whose consent was never written", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING, taskId: "yes" }));
@@ -406,6 +528,72 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(deletions[0]!.contentRows).toBe(1);
       // No account: a sweep spans them by construction.
       expect(deletions[0]!.accountId).toBeNull();
+    });
+
+    it("clears a stored response past its window, on the sweep this branch built", async () => {
+      // **PR #148's F2.** `pruneExpiredResponses` had no production call site, so three sentences on
+      // this branch claimed a residual was "bounded by that table's own twenty-four hours" while
+      // nothing enforced the bound. Measured then: a body back-dated thirty days survived a full
+      // sweep. This is that measurement as a test, and it is on `sweepExpiredContent` rather than on
+      // the prune directly — the defect was never in the function, it was that nothing called it.
+      const key = "prune-me";
+      const claimed = await claimKey(client, {
+        accountScope: CONSENTING,
+        key,
+        route: "POST /v1/plan",
+        fingerprint: "sha256:aaa",
+      });
+      if (claimed.kind !== "claimed") throw new Error("the key was not claimable");
+      await completeClaim(
+        client,
+        { accountScope: CONSENTING, key, token: claimed.token },
+        {
+          status: 200,
+          body: Buffer.from('{"output_text":"something the user said"}'),
+          contentType: "application/json",
+          requestId: "r",
+        },
+      );
+      await client.query(
+        "UPDATE sonny.idempotency_key SET response_expires_at = now() - interval '30 days'",
+      );
+
+      const swept = await sweepExpiredContent(client);
+      expect(swept.storedResponses).toBe(1);
+
+      const { rows } = await client.query<{ has_body: boolean; claimed: boolean }>(
+        `SELECT response_body IS NOT NULL AS has_body, metering_claimed_at IS NOT NULL AS claimed
+           FROM sonny.idempotency_key WHERE idempotency_key = $1`,
+        [key],
+      );
+      // The payload is gone and **the row is not**, which is the whole reason this is a prune rather
+      // than a delete: the row carries the claim that makes §9.2's metering guarantee true.
+      expect(rows[0]!.has_body).toBe(false);
+    });
+
+    it("leaves a stored response still inside its window", async () => {
+      // The other direction, so the prune is not merely "clears everything it can reach".
+      const key = "keep-me";
+      const claimed = await claimKey(client, {
+        accountScope: CONSENTING,
+        key,
+        route: "POST /v1/plan",
+        fingerprint: "sha256:aaa",
+      });
+      if (claimed.kind !== "claimed") throw new Error("the key was not claimable");
+      await completeClaim(
+        client,
+        { accountScope: CONSENTING, key, token: claimed.token },
+        { status: 200, body: Buffer.from("{}"), contentType: "application/json", requestId: "r" },
+      );
+
+      const swept = await sweepExpiredContent(client);
+      expect(swept.storedResponses).toBe(0);
+      const { rows } = await client.query<{ has_body: boolean }>(
+        "SELECT response_body IS NOT NULL AS has_body FROM sonny.idempotency_key WHERE idempotency_key = $1",
+        [key],
+      );
+      expect(rows[0]!.has_body).toBe(true);
     });
 
     it("writes no record for a sweep that found nothing", async () => {
@@ -705,6 +893,41 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       const deletions = await recentContentDeletions(client, { limit: 10 });
       expect(deletions[0]!.reason).toBe("account");
       expect(deletions[0]!.accountId).toBe(CONSENTING);
+    });
+
+    it("takes an account whose only residue is a stored response body", async () => {
+      // **PR #148's F4.** The selection asked only about `retained_content`, so an account closed
+      // with all-incognito usage, or whose content had already expired, was never picked up by any
+      // pass — and the recovery this exists to be held exactly when retained content happened to
+      // exist. There is deliberately no content row in this test.
+      const key = "residue-only";
+      const claimed = await claimKey(client, {
+        accountScope: CONSENTING,
+        key,
+        route: "POST /v1/plan",
+        fingerprint: "sha256:aaa",
+      });
+      if (claimed.kind !== "claimed") throw new Error("the key was not claimable");
+      await completeClaim(
+        client,
+        { accountScope: CONSENTING, key, token: claimed.token },
+        {
+          status: 200,
+          body: Buffer.from('{"output_text":"the reply nobody swept"}'),
+          contentType: "application/json",
+          requestId: "r",
+        },
+      );
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [CONSENTING]);
+      expect(await contentRows()).toHaveLength(0);
+
+      const swept = await sweepClosedAccountContent(client, deleteStoredResponsesForAccount);
+      expect(swept?.storedResponses).toBe(1);
+      const { rows } = await client.query<{ has_body: boolean }>(
+        "SELECT response_body IS NOT NULL AS has_body FROM sonny.idempotency_key WHERE idempotency_key = $1",
+        [key],
+      );
+      expect(rows[0]!.has_body).toBe(false);
     });
 
     it("does nothing for an open account, however much content it holds", async () => {

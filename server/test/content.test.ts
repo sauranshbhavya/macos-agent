@@ -135,6 +135,21 @@ class StatefulKeyStore implements KeyStore {
     row.state = "released";
     delete row.response;
   }
+
+  /**
+   * What this key's row holds, for the tests that ask whether a response body was stored at all.
+   *
+   * **The row and the response are read separately on purpose** (PR #148's review, F1/F5). An
+   * incognito call must leave the row — the claim, the fingerprint and the fencing token are what
+   * keep §9.2's other three guarantees, including the at-most-once metering claim — and must leave
+   * no body. "No row" and "a row with no body" are different answers and only one of them is right.
+   */
+  row(scope: string, key: string): { state: string; hasResponse: boolean } | undefined {
+    const row = this.rows.get(this.id(scope, key));
+    return row === undefined
+      ? undefined
+      : { state: row.state, hasResponse: row.response !== undefined };
+  }
 }
 
 class RecordingContentStore implements ContentStore {
@@ -422,6 +437,104 @@ describe("an incognito run is never stored, and is still billed", () => {
     expect(content.rows).toEqual([]);
     expect(metering.events).toHaveLength(1);
     expect(metering.events[0]!.route).toBe("transcription");
+  });
+
+  it("stores no response body in the idempotency store, and keeps that key's claim", async () => {
+    // **PR #148's F1.** `sonny.idempotency_key` keeps the served response for twenty-four hours,
+    // which makes it the second place in this gateway that stores response content — and it had no
+    // notion of retention, so an incognito call's model reply was kept there verbatim. The three
+    // layers in `content/hook.ts` all guard a different table.
+    //
+    // The assertion is deliberately two-sided. **No body**, because that is the promise; **and the
+    // row is still there**, because the claim, the fingerprint and the fencing token are what keep
+    // §9.2's other three guarantees — deleting the row would hand this key a second metering event.
+    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    const app = build();
+    const key = randomUUID();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: headers(key),
+      payload: planBody({ retention: "none" }),
+    });
+    await app.contentWritesSettled();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).output_text).toBe('{"steps":[]}');
+    expect(content.rows).toEqual([]);
+    expect(keys.row(ACCOUNT, key)).toEqual({ state: "released", hasResponse: false });
+  });
+
+  it("re-runs a repeated incognito call rather than replaying it, which is the deviation", async () => {
+    // The cost of F1's fix, asserted rather than described. §9.2's second row says a repeat inside
+    // the window returns the stored response; for an incognito call there is no stored response, so
+    // the handler runs again and the provider is called a second time. The metering claim survives,
+    // so that second call is unbilled — the same trade the released-retryable deviation already
+    // makes. Contract §14 carries the row; this is the behaviour.
+    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    const app = build();
+    const key = randomUUID();
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: headers(key),
+      payload: planBody({ retention: "none" }),
+    });
+    const repeat = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: headers(key),
+      payload: planBody({ retention: "none" }),
+    });
+    await app.contentWritesSettled();
+
+    expect(first.statusCode).toBe(200);
+    expect(repeat.statusCode).toBe(200);
+    expect(upstreamCalls).toBe(2);
+    expect(content.rows).toEqual([]);
+  });
+
+  it("still stores a standard call's response body, so the fix did not disable the feature", async () => {
+    // The other side of F1, because a guard that withheld every body would pass the test above and
+    // silently remove §9.2's replay from the whole gateway.
+    stubUpstream(() => jsonResponse(OPENAI_REPLY));
+    const app = build();
+    const key = randomUUID();
+    await app.inject({ method: "POST", url: "/v1/plan", headers: headers(key), payload: planBody() });
+    await app.contentWritesSettled();
+
+    expect(keys.row(ACCOUNT, key)).toEqual({ state: "completed", hasResponse: true });
+
+    const repeat = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: headers(key),
+      payload: planBody(),
+    });
+    await app.contentWritesSettled();
+    expect(repeat.statusCode).toBe(200);
+    // Replayed, not re-run: one upstream call across both requests.
+    expect(upstreamCalls).toBe(1);
+  });
+
+  it("keeps replay for an auth route, which declares no retention and carries no content", async () => {
+    // **The reason the guard reads `=== "none"` and not `!== "standard"`.** Widening it would strip
+    // §9.2's replay from the four auth routes, none of which has a retention field to declare.
+    // `email/start` answers 400 on a malformed body, which is a stored response like any other.
+    const app = build();
+    const key = randomUUID();
+    await app.inject({
+      method: "POST",
+      url: "/v1/auth/email/start",
+      headers: { "idempotency-key": key },
+      payload: { email: "not-an-email" },
+    });
+    await app.contentWritesSettled();
+
+    expect(keys.row("00000000-0000-0000-0000-000000000000", key)).toEqual({
+      state: "completed",
+      hasResponse: true,
+    });
   });
 
   it("stores no provider error body for an incognito call either", async () => {

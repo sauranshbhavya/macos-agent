@@ -45,10 +45,17 @@ import { errorBody } from "../errors.js";
  * **What this cannot reach, stated rather than left to be discovered: the idempotency store's
  * stored responses.** `sonny.idempotency_key` holds one response body per key for twenty-four
  * hours, and it is keyed on `(account_scope, idempotency_key)` with no `task_id` — so a per-task
- * delete has no way to name the rows belonging to one task. The residual is bounded by that
- * twenty-four hours and by the fact that the payload is a response the user already has; the
- * account-wide wipe does clear them (`routes/auth.ts`, SONNY-319), because that path is scoped the
- * way that table is. Adding a `task_id` column to another lane's table was not this branch's to do.
+ * delete has no way to name the rows belonging to one task. The account-wide wipe does clear them
+ * (`routes/auth.ts`, SONNY-319), because that path is scoped the way that table is, and adding a
+ * `task_id` column to another lane's table was not this branch's to do.
+ *
+ * **The residual is bounded by twenty-four hours, and until PR #148's review that sentence was
+ * false** (F2). It named a bound that nothing enforced: `pruneExpiredResponses` had no production
+ * call site, so a body sat past its window indefinitely and the residual was unbounded. The prune
+ * now runs on the content-expiry sweep (`content/expiry.ts`), so the bound is real — one sweep
+ * interval past the window rather than exactly twenty-four hours, which is the honest figure. Two
+ * things narrow it further and neither is the bound: the payload is a response the user's own Mac
+ * already has, and an incognito run stores no body here at all (F1).
  */
 
 const params = z.object({ task_id: z.string().trim().min(1).max(200) });

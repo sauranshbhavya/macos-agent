@@ -33,11 +33,16 @@
 -- happens. `src/content/hook.ts` refuses first and never sends the insert; this is what is true
 -- even when something above it is wrong.
 --
--- **The column is redundant by construction and is kept for what redundancy buys here.** A table
--- that simply had no `retention` column would hold the same rows, and its guarantee would be
--- "whoever writes to it decided not to store incognito" — a property of code that changes rather
--- than of a schema that does not. With the column, the guarantee is readable in `\d` and is
--- testable by trying to break it, which `content.db.test.ts` does.
+-- **The column is written by the production insert, and it carries no DEFAULT** (corrected
+-- 2026-08-28, PR #148's review, F3). Both halves matter and the first draft had neither: the writer
+-- omitted the column and the column defaulted to `'standard'`, so every row was labelled storable
+-- whatever the caller had asked for and **the CHECK could only ever refuse a hand-written statement
+-- the running gateway cannot emit**. A wrong `isStorable` one layer up would have stored an
+-- incognito call labelled `standard` and this constraint would have passed it — which is the
+-- opposite of the sentence above. `src/content/store.ts` now binds the value the caller declared,
+-- unnarrowed, so a wrong guard writes `'none'` and this refuses it; and with no DEFAULT, a writer
+-- that forgets the column fails on NOT NULL rather than being quietly assumed storable. A default is
+-- what let the first version go unnoticed, which is why there is not one.
 --
 -- **A missing `retention` is not a stored row either, and that is §2.4.2 rather than an extra
 -- rule.** The field has no default on the wire: a request without it is a `400`, precisely so that
@@ -76,8 +81,8 @@ CREATE TABLE sonny.retained_content (
   -- deletion rather than a column: `content.db.test.ts` ages a row and watches it go.
   expires_at             timestamptz NOT NULL,
 
-  -- The one value this column accepts. See the header.
-  retention              text        NOT NULL DEFAULT 'standard'
+  -- The one value this column accepts, and no default. See the header.
+  retention              text        NOT NULL
                            CHECK (retention = 'standard'),
 
   -- Which provider served, and the provider's own id for the call. §10.3: "Provider request IDs are

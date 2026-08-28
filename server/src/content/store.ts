@@ -27,6 +27,13 @@ const COLUMNS = [
   "session_iteration",
   "route",
   "expires_at",
+  // **Bound explicitly, and that is the whole of F3's fix** (PR #148's review). With the column
+  // omitted every insert took the table's default, so the CHECK could only ever refuse a
+  // hand-written statement the gateway cannot emit — a backstop for nobody. The value bound is the
+  // one the caller declared, so a wrong `isStorable` above writes `'none'` here and the constraint
+  // refuses it. The column's `DEFAULT` was dropped in the same change: a default is what let this
+  // go unnoticed, and without one a writer that forgets the column fails loudly on NOT NULL.
+  "retention",
   "provider",
   "provider_request_id",
   "request_text",
@@ -55,6 +62,11 @@ function values(content: RetainedContent): unknown[] {
     content.sessionIteration,
     content.route,
     content.expiresAt,
+    // `undefined` — a request that declared nothing — is normalised to an explicit NULL rather than
+    // left for `pg` to infer, and an explicit NULL against a NOT NULL column is a refusal. That is
+    // the second half of the backstop: `isStorable` already excludes it, and if it ever did not, the
+    // row does not land.
+    content.retention ?? null,
     content.provider,
     content.providerRequestId,
     // `pg` serialises this as JSON for a `jsonb` parameter. `null` stays SQL NULL rather than the
@@ -328,10 +340,18 @@ export async function sweepClosedAccountContent(
   clearStoredResponses: (client: pg.Client, accountId: string) => Promise<number>,
 ): Promise<DeletionOutcome | undefined> {
   const { rows } = await client.query<{ account_id: string }>(
+    // **Either residue selects the account, and the second arm is PR #148's F4.** This asked only
+    // about `sonny.retained_content`, which meant an account whose *only* leftover was a stored
+    // response body — all-incognito usage, or content that had already expired — was never picked
+    // up by any pass, and the recovery this function exists to be was true exactly when retained
+    // content happened to exist. Both arms are `EXISTS` rather than a join, so an account with a
+    // thousand rows costs the same as one with a single row.
     `SELECT a.id::text AS account_id
        FROM sonny.account a
       WHERE a.deleted_at IS NOT NULL
-        AND EXISTS (SELECT 1 FROM sonny.retained_content rc WHERE rc.account_id = a.id)
+        AND (EXISTS (SELECT 1 FROM sonny.retained_content rc WHERE rc.account_id = a.id)
+             OR EXISTS (SELECT 1 FROM sonny.idempotency_key k
+                         WHERE k.account_scope = a.id AND k.response_body IS NOT NULL))
       ORDER BY a.deleted_at
       LIMIT 1`,
   );
