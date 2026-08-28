@@ -2707,6 +2707,40 @@ struct AgentActionExecutorTests {
         #expect(result.previews.flatMap(\.writes).contains(target.path))
     }
 
+    /// The other side of "only the records that will be written", and it is a decision rather than an
+    /// optimisation: a skipped record's PDF already exists and neither converter touches it, so
+    /// validating it could only refuse a whole scan over a file nothing is going to write.
+    ///
+    /// A pre-existing PDF that is a symbolic link to somewhere outside the roots is exactly that
+    /// case. `fileExists` follows it to a target that *is* there, so the record is skipped, and the
+    /// document beside it must still convert. Added because SONNY-264's own battery found the guard
+    /// unheld: the mutant that drops it — validating every record rather than the pending ones —
+    /// survived a full suite (`scripts/mutate`, mutant M4, at `79ef4f2`), which means the branch was
+    /// a comment until this test existed.
+    @Test
+    func aSkippedPdfThatIsALinkOutOfTheRootDoesNotRefuseTheWholeScan() async throws {
+        let fixture = try collidingDocxFixture(nameA: "report", nameB: "other")
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("somebody-elses.pdf")
+        try write("not ours", to: target)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(try String(contentsOf: fixture.outputFolder.appendingPathComponent("other.pdf"), encoding: .utf8) == "fake pdf")
+        #expect(try String(contentsOf: target, encoding: .utf8) == "not ours", "the skipped record's link was written through")
+        #expect(result.summary.contains("Skipped 1 existing PDF outputs"))
+        #expect(result.previews.flatMap(\.writes) == [fixture.outputFolder.appendingPathComponent("other.pdf").path])
+    }
+
     /// The plan the two zip tests above share: a scan/zip pair with **no** destination, which is
     /// what sends the adapter down its generated-name branch.
     private func defaultNamedZipPlan(root: URL) -> AgentPlan {
