@@ -148,6 +148,16 @@ export function prunedSchema(schema: unknown): unknown {
  * `{"type":["string","null"], "enum":[...,null], "description":"…"}`, and splitting the type without
  * the `enum` would widen what the model may return on that field. Everything other than `type` stays
  * on the parent, where it constrains both branches — which is what the union spelling meant.
+ *
+ * **What this does not handle, and why it is a note rather than a branch** (PR #143, cycle 2's
+ * closing observation). `anyOf` is written unconditionally, so a node carrying *both* a `type` array
+ * and an `anyOf` of its own would lose the second. No schema this gateway serves has such a node —
+ * the plan schema's 53 unions produce 53 `anyOf`s and contribute none of their own, which
+ * `test/anthropic.test.ts` asserts as a count rather than leaving to inspection — so the case is
+ * unreachable today and merging the two correctly (an `allOf` of both) is speculative machinery for
+ * a shape nobody sends. It is written down here instead, because the failure would be silent: a
+ * constraint quietly dropped from a request, visible only as a model returning something it should
+ * not have been allowed to. A client schema that ever grows one starts here.
  */
 function withoutTypeUnions(node: Record<string, unknown>): Record<string, unknown> {
   const type = node["type"];
