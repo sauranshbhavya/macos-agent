@@ -457,6 +457,49 @@ struct OpenAIPlannerTests {
         }
     }
 
+    /// **A stop is not a failure, on the route a stop most often lands on** (SONNY-320).
+    ///
+    /// The shape asserted here is the one a real stop produces, not a convenient stand-in.
+    /// `cancelCurrentRun` cancels `currentTask`, the enclosing task's cancellation reaches the
+    /// in-flight `URLSession` call, and `URLSession` raises `URLError(.cancelled)` — which
+    /// `SonnyBackendClient.transportError` maps to `SonnyBackendError.cancelled` and this client
+    /// then wraps. So the stub fails the transport rather than injecting the wrapped error directly:
+    /// the mapping from a Foundation error to the typed one is part of what must keep working.
+    ///
+    /// **The last three expectations are the ones a mutant dies on.** A `backendError` that returned
+    /// `.cancelled` unconditionally, or ignored the associated value, satisfies everything above
+    /// them.
+    @Test
+    func aStopWhileAPlanIsInFlightIsACancellationRatherThanAFailure() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return .failure(URLError(.cancelled))
+        }
+        defer { fixture.unregister() }
+
+        do {
+            _ = try await Self.planner(fixture).plan(command: "Open Safari")
+            Issue.record("Expected the stopped request to surface as PlannerError.backend(.cancelled).")
+        } catch let error as PlannerError {
+            #expect(error == .backend(.cancelled))
+            #expect(
+                SonnyBackendError.isCancellation(error),
+                "a stop is not a failure to report - see performStart's catch"
+            )
+            // §9.3 gives `.cancelled` no attempt budget, so a stop costs exactly one request and
+            // never sits in a retry sleep the user is waiting through.
+            #expect(recorded.all.count == 1)
+        }
+
+        // The wrapper is transparent in one direction only: every other backend failure through the
+        // same case is still a failure, and a case carrying no backend error is not a cancellation.
+        #expect(!SonnyBackendError.isCancellation(PlannerError.backend(.offline)))
+        #expect(!SonnyBackendError.isCancellation(PlannerError.backend(.notSignedIn)))
+        #expect(!SonnyBackendError.isCancellation(PlannerError.missingOutputText))
+    }
+
     // MARK: - Fixtures
 
     private static func planner(
