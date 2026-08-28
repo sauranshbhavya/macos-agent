@@ -236,9 +236,8 @@ public extension SonnyBackendError {
     /// did, so the fourth shape above was recognised on one route and hidden on the other four; a
     /// stop on any of them read as a failure. The population is
     /// the error *type* rather than the route — four declarations,
-    /// `git grep -nE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 at `PLACEHOLDER_SHA`,
-    /// anchored to the start of a line so this sentence does not count itself, which the unanchored
-    /// form does — and they answer for five routes, because **`WebResearchSynthesizer.swift`
+    /// `git grep -cE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 files at `7642715`
+    /// — and they answer for five routes, because **`WebResearchSynthesizer.swift`
     /// declares no error of its own**: `WebResearchNoteDecodingError` there has three cases,
     /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote`, and no `.backend` at all, so
     /// `/v1/research/synthesize` throws `PlannerError.backend` and one conformance covers it and
@@ -246,9 +245,21 @@ public extension SonnyBackendError {
     /// that one, which would have sent its session looking for a fifth error type and finding an
     /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
     /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
-    /// (`git grep -nE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 at
-    /// `PLACEHOLDER_SHA`, anchored for the same reason and against the same trap: the unanchored
-    /// form answers six — the four, plus the protocol's own declaration, plus this very sentence).
+    /// (`git grep -cE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 files at
+    /// `7642715`; the `public enum` anchor is load-bearing there, because without it the same
+    /// command answers 5 — the protocol's own declaration below is the fifth.)
+    ///
+    /// **The `^ *` on the first of those two is a guard, not a fix, and PR #144's F6 was wrong about
+    /// what it guards against** (SONNY-320). F6 wrote that the unanchored form "matches its own
+    /// citation in `SonnyBackendError.swift` and answers five". It does not:
+    /// `git grep -cE 'case backend\(SonnyBackendError\)' -- Sources` answers **4 files at
+    /// `7642715`**, the same as the anchored form. A citation has to escape its parentheses —
+    /// a bare `(` opens an ERE group rather than matching a bracket — so the text sitting in this
+    /// file is `\(`, and a pattern looking for a literal `(` never matches it. Five is what a looser
+    /// pattern answers, not what the written one does. Keep the anchor anyway, against a later
+    /// citation written without escapes; what is not worth keeping is a figure nobody re-ran. The
+    /// changelog's SONNY-131 entry repeats F6's five and stays as it is — it is a dated record of
+    /// what that review found — and SONNY-320's entry carries the correction.
     ///
     /// **What it still does not reach is a caller that never asks it, not a shape it cannot see**,
     /// and the two known ones are filed rather than left here. The voice route's `catch` calls
