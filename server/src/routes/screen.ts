@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { errorBody } from "../errors.js";
+import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import {
   BODY_LIMIT_BYTES,
   DEADLINE_MS,
@@ -36,12 +37,25 @@ import { ProviderRejected } from "../model/upstream.js";
  *   runner's own `history`, and `session_id` is a client-minted key for metering and for the support
  *   lookup rather than a handle on anything here. That is also why an aborted session is not
  *   resumable server-side, which is an input to SONNY-131's mid-loop decision — recorded on the Mac,
- *   in `VisionSessionRunner`.
+ *   in `VisionSessionRunner`. **`session_id` is now what makes "what did that session cost" a
+ *   GROUP BY** rather than a second event shape (SONNY-133): twelve iterations are twelve events
+ *   sharing one value, which is the only shape available to a server that holds no session and whose
+ *   last iteration does not know it is the last.
  * - **It does not honour `retention`, and validates it anyway.** §2.4.2 makes an omitted `retention` a
  *   loud `400` rather than a guess in either direction. Nothing is stored at all — there is no
  *   content store yet, and SONNY-134 builds it together with §10.1's rule that retention is enforced
  *   where the storing happens. Validating now makes the client's half real and testable from the day
- *   it ships; claiming the guarantee now would be claiming a promise nothing keeps.
+ *   it ships; claiming the guarantee now would be claiming a promise nothing keeps. **It is recorded
+ *   on the metering event**, which is §10.1's other half: "metering runs either way — incognito
+ *   changes what is stored, never what is billed", and an event that dropped `retention: "none"`
+ *   requests would make exactly those runs free.
+ *
+ * **What it does do that it did not before: it feeds the metering event** (SONNY-133). This is the
+ * route §11 exists for — it is the one call the product will charge for, and it recorded nothing
+ * anywhere until this branch. The three things the hook cannot see for itself are deposited below:
+ * the image's bytes, dimensions and media type, which is what vision cost is actually derived from
+ * (§4.5 rule 3); that an upstream call was opened, which is what separates a provider failure from a
+ * refusal that spent nothing; and the provider that served.
  */
 
 /** §2.4: required on every content-bearing request, never defaulted. */
@@ -179,19 +193,35 @@ export function registerScreenRoutes(app: FastifyInstance, vision: VisionProvide
       // The one decode, and its only consumer is `byteLength`. §4.5 rule 1 is why nothing downstream
       // ever sees this buffer: what is forwarded is `image.data`, the string the client sent.
       const imageBytes = Buffer.from(image.data, "base64").byteLength;
+      // **Deposited before the ceiling check, not after.** §6.2 asks for the refusal to be
+      // diagnosable, and the event is where that is answered a week later: a `413` whose row does
+      // not carry the size it refused is a refusal nobody can size. It also costs nothing on the
+      // ordinary path, since the decode has already happened by here.
+      noteMetering(request, {
+        imageBytes,
+        imagePixelWidth: image.pixel_width,
+        imagePixelHeight: image.pixel_height,
+        imageMediaType: image.media_type,
+      });
       if (imageBytes > MAXIMUM_IMAGE_BYTES) {
         return tooLarge(request, reply, imageBytes, MAXIMUM_IMAGE_BYTES);
       }
 
       try {
-        const result = await withDeadlines(DEADLINE_MS.screenAnalyze, (signal) =>
-          vision({
-            prompt: parsed.data.prompt,
-            imageBase64: image.data,
-            imageMediaType: image.media_type,
-            signal,
-          }),
+        const result = await meteredUpstreamCall(request, () =>
+          withDeadlines(DEADLINE_MS.screenAnalyze, (signal) =>
+            vision({
+              prompt: parsed.data.prompt,
+              imageBase64: image.data,
+              imageMediaType: image.media_type,
+              signal,
+            }),
+          ),
         );
+        // §11's `provider`, and the vision route has exactly one — it is not on SONNY-132's router,
+        // so there is no chain to fail over and `failedOver` is empty by construction rather than by
+        // luck. `app.ts` records why the two have not been collapsed and who owns doing it.
+        noteMetering(request, { provider: "vision", failedOver: [], usage: result.usage });
 
         const body: Record<string, unknown> = {
           request_id: request.id,

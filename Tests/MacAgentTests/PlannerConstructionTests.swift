@@ -64,6 +64,54 @@ struct PlannerConstructionTests {
         #expect(capture.identifier == ObjectIdentifier(recorder))
     }
 
+    /// **What a run records reaches `taskUsageSummary`, so the local per-task summary cannot
+    /// silently go blank** (SONNY-133).
+    ///
+    /// The acceptance criterion is the ticket's own, and the contract states the rule it protects
+    /// (§11): "Server-side metering is the billable truth; where the two disagree the server is
+    /// authoritative, and the local summary must not silently go blank." The server half now writes
+    /// a metering event per call, which is what makes the second clause worth pinning — this side is
+    /// an approximation, and an approximation that quietly stopped populating would look exactly
+    /// like a task that cost nothing.
+    ///
+    /// The test above pins the recorder's *identity* one layer up; this pins the effect all the way
+    /// out to the published property, through a real `performStart` and its `defer`. Both are worth
+    /// having: a factory handed the right recorder whose values never reach the surface passes the
+    /// first and fails this.
+    @Test
+    func whatARunRecordsReachesThePublishedUsageSummary() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(
+            root: root,
+            // A screen-control record, because that is the kind this row of work exists for: the
+            // most expensive call the product makes, and the one nothing recorded before SONNY-131.
+            plannerUsage: AIUsageRecord(
+                kind: .screenControl,
+                model: "screen.analyze",
+                tokenSource: .reported,
+                tokenCounts: AIUsageTokenCounts(inputTokens: 1_900, outputTokens: 40, totalTokens: 1_940)
+            )
+        )
+
+        // Empty before the run, so the assertion below is about this run rather than about a field
+        // that was never cleared.
+        #expect(viewModel.taskUsageSummary.requestCount == 0)
+
+        viewModel.command = "tell me something delightful about penguins"
+        viewModel.start()
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let summary = viewModel.taskUsageSummary
+        #expect(summary.requestCount == 1)
+        #expect(summary.records.first?.kind == .screenControl)
+        #expect(summary.reportedTotalTokens == 1_940)
+        #expect(summary.estimatedTotalTokens == 0)
+        #expect(summary.hasUsageDetails)
+    }
+
     /// The run's own `BackendTaskContext` reaches the factory — this task's id, and the retention
     /// answer §2.4.2 forbids anyone from guessing.
     ///
@@ -145,6 +193,38 @@ private final class ClarifyingStubPlanner: Planning {
     }
 }
 
+/// A planner that records one usage record as it plans, the way every real one does.
+///
+/// `OpenAIPlanner`, `WebResearchSynthesizer`, `OpenAITranscriber` and `SonnyVisionModelClient` all
+/// call `usageRecorder.record(...)` beside their own reply parsing; this is that call and nothing
+/// else, so a test can assert what reaches `taskUsageSummary` without a network, a provider or a
+/// gateway.
+private final class RecordingStubPlanner: Planning {
+    private let usage: AIUsageRecord
+    private let recorder: any TaskUsageRecording
+
+    init(usage: AIUsageRecord, recorder: any TaskUsageRecording) {
+        self.usage = usage
+        self.recorder = recorder
+    }
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        recorder.record(usage)
+        return AgentPlan(
+            summary: "Ask before acting.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "clarify",
+                    operation: .clarify,
+                    description: "Ask which one.",
+                    question: "Planned by the injected factory — which penguin?"
+                )
+            ]
+        )
+    }
+}
+
 @MainActor
 private final class RecorderCapture {
     var identifier: ObjectIdentifier?
@@ -159,6 +239,7 @@ private final class ContextCapture {
 private func makeViewModel(
     root: URL,
     usageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
+    plannerUsage: AIUsageRecord? = nil,
     observe: @escaping @MainActor (BackendTaskContext, any TaskUsageRecording) -> Void = { _, _ in }
 ) throws -> AgentViewModel {
     let suiteName = "PlannerSelectionTests-\(UUID().uuidString)"
@@ -241,7 +322,12 @@ private func makeViewModel(
         taskUsageRecorder: usageRecorder,
         makePlanner: { context, recorder in
             observe(context, recorder)
-            return ClarifyingStubPlanner()
+            guard let plannerUsage else {
+                return ClarifyingStubPlanner()
+            }
+            // Handed the recorder the factory was given rather than the one the test holds, so the
+            // test asserts the path the run actually uses instead of a value it planted itself.
+            return RecordingStubPlanner(usage: plannerUsage, recorder: recorder)
         },
         userDefaults: userDefaults
     )
