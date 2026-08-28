@@ -3663,7 +3663,7 @@ final class AgentViewModel: ObservableObject {
     /// **The one writer, so the row's words and its Delete cannot come from different answers**
     /// (PR #110 fix-round review). Called from the Memory page's `onAppear`, from
     /// `refreshMemoryRowsAfterRun()` so a store that breaks mid-run does not leave the page saying
-    /// `0 saved`, and from the top of `deleteMemory(in:)` so the press acts on the truth rather than
+    /// a count of zero, and from the top of `deleteMemory(in:)` so the press acts on the truth rather than
     /// on a probe from whenever the page last appeared.
     ///
     /// **The remaining window is the confirmation dialog itself, and that is the world changing
@@ -3788,8 +3788,8 @@ final class AgentViewModel: ObservableObject {
     private func refreshMemoryRowsAfterRun() {
         refreshSavedItems()
         refreshMemoryEntries()
-        // A store that breaks during a run must not leave the page on screen saying `0 saved` with
-        // its Delete greyed out until the user navigates away and back — which is this branch's two
+        // A store that breaks during a run must not leave the page on screen saying a count of zero
+        // with its Delete greyed out until the user navigates away and back — which is this branch's two
         // tickets meeting each other.
         refreshStoreReadability()
     }

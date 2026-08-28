@@ -337,6 +337,37 @@ enum ComposerPresentation {
     }
 }
 
+/// The collapsed widget's own name (SONNY-251).
+///
+/// **The capsule was the one control in the widget that named itself nowhere at all**, and that —
+/// not the tooltip — is what SONNY-251 turned out to be about. It carried a `.help` and no
+/// `.accessibilityLabel`, so a VoiceOver user got whatever SwiftUI derives from an SF Symbol called
+/// `wand.and.stars.inverse` and a sighted user got a tooltip nobody has ever hovered. The ticket's
+/// own summary said "VoiceOver is unaffected throughout — the accessibility labels are separate and
+/// solid", and that was true of the other three of its four controls and false of this one.
+///
+/// **One string for both, which is the point of the constant.** The tooltip and the VoiceOver name
+/// are the same words by construction rather than by two literals agreeing, the same reason
+/// `ClarificationPresentation.cancelLabel` exists.
+///
+/// **The words are unchanged, deliberately, and there is a question in them for the founders.**
+/// `AppDelegate`'s menu-bar item says "Open Sonny" too and opens the *Command Center window*
+/// (`openCommandCenter`), while this expands the *floating widget* (`expandFromCompact`) — two
+/// destinations under three words. Renaming either is product vocabulary rather than a session's
+/// call, so this ticket names the collision and changes nothing; the manual checklist asks the
+/// question beside the hover it already owed. Filed as **SONNY-338**.
+///
+/// **No visible label, and that is not deference.** The capsule exists to be small — it is what a
+/// permanent on-screen overlay shrinks to when nothing needs attention — so text inside it undoes
+/// the state. The mic's remedy for an unreliable tooltip, a real hover row, is unavailable here for
+/// a reason already written down: `FloatingWidgetView.isMicHintSlotFree` treats the compact capsule
+/// as *owning* that slot, so the row and the capsule cannot both be on screen. A hint row for the
+/// capsule is a redesign of the collapsed state and belongs to SONNY-109's pass.
+enum CompactCapsulePresentation {
+    /// The capsule's tooltip and its VoiceOver name.
+    static let expandLabel = "Open Sonny"
+}
+
 /// The floating widget's text fields — the ones a caret can be in — and the rule for which of them
 /// gets it (SONNY-283).
 ///

@@ -410,6 +410,18 @@ compare directly — don't rely on memory of what it's supposed to look like.
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's
       unsent text (fixed 2026-07-21 — tracker #3).**
+- [ ] **(new 2026-08-28, SONNY-251)** **The collapsed capsule now has a VoiceOver name, and it had
+      none at all before.** Turn VoiceOver on (Cmd-F5), let the widget collapse to the small pill,
+      and move VoiceOver's cursor onto it. It must announce **"Open Sonny"**. Before this ticket it
+      carried a tooltip and no accessibility name, so it announced whatever macOS makes of an SF
+      Symbol called `wand.and.stars.inverse` — the other three icon-only controls in the widget have
+      always had a full name. This is the fix; the hover half of it is the §3d-bis row below
+- [ ] **(new 2026-08-28, SONNY-251 → SONNY-338, a wording call that is yours)** With that in front
+      of you: the capsule says **"Open Sonny"** and expands the *widget*, while the **menu-bar item
+      with the same three words** opens the *Command Center window*. Both are defensible on their
+      own. Say whether you want either reworded — nothing was changed here, because the words are
+      product vocabulary rather than a session's call, and a test asserts the collision as it stands
+      so a later change is noticed rather than rediscovered
 
 ### 3b. Working — `4-FloatingWidgetWorking.png`
 Submit a multi-step command **from the widget itself** (e.g. a routine with 2+ apps) to get real
@@ -691,7 +703,10 @@ case. Relaunch and open the widget.
       Sonny shrinks to when idle) — it should say **"Open Sonny"** — and, with a follow-up question
       on screen, hover the clarification panel's **cancel** control. Say for each whether a tooltip
       appears. These two predate the finding above and were left in place on a "free if it works"
-      footing; nothing depends on them, so this is filling in the record rather than checking a fix
+      footing; nothing depends on them, so this is filling in the record rather than checking a fix.
+      **(Note 2026-08-28, SONNY-251: still true of the hover, and no longer true of the capsule's
+      words in general — it had no VoiceOver name at all, and now has one. The row for that is in
+      §3a.)**
 - [x] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
       quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
       This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it
@@ -981,6 +996,23 @@ it feels confusing in practice, not just whether it's "technically correct."
       name. SONNY-41's inert rendering stays primary over any icon decoration; the two are
       independent fields, so this is a visual judgement no test can make.
 
+### Memory (new 2026-08-28, SONNY-243)
+
+- [ ] **Every row's count now names what it counts.** Open Command Center → Memory. Each row's
+      grey line used to read "**N saved**" whatever the row was; it now reads `3 routines`,
+      `2 workspaces`, `184 tasks`, `26 artifacts`, `1 folder`, `12 copied items`, `4 snippets`,
+      `2 apps`, `1 unfinished task`. **Say whether the nouns read right to you** — the three that
+      are not simply the row's own title are the ones worth a second look: **artifacts**,
+      **copied items**, and **unfinished task** (spelled out rather than "task" because Task history's
+      rows are tasks too and the two counts must not look addable). Every noun lives in one switch,
+      so any of them is a one-line change if you want different words
+- [ ] **The pair you reported on 2026-08-23 no longer reads as a contradiction.** Ask Sonny to write
+      two files into the same folder (`~/Desktop` is what you used). Then Memory → Output locations
+      should read **"1 folder · newest …"**, and pressing **View** should show
+      **"Desktop · ~/Desktop · used 2 times · last …"**. Both numbers are still what they always
+      were — what changed is that each one now says what it is counting. Say whether the two still
+      read as though one of them is wrong
+
 ### Settings — `10-MainAppSettings.svg`/`.png`, opened via the bottom-left account row
 - [x] Account row shows your real macOS full name only, no email/plan badge
 - [x] **Preferences:** Display full names toggle actually changes name rendering somewhere real; Use
@@ -995,6 +1027,19 @@ it feels confusing in practice, not just whether it's "technically correct."
       whether these ever flip to confirmed, or stay "?" permanently (worth knowing which either way)
 - [x] **Data:** "Delete Sonny local data" — do this **last**. Confirm it actually deletes everything
       listed, doesn't crash, and every page shows a clean empty state afterward, not errors
+- [ ] **(new 2026-08-28, SONNY-233)** **Read the two sentences before you press anything, and do
+      the press itself last.** The detail line under **Delete Sonny local data** used to name ten of
+      the thirteen kinds of thing the wipe deletes, and the **confirmation dialog** named nine — so
+      the two surfaces describing one irreversible press disagreed with each other as well as with
+      the wipe. Both now read one sentence built from the store list itself, and the four that had
+      gone missing are in it: **what past tasks planned**, **allowed apps**, **unfinished tasks**
+      and (in the dialog) **common output locations**. Check that the page and the dialog say the
+      same thing, and **say whether the sentence is too long to read** — it is thirteen items now,
+      and the alternative considered and rejected was pointing at the Memory page instead, which
+      would have stopped the sentence naming *records of what Sonny did on screen*
+- [ ] **(new 2026-08-28, SONNY-233)** Then press it, as the row above says — confirm the wipe still
+      does what it always did, and that nothing in the new wording promises something the press does
+      not take
 
 ### Account menu / Profile / Learn More
 - [x] Profile → honest "Not designed yet" placeholder (correct)

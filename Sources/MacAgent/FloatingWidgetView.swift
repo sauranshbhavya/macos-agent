@@ -448,6 +448,16 @@ struct FloatingWidgetView: View {
             .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
+    /// The collapsed widget. Icon-only by design, so its words are `CompactCapsulePresentation`'s
+    /// — see there for why it carries no visible label and why the tooltip's wording is a question
+    /// left open rather than answered here.
+    ///
+    /// **The VoiceOver name is the fix SONNY-251 turned up.** This control had a tooltip and no
+    /// `.accessibilityLabel` at all, which made it the only one of the file's four icon-only
+    /// controls that named itself on *neither* channel — the other three have carried a full
+    /// accessibility name throughout. The name sits directly above the tooltip here and on all
+    /// three of the others, which is the convention
+    /// `WidgetControlNamingTests.everyTooltipInTheWidgetSitsBesideAVoiceOverName` reads.
     private var compactCapsule: some View {
         Button(action: expandFromCompact) {
             Image(systemName: "wand.and.stars.inverse")
@@ -457,7 +467,8 @@ struct FloatingWidgetView: View {
         .buttonStyle(.plain)
         .frame(width: 40, height: 40)
         .widgetGlassPill()
-        .help("Open Sonny")
+        .accessibilityLabel(CompactCapsulePresentation.expandLabel)
+        .help(CompactCapsulePresentation.expandLabel)
     }
 
     /// Which panel the widget draws, and the order is the whole of it — the first branch that
