@@ -377,10 +377,12 @@ extension AgentViewModel: VisionSessionInteracting {
     /// anything.
     func runVisionDelegation(_ request: VisionDelegationRequest) async throws -> VisionDelegationResult {
         do {
-            // The same executor factory and the same planner registry the ordinary path uses
-            // (SONNY-85) — a delegated instruction is planned by whatever would have planned the
-            // user's own sentence, and runs through the executor a typed command would.
-            let runner = try makeDelegationRunner()
+            // The same executor factory and the same planner factory the ordinary path uses — a
+            // delegated instruction is planned by whatever would have planned the user's own
+            // sentence, and runs through the executor a typed command would. (SONNY-85 built this
+            // as a registry call; SONNY-132 moved provider choice to the server and left one
+            // planner, so it is a factory call and no longer throws.)
+            let runner = makeDelegationRunner()
 
             // **The instant resolver first, exactly as a typed command gets it.** `performStart`
             // tries it before reaching for a planner, and `AgentRunner.prepare(command:)` does not —

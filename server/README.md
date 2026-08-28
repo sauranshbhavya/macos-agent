@@ -301,14 +301,22 @@ none. `test/config.test.ts` walks all three steps and asserts a usable key at ev
 here so the Mac app never sees one. `docs/sonny-backend-api-contract.md` §4.2–§4.5 is the wire
 shape; what belongs here is the operational half.
 
-**Which provider serves which route is two functions rather than one, and that is temporary.**
-`modelProvidersFrom` in `src/model/providers.ts` answers for the four text routes;
-`visionProviderFrom` in `src/model/vision.ts` answers for `/v1/screen/analyze`. They are separate
-because SONNY-131 and SONNY-132 ran in parallel and `providers.ts` is SONNY-132's, which reshapes it
-for the provider router; the two collapse when that branch lands. Both read the endpoint and model
-identifier from the environment, which is what makes SONNY-110's move to a paid zero-retention route
+**Which provider serves which route is one function for four routes and a second for the fifth.**
+`modelProvidersFrom` in `src/model/providers.ts` answers for `/v1/plan`,
+`/v1/research/synthesize`, `/v1/transcriptions` and `/v1/search`, reading the endpoints, model
+identifiers and route chains from the environment; `visionProviderFrom` in `src/model/vision.ts`
+answers for `/v1/screen/analyze`. That is what makes SONNY-110's move to a paid zero-retention route
 a redeploy: nothing in the Mac app names a provider, a model or an endpoint, so changing any of the
 three never needs an app release.
+
+**The two were expected to collapse when SONNY-132 landed, and they did not.** SONNY-131 and
+SONNY-132 ran in parallel and this paragraph used to say the split was temporary. It survived the
+merge because nothing forced it: `/v1/screen/analyze` reads no `ModelProviders` field, so the
+provider router grew its four chains without touching that route, and the vision route was on
+SONNY-132's never-touch list. Collapsing it is worthwhile and unclaimed — a `MODEL_ROUTE_SCREEN_ANALYZE`
+chain would give the vision route the same failover and the same per-provider retention policy the
+other four have, which is what SONNY-110 needs of it. `src/app.ts` carries the same note at the
+mount.
 
 **`/v1/screen/analyze` is the one route with a body worth thinking about, and its limit is derived
 rather than chosen.** `src/model/limits.ts` holds `MAXIMUM_IMAGE_BYTES` — 3,000,000, the same
@@ -325,6 +333,58 @@ wrong.
 **A route whose provider has no credential answers `502 provider.unavailable`, not `404`.** The
 route table does not change shape with the environment, because a 404 tells the client "no such
 route" — which it does not retry and cannot explain — when the truth is a deployment missing a key.
+
+### The provider router and failover (SONNY-132)
+
+**A route resolves to an ordered chain of providers, not to one.** Four variables decide it —
+`MODEL_ROUTE_PLAN`, `MODEL_ROUTE_SYNTHESIZE`, `MODEL_ROUTE_TRANSCRIPTIONS`, `MODEL_ROUTE_SEARCH` —
+each a comma-separated list whose first entry serves and whose remainder are the failover
+candidates. Unset means the shipped default: `openai,anthropic` on the two text routes, `openai` on
+transcription (Anthropic serves no transcription API), `tavily` on search. Three providers have text
+adapters — OpenAI, Anthropic and Cerebras — so moving the planner between them is one variable and a
+redeploy, with no change to the app and no new release.
+
+**A deployment holding only `OPENAI_API_KEY` behaves exactly as it did before the router existed**,
+because a chain entry with no credential is not a candidate. **A chain entry with no *adapter* is
+refused at startup instead** — `MODEL_ROUTE_SEARCH=openai` exits 78 naming the variable — because
+silently dropping it would leave you believing you had configured a fallback you do not have. An
+unknown provider and a repeated entry are refused the same way.
+
+**Failover triggers on `provider.unavailable` and on nothing else.** That is the provider being
+unreachable, rate-limiting this gateway, or answering `5xx`: the request is fine and the provider is
+not. A `provider.rejected` is not failed over — §9.3 makes it non-retryable because the same request
+fails identically, and a refusal is usually about the content, so shopping it to a second vendor is
+routing around one vendor's answer rather than resilience. A `provider.timeout` is not either: the
+whole chain runs inside one route deadline and shares one abort signal, so a second attempt would
+fail before it opened a socket, and giving each attempt a fresh deadline would push the handler past
+§12's total and hand the failure to whatever sits in front of this gateway.
+
+**The user is never told which provider served, and that is the contract rather than a preference.**
+§4.2: "The response names no provider and no model." What the router produces instead is a
+server-side attribution — who served, and who was tried first — logged on every model route
+(`model route served`, or `model route served after failover` at `warn`) with the request id §2.3
+makes the support join key. §11's metering event carries the same fact in a `provider` column;
+SONNY-133 builds the event that will record it.
+
+**Per-provider retention and training terms are configuration**, per spec §16.5:
+`<PROVIDER>_DATA_RETENTION` (`unknown` / `none` / `retains`) and `<PROVIDER>_TRAINING` (`unknown` /
+`none` / `reserved`). **Every one defaults to `unknown`, which is the honest current value rather
+than a placeholder** — no vendor agreement has been read on this project's behalf, and recording a
+vendor's published default as though it were checked would be a claim nobody made. SONNY-110 is
+where real values come from, and a provider clears its bar only with `none` on *both* axes: one that
+retains nothing but reserves training rights has not protected the content, because training is one
+of retention's own named purposes. Nothing routes on it yet, deliberately; the values are printed in
+the `model routing` log line at startup so a deployment's beliefs are visible rather than inferred.
+
+**Which vendors this gateway can currently speak to, and how each maps a JSON Schema.** OpenAI's
+Responses API takes `text.format` with `type: "json_schema"` and `strict: true`. Anthropic's
+Messages API takes `output_config.format` with the same `type`, after the adapter prunes the
+keywords structured outputs do not accept — the planner's own schema carries `minItems`, so an
+unpruned schema would fail every plan request rather than an unusual one. Cerebras takes the schema
+in the system prompt: its native mode caps a schema at 5,000 characters and ours is longer, which
+was re-verified live on 2026-08-13, so the adapter appends the schema instruction and strips a
+wrapping markdown fence off the reply. §4.2 names all three shapes as the server's to choose, and
+says the client "does not know which mechanism was used and must not need to".
 
 **Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
 contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in

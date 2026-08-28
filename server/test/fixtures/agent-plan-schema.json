@@ -1,0 +1,612 @@
+{
+  "additionalProperties" : false,
+  "properties" : {
+    "requiresConfirmation" : {
+      "description" : "True when the action writes files, opens apps, or converts documents.",
+      "type" : "boolean"
+    },
+    "steps" : {
+      "items" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "appName" : {
+            "description" : "Human app name for open_app or switch_running_app actions, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "browserName" : {
+            "description" : "The browser the user named for a URL-opening step, exactly as they said it (for example \"Chrome\", \"Safari\"), or null when they named none.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "contextSource" : {
+            "description" : "Use finder_selection when the user refers to selected Finder items, or null.",
+            "enum" : [
+              "finder_selection",
+              null
+            ],
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "count" : {
+            "description" : "Requested count, such as top 3 files or top 5 headlines.",
+            "type" : [
+              "integer",
+              "null"
+            ]
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "draftContent" : {
+            "description" : "User-provided body content for create_local_draft Markdown drafts, the expansion text for save_snippet, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "draftTitle" : {
+            "description" : "Title for create_local_draft Markdown drafts, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "id" : {
+            "type" : "string"
+          },
+          "inputPath" : {
+            "description" : "Folder or file path supplied by the user, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "mediaArtist" : {
+            "description" : "Artist name for media-opening actions when provided by the user, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "mediaProvider" : {
+            "description" : "Music provider for media-opening actions, or null.",
+            "enum" : [
+              "apple_music",
+              "spotify",
+              null
+            ],
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "mediaTitle" : {
+            "description" : "Song or album title for media-opening actions, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "operation" : {
+            "enum" : [
+              "scan_select_largest_files",
+              "create_zip",
+              "scan_docx",
+              "convert_docx_to_pdf",
+              "open_hacker_news",
+              "fetch_hn_headlines",
+              "write_markdown",
+              "web_to_markdown",
+              "open_app",
+              "open_app_search_url",
+              "open_url",
+              "play_media",
+              "get_finder_selection",
+              "reveal_in_finder",
+              "show_permission_readiness",
+              "save_routine",
+              "run_routine",
+              "create_workspace",
+              "edit_workspace",
+              "open_workspace",
+              "open_generated_artifact",
+              "create_local_draft",
+              "save_snippet",
+              "switch_running_app",
+              "invoke_shortcut",
+              "vision_session",
+              "clarify",
+              "unsupported"
+            ],
+            "type" : "string"
+          },
+          "outputPath" : {
+            "description" : "Destination folder or file path, reveal target path, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "question" : {
+            "description" : "Clarifying question for clarify actions, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "routineName" : {
+            "description" : "Routine name for save_routine or run_routine, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "routineSteps" : {
+            "description" : "Nested executable steps for save_routine, or null.",
+            "items" : {
+              "additionalProperties" : false,
+              "properties" : {
+                "appName" : {
+                  "description" : "Human app name for open_app or switch_running_app actions, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "browserName" : {
+                  "description" : "The browser the user named for a URL-opening step, exactly as they said it (for example \"Chrome\", \"Safari\"), or null when they named none.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "contextSource" : {
+                  "description" : "Use finder_selection when the user refers to selected Finder items, or null.",
+                  "enum" : [
+                    "finder_selection",
+                    null
+                  ],
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "count" : {
+                  "description" : "Requested count, such as top 3 files or top 5 headlines.",
+                  "type" : [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "description" : {
+                  "type" : "string"
+                },
+                "draftContent" : {
+                  "description" : "User-provided body content for create_local_draft Markdown drafts, the expansion text for save_snippet, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "draftTitle" : {
+                  "description" : "Title for create_local_draft Markdown drafts, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id" : {
+                  "type" : "string"
+                },
+                "inputPath" : {
+                  "description" : "Folder or file path supplied by the user, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mediaArtist" : {
+                  "description" : "Artist name for media-opening actions when provided by the user, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mediaProvider" : {
+                  "description" : "Music provider for media-opening actions, or null.",
+                  "enum" : [
+                    "apple_music",
+                    "spotify",
+                    null
+                  ],
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "mediaTitle" : {
+                  "description" : "Song or album title for media-opening actions, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "operation" : {
+                  "enum" : [
+                    "scan_select_largest_files",
+                    "create_zip",
+                    "scan_docx",
+                    "convert_docx_to_pdf",
+                    "open_hacker_news",
+                    "fetch_hn_headlines",
+                    "write_markdown",
+                    "web_to_markdown",
+                    "open_app",
+                    "open_app_search_url",
+                    "open_url",
+                    "play_media",
+                    "get_finder_selection",
+                    "reveal_in_finder",
+                    "show_permission_readiness",
+                    "save_routine",
+                    "run_routine",
+                    "create_workspace",
+                    "edit_workspace",
+                    "open_workspace",
+                    "open_generated_artifact",
+                    "create_local_draft",
+                    "save_snippet",
+                    "switch_running_app",
+                    "invoke_shortcut",
+                    "vision_session",
+                    "clarify",
+                    "unsupported"
+                  ],
+                  "type" : "string"
+                },
+                "outputPath" : {
+                  "description" : "Destination folder or file path, reveal target path, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "question" : {
+                  "description" : "Clarifying question for clarify actions, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "routineName" : {
+                  "description" : "Routine name for save_routine or run_routine, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "routineSteps" : {
+                  "description" : "Nested routines are not allowed.",
+                  "type" : "null"
+                },
+                "searchQuery" : {
+                  "description" : "Topic or web search query for web_to_markdown research notes, the snippet trigger for save_snippet, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "shortcutInput" : {
+                  "description" : "Simple text input to pass to invoke_shortcut through a temporary input file, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "shortcutName" : {
+                  "description" : "Existing Apple Shortcut name for invoke_shortcut, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sourceURLs" : {
+                  "description" : "HTTP\/HTTPS source URLs for web_to_markdown comparison notes, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "targetURL" : {
+                  "description" : "URL for browser\/fetch actions or exact provider result URI for media actions, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "visionGoal" : {
+                  "description" : "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "workspaceApps" : {
+                  "description" : "App names for create_workspace, or app names to add for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "workspaceAppsToRemove" : {
+                  "description" : "App names to remove from a workspace for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "workspaceFileLocations" : {
+                  "description" : "Folder paths inside Desktop or Documents to add to a workspace for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "workspaceFileLocationsToRemove" : {
+                  "description" : "Folder paths to remove from a workspace for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "workspaceName" : {
+                  "description" : "Workspace name for create_workspace, edit_workspace or open_workspace, or null.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "workspaceURLs" : {
+                  "description" : "HTTP\/HTTPS URLs for create_workspace, or URLs to add for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                },
+                "workspaceURLsToRemove" : {
+                  "description" : "URLs or site domains to remove from a workspace for edit_workspace, or null.",
+                  "items" : {
+                    "type" : "string"
+                  },
+                  "type" : [
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required" : [
+                "id",
+                "operation",
+                "description",
+                "inputPath",
+                "outputPath",
+                "count",
+                "targetURL",
+                "appName",
+                "question",
+                "mediaProvider",
+                "mediaTitle",
+                "mediaArtist",
+                "contextSource",
+                "routineName",
+                "routineSteps",
+                "workspaceName",
+                "workspaceApps",
+                "workspaceURLs",
+                "workspaceFileLocations",
+                "workspaceAppsToRemove",
+                "workspaceURLsToRemove",
+                "workspaceFileLocationsToRemove",
+                "sourceURLs",
+                "searchQuery",
+                "draftTitle",
+                "draftContent",
+                "shortcutName",
+                "shortcutInput",
+                "visionGoal",
+                "browserName"
+              ],
+              "type" : "object"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "searchQuery" : {
+            "description" : "Topic or web search query for web_to_markdown research notes, the snippet trigger for save_snippet, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "shortcutInput" : {
+            "description" : "Simple text input to pass to invoke_shortcut through a temporary input file, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "shortcutName" : {
+            "description" : "Existing Apple Shortcut name for invoke_shortcut, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "sourceURLs" : {
+            "description" : "HTTP\/HTTPS source URLs for web_to_markdown comparison notes, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "targetURL" : {
+            "description" : "URL for browser\/fetch actions or exact provider result URI for media actions, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "visionGoal" : {
+            "description" : "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "workspaceApps" : {
+            "description" : "App names for create_workspace, or app names to add for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceAppsToRemove" : {
+            "description" : "App names to remove from a workspace for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceFileLocations" : {
+            "description" : "Folder paths inside Desktop or Documents to add to a workspace for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceFileLocationsToRemove" : {
+            "description" : "Folder paths to remove from a workspace for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceName" : {
+            "description" : "Workspace name for create_workspace, edit_workspace or open_workspace, or null.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "workspaceURLs" : {
+            "description" : "HTTP\/HTTPS URLs for create_workspace, or URLs to add for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceURLsToRemove" : {
+            "description" : "URLs or site domains to remove from a workspace for edit_workspace, or null.",
+            "items" : {
+              "type" : "string"
+            },
+            "type" : [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required" : [
+          "id",
+          "operation",
+          "description",
+          "inputPath",
+          "outputPath",
+          "count",
+          "targetURL",
+          "appName",
+          "question",
+          "mediaProvider",
+          "mediaTitle",
+          "mediaArtist",
+          "contextSource",
+          "routineName",
+          "routineSteps",
+          "workspaceName",
+          "workspaceApps",
+          "workspaceURLs",
+          "workspaceFileLocations",
+          "workspaceAppsToRemove",
+          "workspaceURLsToRemove",
+          "workspaceFileLocationsToRemove",
+          "sourceURLs",
+          "searchQuery",
+          "draftTitle",
+          "draftContent",
+          "shortcutName",
+          "shortcutInput",
+          "visionGoal",
+          "browserName"
+        ],
+        "type" : "object"
+      },
+      "minItems" : 1,
+      "type" : "array"
+    },
+    "summary" : {
+      "description" : "Short human-readable summary of the proposed action.",
+      "type" : "string"
+    }
+  },
+  "required" : [
+    "summary",
+    "requiresConfirmation",
+    "steps"
+  ],
+  "type" : "object"
+}

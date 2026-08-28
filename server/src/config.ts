@@ -1,6 +1,12 @@
 import { isIP } from "node:net";
 import { z } from "zod";
 import type { SupabaseJwtPolicy } from "./auth/token.js";
+import {
+  parseRouteChain,
+  providerDataPolicies,
+  type ModelRoute,
+  type ProviderDataPolicy,
+} from "./model/provider-router.js";
 
 /**
  * Environment → typed configuration, validated once at startup.
@@ -133,6 +139,61 @@ const schema = z.object({
   OPENAI_TEXT_MODEL: nonEmpty.default("gpt-5.5"),
   OPENAI_TRANSCRIPTION_MODEL: nonEmpty.default("gpt-4o-mini-transcribe"),
   SEARCH_BASE_URL: nonEmpty.default("https://api.tavily.com"),
+
+  /**
+   * The second provider's endpoint and model (SONNY-132), on the same terms as OpenAI's above: a
+   * default that is neither secret nor guessable-wrong, so a deployment that sets only
+   * `ANTHROPIC_API_KEY` works, and one that wants a different model changes one variable.
+   *
+   * `ANTHROPIC_MAX_OUTPUT_TOKENS` has no counterpart on the OpenAI side because the Messages API
+   * **requires** `max_tokens` on every request — there is no server-side default to inherit. 16000
+   * is the value the API's own guidance gives for a non-streaming request: high enough for a plan or
+   * a research note, low enough to stay inside the HTTP timeouts a non-streaming call has.
+   *
+   * **What that reasoning does not account for, stated rather than left to be discovered** (PR #143,
+   * F10). `max_tokens` bounds thinking **plus** answer, and the configured default model runs
+   * adaptive thinking when `thinking` is omitted, which it is here. So the effective ceiling on the
+   * *answer* is lower than 16000 by an amount nothing in this file controls and nothing in this
+   * branch measured — **this is hedged, not measured**, because no live round was run against a real
+   * key. Hitting it is a `stop_reason: "max_tokens"`, which the adapter refuses rather than handing
+   * the client a half-written JSON object; that refusal is a `provider.rejected`, so it does not
+   * fail over. Latent today: the client hard-codes `reasoning_effort: "medium"`
+   * (`SonnyModelGateway.swift`), and it becomes live if `/v1/research/synthesize` produces a long
+   * note or the effort the client sends ever rises. The first real Anthropic round is where this
+   * gets a number; raise this variable rather than re-deriving the reasoning if a plan ever comes
+   * back truncated.
+   */
+  ANTHROPIC_BASE_URL: nonEmpty.default("https://api.anthropic.com/v1"),
+  ANTHROPIC_TEXT_MODEL: nonEmpty.default("claude-opus-5"),
+  ANTHROPIC_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1).max(200_000).default(16_000),
+
+  /**
+   * Cerebras's endpoint and model, moved off the Mac (SONNY-132).
+   *
+   * The defaults are exactly what `CerebrasPlanner` compiled in —
+   * `https://api.cerebras.ai/v1/chat/completions` and `gpt-oss-120b` — so the provider behaves as
+   * it did when it was reachable by `SONNY_PLANNER=cerebras`, with the credential now held here
+   * instead of in the user's own environment.
+   */
+  CEREBRAS_BASE_URL: nonEmpty.default("https://api.cerebras.ai/v1"),
+  CEREBRAS_TEXT_MODEL: nonEmpty.default("gpt-oss-120b"),
+
+  /**
+   * Which provider serves which route, in order (SONNY-132) — spec §16.5's "model routing
+   * controlled server-side", as four variables rather than a code path.
+   *
+   * Each is a comma-separated provider list: the first entry serves, and the rest are what
+   * `withFailover` tries when it answers `provider.unavailable`. Unset means
+   * `provider-router.ts`'s `DEFAULT_ROUTE_CHAINS`, which reproduces SONNY-130's behaviour on any deployment
+   * holding only an OpenAI key. Parsed and validated by `parseRouteChain`, which refuses an unknown
+   * provider, a provider with no adapter for that route, and a repeated entry — each by name, at
+   * startup, because none of those values is a secret and none of them can be fixed without knowing
+   * which one is wrong.
+   */
+  MODEL_ROUTE_PLAN: z.string().trim().default(""),
+  MODEL_ROUTE_SYNTHESIZE: z.string().trim().default(""),
+  MODEL_ROUTE_TRANSCRIPTIONS: z.string().trim().default(""),
+  MODEL_ROUTE_SEARCH: z.string().trim().default(""),
   /**
    * Where `POST /v1/screen/analyze` sends, and what it asks for (SONNY-131).
    *
@@ -194,6 +255,23 @@ export interface Config {
   readonly searchBaseUrl: string;
   readonly visionBaseUrl: string;
   readonly visionModel: string;
+  readonly anthropicBaseUrl: string;
+  readonly anthropicTextModel: string;
+  readonly anthropicMaxOutputTokens: number;
+  readonly cerebrasBaseUrl: string;
+  readonly cerebrasTextModel: string;
+  /** Which providers serve which route, in order. `MODEL_ROUTE_*`, validated at startup. */
+  readonly routeChains: Readonly<Record<ModelRoute, readonly Provider[]>>;
+  /**
+   * What this deployment has been told about each provider's retention and training terms.
+   *
+   * §16.5's "provider-specific retention/training configuration", and **the field SONNY-110's
+   * answer lands in**. Every provider defaults to `unknown` on both axes, which is the honest
+   * current value rather than a placeholder: no vendor agreement has been read on this project's
+   * behalf, and recording a vendor's published default here as though it were checked would be a
+   * claim nobody made. `meetsZeroRetentionBar` is the predicate SONNY-110's answer switches on.
+   */
+  readonly dataPolicies: Readonly<Record<Provider, ProviderDataPolicy>>;
   readonly supabaseAnonKey: string | undefined;
   readonly supabaseServiceRoleKey: string | undefined;
   readonly credentials: readonly ProviderCredentials[];
@@ -362,6 +440,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     searchBaseUrl: value.SEARCH_BASE_URL,
     visionBaseUrl: value.VISION_BASE_URL,
     visionModel: value.VISION_MODEL,
+    anthropicBaseUrl: value.ANTHROPIC_BASE_URL,
+    anthropicTextModel: value.ANTHROPIC_TEXT_MODEL,
+    anthropicMaxOutputTokens: value.ANTHROPIC_MAX_OUTPUT_TOKENS,
+    cerebrasBaseUrl: value.CEREBRAS_BASE_URL,
+    cerebrasTextModel: value.CEREBRAS_TEXT_MODEL,
+    routeChains: {
+      plan: parseRouteChain("plan", value.MODEL_ROUTE_PLAN),
+      synthesize: parseRouteChain("synthesize", value.MODEL_ROUTE_SYNTHESIZE),
+      transcriptions: parseRouteChain("transcriptions", value.MODEL_ROUTE_TRANSCRIPTIONS),
+      search: parseRouteChain("search", value.MODEL_ROUTE_SEARCH),
+    },
+    dataPolicies: providerDataPolicies(env),
     supabaseAnonKey: value.SUPABASE_ANON_KEY,
     supabaseServiceRoleKey: value.SUPABASE_SERVICE_ROLE_KEY,
     credentials: providerCredentials(env),

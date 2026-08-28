@@ -685,10 +685,7 @@ private func makeFollowUpFixture() throws -> FollowUpFixture {
         backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        plannerProviderRegistry: PlannerProviderRegistry(
-            defaultProvider: PlannerProvider(id: "follow-up-stub", displayName: "Follow Up Stub") { _ in planner }
-        ),
-        plannerSelection: nil,
+        makePlanner: { _, _ in planner },
         userDefaults: userDefaults,
         whitelist: PathWhitelist(roots: [root])
     )

@@ -241,15 +241,29 @@ final class AgentViewModel: ObservableObject {
     /// Carries successes too, not just skips: an action taken with nobody watching should be
     /// visible after the fact, which is the whole reason unattended execution needs a surface.
     @Published var scheduledRunNotice: String?
-    /// The planner router could not honor the configured planner selection and used the
-    /// default instead — who actually planned the task, and why (SONNY-85). Its own channel
-    /// for the same reason `scheduledRunNotice` has one: the subject is neither a failed task
-    /// (`errorMessage` — the task went on to run) nor Sonny's own data (`localStorageNotice`).
-    /// Set by `performStart` when the registry reports a fallback, cleared at the next
-    /// dispatch — the notice describes the current task's planning, and a stale one would
-    /// claim a swap that never happened. A planner swap must never be silent, so the widget
-    /// renders this as its own dismissible strip.
-    @Published var plannerFallbackNotice: String?
+    /// **`plannerFallbackNotice` stood here and is gone** (SONNY-132), along with the widget strip
+    /// that rendered it. It said which planner had actually planned a task when the configured
+    /// selection could not be honored, and every state it could describe has stopped existing.
+    /// Enumerated rather than asserted, because "nothing reaches this any more" is exactly the
+    /// class of claim that needs the enumeration:
+    ///
+    /// 1. **An unknown selection id.** There is no selection: `SONNY_PLANNER` is deleted and
+    ///    `PlannerProviderRegistry.resolve(selection:)` with it.
+    /// 2. **A selected provider that would not construct.** There is one planner and
+    ///    `OpenAIPlanner.init` cannot fail — `PlannerFactory` does not throw, which is why the
+    ///    construction site no longer has a `try`.
+    /// 3. **The server failing over between providers.** Deliberately invisible.
+    ///    `docs/sonny-backend-api-contract.md` §4.2 states it — "The response names no provider and
+    ///    no model" — and the no-explanatory-copy rule says the same thing from the product side:
+    ///    the task ran, nothing the user asked for failed, and a strip announcing that a different
+    ///    vendor was used would explain an internal to somebody who cannot act on it.
+    /// 4. **Every provider in the chain failing.** That is a failed task, and it has always gone to
+    ///    `errorMessage` through `PlannerError.backend` and `SonnyBackendCopy.sentence(for:)`,
+    ///    whose every branch names what happened and what to do next and no vendor at all.
+    ///
+    /// So there is nothing left to replace it with, which is the ticket's sixth requirement
+    /// answered rather than dodged: the user is still told when something did not work, by the
+    /// surface that has always told them, in words that name no vendor.
     @Published var localDataDeletionStatusMessage: String?
     /// Set on every `start()`. Approving a pending run genuinely does not touch it —
     /// `performApproval` reuses the existing prepared run. A clarification answer *does* go back
@@ -382,7 +396,11 @@ final class AgentViewModel: ObservableObject {
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
     private let backendClient: SonnyBackendClient
-    private let plannerProviderRegistry: PlannerProviderRegistry
+    /// How this view model builds the planner for a run (SONNY-132). The shipping app passes
+    /// `OpenAIPlanner.throughSonnysBackend(client:)`; tests pass a stub. One seam, because there is
+    /// one planner — which provider actually serves a request is `MODEL_ROUTE_PLAN` on the server,
+    /// and this side is not allowed to know.
+    private let makePlanner: PlannerFactory
 
     /// §5.1's `task_id` for the run in flight — **minted when a task starts, not when its record is
     /// written** (SONNY-130).
@@ -394,11 +412,6 @@ final class AgentViewModel: ObservableObject {
     /// moves with the usage recorder's reset — the two have exactly the same lifetime, which is why
     /// they are one function rather than two lines that have to be remembered together.
     private(set) var currentTaskID = UUID().uuidString
-    /// Which registered planner provider plans tasks. Environment-backed in production
-    /// (`SONNY_PLANNER`, read once at init — the environment cannot change under a running
-    /// process); mutable so tests can drive both the honored and fallback selection paths
-    /// through one view model.
-    var plannerSelection: String?
     private let userDefaults: UserDefaults
     /// The one whitelist every path this view model owns reasons with. Injectable so the
     /// ProductShell suite can drive the *real* dispatch path against a temp directory — the class
@@ -787,12 +800,6 @@ final class AgentViewModel: ObservableObject {
         static let interactionMode = "com.sonny.preferences.interactionMode"
     }
 
-    /// The environment variable naming which registered planner provider plans tasks —
-    /// same env-backed shape as `OPENAI_API_KEY`/`OPENAI_MODEL`, and the same variable name
-    /// the experiment era used, so the founder's existing launch incantation keeps working.
-    /// Unset means the registry default (OpenAI).
-    nonisolated static let plannerSelectionEnvironmentKey = "SONNY_PLANNER"
-
     /// The view model the shipping app runs on: every local store at its real location under
     /// `~/Library/Application Support/Sonny/`.
     ///
@@ -954,11 +961,9 @@ final class AgentViewModel: ObservableObject {
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
         // Resolved from `backendClient` when absent, which a default value cannot do — Swift default
-        // expressions cannot name another parameter. The shipped registry's default provider plans
-        // through the backend, so it needs the client the line above requires.
-        plannerProviderRegistry: PlannerProviderRegistry? = nil,
-        plannerSelection: String? = ProcessInfo.processInfo
-            .environment[AgentViewModel.plannerSelectionEnvironmentKey],
+        // expressions cannot name another parameter. The shipped factory builds a planner that
+        // talks through the backend, so it needs the client the line above requires.
+        makePlanner: PlannerFactory? = nil,
         userDefaults: UserDefaults = .standard,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
@@ -1004,8 +1009,7 @@ final class AgentViewModel: ObservableObject {
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
         self.backendClient = backendClient
-        self.plannerProviderRegistry = plannerProviderRegistry ?? .default(client: backendClient)
-        self.plannerSelection = plannerSelection
+        self.makePlanner = makePlanner ?? OpenAIPlanner.throughSonnysBackend(client: backendClient)
         self.whitelist = whitelist
         // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
         // *recording*, not a view: an executor built before anything opened Command Center would
@@ -1751,7 +1755,6 @@ final class AgentViewModel: ObservableObject {
         // describes *this* run.
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
-        plannerFallbackNotice = nil
         // **The handle on the previous run's checkpoint, dropped — and dropping it is not the same
         // as abandoning the record** (corrected by PR #105 review F1).
         //
@@ -1905,21 +1908,17 @@ final class AgentViewModel: ObservableObject {
                     prepared = try runner.prepare(plan: localPlan, source: .instantResolver)
                 }
             } else {
-                // The registry, not this site, decides which provider plans the task
-                // (SONNY-85): a new provider is a registration in MacAgentCore, never another
-                // branch here. With the default selection this constructs exactly the
-                // `OpenAIPlanner(usageRecorder:)` call that used to be written inline.
-                let selected = try plannerProviderRegistry.makePlanner(
-                    selection: plannerSelection,
-                    taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
-                    usageRecorder: taskUsageRecorder
-                )
-                if let notice = selected.fallbackNotice {
-                    plannerFallbackNotice = notice
-                    logStore.append(.plan, notice)
-                }
+                // **This site does not decide which provider plans the task, and since SONNY-132
+                // neither does anything else on this Mac.** It used to be a registry call carrying
+                // a selection; the selection is `MODEL_ROUTE_PLAN` on the server now, and the
+                // response is forbidden from naming which provider answered (contract §4.2). What
+                // is left here is the one thing the client still owns: which *run* the planner is
+                // built for — this task's id and its retention answer.
                 runner = AgentRunner(
-                    planner: selected.planner,
+                    planner: makePlanner(
+                        backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                        taskUsageRecorder
+                    ),
                     executor: executor,
                     logStore: logStore,
                     recentArtifactStore: recentArtifactStoreForThisRun,
@@ -4579,40 +4578,31 @@ final class AgentViewModel: ObservableObject {
     /// executor a delegated plan runs through — the *same* executor factory the ordinary path uses,
     /// which is what makes "a delegated command meets the gate a typed one would" true by
     /// construction rather than by a parallel wiring that has to be kept in step.
-    /// The planner a delegated vision instruction is planned by — the same registry call, with the
-    /// same selection, that plans a typed command.
-    ///
-    /// One named door rather than widening `plannerProviderRegistry`, `plannerSelection` and
-    /// `taskUsageRecorder` to internal: what the vision extension needs is a planner, not three
-    /// fields, and keeping the registry call in this file is what makes "a delegated instruction is
-    /// planned by whatever would have planned the user's own sentence" true by construction. The
-    /// fallback notice is surfaced here too, exactly as the ordinary path surfaces it.
     /// The whole runner a delegated instruction goes through — same executor factory, same planner
-    /// registry, same log store, same artifact store as the ordinary path.
-    func makeDelegationRunner() throws -> AgentRunner {
+    /// factory, same log store, same artifact store as the ordinary path.
+    ///
+    /// One named door rather than widening `makePlanner` and `taskUsageRecorder` to internal: what
+    /// the vision extension needs is a runner, not two fields, and keeping the construction in this
+    /// file is what makes "a delegated instruction is planned by whatever would have planned the
+    /// user's own sentence" true by construction rather than by a parallel wiring somebody has to
+    /// keep in step.
+    ///
+    /// **It no longer throws** (SONNY-132). It did because the registry could fail to construct a
+    /// selected provider; `PlannerFactory` cannot fail, and `PlannerFactory`'s own doc says why.
+    func makeDelegationRunner() -> AgentRunner {
         AgentRunner(
-            planner: try makeDelegationPlanner(),
+            planner: makePlanner(
+                // A delegated instruction is planned under the run it belongs to — same task id,
+                // same retention answer — because it is the same task. `makeDelegationRunner`'s
+                // whole argument is that a delegated command meets what a typed one would.
+                backendTaskContext(recordingPolicy: taskRecordingPolicy),
+                taskUsageRecorder
+            ),
             executor: makeExecutor(),
             logStore: logStore,
             recentArtifactStore: recentArtifactStoreForThisRun,
             outputLocationStore: outputLocationStoreForThisRun
         )
-    }
-
-    private func makeDelegationPlanner() throws -> any Planning {
-        let selected = try plannerProviderRegistry.makePlanner(
-            selection: plannerSelection,
-            // A delegated instruction is planned under the run it belongs to — same task id, same
-            // retention answer — because it is the same task. `makeDelegationRunner`'s whole
-            // argument is that a delegated command meets what a typed one would.
-            taskContext: backendTaskContext(recordingPolicy: taskRecordingPolicy),
-            usageRecorder: taskUsageRecorder
-        )
-        if let notice = selected.fallbackNotice {
-            plannerFallbackNotice = notice
-            logStore.append(.plan, notice)
-        }
-        return selected.planner
     }
 
     /// Builds the live vision environment and keeps a handle on the pause wrapper the HUD writes to.

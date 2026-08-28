@@ -201,9 +201,12 @@ extension SonnyBackendClient {
     /// returns the stored response rather than doing the work again.
     ///
     /// A body this client cannot read becomes `undecodableResponse` rather than a raw
-    /// `DecodingError`. That matters because these errors reach the user: `PlannerProvider`'s third
-    /// obligation is that every thrown error carries its own `LocalizedError`, and a Foundation
-    /// error rendered verbatim in the failure surface is a bug this repository has shipped before.
+    /// `DecodingError`. That matters because these errors reach the user: every error a planner
+    /// throws has to carry its own `LocalizedError`, and a Foundation error rendered verbatim in the
+    /// failure surface is a bug this repository has shipped before. (That obligation used to be
+    /// stated as `PlannerProvider`'s third, on a type SONNY-132 deleted with the client-side
+    /// provider router; the obligation is unchanged and is now simply what `Planning` conformances
+    /// owe.)
     func modelRouteResponse<T: Decodable>(
         _ type: T.Type,
         route: SonnyModelRoute,

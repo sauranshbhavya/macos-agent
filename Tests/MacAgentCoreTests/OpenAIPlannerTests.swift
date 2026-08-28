@@ -436,8 +436,9 @@ struct OpenAIPlannerTests {
         // outcome changed on purpose.** `output_text` is a required field of §4.2's response, so a
         // 200 carrying something else is a body this client cannot read at all — which is
         // `undecodableResponse`, not "the model said nothing". `PlannerError.missingOutputText`
-        // still exists and is still thrown, by `OpenAIResponseParser`, which `VisionModelClient` and
-        // `CerebrasPlanner` use and this ticket does not touch.
+        // still exists and is still thrown, by `OpenAIResponseParser`, which `VisionModelClient`
+        // uses and this ticket does not touch. (It named `CerebrasPlanner` as a second user until
+        // SONNY-132 deleted that class.)
         let fixture = SignedInBackendFixture()
         fixture.register { _ in
             ModelRouteFixtures.reply(Data("<html>not json at all</html>".utf8))
@@ -497,3 +498,50 @@ struct OpenAIPlannerTests {
 /// The plan the stub answers with. File-level rather than a member, because the suite is
 /// `@MainActor` and the stub handlers are `@Sendable` closures that run on URLSession's threads.
 private let openAppPlanJSON = #"{"summary":"Open Safari.","requiresConfirmation":false,"steps":[{"id":"open","operation":"open_app","description":"Open Safari.","inputPath":null,"outputPath":null,"count":null,"targetURL":null,"appName":"Safari","question":null,"mediaProvider":null,"mediaTitle":null,"mediaArtist":null,"contextSource":null,"routineName":null,"routineSteps":null,"workspaceName":null,"workspaceApps":null,"workspaceURLs":null,"sourceURLs":null,"searchQuery":null,"draftTitle":null,"draftContent":null,"shortcutName":null,"shortcutInput":null}]}"#
+
+/// The shipping app's planner factory (SONNY-132), migrated from
+/// `PlannerProviderRegistryTests.shippedRegistryOffersOpenAIAsDefaultWithCerebrasAsTheAlternate`.
+///
+/// What that test pinned was a *set* of providers and which one was the default. Neither exists on
+/// this side any more: there is one factory, and which provider serves a request is
+/// `MODEL_ROUTE_PLAN` on the gateway. What survives the move is the half that still means something
+/// — the shipped factory builds a planner that talks to Sonny's backend, and it is a function of
+/// the one client in the process rather than of a shared instance it could reach for itself.
+@Suite
+@MainActor
+struct ShippedPlannerFactoryTests {
+    @Test
+    func theShippedFactoryBuildsAPlannerThatTalksToSonnysBackend() {
+        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient())
+        let planner = factory(
+            BackendTaskContext(taskID: "task-factory-1", retention: .standard),
+            NoopTaskUsageRecorder.shared
+        )
+        #expect(planner is OpenAIPlanner)
+    }
+
+    /// Two calls build two planners rather than handing back one shared object.
+    ///
+    /// A run's planner carries that run's `BackendTaskContext`, so a factory that cached one would
+    /// silently plan the second task under the first task's id and retention answer — §5.1's join
+    /// key and §2.4.2's privacy field, both wrong, both invisible.
+    @Test
+    func eachCallBuildsAPlannerForItsOwnRun() {
+        let factory = OpenAIPlanner.throughSonnysBackend(client: makeHermeticBackendClient())
+        let first = factory(
+            BackendTaskContext(taskID: "task-factory-1", retention: .standard),
+            NoopTaskUsageRecorder.shared
+        )
+        let second = factory(
+            BackendTaskContext(taskID: "task-factory-2", retention: .notStored),
+            NoopTaskUsageRecorder.shared
+        )
+        // **`ObjectIdentifier`, not `!==`, and that is a compiler workaround rather than style.**
+        // `#expect((first as AnyObject) !== (second as AnyObject))` crashes SILGen on this
+        // toolchain — `fatal error encountered during compilation`, "While emitting reabstraction
+        // thunk", killing the whole `swift test` run with no failing test to point at. The
+        // existential erasure of `any Planning` to `AnyObject` inside the macro's autoclosure is
+        // what does it. Comparing identifiers erases nothing and says the same thing.
+        #expect(ObjectIdentifier(first as AnyObject) != ObjectIdentifier(second as AnyObject))
+    }
+}

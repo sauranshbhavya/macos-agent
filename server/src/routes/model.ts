@@ -7,7 +7,8 @@ import {
   ProviderTimedOut,
   ProviderUnavailable,
   type ModelProviders,
-  type SearchResultItem,
+  type ProviderAttribution,
+  type RoutedTextAdapter,
   type UpstreamUsage,
 } from "../model/upstream.js";
 
@@ -73,6 +74,33 @@ const searchBody = z
 const transcriptionMeta = z
   .object({ task_id: taskIdField, retention: retentionField })
   .strict();
+
+/**
+ * Record which provider served, and which were tried first (SONNY-132).
+ *
+ * **This is the only place the fact leaves the router, and it never leaves this server.** §4.2:
+ * "The response names no provider and no model." §11 puts `provider` on the metering event —
+ * "Which provider actually served it. Required for failover accounting (SONNY-132) and never
+ * returned to the client" — so the log line below is where it lives until SONNY-133 builds the
+ * event that will carry it. `request.id` ties it to the `Sonny-Request-Id` the caller was given,
+ * which §2.3 makes the join key for exactly this kind of lookup.
+ *
+ * A failover is logged at `warn` and an ordinary request at `debug`: the first is a provider
+ * having a bad hour and is worth noticing without anyone asking, the second is every request that
+ * has ever worked.
+ */
+function recordServingProvider(
+  request: FastifyRequest,
+  route: string,
+  served: ProviderAttribution,
+): void {
+  const detail = { route, provider: served.provider, failedOver: served.failedOver };
+  if (served.failedOver.length > 0) {
+    request.log.warn(detail, "model route served after failover");
+  } else {
+    request.log.debug(detail, "model route served");
+  }
+}
 
 function usageBody(usage: UpstreamUsage): Record<string, unknown> {
   return {
@@ -210,18 +238,22 @@ function noProvider(request: FastifyRequest, reply: FastifyReply): FastifyReply 
 export function registerModelRoutes(app: FastifyInstance, providers: ModelProviders): void {
   const textRoute = (
     path: string,
+    // **The route's own adapter, not one shared entry** (SONNY-132). §4.2 gives the two text routes
+    // one body shape so the server can hold one adapter per provider "while still routing, metering
+    // and pricing them separately"; a shared entry would make `MODEL_ROUTE_SYNTHESIZE` mean nothing.
+    route: "plan" | "research.synthesize",
+    adapter: RoutedTextAdapter | undefined,
     deadlines: { readonly upstream: number; readonly total: number },
     bodyLimit: number,
   ): void => {
     app.post(path, { bodyLimit }, async (request, reply) => {
       const parsed = textBody.safeParse(request.body);
       if (!parsed.success) return invalid(request, reply, "Request body failed validation.");
-      const text = providers.text;
-      if (text === undefined) return noProvider(request, reply);
+      if (adapter === undefined) return noProvider(request, reply);
 
       try {
         const result = await withDeadlines(deadlines, (signal) =>
-          text({
+          adapter({
             messages: parsed.data.messages,
             responseSchemaName: parsed.data.response_schema_name,
             responseSchema: parsed.data.response_schema,
@@ -230,6 +262,7 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
             signal,
           }),
         );
+        recordServingProvider(request, route, result.served);
         return reply.send({
           request_id: request.id,
           output_text: result.outputText,
@@ -241,8 +274,14 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
     });
   };
 
-  textRoute("/v1/plan", DEADLINE_MS.plan, BODY_LIMIT_BYTES.plan);
-  textRoute("/v1/research/synthesize", DEADLINE_MS.synthesize, BODY_LIMIT_BYTES.synthesize);
+  textRoute("/v1/plan", "plan", providers.plan, DEADLINE_MS.plan, BODY_LIMIT_BYTES.plan);
+  textRoute(
+    "/v1/research/synthesize",
+    "research.synthesize",
+    providers.synthesize,
+    DEADLINE_MS.synthesize,
+    BODY_LIMIT_BYTES.synthesize,
+  );
 
   app.post("/v1/search", { bodyLimit: BODY_LIMIT_BYTES.search }, async (request, reply) => {
     const parsed = searchBody.safeParse(request.body);
@@ -256,13 +295,13 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
     const maxResults = Math.min(Math.max(requested, 1), 20);
 
     try {
-      const results: readonly SearchResultItem[] = await withDeadlines(
-        DEADLINE_MS.search,
-        (signal) => search({ query: parsed.data.query, maxResults, signal }),
+      const result = await withDeadlines(DEADLINE_MS.search, (signal) =>
+        search({ query: parsed.data.query, maxResults, signal }),
       );
+      recordServingProvider(request, "search", result.served);
       return reply.send({
         request_id: request.id,
-        results: results.map((item) => ({
+        results: result.items.map((item) => ({
           title: item.title,
           url: item.url,
           snippet: item.snippet,
@@ -355,6 +394,7 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
         const result = await withDeadlines(DEADLINE_MS.transcriptions, (signal) =>
           transcribe({ audio: recording, filename, contentType, signal }),
         );
+        recordServingProvider(request, "transcription", result.served);
         return reply.send({
           request_id: request.id,
           text: result.text,

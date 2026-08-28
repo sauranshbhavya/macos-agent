@@ -2795,12 +2795,7 @@ private func makeFixture() throws -> ResumableFixture {
             backendClient: makeHermeticBackendClient(),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
-            plannerProviderRegistry: PlannerProviderRegistry(
-            defaultProvider: PlannerProvider(id: "resume-stub", displayName: "Resume Stub") { _ in
-                planner
-            }
-            ),
-            plannerSelection: nil,
+            makePlanner: { _, _ in planner },
             userDefaults: userDefaults,
             whitelist: PathWhitelist(roots: [root])
         )

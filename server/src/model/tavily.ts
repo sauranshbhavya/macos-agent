@@ -1,7 +1,9 @@
 import {
+  readJSONBodyOrUnparsed,
   upstreamStatusError,
   upstreamTransportError,
   type SearchRequest,
+  type SearchResult,
   type SearchResultItem,
 } from "./upstream.js";
 
@@ -38,7 +40,7 @@ function isWebURL(value: unknown): value is string {
 
 export function makeTavilySearchAdapter(
   settings: TavilySettings,
-): (request: SearchRequest) => Promise<readonly SearchResultItem[]> {
+): (request: SearchRequest) => Promise<SearchResult> {
   const key = settings.keys[0];
   if (key === undefined) throw new Error("search adapter constructed with no credential");
   const base = settings.baseUrl.endsWith("/") ? settings.baseUrl.slice(0, -1) : settings.baseUrl;
@@ -58,16 +60,24 @@ export function makeTavilySearchAdapter(
 
     if (!response.ok) throw upstreamStatusError(response.status, "search");
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBodyOrUnparsed(response, "search");
     const results =
       typeof parsed === "object" && parsed !== null
         ? (parsed as { results?: unknown }).results
         : undefined;
-    // An unreadable body is an empty result list rather than a failure, which is what the client
-    // did before this route existed: a search that finds nothing is an ordinary outcome the
-    // research step already handles, and turning it into an error would fail a whole task over
-    // telemetry-grade malformation.
-    if (!Array.isArray(results)) return [];
+    // A body that parsed but carries no `results` array is an empty result list rather than a
+    // failure, which is what the client did before this route existed: a search that finds nothing
+    // is an ordinary outcome the research step already handles, and turning it into an error would
+    // fail a whole task over telemetry-grade malformation.
+    //
+    // **A body that never finished arriving is no longer collapsed into that** (PR #143, F2). It
+    // used to be, because `response.json().catch(() => null)` could not tell an aborted read from a
+    // malformed one — so a search whose provider stalled after headers reported "nothing found",
+    // which is worse here than on the text routes: a wrong *answer* rather than a wrong error, and
+    // a research task that silently proceeds with no sources. `readJSONBodyOrUnparsed` throws that
+    // case as the transport failure it is, and keeps the malformed-body decision above intact —
+    // the two are told apart by whether `json()` rejected with a `SyntaxError`.
+    if (!Array.isArray(results)) return { items: [] };
 
     const items: SearchResultItem[] = [];
     for (const entry of results) {
@@ -83,6 +93,9 @@ export function makeTavilySearchAdapter(
         snippet: typeof snippet === "string" ? snippet : null,
       });
     }
-    return items;
+    // `{ items }` rather than the bare array it used to be (SONNY-132): the router adds `served` to
+    // whatever an adapter returns, and an intersection of an array type with an object is a shape
+    // nobody should have to read. `upstream.ts`'s `SearchResult` carries the reasoning.
+    return { items };
   };
 }

@@ -499,9 +499,15 @@ public enum AgentPlanSchema {
     ///
     /// §4.2 puts `response_schema` — this value — on the wire and leaves the mapping onto a
     /// provider's structured-output mechanism to the server, because "the client does not know
-    /// which mechanism was used and must not need to". `responseFormat()` below is one such
-    /// wrapper, and it stays: `CerebrasPlanner` builds its own request from it, and that planner
-    /// keeps its own credential until the provider-router branch moves it.
+    /// which mechanism was used and must not need to".
+    ///
+    /// **`responseFormat()` below has no production caller any more** (SONNY-132). It was one such
+    /// wrapper, kept because `CerebrasPlanner` built its own request from it while that planner
+    /// held its own credential; the provider-router branch moved Cerebras to the gateway and
+    /// deleted the class, so the wrapper is now exercised only by `PlannerBoundaryTests`. It is
+    /// left in place rather than removed here because `WebResearchNoteSchema.responseFormat()` is
+    /// in exactly the same position and has been since SONNY-130, so removing one of a matched pair
+    /// on this branch would be a half-swept tree — filed as **SONNY-321** to be taken together.
     public static func schema() -> [String: Any] {
         [
             "type": "object",
