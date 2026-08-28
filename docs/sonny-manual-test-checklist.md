@@ -410,6 +410,18 @@ compare directly — don't rely on memory of what it's supposed to look like.
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's
       unsent text (fixed 2026-07-21 — tracker #3).**
+- [ ] **(new 2026-08-28, SONNY-251)** **The collapsed capsule now has a VoiceOver name, and it had
+      none at all before.** Turn VoiceOver on (Cmd-F5), let the widget collapse to the small pill,
+      and move VoiceOver's cursor onto it. It must announce **"Open Sonny"**. Before this ticket it
+      carried a tooltip and no accessibility name, so it announced whatever macOS makes of an SF
+      Symbol called `wand.and.stars.inverse` — the other three icon-only controls in the widget have
+      always had a full name. This is the fix; the hover half of it is the §3d-bis row below
+- [ ] **(new 2026-08-28, SONNY-251 → SONNY-338, a wording call that is yours)** With that in front
+      of you: the capsule says **"Open Sonny"** and expands the *widget*, while the **menu-bar item
+      with the same three words** opens the *Command Center window*. Both are defensible on their
+      own. Say whether you want either reworded — nothing was changed here, because the words are
+      product vocabulary rather than a session's call, and a test asserts the collision as it stands
+      so a later change is noticed rather than rediscovered
 
 ### 3b. Working — `4-FloatingWidgetWorking.png`
 Submit a multi-step command **from the widget itself** (e.g. a routine with 2+ apps) to get real
@@ -691,7 +703,10 @@ case. Relaunch and open the widget.
       Sonny shrinks to when idle) — it should say **"Open Sonny"** — and, with a follow-up question
       on screen, hover the clarification panel's **cancel** control. Say for each whether a tooltip
       appears. These two predate the finding above and were left in place on a "free if it works"
-      footing; nothing depends on them, so this is filling in the record rather than checking a fix
+      footing; nothing depends on them, so this is filling in the record rather than checking a fix.
+      **(Note 2026-08-28, SONNY-251: still true of the hover, and no longer true of the capsule's
+      words in general — it had no VoiceOver name at all, and now has one. The row for that is in
+      §3a.)**
 - [x] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
       quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
       This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it
