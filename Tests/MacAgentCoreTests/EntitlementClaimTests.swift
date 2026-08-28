@@ -18,6 +18,13 @@ struct EntitlementClaimTests {
     /// was generated for this one command and discarded, the subject is synthetic, and the claim
     /// expired on 2026-08-29. Its only power is to be verified.
     ///
+    /// **Written in segments on purpose, and not for line length.** `npm run check:secrets` carries
+    /// a JWT pattern — `eyJ…\.eyJ…\.` — for Supabase's anon and service keys, and it is line-based,
+    /// so a claim written as one literal would be a finding on a string that is not a credential.
+    /// Splitting it means no line carries two segments. Joining these lines back together brings the
+    /// finding back; the alternative is a baseline entry, which is a real exemption for something
+    /// that does not need one.
+    ///
     /// Reproduce it (the private key is new every run, so the strings will differ and the *shape*
     /// will not):
     ///
