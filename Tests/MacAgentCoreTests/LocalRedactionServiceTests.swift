@@ -211,6 +211,32 @@ struct LocalRedactionTextTests {
         }
     }
 
+    /// **The colon refusal is hyphenated-only, and that asymmetry is deliberate rather than an
+    /// oversight.** A mutation battery at `6cec301` widened it to the spaced form and **survived**:
+    /// nothing held the narrower rule, because the one obvious example — `Code:483 291` — has a
+    /// context word and the contextual rule catches it either way. The unlabelled case is what tells
+    /// the two apart, so it is asserted here.
+    ///
+    /// **Why narrow rather than wide.** Every colon-bound false positive in the measured corpus was
+    /// hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no measurement asked to
+    /// refuse, in a detector whose whole design is fail-closed. A reference number written
+    /// `Ref:483 291` is admittedly not a code; it is also not something the corpus contains, and
+    /// this file does not narrow a redaction on a guess.
+    @Test
+    func aSpacedPairAgainstAColonIsStillDetected() {
+        let payload = textService().redactText("Ref:483 291")
+        #expect(payload.maskedText == "Ref:•••••")
+        #expect(payload.report == [
+            RedactionReportEntry(
+                detectionClass: .oneTimeCode,
+                count: 1,
+                locationCategory: .text,
+                confidence: 0.55,
+                belowConfidenceThreshold: true
+            )
+        ])
+    }
+
     /// **What the run guard costs, stated rather than left to be found.**
     ///
     /// Two codes printed side by side separated by one space are, as text, a nine-digit grouped
