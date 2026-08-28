@@ -2288,6 +2288,40 @@ struct MemoryCommandCenterTests {
         #expect(onAppear.contains("viewModel.refreshSetAsideFiles()"))
     }
 
+    /// **Both surfaces that say what the wipe takes read one derived sentence** (SONNY-233).
+    ///
+    /// They held hand-written lists and both were false by omission — Settings' detail line named
+    /// ten of the thirteen stores the wipe deletes and the confirmation dialog named nine, so the
+    /// two surfaces describing one irreversible press disagreed with each other as well as with the
+    /// wipe. `LocalDataDeletionCopy.everythingItTakes` is derived from `LocalStore.allCases` through
+    /// an exhaustive switch, and `LocalStorageSecurityTests.theWipesOwnSentenceNamesEveryStoreItDeletes`
+    /// pins that it is complete. What this scan holds is the other half, which no assertion can
+    /// reach: that these two views actually read it, and that neither has quietly grown a literal of
+    /// its own again.
+    @Test
+    func bothSurfacesDescribingTheWipeReadOneDerivedSentence() throws {
+        let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
+        let contentView = try MacAgentSource.read("ContentView.swift")
+        let page = try MacAgentSource.braceBlock(of: commandCenter, openedBy: "private struct SettingsDataPage: View {")
+
+        #expect(MacAgentSource.count(of: "LocalDataDeletionCopy.everythingItTakes", inText: page) == 1)
+        #expect(MacAgentSource.count(of: "LocalDataDeletionCopy.everythingItTakes", inText: contentView) == 1)
+
+        // No hand-written store name survives on either surface. Counted on both sides rather than
+        // checked for absence in one: a literal that came back would raise a count here, and a
+        // comment cannot talk one back down — `MacAgentSource`'s own doc records why a scan leans on
+        // counts rather than on a token being missing.
+        for name in LocalStore.allCases.map(\.deletionCopyName) {
+            // The list form, "<name>," — what a hand-written enumeration looks like on either
+            // surface, and what both of these literals looked like before this ticket.
+            #expect(MacAgentSource.count(of: "\(name),", inText: page) == 0, "\(name) is written out again")
+            #expect(MacAgentSource.count(of: "\(name),", inText: contentView) == 0, "\(name) is written out again")
+        }
+
+        // What the dialog says that the page does not, and which is nobody else's to derive.
+        #expect(contentView.contains("Generated files and API keys are not deleted."))
+    }
+
     /// **F3 — the whole wipe must not leave a row saying "Can't be read" about a file it just deleted.**
     ///
     /// `clearInMemoryLocalDataState`'s four refreshes reach ten of the eleven load-failure sources.

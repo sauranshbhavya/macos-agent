@@ -37,6 +37,57 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
     }
 }
 
+/// The words Settings uses to say what the whole wipe takes (SONNY-233).
+///
+/// **One sentence, derived from the population, read by both surfaces that state it.** Settings' Data
+/// page carries a detail line under "Delete Sonny local data" and the confirmation dialog carries a
+/// message; both enumerate what goes, and both were written by hand. At the head this ticket was
+/// picked up the detail line named ten of the thirteen stores the wipe deletes and the dialog named
+/// nine — the dialog being the last thing a user reads before an irreversible press. Neither was
+/// noticed going stale, because nothing tied the words to
+/// `LocalDataDeletionService.defaultStoreFileURLs()`: a store landed, its file went into the wipe,
+/// and the sentence stayed as it was. SONNY-233 was filed against the detail line alone; the dialog
+/// was found by sweeping for the claim rather than for the line number the ticket gave.
+///
+/// **It names no count, deliberately.** "Everything Sonny keeps on this Mac" or a figure would both
+/// be shorter, and both would say less than the list does about the one thing a person reading a
+/// destructive control wants to know — whether their own thing is in it. A figure would also go
+/// stale exactly the way the list did, while reading as current.
+///
+/// **It names every store rather than every Memory row**, which would have been three phrases
+/// shorter. The Memory page folds the vision journal, plan details and Shortcut history under Task
+/// history, so a row-derived sentence would stop saying "records of what Sonny did on screen" — the
+/// most sensitive store in the product, and the one a wipe's description least deserves to drop.
+///
+/// **The order is `LocalStore.allCases`'** rather than a second list that can disagree with it. That
+/// puts the screen records first, which is right for a destructive-action disclosure rather than
+/// merely accepted: it is the item a person is likeliest to be checking for.
+public enum LocalDataDeletionCopy {
+    /// Every store the wipe reaches, named, as one list phrase — "a, b, and c".
+    ///
+    /// Read by both call sites, so the two cannot describe the same button differently. Each frames
+    /// it in its own sentence, which is the only thing they do separately.
+    public static var everythingItTakes: String {
+        list(LocalStore.allCases.map(\.deletionCopyName))
+    }
+
+    /// Oxford-comma join. Written out rather than `joined(separator:)` because the last separator
+    /// differs, and handling one and two items is what stops a future single-store list reading
+    /// "and unfinished tasks" on its own.
+    static func list(_ items: [String]) -> String {
+        switch items.count {
+        case 0:
+            return ""
+        case 1:
+            return items[0]
+        case 2:
+            return "\(items[0]) and \(items[1])"
+        default:
+            return items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1]
+        }
+    }
+}
+
 /// How many files are set aside across a service's stores, and how many bytes they hold.
 ///
 /// What Settings' Data page states — the count and the size, and nothing about why the files exist

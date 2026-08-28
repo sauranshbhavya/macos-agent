@@ -188,4 +188,62 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return ResumableTaskStore(fileManager: fileManager).fileURL
         }
     }
+
+    /// What this store is called in the sentence Settings uses to say what the wipe takes
+    /// (SONNY-233).
+    ///
+    /// **The sentence was written by hand twice and was false both times.** Settings' detail line
+    /// named ten of the thirteen stores the wipe deletes and the confirmation dialog named nine —
+    /// two surfaces describing one destructive action, disagreeing with each other and with the
+    /// wipe. Neither omission was noticed when it happened, because nothing connected the words to
+    /// `LocalDataDeletionService.defaultStoreFileURLs()`: a store was added, its file was added to
+    /// the wipe, and the sentence stayed as it was. The three that had gone missing by the time this
+    /// was written are what past tasks planned (row E), allowed apps (row J) and unfinished tasks
+    /// (row 13); common output locations was missing from the dialog alone.
+    ///
+    /// **So the sentence is derived rather than maintained.** This switch is exhaustive with no
+    /// `default`, the same guard `kind` and `memoryCategory` use, so a fourteenth store cannot reach
+    /// the tree without being named here — and `theWipeReachesEveryLocalStore` already pins that
+    /// `allCases` and the wipe's own file list are the same population, which closes the chain from
+    /// the words to the files.
+    ///
+    /// **Lower case and standing alone**, because the sentence puts each of these mid-list. The
+    /// wording is the user's rather than the file's, in the vocabulary the rest of the product
+    /// already uses for these stores — the same choice `LocalStorageLoadFailureSource.label` makes,
+    /// and where the two overlap they say the same thing.
+    public var deletionCopyName: String {
+        switch self {
+        case .visionSessionJournal:
+            return "records of what Sonny did on screen"
+        case .routines:
+            return "routines"
+        case .workspaces:
+            return "workspaces"
+        case .clipboardHistory:
+            return "clipboard history"
+        case .clipboardHistorySettings:
+            return "clipboard settings"
+        case .snippets:
+            return "snippets"
+        case .recentArtifacts:
+            return "recent artifacts"
+        case .shortcutRunHistory:
+            // Capitalised because Apple's app is: it is the name of a product, not of a Sonny
+            // feature, and it is the one item in this list that is.
+            return "Shortcut run history"
+        case .taskHistory:
+            return "task history"
+        case .taskPlanDetails:
+            // Named for what the user would notice going missing — a follow-up on a past task with
+            // less to go on — rather than for the file. The same words
+            // `LocalStorageLoadFailureSource` uses when this file will not read.
+            return "what past tasks planned"
+        case .approvedApps:
+            return "allowed apps"
+        case .outputLocations:
+            return "common output locations"
+        case .resumableTasks:
+            return "unfinished tasks"
+        }
+    }
 }

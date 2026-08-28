@@ -510,6 +510,58 @@ struct LocalStorageSecurityTests {
         #expect(LocalStore.allCases.count == 13)
     }
 
+    /// **The words Settings uses to describe the wipe name every store the wipe reaches**
+    /// (SONNY-233).
+    ///
+    /// The two surfaces that describe this button used to hold hand-written lists, and both were
+    /// false by omission: the Data page's detail line named ten of thirteen and the confirmation
+    /// dialog named nine — the dialog being the last thing a user reads before an irreversible
+    /// press. Nothing connected either sentence to the file list, so each new store went unnamed
+    /// silently. The sentence is derived now, and this is the assertion that it is complete.
+    ///
+    /// **The other half of the chain is the two tests above.** They pin that `LocalStore.allCases`
+    /// and `LocalDataDeletionService.defaultStoreFileURLs()` describe one population; this pins that
+    /// the sentence names all of `allCases`. Together: every file the wipe deletes is named in the
+    /// words that describe it.
+    @Test
+    func theWipesOwnSentenceNamesEveryStoreItDeletes() {
+        // Split back into items rather than searching for substrings: "clipboard history" is a
+        // prefix of nothing here today and would be of "clipboard history settings" tomorrow, and a
+        // containment check cannot tell a named store from an accidental substring of a neighbour.
+        let items = LocalDataDeletionCopy.everythingItTakes
+            .replacingOccurrences(of: ", and ", with: ", ")
+            .components(separatedBy: ", ")
+
+        #expect(items == LocalStore.allCases.map(\.deletionCopyName))
+        #expect(items.count == LocalStore.allCases.count)
+        #expect(Set(items).count == items.count, "two stores share a name and one of them is invisible")
+        #expect(!items.contains(""), "a store is named by nothing at all")
+
+        // The three that were missing when this was filed, by value — so the ticket's own finding is
+        // readable here rather than only in its history.
+        #expect(items.contains("what past tasks planned"))
+        #expect(items.contains("allowed apps"))
+        #expect(items.contains("unfinished tasks"))
+        // And the one the dialog alone had lost.
+        #expect(items.contains("common output locations"))
+    }
+
+    /// The join, at the sizes the product cannot reach today and a successor might.
+    ///
+    /// One store would otherwise render as a list of one with a stray "and" in front of it, and two
+    /// take no comma at all. Written out rather than left to `joined(separator:)` for exactly that,
+    /// so the branches are asserted rather than assumed unreachable.
+    @Test
+    func theListJoinsWithAnOxfordCommaAtEverySize() {
+        #expect(LocalDataDeletionCopy.list([]) == "")
+        #expect(LocalDataDeletionCopy.list(["snippets"]) == "snippets")
+        #expect(LocalDataDeletionCopy.list(["snippets", "routines"]) == "snippets and routines")
+        #expect(
+            LocalDataDeletionCopy.list(["snippets", "routines", "workspaces"])
+                == "snippets, routines, and workspaces"
+        )
+    }
+
     /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
     /// task history be silently reclassified `.artifact` and stop being suppressed, which is the
     /// same failure by a different route.
