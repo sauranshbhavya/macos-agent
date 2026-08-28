@@ -121,15 +121,6 @@ public enum WebResearchNoteSchema {
             ]
         ]
     }
-
-    public static func responseFormat() -> [String: Any] {
-        [
-            "type": "json_schema",
-            "name": name,
-            "strict": true,
-            "schema": schema()
-        ]
-    }
 }
 
 public struct WebResearchSynthesisPrompt: Equatable, Sendable {

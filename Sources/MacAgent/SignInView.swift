@@ -5,8 +5,16 @@ import SwiftUI
 ///
 /// **Its own object rather than another field on `AgentViewModel`.** The view model owns the run
 /// loop and thirteen local stores; an account session shares none of that, and adding it there
-/// would put a sixteenth required parameter on an initializer whose fifteen fixtures already exist
-/// only because SONNY-240 removed every default from it.
+/// would put one more required parameter on an initializer that already has no defaults at all,
+/// and would land in every one of its fixtures — which exist only because SONNY-240 removed every
+/// default from it.
+///
+/// (**Two numerals came out of that sentence, both stale, both for the same reason** — SONNY-326.
+/// It read "a *sixteenth* required parameter on an initializer whose *fifteen* fixtures". A
+/// required-parameter count moves whenever a store or a dependency is added, and a fixture count
+/// moves whenever a fixture file is — both are ordinary work, both had already happened, and
+/// neither number carried the argument. The argument is that the cost is paid at *every*
+/// construction site, and that holds at any count.)
 ///
 /// **`restore()` is what makes the app come back signed in.** It reads the Keychain and touches no
 /// network, so it works on a launch with no connection — and, the case this ticket exists for, on
