@@ -21,6 +21,35 @@ import Testing
 /// third state exists and it is never `.ready`.
 @Suite
 struct PermissionReadinessModelAccessTests {
+    /// **Not about readiness, and it is here rather than in a file of its own for one reason: this
+    /// is where SONNY-136's "no user-facing string mentions an environment variable" sweep is
+    /// held.** The row above was one of the two sites that criterion was written for. The other was
+    /// `DocumentConversionError.wordUnavailable`, which the ticket's own sweep missed because that
+    /// sweep enumerated *provider* variables and this one is the DOCX mock flag — a population
+    /// defined too narrowly, which is the failure mode `CLAUDE.md`'s quantified-claim rule describes
+    /// from the inside.
+    ///
+    /// **It was held by nothing at all**, which is how it survived: `git grep -n 'Microsoft Word is
+    /// unavailable' -- Sources Tests` answered one line at `13b37c4`, in the source. So the reword
+    /// gets an assertion, or the next edit puts the variable back and no run says so.
+    ///
+    /// The flag is untouched — this asserts the sentence, never the mechanism.
+    @Test
+    @MainActor
+    func theWordUnavailableSentenceNamesNoEnvironmentVariable() throws {
+        let sentence = try #require(DocumentConversionError.wordUnavailable.errorDescription)
+        #expect(sentence == "Microsoft Word isn't available, so Sonny can't convert this document.")
+        #expect(!sentence.contains("MAC_AGENT_MOCK_DOCX"))
+        // The shape rather than the name, so a *different* variable in this sentence fails too.
+        let variableShape = try NSRegularExpression(pattern: "[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{2,}")
+        #expect(
+            variableShape.firstMatch(in: sentence, range: NSRange(sentence.startIndex..., in: sentence)) == nil
+        )
+        // And the mechanism the founder's ratification put out of bounds is still there, so this
+        // test cannot be satisfied by deleting the mock path (SONNY-136's never-touch list).
+        #expect(MockDocumentConverter(enabled: true).isAvailable)
+    }
+
     private func accountRow(_ readiness: ModelAccessReadiness) throws -> PermissionReadinessItem {
         let items = PermissionReadinessService
             .deterministic()
