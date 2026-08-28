@@ -119,7 +119,16 @@ export function parseUsageArguments(argv: readonly string[]): ParsedUsageArgumen
   return { kind: "run", command: first, window };
 }
 
-/** Bytes as a figure a person can read, with the exact count kept beside it. */
+/**
+ * Bytes as a figure a person can read.
+ *
+ * **Two decimal places and nothing else — this said "with the exact count kept beside it" and it
+ * never printed one** (corrected 2026-08-28, PR #147's review, F7, which caught it on a real report
+ * where a session that sent 192 bytes printed `0.00 MB`). The exact count is in the table and is one
+ * query away; what this is for is a figure a person can compare two sessions with at a glance, and a
+ * byte count beside every megabyte figure would bury that. A reader who needs the byte is reading
+ * `sonny.metering_event.image_bytes`, not this line.
+ */
 function megabytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(2)} MB`;
 }

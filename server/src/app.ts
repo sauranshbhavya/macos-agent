@@ -242,8 +242,36 @@ export function buildApp(
    * `request.idempotency` to decide whether this request may spend the key's one metering claim — a
    * replay and a `409` wrote nothing and must not take a claim from the request that did the work.
    * That state is set in `preHandler`, so it is there either way; what this line's position decides
-   * is that the key's own bookkeeping settles before the event that cites it is written, which is
-   * the order a reader would assume and the only one worth having.
+   * is that the key's own bookkeeping settles before the event that cites it is written.
+   *
+   * **A window between the two survives, it loses money rather than duplicating it, and this branch
+   * chose the order on readability after reversing `onResponse` on exactly that criterion** — so it
+   * is written down here rather than left for the next session to re-derive (PR #147's review, F6).
+   * Both directions traced:
+   *
+   * - **As built** — the key completes, then the event is written. A process killed between the two
+   *   leaves a `completed` key row with a stored response and `metering_claimed_at` still NULL. The
+   *   client's retry replays that stored response, so `ClaimState` is `replayed` and the metering
+   *   hook returns without asking the store. The provider call was paid for and is **never metered,
+   *   ever**.
+   * - **Reversed** — the event is written, then the key completes. A kill between them leaves an
+   *   event and a key still `in_flight`; the lease expires, the retry genuinely re-runs and calls
+   *   the provider a second time, and its claim is already taken so the second call goes unbilled.
+   *   The first call *is* recorded.
+   *
+   * So neither order is free, and the reversed one loses less. **It is not changed here**, because
+   * the window is one database round trip wide and strictly narrower than the `onResponse` window
+   * this branch already removed — the change would be trading a known small residual for a reordering
+   * whose own failure mode (a re-run the gateway pays for and does not record) is not obviously
+   * better, and the ticket that has to weigh that is the one that owns the spend cap.
+   *
+   * **What the single transaction in `writeMeteringEvent` does and does not close**, since it is easy
+   * to read as covering this. It closes claim-versus-insert: the claim cannot be taken without the
+   * event landing, which is the direction that would lose an event permanently. It cannot close the
+   * gap above, because the key's completion and the metering write are two transactions on two
+   * connections by construction — `KeyStore` and `MeteringStore` each lease their own — and merging
+   * them would put the metering write inside the key store's transaction, which is the coupling
+   * SONNY-300's seam exists to avoid.
    *
    * **The gate's `onRequest` runs before both**, because it is registered before both, which is
    * what makes `request.auth` available by the time the event is built.
