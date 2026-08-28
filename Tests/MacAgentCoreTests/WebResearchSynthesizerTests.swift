@@ -32,14 +32,18 @@ import Testing
 /// became `prompt.messages`, because the provider envelope around the text is the server's to build.
 @Suite
 struct WebResearchSynthesizerTests {
+    /// **This asserted `WebResearchNoteSchema.responseFormat()` until SONNY-321 deleted that
+    /// wrapper**, and is repointed at `schema()` — which is what `synthesize` actually puts on the
+    /// wire — rather than deleted with it. The three envelope assertions are gone and nothing went
+    /// with them: `"web_research_note"` is asserted directly on `WebResearchNoteSchema.name` below,
+    /// and again on the request body by `synthesizerRecordsTheUsageTheBackendReported`, which reads
+    /// `response_schema_name` off the bytes; `json_schema` and `strict` described a provider
+    /// envelope this client no longer builds. The `sources` assertion further down is the one this
+    /// test exists for and is untouched.
     @Test
     func webResearchNoteSchemaIsStrict() throws {
-        let format = WebResearchNoteSchema.responseFormat()
-        #expect(format["type"] as? String == "json_schema")
-        #expect(format["name"] as? String == "web_research_note")
-        #expect(format["strict"] as? Bool == true)
-
-        let schema = try #require(format["schema"] as? [String: Any])
+        let schema = WebResearchNoteSchema.schema()
+        #expect(WebResearchNoteSchema.name == "web_research_note")
         #expect(schema["type"] as? String == "object")
         #expect(schema["additionalProperties"] as? Bool == false)
         #expect(schema["required"] as? [String] == ["title", "summary", "keyPoints", "citations"])
