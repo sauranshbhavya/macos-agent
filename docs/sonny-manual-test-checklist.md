@@ -981,6 +981,23 @@ it feels confusing in practice, not just whether it's "technically correct."
       name. SONNY-41's inert rendering stays primary over any icon decoration; the two are
       independent fields, so this is a visual judgement no test can make.
 
+### Memory (new 2026-08-28, SONNY-243)
+
+- [ ] **Every row's count now names what it counts.** Open Command Center → Memory. Each row's
+      grey line used to read "**N saved**" whatever the row was; it now reads `3 routines`,
+      `2 workspaces`, `184 tasks`, `26 artifacts`, `1 folder`, `12 copied items`, `4 snippets`,
+      `2 apps`, `1 unfinished task`. **Say whether the nouns read right to you** — the three that
+      are not simply the row's own title are the ones worth a second look: **artifacts**,
+      **copied items**, and **unfinished task** (spelled out rather than "task" because Task history's
+      rows are tasks too and the two counts must not look addable). Every noun lives in one switch,
+      so any of them is a one-line change if you want different words
+- [ ] **The pair you reported on 2026-08-23 no longer reads as a contradiction.** Ask Sonny to write
+      two files into the same folder (`~/Desktop` is what you used). Then Memory → Output locations
+      should read **"1 folder · newest …"**, and pressing **View** should show
+      **"Desktop · ~/Desktop · used 2 times · last …"**. Both numbers are still what they always
+      were — what changed is that each one now says what it is counting. Say whether the two still
+      read as though one of them is wrong
+
 ### Settings — `10-MainAppSettings.svg`/`.png`, opened via the bottom-left account row
 - [x] Account row shows your real macOS full name only, no email/plan badge
 - [x] **Preferences:** Display full names toggle actually changes name rendering somewhere real; Use

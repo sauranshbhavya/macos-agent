@@ -1372,13 +1372,16 @@ struct ResumableTaskRunTests {
         let row = MemoryRowPresentation.row(for: .resumableTasks, viewModel: fixture.viewModel)
         #expect(row.title == "Unfinished tasks")
         #expect(row.count == 1)
-        #expect(row.detailText.hasPrefix("1 saved · newest "))
+        #expect(row.detailText.hasPrefix("1 unfinished task · newest "))
 
         let entries = MemoryEntryPresentation.entries(for: .resumableTasks, viewModel: fixture.viewModel)
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         #expect(entry.title == "Write notes and open the page")
+        // The sheet's own number says what it counts ("steps left"), so it cannot be read as a
+        // second answer to the row's count the way the output locations pair was (SONNY-243).
         #expect(entry.detail.hasPrefix("Stopped by an error · 1 of 2 steps left · "))
+        #expect(entries.count == row.count)
     }
 
     @Test

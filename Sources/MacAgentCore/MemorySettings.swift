@@ -95,6 +95,88 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The row's count with the thing it counts named — "1 folder", "184 tasks".
+    ///
+    /// **Every row said "N saved", and that word is unitless** (SONNY-243). The founder read the
+    /// Output locations row as `1 saved` and its sheet as `Desktop · ~/Desktop · 2 times`, and
+    /// reported the pair as a bug within a minute of first seeing it. Both numbers were right and
+    /// they measure different things: the row counts the folders Sonny remembers — which is exactly
+    /// the number of rows the sheet then lists — and `2 times` is one of those folders' own use
+    /// count. Nothing on either surface said which was which, so the only reading available was that
+    /// one of them was wrong.
+    ///
+    /// **Naming the unit is the repair, and it is applied to every row rather than to the one that
+    /// was reported.** A single row reading "1 folder" among eight reading "N saved" is the same
+    /// defect the report is about — words that differ from their neighbours' for a reason the reader
+    /// cannot see. And "saved" was not merely unitless: this page groups its rows by
+    /// `LocalStoreKind`, and for the whole `.trace` half nobody saved anything — a task history row,
+    /// a copied item, an allowed app and an unfinished run are recorded rather than saved.
+    ///
+    /// The nouns are the row's own vocabulary, so `title` and this cannot describe different things;
+    /// `MemorySettingsTests.everyMemoryRowsCountNamesTheThingItCounts` walks the population.
+    public func countedEntries(_ count: Int) -> String {
+        "\(count) \(count == 1 ? singularNoun : pluralNoun)"
+    }
+
+    /// What one entry under this row is called. Lower-case: it is read mid-sentence, after a number.
+    var singularNoun: String {
+        switch self {
+        case .routines:
+            return "routine"
+        case .workspaces:
+            return "workspace"
+        case .taskHistory:
+            return "task"
+        case .recentArtifacts:
+            return "artifact"
+        case .outputLocations:
+            // The founder's own word for these on SONNY-243. `title` says *which* folders these are;
+            // a count does not have room to and does not need to.
+            return "folder"
+        case .clipboardHistory:
+            // "copied item", not "item": it is the noun the row's own delete confirmation already
+            // uses ("every copied item Sonny has recorded"), so the count and the confirmation name
+            // one thing.
+            return "copied item"
+        case .snippets:
+            return "snippet"
+        case .approvedApps:
+            return "app"
+        case .resumableTasks:
+            // "unfinished task" rather than "task", even though the row is already titled
+            // "Unfinished tasks" and the repetition is audible. Task history's rows are also tasks,
+            // the two sit on one page, and the stores are disjoint by construction — a history row
+            // is written when a run terminates and this store holds the runs that have not — so a
+            // bare "1 task" beside "184 tasks" invites the one arithmetic the page cannot support.
+            return "unfinished task"
+        }
+    }
+
+    /// The plural of `singularNoun`. Spelled out rather than derived: an "-s" rule is a guess about
+    /// English that holds for today's nine nouns and for no reason that will keep holding.
+    var pluralNoun: String {
+        switch self {
+        case .routines:
+            return "routines"
+        case .workspaces:
+            return "workspaces"
+        case .taskHistory:
+            return "tasks"
+        case .recentArtifacts:
+            return "artifacts"
+        case .outputLocations:
+            return "folders"
+        case .clipboardHistory:
+            return "copied items"
+        case .snippets:
+            return "snippets"
+        case .approvedApps:
+            return "apps"
+        case .resumableTasks:
+            return "unfinished tasks"
+        }
+    }
+
     /// Every store whose contents this row covers, in `LocalStore.allCases` order.
     ///
     /// Derived from `LocalStore.memoryCategory` rather than listed here, so the mapping exists once

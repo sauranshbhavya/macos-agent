@@ -65,6 +65,55 @@ struct MemorySettingsTests {
         }
     }
 
+    /// **Every row's count names what it counts** (SONNY-243).
+    ///
+    /// The founder read `1 saved` on the Output locations row beside `2 times` in its sheet and
+    /// reported the pair as a bug. Both numbers were right; "saved" named no unit, so nothing said
+    /// that one counted folders and the other counted one folder's uses. The repair is a noun on
+    /// every row, and this is the population check on it — a tenth category cannot arrive without
+    /// one, and cannot arrive with a plural that was never written.
+    @Test
+    func everyMemoryRowsCountNamesTheThingItCounts() {
+        for category in MemoryCategory.allCases {
+            let one = category.countedEntries(1)
+            let two = category.countedEntries(2)
+            let none = category.countedEntries(0)
+
+            #expect(one == "1 \(category.singularNoun)", "\(category.title)")
+            #expect(two == "2 \(category.pluralNoun)", "\(category.title)")
+            // Zero takes the plural, which is the form the empty row renders.
+            #expect(none == "0 \(category.pluralNoun)", "\(category.title)")
+
+            // A noun, not a bare number and not the unitless word this replaced.
+            #expect(!category.singularNoun.isEmpty, "\(category.title) counts nothing in particular")
+            #expect(category.singularNoun == category.singularNoun.lowercased(), "\(category.title)")
+            #expect(category.pluralNoun == category.pluralNoun.lowercased(), "\(category.title)")
+            for noun in [category.singularNoun, category.pluralNoun] {
+                #expect(!noun.contains("saved"), "\(category.title) still infers its unit")
+            }
+
+            // A copied singular is the mistake this catches: nine nouns written by hand, and the
+            // one that reads "2 copied item" is invisible to a test that only checks presence.
+            #expect(category.singularNoun != category.pluralNoun, "\(category.title) is not pluralised")
+        }
+    }
+
+    /// The two nouns the row and its sheet each need, pinned by value.
+    ///
+    /// `outputLocations` is the row the founder reported and `resumableTasks` is the one the ticket
+    /// asked to check beside it. Both are spelled out here rather than left to the population check
+    /// above, which cannot tell a right noun from a plausible one.
+    @Test
+    func theRowsTheFounderComparedNameFoldersAndUnfinishedTasks() {
+        #expect(MemoryCategory.outputLocations.countedEntries(1) == "1 folder")
+        #expect(MemoryCategory.outputLocations.countedEntries(3) == "3 folders")
+        // Not "1 task": task history's rows are tasks too, the two rows sit on one page, and the
+        // stores are disjoint — so a bare noun here invites adding the two counts together.
+        #expect(MemoryCategory.resumableTasks.countedEntries(1) == "1 unfinished task")
+        #expect(MemoryCategory.taskHistory.countedEntries(184) == "184 tasks")
+        #expect(MemoryCategory.clipboardHistory.countedEntries(12) == "12 copied items")
+    }
+
     /// Task history is the one row that speaks for more than one file, and the three it carries are
     /// named rather than counted: a reader wondering where screen records go should find the answer
     /// in an assertion, not in a number.
