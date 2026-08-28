@@ -190,8 +190,19 @@ async function readBoundedJSON(response: Response, limit: number): Promise<unkno
       chunks.push(value);
     }
   } finally {
-    // Releasing the lock lets the connection be reused; an un-released reader on an abandoned body
-    // holds it until GC, which under a 12-iteration session is a socket per failed read.
+    // Released as hygiene, and **not because it gets the connection reused** — the sentence that
+    // stood here said it did, read as a measurement, and was not one (PR #144, F5). The reviewer
+    // measured the two arms against a control on Node v22.23.1, four sequential `fetch`es to a
+    // loopback server counting `connection` events: body fully read, **2 connections**; abandoned at
+    // a cap with `releaseLock()` alone, **4**; abandoned at a cap with `reader.cancel()` first,
+    // **6**. So this arm is about one socket per request, which is the state the old comment claimed
+    // to avoid — and the obvious "fix" is worse, which is the part worth knowing before anyone
+    // reaches for it. Read those as a comparison between the arms rather than as absolute counts:
+    // the harness is a loopback `http` server, not this provider path.
+    //
+    // It stays because an un-released reader is a lock held until GC either way, and this costs
+    // nothing. The path is a provider reply over §6.3's cap, which is rare and where a socket is the
+    // cheapest thing being spent.
     reader.releaseLock();
   }
 

@@ -4619,7 +4619,8 @@ final class AgentViewModel: ObservableObject {
     ///
     /// The handle is why this is not inline: `pauseVisionSession()` needs the *same* monitor the
     /// running session is consulting, and a second one built later would be a Pause button wired to
-    /// nothing.
+    /// nothing. (The summary line above wrote this function's name without its parameter until
+    /// PR #144's R3; it takes `recordingPolicy:` since SONNY-131.)
     /// - Parameter recordingPolicy: **already resolved**, never the Optional. It answers two
     ///   different questions that have to agree — which local stores this run writes to, and what
     ///   `retention` the vision route puts on the wire — and resolving it twice from two places is
