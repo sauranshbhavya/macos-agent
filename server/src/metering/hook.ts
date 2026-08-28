@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Config } from "../config.js";
-import type { UpstreamUsage } from "../model/upstream.js";
+import { noteContent } from "../content/hook.js";
+import { detailOf, type UpstreamUsage } from "../model/upstream.js";
 import {
   meteredRouteFor,
   modelForRoute,
@@ -149,6 +150,33 @@ export async function meteredUpstreamCall<T>(
   const startedAt = performance.now();
   try {
     return await work();
+  } catch (error) {
+    // **The provider's error body is deposited here, in the one place every provider call in this
+    // gateway passes through** (SONNY-134). §10.3 requires it to land in the content store on the
+    // content clock rather than in an unclassified log, and this function is the single seam that
+    // can see it: the adapters have no request, and the obvious alternative — capturing it in
+    // `sendUpstreamFailure` — would mean editing **two** copies of that function and trusting them
+    // to stay in step, which is the exact drift `model/routing.ts` carries a warning about. A
+    // capture that exists on four routes and not the fifth is worse than none, because it reads
+    // like coverage.
+    //
+    // **Depositing is not storing.** `content/hook.ts` writes nothing for a request that did not
+    // declare `retention: "standard"`, so an incognito run's provider error body is deposited on a
+    // draft that is discarded — which is the guarantee a log line could never have made about the
+    // same bytes.
+    const detail = detailOf(error);
+    if (detail !== undefined) {
+      noteContent(request, {
+        providerErrorStatus: detail.status,
+        // Contract §10.3: "Provider request IDs are kept for correlation." Kept even when the body
+        // could not be read, because it is a header and it is what a vendor support ticket needs.
+        ...(detail.providerRequestId === null
+          ? {}
+          : { providerRequestId: detail.providerRequestId }),
+        ...(detail.body === null ? {} : { providerErrorBody: detail.body }),
+      });
+    }
+    throw error;
   } finally {
     noteMetering(request, { upstreamDurationMs: Math.round(performance.now() - startedAt) });
   }

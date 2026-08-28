@@ -1562,6 +1562,87 @@ build` once, and read the reports with `DATABASE_URL=<the same one the container
       before the write moved — the inversion of the branch's own central decision, and it told the
       founder there was nothing that could be felt. Corrected 2026-08-28, PR #147's review, F2.)
 
+### Retention, deletion, and what support can see (new 2026-08-28, SONNY-134)
+
+**What changed:** the backend now keeps the content of your calls for **30 days** — the command text,
+the voice recording, the redacted screenshot, the reply, and a provider's error body — and, just as
+importantly, it now has the two ways content does *not* get kept: a delete that reaches everywhere,
+and a "Don't save this task" run that is never stored at all. The founder confirmed the thirty days
+on 2026-08-28.
+
+**Read this before running any of it: one row below is runnable today and the rest need sign-in.**
+The three sign-in rows queue behind **SONNY-280's founder-deferral comment of 2026-08-27 and its
+numbered resume checklist, steps (1)–(5), in that order** — the same gate SONNY-133's rows sit
+behind, and its section above carries the detail that matters (the Supabase project
+`zpyyljfsqrxulhmgkhfp` exists with its migrations applied, use the **session pooler** connection
+string, and the JWT key mode is the first thing to check). Nothing here needs a provider credential
+beyond what those rows already need.
+
+**One thing this branch deliberately did not build, so a row below does not ask you to look for it.**
+The app's own delete button still deletes only the Mac's copy: `AgentViewModel.deleteTask` does not
+call the new endpoint, because SONNY-134 was scoped server-only for parallel-lane disjointness
+(`docs/sonny-row-12-plan.md` §8.2). The endpoint is real and reachable; wiring the button to it is a
+separate ticket. The row below therefore calls the endpoint with `curl`, which is what actually
+exists to test.
+
+- [ ] **(new 2026-08-28, SONNY-134) — Terminal, needs only a Postgres. This one is runnable today.**
+      With a database and `npm run build` done, rehearse the migration both ways:
+      `npm run migrate -- up`, then `npm run migrate -- down`, then `npm run migrate -- up` again.
+      The `down` must say `rolled back: 0013_content_is_kept_on_its_own_clock` and **all five tables
+      must be gone** (`\dt sonny.*` in `psql`: `retained_content`, `training_snapshot`,
+      `training_snapshot_member`, `content_deletion`, `content_access`); the second `up` must bring
+      them back. Then run `npm run support -- deletions` against the empty table: it must say *"no
+      deletions recorded"* and explain that this is the expected answer until content is old enough
+      to expire, rather than printing an error. A rollback that leaves a table behind, or a re-apply
+      that fails, is the finding.
+
+- [ ] **(new 2026-08-28, SONNY-134) — after SONNY-280's resume steps (1)–(5). The headline row.**
+      Sign in, run **one ordinary task** (a typed command that reaches the planner), and note the
+      task from Command Center. Then, in a terminal with the same `DATABASE_URL` the container uses:
+      `npm run support -- account <your account id>`. It must show `content` with **at least one
+      call retained**, a `next expiry` about thirty days out, and your usage beside it. Then delete
+      that task's server copy — the app cannot do this yet, see the note above — with
+      `curl -X DELETE -H "Authorization: Bearer <an access token>"
+      http://localhost:8080/v1/tasks/<task id>`; it must answer `200` with `requests_deleted` at
+      least 1. Re-run the account report: `content` must be back to **0 call(s) retained**, and
+      `npm run support -- deletions` must show a `task` row naming that task. **What would be a
+      finding:** a `404` from the delete, a `requests_deleted` of 0 for a task you just ran, or
+      content still showing after the delete.
+
+- [ ] **(new 2026-08-28, SONNY-134; command widened 2026-08-28 after PR #148's review) — after
+      SONNY-280's resume steps (1)–(5).** Run one task with **"Don't save this task"** on. Then check
+      **both** places this gateway can hold response content, because the review found the leak in
+      the second one and a check of the first alone would have passed straight over it:
+      <br>&nbsp;&nbsp;**(a)** `npm run support -- account <your account id>` — **`content` must say
+      0 call(s) retained** for it, while `usage` shows the call, one more event than before.
+      <br>&nbsp;&nbsp;**(b)** in `psql` against the same database:
+      `SELECT idempotency_key, state, response_body IS NOT NULL AS has_body FROM sonny.idempotency_key
+      ORDER BY claimed_at DESC LIMIT 5;` — the row for that run must read **`released` and `has_body`
+      = f**. A `completed` row with `has_body` = t is the finding, and it is the exact defect PR
+      #148's F1 measured. **Do not check this with a `LIKE` over `response_body::text`** — that
+      column is `bytea`, the cast gives hex, and the comparison answers a clean zero even when the
+      reply is sitting there; use `convert_from(response_body,'UTF8')` if you want to read one.
+      <br>This is the guarantee the whole feature rests on and the one most easily lost by accident:
+      **content appearing in either place for that task is the finding.** The accepted cost is
+      deliberate and is not a finding — if that run misbehaves, nothing stored can explain why, and
+      that is the feature working. A second accepted cost, also not a finding: a retry of an
+      incognito call re-runs rather than replaying, so you may see two provider calls for one
+      operation.
+
+- [ ] **(new 2026-08-28, SONNY-134) — after SONNY-280's resume steps (1)–(5). Read this row before
+      running it: it is a judgement call, not a pass/fail.** Run
+      `npm run support -- account <your account id>` and ask yourself the real question: **is this
+      enough to answer a support email, and is it more than you should be able to see without
+      asking?** It shows account state, how you sign in, what you have called and how it went, and
+      how many calls are retained and of what kinds — and no content, and not the email address
+      behind your identity. Then read one call's content deliberately:
+      `npm run support -- content --request <a Sonny-Request-Id> --operator <your name> --reason
+      "checking retention manually"`. It must refuse without either flag, print the request text and
+      the response, print the screenshot and any recording as **sizes rather than bytes**, and then
+      `npm run support -- accesses` must show your own lookup with the reason you typed. **Tell me
+      if the account report is missing something you would actually need**, or if it shows something
+      you think it should not. This is the row where the access decision gets its only real test.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 **Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads
