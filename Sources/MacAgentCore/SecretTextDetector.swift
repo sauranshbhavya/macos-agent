@@ -339,10 +339,16 @@ struct SecretTextDetector {
     /// Whether a **hyphenated** pair is bound to what precedes it by a colon with no space —
     /// `CerebrasPlanner.swift:129-131`, `linking.db.test.ts:773-783` (SONNY-278).
     ///
-    /// Hyphenated only, deliberately: `Code:483 291` is a label with its space in the ordinary
-    /// place and stays a match, and every colon-bound false positive in the measured corpus was
-    /// hyphenated. The colon has to be *immediately* before the digits — `Code: 483-291` is
-    /// preceded by a space and is untouched.
+    /// Hyphenated only, deliberately, and **the asymmetry is held by a test rather than by this
+    /// sentence**: a battery at `6cec301` widened this to the spaced form and survived, because the
+    /// obvious example of the difference carries a context word and the contextual rule catches it
+    /// either way. `aSpacedPairAgainstAColonIsStillDetected` is the unlabelled case that tells them
+    /// apart. Narrow rather than wide because every colon-bound false positive in the measured
+    /// corpus was hyphenated — 99 of them, 0 spaced — and a fail-closed detector does not narrow on
+    /// a shape no measurement asked it to.
+    ///
+    /// The colon has to be *immediately* before the digits — `Code: 483-291` is preceded by a space
+    /// and is untouched.
     private static func isBoundToALocatorByAColon(_ range: Range<String.Index>, in text: String) -> Bool {
         guard text[range].contains("-"), range.lowerBound > text.startIndex else { return false }
         return text[text.index(before: range.lowerBound)] == ":"
