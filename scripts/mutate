@@ -1047,6 +1047,23 @@ failed_re = re.compile(r"^.*\sTest (.*) failed after ")
 # vitest prints one line and has no such disagreement.
 vitest_fail_re = re.compile(r"^\s*FAIL\s\s+(\S.*?)\s*$")
 
+# An entry counts only INSIDE that section, and this gate is not caution — it is a measurement. A
+# failing test's console output is echoed into the log above the section, under a `stdout |
+# test/x.test.ts > …` header and then verbatim, so a test that logs a line shaped like an entry
+# would otherwise mint a failing test that never existed: evidence out of nothing, which is the
+# direction that manufactures a kill. Reproduced on this repository's own server suite with a
+# throwaway test that prints ` FAIL  test/made-up.test.ts > a suite > a test that does not exist`
+# and then fails; the line arrives at column 0 exactly as an entry does, and only its position
+# separates them. (The code frame vitest prints under the real entry quotes that same source line,
+# but it arrives prefixed with `      5|` and matches nothing here.)
+#
+# The section opens on vitest's own heading and closes at the run summary, which is the first line
+# after which nothing can be an entry. A log carrying no heading yields no vitest names at all and
+# is reported as a run that named no test — the safe direction, and the same thing this harness says
+# about a trapped process.
+vitest_failures_heading_re = re.compile(r"^\u23af{2,} Failed (?:Tests|Suites)\b")
+vitest_summary_re = re.compile(r"^\s*Test Files\s")
+
 # What closes one of those entries. Anchored at the start of the line and requiring the rule itself,
 # rather than the weaker "a line carrying no letters" the swift boundary can afford: the blank lines
 # inside a failure's own diff would match that, and ending a block early is the direction that drops
@@ -1083,6 +1100,7 @@ issue_order = []
 
 current_name = None
 current_text = []
+in_vitest_failures = False
 
 
 def flush():
@@ -1097,10 +1115,20 @@ with open(log_path, encoding="utf-8", errors="replace") as handle:
     for raw in handle:
         line = raw.rstrip("\n")
 
-        # vitest first: its FAIL line both names a failing test and opens that test's block, so it
-        # does the work swift-testing splits across two line shapes. There is no separate per-test
-        # summary line to merge in afterwards.
-        vitest = vitest_fail_re.match(line)
+        # vitest first. The heading is checked before the rule that closes an entry, because the
+        # heading is itself a rule and would otherwise be read as one.
+        if vitest_failures_heading_re.match(line):
+            flush()
+            in_vitest_failures = True
+            continue
+        if vitest_summary_re.match(line):
+            flush()
+            in_vitest_failures = False
+            continue
+        # Its FAIL line both names a failing test and opens that test's block, so it does the work
+        # swift-testing splits across two line shapes. There is no separate per-test summary line to
+        # merge in afterwards.
+        vitest = vitest_fail_re.match(line) if in_vitest_failures else None
         if vitest:
             flush()
             current_name = vitest.group(1)
@@ -2071,6 +2099,37 @@ printf "      Tests  26 passed (26)\n"'
   st_absent "it is not reported as a build failure" "$ST_OUT" "the suite never ran"
   st_absent "nor as a run that named nothing" "$ST_OUT" "named no test"
   st_absent "nor as unattributed" "$ST_OUT" "UNATTRIBUTED"
+
+  # A line a test PRINTED, which is not a failing test however much it looks like one. Measured on
+  # this repository's server suite with a throwaway test that logs an entry-shaped line and then
+  # fails: vitest echoes a failing test's console output above the error summary, under a
+  # `stdout | <file> > <test>` header, and the echoed line arrives at column 0 exactly as a real
+  # entry does. Run against this branch's first vitest reader, which had no section gate, this
+  # fixture reports KILLED by 2 test(s) and names a test that does not exist — evidence out of
+  # nothing, which is the direction that manufactures a kill.
+  local vitest_echoes_a_fake_entry='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "stdout | test/period.test.ts > the period label > labels the hour before noon as morning\n"
+  printf " FAIL  test/made-up.test.ts > a suite > a test that does not exist\n"
+  printf " ❯ test/period.test.ts (26 tests | 1 failed) 271ms\n"
+  printf "     × labels the hour before noon as morning 3ms\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/period.test.ts > the period label > labels the hour before noon as morning\n"
+  printf "AssertionError: expected \"Afternoon\" to be \"Morning\" // Object.is equality\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 25 passed (26)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  26 passed (26)\n"'
+
+  printf '\n==> A line a test printed is not a failing test, however much it looks like one\n'
+  st_run "$vitest_echoes_a_fake_entry" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the real failure is the only one counted" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and it is the one named" "$ST_OUT" "labels the hour before noon as morning"
+  st_absent "the printed line is not named as evidence" "$ST_OUT" "made-up"
 
   # The other direction, and the one that keeps the arm above from being satisfied by reading any
   # red vitest log as a kill. A mutant that leaves a file the transformer cannot parse gets vitest's
