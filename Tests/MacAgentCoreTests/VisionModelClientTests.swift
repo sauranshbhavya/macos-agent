@@ -602,7 +602,8 @@ struct VisionModelClientTests {
                 )
             ),
             imageWidth: payload.imagePixelWidth ?? 0,
-            imageHeight: payload.imagePixelHeight ?? 0
+            imageHeight: payload.imagePixelHeight ?? 0,
+            delimiters: fixedTagBoundary
         )
         _ = try await Self.client(fixture).decide(prompt: prompt, payload: payload, session: Self.session)
 

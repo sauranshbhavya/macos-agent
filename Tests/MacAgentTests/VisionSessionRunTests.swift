@@ -3091,11 +3091,34 @@ struct VisionSessionRunTests {
         try await waitForIdle(fixture.viewModel)
 
         #expect(fixture.model.prompts.count == 2)
+        var tags: Set<String> = []
         for prompt in fixture.model.prompts {
-            #expect(prompt.contains(UntrustedContentBoundary.observedBeginDelimiter))
-            #expect(prompt.contains(UntrustedContentBoundary.trustedInstructionBeginDelimiter))
+            #expect(prompt.contains(UntrustedContentBoundary.observedBeginName))
+            #expect(prompt.contains(UntrustedContentBoundary.trustedInstructionBeginName))
             #expect(prompt.contains("click a thing"))
+            if let tag = Self.segmentTag(in: prompt) {
+                tags.insert(tag)
+            }
         }
+        // **Two iterations, two tags, measured through the real runner** (SONNY-234). The freshness
+        // property is asserted on the builder's own default in
+        // `UntrustedContentBoundaryTagTests.theTagIsFreshForEveryPromptAndNeverReused`; what this
+        // adds is that the loop does not hoist one tag across the session. It matters here because
+        // the loop is what feeds model-authored history back into the next prompt, so a session-wide
+        // tag would be echoable by the one party that has seen it.
+        #expect(tags.count == 2, "two iterations produced \(tags.count) distinct segment tags")
+    }
+
+    /// The twenty tag letters a prompt's observed-segment marker carries, or nil if it carries none.
+    private static func segmentTag(in prompt: String) -> String? {
+        let name = Array("\(UntrustedContentBoundary.observedBeginName)_".unicodeScalars)
+        let scalars = Array(prompt.unicodeScalars)
+        guard scalars.count > name.count else { return nil }
+        for start in 0...(scalars.count - name.count) where Array(scalars[start..<(start + name.count)]) == name {
+            let letters = scalars[(start + name.count)...].prefix { (65...90).contains($0.value) }
+            return letters.isEmpty ? nil : String(String.UnicodeScalarView(letters))
+        }
+        return nil
     }
 
     // MARK: - The screen check (SONNY-139)
