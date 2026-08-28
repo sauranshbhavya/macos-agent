@@ -25,6 +25,7 @@ import { PROVIDER_ERROR_BODY_BYTES } from "../src/model/upstream.js";
 import { parseSupportArguments } from "../src/support.js";
 import { parseSnapshotArguments } from "../src/snapshots.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { accessTokenFor } from "./support/tokens.js";
 
@@ -196,7 +197,16 @@ function build(overrides: Partial<Config> = {}) {
   return buildApp(
     testConfig({ credentials: CREDENTIALS, ...overrides }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-    { idempotencyStore: keys, meteringStore: metering, contentStore: content },
+    {
+      idempotencyStore: keys,
+      meteringStore: metering,
+      contentStore: content,
+      // SONNY-135's check runs on every authenticated route and is Postgres-backed, so a suite
+      // with no database injects the fake store `support/entitlement.ts` documents. It answers
+      // "admitted" and records what it was asked; what the cap actually does is proved against a
+      // real Postgres in `entitlement.db.test.ts`.
+      entitlementStore: fakeEntitlementStore(),
+    },
   );
 }
 
@@ -830,7 +840,7 @@ describe("the store never fails a response", () => {
     const app = buildApp(
       testConfig({ credentials: CREDENTIALS }),
       { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-      { idempotencyStore: keys, meteringStore: metering },
+      { idempotencyStore: keys, meteringStore: metering, entitlementStore: fakeEntitlementStore() },
     );
     const response = await app.inject({
       method: "POST",
