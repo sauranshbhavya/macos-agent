@@ -2554,6 +2554,179 @@ struct AgentActionExecutorTests {
         #expect(try String(contentsOf: destination).contains("Mock PDF placeholder"))
     }
 
+    // MARK: - SONNY-264: a generated output name is validated, not the folder it was composed from
+    /// The zip adapter's default destination is `<scanned folder>/largest-files-<timestamp>.zip`,
+    /// composed onto a folder `validateExistingDirectory` had just checked, and it is the one
+    /// destination in this tree whose writer follows a leaf symbolic link: `ProcessZipArchiver`
+    /// hands the path to `/usr/bin/zip`, which opens it. PR #111's review reproduced that with
+    /// bytes — `zip` exits 0 after creating the link's target outside the roots.
+    ///
+    /// **Two routes reach that composition, and only one of them was ever exposed. Measured, because
+    /// the ticket says otherwise.** Against a tree carrying the pre-fix composition — this branch
+    /// with `validateOutputFile` reduced to a bare `appendingPathComponent` — `prepare` and
+    /// `execute` both refused this plan with `outsideWhitelist` and the target was never created.
+    /// `AgentActionExecutor.resolveDefaultOutputs` pins the generated path into the step's
+    /// `outputPath`, so the very next pass through `spec(in:context:)` takes the *user-named*
+    /// branch, which has validated since it was written. The dry-run route is the one with no such
+    /// second pass: `preview(plan:)` does not resolve, and on that same tree it returned the link's
+    /// own path as the archive's destination — a preview naming a path the boundary would refuse.
+    ///
+    /// So the assertions split. The preview is the discriminating one; the run's refusal and the
+    /// target's absence are the end-to-end backstop, and they held before this fix too. What the fix
+    /// removes is the *dependence* on that second pass, which nothing states, nothing tests, and a
+    /// change to the resolution order would take away silently.
+    @Test
+    func theZipDefaultDestinationIsValidatedWhereItIsComposedAndNotOnlyOnASecondPass() async throws {
+        let root = try makeDirectory()
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try write(String(repeating: "a", count: 2048), to: root.appendingPathComponent("big.txt"))
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let generatedName = "largest-files-\(Timestamp.fileSafe(stamp)).zip"
+        let target = outside.appendingPathComponent(generatedName)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(generatedName),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, zipArchiver: ProcessZipArchiver(), now: { stamp })
+
+        var caughtInPreview: Error?
+        do {
+            _ = try executor.preview(plan: defaultNamedZipPlan(root: root))
+        } catch {
+            caughtInPreview = error
+        }
+        var caughtInRun: Error?
+        do {
+            _ = try await executor.execute(plan: defaultNamedZipPlan(root: root)) { _, _ in }
+        } catch {
+            caughtInRun = error
+        }
+
+        #expect(
+            isOutsideWhitelist(caughtInPreview),
+            "the dry run named a path the boundary refuses, got \(String(describing: caughtInPreview))"
+        )
+        #expect(isOutsideWhitelist(caughtInRun), "expected a containment refusal, got \(String(describing: caughtInRun))")
+        #expect(!FileManager.default.fileExists(atPath: target.path), "the archive's target was created outside the roots")
+    }
+
+    /// The other direction, through the real writer and proved on the archive's own bytes: a
+    /// generated name that is a link *staying inside* the roots resolves, the approval preview names
+    /// the resolved path rather than the link, and `/usr/bin/zip` writes a real archive there. This
+    /// is what makes the fix a validation rather than a blanket refusal of links at generated names.
+    @Test
+    func theZipDefaultDestinationFollowsALinkThatStaysInsideAndTheArchiveLandsAtItsTarget() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(String(repeating: "a", count: 2048), to: root.appendingPathComponent("big.txt"))
+        let archives = root.appendingPathComponent("Archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let target = archives.appendingPathComponent("kept.zip")
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("largest-files-\(Timestamp.fileSafe(stamp)).zip"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, zipArchiver: ProcessZipArchiver(), now: { stamp })
+
+        let prepared = try executor.prepare(plan: defaultNamedZipPlan(root: root))
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(prepared.plan.steps[1].outputPath == target.path)
+        #expect(result.previews.flatMap(\.writes) == [target.path])
+        // The bytes, not the path the run reported: a real archive begins `PK`.
+        #expect(try Data(contentsOf: target).prefix(2) == Data("PK".utf8))
+    }
+
+    /// The docx adapter's PDF destinations are composed one layer down, in `FileInventory` — the
+    /// preferred `<stem>.pdf` and the `-2`, `-3`, … candidate a same-run collision renames onto — and
+    /// both were handed to the converter having never met a `validate...` method. Validating them in
+    /// `records(for:context:)` covers both composition sites with one call.
+    ///
+    /// **This is the one of the four sites with no second validating pass**: a PDF destination is
+    /// never pinned into a step's `outputPath`, so nothing revalidates it the way the zip default is
+    /// revalidated. What stopped it instead was the two converters shipped today, measured on Darwin
+    /// 25.5.0: `MicrosoftWordDocumentConverter` reaches the destination through
+    /// `FileManager.moveItem`, which throws `NSCocoaErrorDomain` 516 at a dangling link rather than
+    /// following it, and `MockDocumentConverter` writes `.atomic`, which replaces one. That is a
+    /// property of those two writers, not of the boundary — which is exactly what `FakeDocumentConverter`
+    /// demonstrates here: it writes with a plain `Data.write(to:)`, which *does* follow a dangling
+    /// leaf link, so against the pre-fix composition this test's target really was created outside
+    /// the roots. The double stands in for the third converter nobody has written yet.
+    @Test
+    func aDocxDestinationThatLeadsOutOfTheRootIsRefusedRatherThanConverted() async throws {
+        let fixture = try collidingDocxFixture()
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("report.pdf")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        var caught: Error?
+        do {
+            _ = try await executor.execute(plan: fixture.plan) { _, _ in }
+        } catch {
+            caught = error
+        }
+
+        #expect(isOutsideWhitelist(caught), "expected a containment refusal, got \(String(describing: caught))")
+        #expect(!FileManager.default.fileExists(atPath: target.path), "a PDF was created outside the roots")
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report-2.pdf").path))
+    }
+
+    /// The docx equivalent of the zip test above: a destination that is a link staying inside is
+    /// followed, the PDF lands at its target, and what the run reports as the conversion pair is the
+    /// resolved path rather than the link. Asserted on the file's contents, because a fix that
+    /// refused links outright would leave nothing here to read.
+    @Test
+    func aDocxDestinationThatIsALinkStayingInsideIsFollowedToItsTarget() async throws {
+        let fixture = try collidingDocxFixture(nameA: "report", nameB: "other")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let kept = fixture.root.appendingPathComponent("Kept", isDirectory: true)
+        try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+        let target = kept.appendingPathComponent("report.pdf")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(try String(contentsOf: target, encoding: .utf8) == "fake pdf")
+        #expect(result.previews.flatMap(\.writes).contains(target.path))
+    }
+
+    /// The plan the two zip tests above share: a scan/zip pair with **no** destination, which is
+    /// what sends the adapter down its generated-name branch.
+    private func defaultNamedZipPlan(root: URL) -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan", operation: .scanSelectLargestFiles, description: "Scan files.", inputPath: root.path, count: 3),
+                AgentStep(id: "zip", operation: .createZip, description: "Zip files.", inputPath: root.path, count: 3)
+            ]
+        )
+    }
+
+    private func isOutsideWhitelist(_ error: Error?) -> Bool {
+        guard let validation = error as? PathValidationError, case .outsideWhitelist = validation else {
+            return false
+        }
+        return true
+    }
+
     // MARK: - SONNY-30: an unreadable store cannot pass for an empty one
     //
     // `CreateWorkspaceCapabilityAdapter` and `SaveRoutineCapabilityAdapter` decided "does this name
@@ -6757,6 +6930,15 @@ private struct RecordingZipArchiver: ZipArchiving {
 /// the shipped mock did not extend to the double the docx tests actually run against, and a
 /// reintroduced shared destination would have been caught only by an output assertion rather than at
 /// the write. (PR #41 review, SONNY-28 "one note, not a finding".)
+///
+/// **It diverges from both of them on one shape, deliberately kept (SONNY-264): a *dangling* leaf
+/// symbolic link.** `fileExists` follows such a link to a target that is not there, so the guard
+/// above reads the destination as free, and the plain `Data.write(to:)` below then follows the link
+/// and creates its target — where `moveItem` throws and an `.atomic` write replaces the link. That
+/// makes this double the one writer in the process that behaves the way `/usr/bin/zip` does, which
+/// is what lets `aDocxDestinationThatLeadsOutOfTheRootIsRefusedRatherThanConverted` prove its
+/// refusal with bytes rather than with an error type alone. Making it faithful here would make that
+/// test assert nothing.
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
