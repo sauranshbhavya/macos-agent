@@ -1837,6 +1837,79 @@ exists to test.
       if the account report is missing something you would actually need**, or if it shows something
       you think it should not. This is the row where the access decision gets its only real test.
 
+### No environment variable is required for anything (new 2026-08-28, SONNY-136)
+
+**This is SONNY-106 section E's condition, and it is the one section here whose first half needs no
+gateway, no sign-in and no host.** Every provider credential and model name is gone from the app;
+what is left is a build that either has a Sonny account or does not. The rows are split accordingly,
+because a section that put all of them behind the shared setup note above would hide the half that
+can be checked today.
+
+**Setup for the rows that run now: none at all, and that is the check.** Open a *fresh* terminal,
+export nothing, run `./scripts/package-app.sh`, then launch the bundle by **double-clicking it in
+Finder**. A Finder launch inherits no shell environment, which is exactly the condition every user
+who is not a founder in a terminal is in.
+
+**What a command that needs the backend says today, so it is not reported as a defect.** No
+production host exists yet — `SonnyBackendHost.productionBaseURL` is `nil` until SONNY-192 chooses
+one — so a build with no `defaults write com.sonny.MacAgent SonnyBackendBaseURL` pointing at a local
+gateway fails every backend call before it builds a URL, with *"This build has no Sonny account
+service."* That is the honest sentence for that state, not an outage.
+
+#### Runs today
+
+- [ ] **(new 2026-08-28, SONNY-136) — the headline check.** With the app launched from Finder out of
+      a shell that exported nothing, run each of these and confirm every one completes: `calc 2 + 2 *
+      3`; a saved routine by name (`run routine <name>`); a saved workspace (`open workspace
+      <name>`); `snippet save addr = 221B Baker Street` and then `addr` on its own; `clipboard
+      history`. **None of these should touch the network at all.** This is the guarantee spec §16.3
+      makes and one of the three recorded reasons the agent loop stayed on the Mac.
+- [ ] **(new 2026-08-28, SONNY-136)** Turn **wifi off** and repeat the five above. Same answers. Then
+      type an ordinary command ("open Safari") and read what it says: it must be one human sentence
+      with no status code, no URL, no provider name and no variable name. On a build with no backend
+      pointer set that sentence is *"This build has no Sonny account service."*
+- [ ] **(new 2026-08-28, SONNY-136)** Open **Settings → Permission Readiness**. There must be **no
+      "OpenAI" row at all**, and no row anywhere on the page telling you to export or set anything.
+      The first row is **Sonny account**; signed out it reads *"Sign in to Sonny in Command
+      Center."* and shows **Needs action**. Press **Refresh** and confirm it settles rather than
+      flickering between states.
+- [ ] **(new 2026-08-28, SONNY-136)** Press the **mic** in the widget, and hold the push-to-talk
+      hotkey, on this same Finder-launched build. Neither may refuse with anything about a key —
+      *"No API key is set up. Add one, then relaunch Sonny."* is deleted, and a refusal quoting it
+      means something reintroduced the constant. (Whether the transcription then succeeds is the
+      gateway's row below.)
+
+#### Waits on SONNY-280's resume (a local gateway and a real sign-in)
+
+- [ ] **(new 2026-08-28, SONNY-136)** Signed in, with the local gateway up: **Settings → Permission
+      Readiness** shows the Sonny account row as **Ready**, reading *"Signed in."* Sign out and press
+      Refresh: it returns to **Needs action**. This is the row that replaced the one reporting on a
+      credential nothing reads.
+- [ ] **(new 2026-08-28, SONNY-136)** Signed in, gateway up, then **stop the container** (`docker
+      stop` the deploy, or `Ctrl-C` it) and run a typed command. It must say *"Sonny couldn't finish
+      this one. Try again."* — and the readiness row must **stay Ready**, because a dead backend has
+      not signed you out. A row that flips to Needs action here is a defect.
+- [ ] **(new 2026-08-28, SONNY-136)** Signed in, gateway up, wifi **off**, and the backend pointer
+      pointing at something that is not `127.0.0.1`: a typed command must say *"You're offline.
+      Everything Sonny does on this Mac still works."* — and then the five local commands in the
+      first row must actually still work, which is what makes that sentence true rather than a
+      slogan. (A pointer at `localhost` cannot produce this row: loopback survives wifi being off.)
+- [ ] **(new 2026-08-28, SONNY-136)** Sign **out**, then run a typed command: *"Sign in to Sonny to
+      run this."* Then run `calc 2 + 2` while still signed out — it must complete. Being signed out
+      takes the model routes away and nothing else.
+- [ ] **(new 2026-08-28, SONNY-136)** Start a **screen-control session** and let it run several
+      steps. It should finish normally. There is nothing to see here when it works — the row exists
+      because a token expiring between iterations is invisible by design, and the failure mode it
+      would replace is a session that dies partway with *"…It stopped after N steps in <app>."*
+
+#### Waits on a real host (SONNY-192)
+
+- [ ] **(new 2026-08-28, SONNY-136)** With the backend deliberately down on the first real deployed
+      environment, walk every surface that can raise a failure — a typed command, a voice command, a
+      web-research command, a screen-control session — and confirm each says something true and human
+      rather than a status code. This is the row the ticket's own manual list asks for and the only
+      one that cannot be approximated locally.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 **Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads

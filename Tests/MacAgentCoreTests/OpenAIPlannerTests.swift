@@ -517,9 +517,11 @@ struct OpenAIPlannerTests {
     /// list is not advice — "retrying any of these produces the identical failure and burns a round
     /// trip" — and a run that reached a planner it was never meant to consult is in exactly that
     /// position: pressing the button again sends the same plan down the same path. So the sentence
-    /// says what happened and stops. `SonnyBackendCopyTests.aNonRetryableFailureNeverTellsTheUserTo
-    /// TryAgain` holds the same rule for the wire errors; this is the one case of it that
-    /// `SonnyBackendCopy` does not own.
+    /// says what happened and stops. The same rule for the wire errors is held by
+    /// `SonnyBackendCopyTests`, in `aNonRetryableFailureNeverTellsTheUserToTryAgain`; this is the
+    /// one case of it that `SonnyBackendCopy` does not own. (Written that way round because a symbol
+    /// wrapped across two comment lines is a citation `git grep` cannot resolve, which is the same
+    /// failure as naming one that does not exist.)
     @Test
     func everySentencePlannerErrorCanShowIsHeldHere() {
         #expect(PlannerError.noPlannerRan.errorDescription == "Sonny couldn't plan this one.")

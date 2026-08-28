@@ -3075,13 +3075,12 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Internal and separated from its one call site for the same reason
     /// `recentArtifactStoreForThisRun` is (PR #67 review, F1): the decision was previously inline in
-    /// `makeLiveVisionEnvironment()`, which **no test in this repository can execute** — under test
-    /// the vision tests inject their own environment and never reach the live builder, so they
-    /// bypass it. (This used to add "`makeVisionEnvironment` returns `nil` without an API key";
-    /// SONNY-131 made that builder non-Optional and SONNY-136 removed the key, so the reason the
-    /// live builder is unreachable from a test is the injection alone.)
-    /// `visionSessionEnvironment` directly, bypassing the function. So a mutation handing over the
-    /// store regardless of policy survived the whole suite. Asserting the decision *is* asserting
+    /// `makeLiveVisionEnvironment()`, which **no test in this repository can execute** — the vision
+    /// tests inject `visionSessionEnvironment` directly, bypassing the function. So a mutation
+    /// handing over the store regardless of policy survived the whole suite. (This gave a second
+    /// reason, that `makeVisionEnvironment` returns `nil` without an API key. SONNY-131 made that
+    /// builder non-Optional and SONNY-136 deleted the key; the injection is the reason that
+    /// remains, and it is the one that was doing the work.) Asserting the decision *is* asserting
     /// the suppression, because row I built a `nil` journal store as "run the session, record
     /// nothing".
     ///
@@ -6897,13 +6896,13 @@ enum AgentStepStatus: String {
     case canceled
 }
 
-@MainActor
 /// The planner handed to a run whose plan is already made — a pre-built plan from the screen, or
 /// one the instant resolver produced. Asking it for a plan is a bug, and it says so.
 ///
 /// **It threw `PlannerError.missingAPIKey` until SONNY-136**, which meant a user who somehow reached
 /// this was told to export `OPENAI_API_KEY`: a live path wearing the message of a dead one. The case
 /// is `noPlannerRan` now, named for what this actually is.
+@MainActor
 private struct InstantOnlyFallbackPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         throw PlannerError.noPlannerRan
