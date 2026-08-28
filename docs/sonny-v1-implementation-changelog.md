@@ -170,6 +170,83 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/three-surfaces-say-what-they-mean
+Status: complete — SONNY-243, SONNY-251 and SONNY-233 Done; written 2026-08-28 before the PR opened
+Date: 2026-08-28
+Tickets: **SONNY-243** (Memory's Output locations row counts folders while its sheet counts uses), **SONNY-251** (four icon-only widget controls name themselves only through `.help`), **SONNY-233** (Settings' Delete-Local-Data copy names nine of the twelve stores it deletes). Three tickets, one session, one branch, cut from `main` at `4824e50` (PR #151's merge). No rebase. Spawned **SONNY-338** (the compact capsule and the menu bar both say "Open Sonny" for two different destinations), filed rather than decided because it is product vocabulary.
+Reviewed by: fresh session per WORKFLOW.md step 7 — pending when this entry was written; this line is restated before merge.
+
+Spec sections covered: §6.10's memory surface (SONNY-243's row copy) and its Delete-Local-Data control (SONNY-233). No contract changes, no new capability, `server/` untouched.
+
+**Every one of the three was filed as a copy defect, and in each case the ticket's own figure had moved or its premise had.** That is the thread of the branch and it is the reason each entry below leads with what was counted rather than with what was changed. The rule this exercises is `CLAUDE.md`'s *count first, then write the number* — applied to a ticket's own text, which is a stamped measurement like any other and goes stale the same way.
+
+**What a reviewer's step-0 ancestry sweep over this entry finds, said in advance: four hex tokens, three ancestors and one deliberately not.** The population is the entry's own text rather than this sentence's memory of it: `awk '/^### Branch: fix\/three-surfaces-say-what-they-mean$/,/^### Branch: fix\/every-stop-reaches-its-catch$/' docs/sonny-v1-implementation-changelog.md | grep -ohE '\b[0-9a-f]{7,40}\b' | sort -u` → 4, each read through `git merge-base --is-ancestor <t> HEAD` with nothing between the command and `$?`. `4824e50` (the cut point), `d156daa` and its full form (the head every figure is measured at) exit **0**. `d2ed2de` exits **1**, and that is the correct answer rather than a stale citation: it is the head SONNY-233's own description stamps, a branch head a rebase replaced, cited below precisely *as* a stamp that still resolves here and is no longer an ancestor.
+
+Files changed, **14** (`git diff --name-only 4824e50 d156daa | wc -l` → 14 at `d156daa`):
+- `Sources/MacAgentCore/MemorySettings.swift` — `MemoryCategory.countedEntries(_:)`, `singularNoun`, `pluralNoun`.
+- `Sources/MacAgent/CommandCenterView.swift` — the Memory row's detail, the output-location sheet row's detail, the Data page's wipe copy.
+- `Sources/MacAgent/AgentViewModel.swift` — two comments that quoted the old row copy.
+- `Sources/MacAgent/AgentActivityPresentation.swift` — `CompactCapsulePresentation`.
+- `Sources/MacAgent/FloatingWidgetView.swift` — the compact capsule's accessibility name.
+- `Sources/MacAgent/ContentView.swift` — the wipe's confirmation message.
+- `Sources/MacAgentCore/LocalStoreClassification.swift` — `LocalStore.deletionCopyName`.
+- `Sources/MacAgentCore/LocalDataDeletionService.swift` — `LocalDataDeletionCopy`.
+- Tests: `MemorySettingsTests`, `LocalStorageSecurityTests`, `MemoryCommandCenterTests`, `ResumableTaskRunTests`, and `WidgetControlNamingTests` (new).
+- `docs/sonny-manual-test-checklist.md` — six unchecked rows across §3a, §7 Memory (new subsection) and §7 Settings, plus a dated note on SONNY-295's §3d-bis row.
+
+Tests: the flagged command in `CLAUDE.md` → **2331 tests in 162 suites passed**, exit 0, at `d156daa`, the last commit on this branch that touches anything a measurement can see — the changelog commit above it changes only `docs/`. Baseline **2320 in 161**, exit 0, at `4824e50`, measured in a detached worktree of its own. Net **+11 tests, +1 suite** (`git diff 4824e50 d156daa -- Tests/ | grep -cE '^\+.*@Test'` → 11 at `d156daa`; the twelfth added `func` line is `anUnreadableRowSaysSoInsteadOfACountOfZeroAndKeepsItsDeleteLive`, a rename rather than a new test). `swift build` exit 0. `scripts/warnings` → **0 warnings**, exit 0, stamp `d156daa (clean)` — the script's own, not inferred. **The known-issue count is 5 on both sides and is `main`'s**, not this branch's: three in `RecordedBackendRequestsTests` and two in `HangBackstopTests`, all deliberate `withKnownIssue` constructs that arrived with PR #151. Nothing here uses one.
+
+**Mutation battery through `scripts/mutate`: 10 mutants, 10 killed, 0 survived, 0 unattributed at `d156daa1d1b86b8daaade22b6b37a46de7f28f75`**, over a green baseline of 2331 in 162 the run measured for itself. The plan is one mutant per way each of the three tickets could be present and wrong, and the results worth reading rather than counting are these.
+- **M1 and M2 die by eight tests each, and most of those tests were never about this ticket.** M1 puts `N saved` back and M2 stops the noun pluralising. Of M1's eight, **six pre-date this branch** — `theOutputLocationRowsCountAndNewestLineComeFromTheRealStore`, `anUnreadableRowSaysSoInsteadOfACountOfZeroAndKeepsItsDeleteLive`, `theMemoryRowShowsWhatStoppedAndHowMuchIsLeft`, `aPartlyUnreadableRowKeepsItsCountAndItsConfirmationStillNamesWhatGoes`, `aRowsCountAndNewestLineComeFromTheRealStores`, `anEmptyRowSaysSoWithoutInventingATimestamp` — and two are new. Of M2's eight, five pre-date it and three are new. The copy is built in one place, so every row's existing pin is a witness for every other row's, which is the coverage argument for changing the whole page rather than the one row that was reported.
+- **M4 is killed by exactly one test**, `theOutputLocationsRowCountsFoldersWhileItsSheetSaysHowOftenEachWasUsed`, and it is the mutant that matters most for SONNY-243: it strips "used" from the sheet's number, restoring the exact pair the founder read as a contradiction while leaving the row's own count correct. Without that test the choice to name the verb would be unheld — every other assertion about that sheet row passes with the bare form.
+- **W2 and W3 are killed only by `theListJoinsWithAnOxfordCommaAtEverySize`, and W2 is the reason that test exists.** Dropping the Oxford comma leaves a sentence that still splits into the right thirteen items, so `theWipesOwnSentenceNamesEveryStoreItDeletes` passes on it — the completeness test cannot see a join defect at all. The two tests hold different halves and neither substitutes for the other.
+- **W4 is killed only by the duplicate check.** Giving two stores one name leaves `items == LocalStore.allCases.map(\.deletionCopyName)` true, because both sides read the mutated switch — so the assertion that looks like the strong one is blind to it. `Set(items).count == items.count` is what catches a store made invisible in the sentence, and it was written for exactly that.
+- **C1 and C2 are the two ways SONNY-251's fix can be half-present.** C1 removes the accessibility name again and dies by the adjacency scan plus the capsule's own test; C2 keeps both names but writes the tooltip as a literal, and dies by the owner test's literal count. A single test would have caught one of them.
+
+Behavior added:
+- **Every Memory row's count names what it counts** — `1 folder`, `184 tasks`, `12 copied items` — where all nine read `N saved` before, and the Output locations sheet says a folder was *used* N times rather than leaving the number bare.
+- **The collapsed widget has a VoiceOver name.** It had none; a tooltip was its only words, and only for a sighted user who hovered.
+- **Settings' two descriptions of the whole wipe name every store it deletes**, and are one derived sentence rather than two hand-written lists.
+
+Behavior preserved (required, no blanket claims):
+- **Every damaged-row state is unchanged.** `Can't be read` and `N · part can't be read` still render for the readability cases SONNY-239 built, with the count in the second one still real — `aPartlyUnreadableRowKeepsItsCountAndItsConfirmationStillNamesWhatGoes` passes with its pin updated to the new noun and nothing else.
+- **The row's count and the sheet's length still agree**, on Output locations and on unfinished tasks, and that is now asserted rather than incidental.
+- **Nothing about the wipe changed.** `LocalDataDeletionService` gained a copy type and no behaviour; `theWipeReachesEveryLocalStore`, `everyLocalStoreFileIsClassifiedExactlyOnce` and the behavioural wipe fixture pass unchanged.
+- **The other three icon-only widget controls are untouched.** Their accessibility labels, their tooltips and their glyphs are exactly as they were; the founder's 2026-08-23 icons-only decision and SONNY-166's clarification cancel both stand.
+- **The mic hover hint is untouched**, and the claim in `micHintPointerEnteredMic` that `.help()` is unreliable *for that button* is left standing on purpose.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+**A row's headline count and a number inside one of that row's entries are different measurements, and the page's own pattern is what makes the second read as a correction of the first.** SONNY-243 was reported as a bug by the person who specified the feature, within a minute of first seeing it, and nothing was wrong: `1 saved` counted the folders Sonny remembers and `2 times` counted one folder's uses. What the page had established everywhere else is that a row's number is the number of things its sheet lists — which is true of Output locations too — so the only available reading of "1" beside "2" was that one of them was broken. **The general form: a surface that has taught a reader to compare two numbers owes them the unit of each.** The repair is words rather than arithmetic, and no number moved.
+
+**Naming the unit on one row would have been the same defect.** The fix was applied to all nine rows, and the argument is not tidiness: a single row reading `1 folder` among neighbours reading `N saved` is words that differ from their neighbours' for a reason the reader cannot see, which is exactly what was reported. **And "saved" was independently wrong for half the page** — the Memory section groups its rows by `LocalStoreKind`, and for the whole `.trace` half nobody saved anything: a task-history row, a copied item, an allowed app and an unfinished run are recorded rather than saved. That was invisible while the word was unitless.
+
+**A ticket's own figures are stamped measurements and go stale exactly like any other, and all three of this branch's had.** `WORKFLOW.md` step 4 says to read the description and every comment and to reconcile the ticket against later conversation. What this branch adds is that the reconciliation has to include **re-deriving the ticket's numbers and re-checking its premises at your own head, before implementing against them** — because a contract written weeks ago reads as current and nothing in it says otherwise.
+- **SONNY-233** said "nine of the twelve". At this head it was **ten of the thirteen** — and its figure was already wrong **at the SHA the ticket itself stamps**, in the most instructive way available: `d2ed2de` held **twelve** stores and **twelve** wipe URLs, so "twelve" was right, and the line the ticket names, `CommandCenterView.swift:5129`, named **ten** there (`git show d2ed2de:Sources/MacAgent/CommandCenterView.swift | sed -n '5125,5133p'`). **Nine was the count of a surface the ticket never mentions** — `ContentView.swift`'s confirmation dialog, which named exactly nine at that same commit. The number was correct about the thing the reporter had not found, attached to the thing they had. (`d2ed2de` resolves in this object store and `git merge-base --is-ancestor d2ed2de HEAD` exits 1: a branch head a rebase replaced, which is the convention working rather than a broken citation.)
+- **SONNY-251** said "VoiceOver is unaffected throughout — the accessibility labels are separate and solid". That was true of three of its four controls and **false of the one it calls "the collapsed widget's only name"**. Its title's premise — that the file records `.help` as unreliable in the widget — had also been corrected by **SONNY-295** four days after it was filed.
+- **SONNY-243** was the one whose facts held; what had moved was its status, since it had been folded into SONNY-109's pass and was re-tasked by the founder's kickoff. Resolved out loud on the ticket per step 4 rather than silently.
+
+**Enumerate before you subtract, in the direction a ticket points you away from.** SONNY-233 named `CommandCenterView.swift:5129` and one sentence. Sweeping for the *claim* rather than the line number (`git grep -n "clipboard settings\|Shortcut run history\|records of what Sonny did on screen" -- Sources Tests`) found a second surface the ticket did not mention — `ContentView.swift`'s confirmation dialog, naming **nine** of thirteen, one fewer than the page behind it. So the two surfaces describing one irreversible press disagreed with each other as well as with the wipe, and the worse of the two is the one the user reads last. **A ticket's file:line is where the reporter looked, not the population.**
+
+**Removing a drift beats guarding it, when the population is already enumerable.** SONNY-233 asked whether the staleness "deserves a guard". A guard notices drift after it has shipped; an exhaustive `switch` with no `default` makes it impossible to compile. The chain now runs end to end and every link was already there except the first: the sentence is built from `LocalStore.allCases` through `deletionCopyName` (exhaustive), `everyLocalStoreFileIsClassifiedExactlyOnce` pins `allCases` against `LocalDataDeletionService.defaultStoreFileURLs()`, and `theWipesOwnSentenceNamesEveryStoreItDeletes` pins that the sentence names all of `allCases`. A fourteenth store cannot reach the tree unnamed.
+
+**The shorter derivation was rejected, and the reason is worth keeping.** SONNY-233 proposed pointing at the Memory page instead of enumerating, and thought it probably better. Deriving from `MemoryCategory` would have produced ten phrases instead of thirteen — but the Memory page folds the vision journal, plan details and Shortcut run history under one Task history row, so the sentence would have stopped saying **"records of what Sonny did on screen"**, the most sensitive store in the product. It would also have under-promised by one, since `clipboard-history-settings.json` sits under no Memory row at all by design. **A shorter derivation over a coarser population is a different claim, not the same claim compressed.**
+
+**SONNY-251's durable finding was not the one it was filed for, and the difference is what can be asserted.** It was filed about tooltips. A tooltip is evidence about one hover on one Mac — the founder's 2026-08-26 pass is the only such evidence this project has ever had, and SONNY-295 was careful not to generalise it — and no test in this repository can observe one. Whether a control carries a VoiceOver name is a property of the source, it is the property that was actually broken, and it is the one a scan can hold. So `WidgetControlNamingTests` pins the *pairing*: every `.help` line in `FloatingWidgetView.swift` sits directly beneath an `.accessibilityLabel` line. **Adjacency is deliberate** — it is what a diff shows and what a textual scan can read without parsing Swift, and a control that wants a tooltip and no name has to break the test to get one.
+
+**A count in a doc comment is guidance, and guidance may carry no number — this branch wrote four and removed them in its own last commit.** `CLAUDE.md` records that rule from SONNY-314, and this branch broke it while implementing three tickets *about* stale figures: "today's nine nouns", "nine nouns written by hand", "one of nine", "among eight reading". Each was an honest reading of the tree and each would expire the day a tenth Memory row lands, while continuing to read as current. They are gone, replaced by the population's name and a pointer to the test that asserts it. **The four numerals that stay are dated records of what a literal said before this branch changed it, and their tense was corrected so they stay true** — "named ten of the thirteen stores the wipe *deleted then*", not "deletes".
+
+Known limitations / deferred scope: 
+- **Two of the four widget tooltips have still never been hovered by anyone**, and nothing here changes that: the compact capsule's and the clarification panel's cancel. SONNY-295's §3d-bis row already asks for both and stays open, now with a dated note pointing at §3a's new rows. What this branch removes is the part that did not need a hover — the capsule had no VoiceOver name either.
+- **The wording collision the capsule carries is filed, not decided.** `AppDelegate`'s menu item and the capsule both say "Open Sonny" and go to different places. **SONNY-338**, unattached, suggested landing SONNY-109's pass, which already owns the menu-bar treatment as an open founder question. `WidgetControlNamingTests.theCapsuleAndTheMenuBarStillShareThreeWordsForTwoDestinations` asserts the collision as it stands, so a later rewording is noticed rather than rediscovered.
+- **Nothing here reaches SONNY-109's pass**, and two of the three tickets were originally routed to it. The row nouns and the wipe sentence are copy the founders can still change; both live in one `switch` each, so either is a one-line edit per row.
+
+Open questions (required, write "none" if true): 
+- **Whether the row nouns are the right words** is the founders'. The three that are not simply the row's own title are *artifacts*, *copied items* and *unfinished task*; a manual row asks about exactly those.
+- **Whether the wipe's thirteen-item sentence is too long to read.** The shorter derivation was measured and rejected for a stated reason — it drops "records of what Sonny did on screen" — but "too long" is a judgment about a real screen and only the founders are looking at one. A manual row asks it.
+- **Whether "Open Sonny" should stay on both the capsule and the menu bar** — SONNY-338.
+
+Next branch: none assigned by this branch — the three tickets were routed to it individually rather than as a roadmap row.
+
 ### Branch: fix/three-small-client-defects
 Status: complete — SONNY-264, SONNY-218 and SONNY-259 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28
@@ -219,6 +296,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 Open questions (required, write "none" if true): none.
 
 Next branch: per the roadmap and the founders' triage; **SONNY-342** and **SONNY-346** are unattached and untriaged.
+
 
 ### Branch: fix/the-declarations-see-both-test-trees
 Status: complete — SONNY-334, SONNY-335 and SONNY-241 Done; written 2026-08-28 before the PR opened
@@ -283,6 +361,7 @@ Open questions (required, write "none" if true): **whether the server half shoul
 
 Next branch: unassigned — this is a standalone tooling lane, not a roadmap row.
 
+
 ### Branch: docs/four-records-catch-up
 Status: complete — SONNY-205, SONNY-275, SONNY-276 and SONNY-170 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28
@@ -322,6 +401,7 @@ Known limitations / deferred scope: three tickets filed and left for the founder
 Open questions (required, write "none" if true): **none.** One was open when this entry was written — whether SONNY-276's departure should stand, since its contract said delete and this branch moved instead — and the coordinator ruled on 2026-08-28 that it stands: the contract assumed an original that never existed, deleting would have destroyed the only copy, and the move preserves the record. No revert. Recorded on SONNY-276 as a ruling rather than left as a question, which is the difference between a decision and a deferral.
 
 Next branch: unchanged by this one.
+
 
 ### Branch: fix/every-stop-reaches-its-catch
 Status: complete — SONNY-327, SONNY-328, SONNY-324, SONNY-331 and SONNY-310 Done; written 2026-08-28 before the PR opened
