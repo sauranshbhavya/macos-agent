@@ -74,6 +74,32 @@ class UnusedAuthProvider implements AuthProvider {
  * writes in one second are indistinguishable.
  */
 
+/**
+ * A switch that makes `isStorable` wrong on purpose, for the one property no ordinary test can
+ * reach (PR #148's cycle-2, G3).
+ *
+ * **F3's guarantee is composite and only half of it was pinned.** "If something above this is ever
+ * wrong, the insert is refused rather than served" needs two things to be true: the store must bind
+ * the retention it was given, and **the hook must give it the value it checked rather than a
+ * literal**. The two existing pins call `insertRetainedContent` directly, so they hold the store
+ * half and say nothing about the hook — a later simplification of `retention: declared` to
+ * `retention: "standard"` would keep every one of them green while quietly restoring the defect,
+ * because with a *correct* guard the two are indistinguishable at run time.
+ *
+ * So the guard is made incorrect, which is the only way the difference becomes observable, and the
+ * assertion is that the database refuses the row. Off by default: every other test in this file runs
+ * against the real predicate.
+ */
+const guard = vi.hoisted(() => ({ forceStorable: false }));
+vi.mock("../src/content/record.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/content/record.js")>();
+  return {
+    ...actual,
+    isStorable: (retention: Parameters<typeof actual.isStorable>[0]) =>
+      guard.forceStorable || actual.isStorable(retention),
+  };
+});
+
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
 
@@ -445,6 +471,80 @@ describeDb("the content store, its clocks, and what reaches training", () => {
     it("stores the declared value rather than a default, so the column is not decoration", async () => {
       await insertRetainedContent(client, content());
       expect((await contentRows())[0]!["retention"]).toBe("standard");
+    });
+
+    it("refuses an incognito insert the HOOK sends when the guard above it is wrong", async () => {
+      // **The hook-side half of F3's composite property** (PR #148's cycle-2, G3). The two tests
+      // above drive the store directly and hold the store's half; this drives a real request through
+      // the real app with `isStorable` forced true, which is the only way "if something above this
+      // is ever wrong" becomes a state a test can be in.
+      //
+      // **What makes it fail on a hook simplification:** with the guard defeated the hook proceeds
+      // to write. Passing the *declared* value sends `'none'` and the CHECK refuses it — no row, and
+      // a logged failure. Passing a `"standard"` literal would store the incognito call instead, so
+      // this test goes red on exactly the change no behavioural test can otherwise see.
+      const SUPABASE_USER = "4f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a7744";
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, link_method, supabase_user_id)
+         VALUES ($1, 'email', $2, 'primary', $3)`,
+        [CONSENTING, "guard-failure@example.test", SUPABASE_USER],
+      );
+      vi.stubGlobal("fetch", async () =>
+        new Response(
+          JSON.stringify({ output_text: '{"steps":[]}', usage: { input_tokens: 1, output_tokens: 1 } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+      // The app's own log, captured, so the refusal is asserted rather than inferred from an absence.
+      // An empty table proves nothing on its own: a hook that refused correctly leaves one too.
+      const logged: string[] = [];
+      const logStream = {
+        write: (line: string) => {
+          logged.push(line);
+          return true;
+        },
+      } as unknown as NodeJS.WritableStream;
+
+      const app = buildApp(
+        testConfig({
+          databaseUrl: url,
+          credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }],
+          logLevel: "error",
+        }),
+        { provider: new UnusedAuthProvider(), withConnection: async (work) => work(client) },
+        { logStream },
+      );
+
+      guard.forceStorable = true;
+      try {
+        const response = await app.inject({
+          method: "POST",
+          url: "/v1/plan",
+          headers: {
+            authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}`,
+            "idempotency-key": randomUUID(),
+          },
+          payload: {
+            task_id: "guard-failure-task",
+            retention: "none",
+            messages: [{ role: "user", text: "Open Safari" }],
+            response_schema_name: "agent_plan",
+            response_schema: { type: "object" },
+          },
+        });
+        await app.contentWritesSettled();
+        // The caller is unaffected — a refused retention write never fails a response.
+        expect(response.statusCode).toBe(200);
+      } finally {
+        guard.forceStorable = false;
+        vi.unstubAllGlobals();
+      }
+
+      expect(await contentRows()).toHaveLength(0);
+      const refusal = logged.join("");
+      expect(refusal).toContain("content could not be retained for this request");
+      // Named, so the row was refused by the retention constraint and not by something incidental.
+      expect(refusal).toContain("retention");
     });
   });
 
