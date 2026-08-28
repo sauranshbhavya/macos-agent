@@ -156,6 +156,6 @@ struct SnippetRoutineAuthoringTests {
 private struct UnusedPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("These tests drive prebuilt plans; the planner must not be called.")
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }

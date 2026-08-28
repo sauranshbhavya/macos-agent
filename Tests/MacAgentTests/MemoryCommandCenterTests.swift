@@ -1114,9 +1114,10 @@ struct MemoryCommandCenterTests {
     /// not a shortcut.** `recentArtifactStoreForThisRun`'s own doc records why: no command the
     /// fixtures can run generates an artifact, so a suppressed run leaves that store untouched
     /// either way and an end-to-end assertion passes for the wrong reason — a mutation battery
-    /// caught exactly that. The vision journal is worse: `makeVisionEnvironment` returns nil without
-    /// an API key and the vision tests inject their own substrate, so no test in this repository can
-    /// execute the live decision at all. Row I built a `nil` store as "run the session, record
+    /// caught exactly that. The vision journal is worse: the vision tests inject their own
+    /// substrate, so no test in this repository can execute the live decision at all. (This used to
+    /// say `makeVisionEnvironment` returns nil without an API key as well — SONNY-131 made it
+    /// non-Optional and SONNY-136 deleted the key, so the injection is the whole reason now.) Row I built a `nil` store as "run the session, record
     /// nothing", which is what makes asserting the handover the same thing as asserting the
     /// suppression.
     ///

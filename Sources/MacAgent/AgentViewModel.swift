@@ -28,6 +28,11 @@ final class AgentViewModel: ObservableObject {
     @Published var voiceHotKeyStatus: String = "Hold Ctrl-Opt-Space"
     @Published var voiceHotKeyReady: Bool = true
     @Published var permissionItems: [PermissionReadinessItem] = []
+    /// Whether a Sonny session is held on this Mac, as the readiness row reads it (SONNY-136).
+    ///
+    /// Starts `.undetermined` and is answered by `refreshModelAccessReadiness()`. It is not derived
+    /// on demand because the read is an actor hop and every reader of it is synchronous.
+    @Published private(set) var modelAccessReadiness: ModelAccessReadiness = .undetermined
     @Published var savedRoutines: [StoredRoutine] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
@@ -1022,19 +1027,16 @@ final class AgentViewModel: ObservableObject {
         memorySettings = memorySettingsStore.load(policy: memoryPolicyProvider.currentPolicy())
     }
 
-    var hasAPIKey: Bool {
-        !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-    }
-
-    var modelName: String {
-        ProcessInfo.processInfo.environment["OPENAI_MODEL"] ?? "gpt-5.5"
-    }
-
-    var transcriptionModelName: String {
-        ProcessInfo.processInfo.environment["OPENAI_TRANSCRIBE_MODEL"] ?? "gpt-4o-mini-transcribe"
-    }
+    /// **`hasAPIKey`, `modelName` and `transcriptionModelName` were here and are gone**
+    /// (SONNY-136). All three read `ProcessInfo.processInfo.environment`, which is what SONNY-106
+    /// section E forbids a user's build from needing: the packaged app is launched from Finder,
+    /// which inherits no shell environment, so every one of them answered for a world the shipping
+    /// app is never in. `hasAPIKey` fed the Settings readiness row, which now reports the session
+    /// (`modelAccessReadiness`); the other two named a model, and which model answers a route has
+    /// been the gateway's `MODEL_ROUTE_*` configuration since SONNY-130 — nothing had read either
+    /// for several branches.
+    ///
+    /// `ClientNamesNoProviderScanTests` is what stops one coming back.
 
     /// True while a task occupies the app: running, waiting on an approval, or **paused on a
     /// clarification the user has not answered**.
@@ -1247,25 +1249,18 @@ final class AgentViewModel: ObservableObject {
         isAwaitingApproval || clarificationQuestion != nil || (isRunning && currentTask != nil)
     }
 
-    /// The message shown when voice is asked for and the app is not configured to do it.
+    /// **`missingAPIKeyVoiceMessage` was here and is gone** (SONNY-136). It read "No API key is set
+    /// up. Add one, then relaunch Sonny.", and by the time this ticket ran it was the default answer
+    /// of a property whose live answer is `nil` — a shipped constant for a sentence nothing in
+    /// `Sources/` could produce, describing a condition that can no longer occur. SONNY-177's rule
+    /// that produced it stands and has simply moved to the copy the user does see:
+    /// `SonnyBackendCopy`, `SignInCopy` and the readiness row name no provider and no variable.
     ///
-    /// One copy, because three surfaces must say the same thing: the widget's mic button, the
-    /// push-to-talk hotkey, and — since SONNY-177 — the mic's hover hint, which reaches it through
-    /// `micHoverHintPresentation` rather than holding a second string of its own. The first two said
-    /// the same thing by coincidence — two identical literals — until one of them stopped saying
-    /// anything at all (SONNY-173).
-    ///
-    /// **Provider-neutral by founder decision, 2026-08-19 (SONNY-177), wording approved the same
-    /// day.** No provider name and no environment-variable name: other providers are coming, and
-    /// SONNY-136 deletes every provider environment variable, so anything more specific written here
-    /// is copy already scheduled for deletion. Naming the variable was the more actionable sentence
-    /// today and that cost was accepted deliberately — the audience is two founders who already know
-    /// what it means, and the specificity survives in one place, the Settings › Security & Access
-    /// readiness row, which is SONNY-136's to rewrite. What the trade may not cost is the
-    /// instruction: this still names the action class — add a key, relaunch — so a reader is left
-    /// with something to do rather than a statement of fact.
-    static let missingAPIKeyVoiceMessage =
-        "No API key is set up. Add one, then relaunch Sonny."
+    /// **The `voiceConfigurationBlocker` seam below is untouched**, which is the distinction worth
+    /// keeping — SONNY-173's rule is about which *kind* of reason may disable a control, and that
+    /// rule outlives every particular reason. The tests that need a configuration failure state one
+    /// through `voiceConfigurationBlockerOverride` with a literal of their own, which is how
+    /// SONNY-173 wrote them so that this deletion would not cost their meaning.
 
     /// What the mic's hover hint says when voice actually works. It lives here, rather than as a
     /// literal in `FloatingWidgetView`, so that *choosing* between this and the configuration
@@ -1294,8 +1289,8 @@ final class AgentViewModel: ObservableObject {
     /// string of its own.** One condition on one control must not speak with two voices, and taking
     /// the words from the same place the press takes them makes that structural instead of a
     /// convention someone has to keep remembering — a rewrite cannot leave the hover and the press
-    /// disagreeing, because there is only one sentence. It also means SONNY-136 changes one constant
-    /// and all three surfaces follow.
+    /// disagreeing, because there is only one sentence. That prediction is what SONNY-136 found:
+    /// removing the message was one deletion here, and all three surfaces followed.
     var micHoverHintPresentation: MicHoverHintPresentation {
         if let blocker = voiceConfigurationBlocker {
             return MicHoverHintPresentation(message: blocker, autoDismissDelay: nil)
@@ -1309,12 +1304,19 @@ final class AgentViewModel: ObservableObject {
     /// Lets a test state what the *configuration* half of voice readiness should answer, instead of
     /// inheriting whatever the process that launched the test suite happened to export.
     ///
-    /// The live answer reads `ProcessInfo.processInfo.environment` through `hasAPIKey`, which a test
-    /// cannot set for itself: `setenv` is process-global and the suite runs its tests in parallel.
-    /// The same reason `visionSessionEnvironment` is a seam — a test must be able to describe the
-    /// world rather than hope for it. Before this existed the repo's own comment on
+    /// **It was built for a live answer that read the process environment through `hasAPIKey`**,
+    /// which a test cannot set for itself: `setenv` is process-global and the suite runs its tests in
+    /// parallel. The same reason `visionSessionEnvironment` is a seam — a test must be able to
+    /// describe the world rather than hope for it. Before this existed the repo's own comment on
     /// `voiceCannotConsumeAnArmWhileAClarificationIsPending` recorded the consequence plainly: "that
-    /// half is readable, not testable, and its proof is the declaration." It is testable now.
+    /// half is readable, not testable, and its proof is the declaration."
+    ///
+    /// **That reason is gone and the seam stays** (SONNY-136). There is no environment read left to
+    /// be untestable, and the live answer is unconditionally `nil` — so what this now exists for is
+    /// the *rule*: SONNY-173's split between an actionable refusal and a transient one is the thing
+    /// the tests below hold, and holding it needs a way to state an actionable refusal. Deleting the
+    /// seam would delete the only way to state one, and the rule would go back to being a
+    /// declaration nothing checks.
     ///
     /// `nil` in the shipping app, and nothing in `Sources/` assigns it. Deliberately not
     /// `@Published`: a test sets it once before reading, and production never changes it, so there
@@ -1336,17 +1338,17 @@ final class AgentViewModel: ObservableObject {
     /// untouched, while the one thing it used to report is gone.
     ///
     /// **The live answer is `nil`, because no local configuration blocks voice any more.** It read
-    /// `hasAPIKey` until this ticket, and leaving it that way would have made this ticket's own
+    /// `hasAPIKey` until SONNY-130, and leaving it that way would have made that ticket's own
     /// headline outcome unreachable: transcription now goes through Sonny's backend under the user's
     /// session, and the founder's manual item launches the packaged app **from Finder**, where no
-    /// shell environment exists and `OPENAI_API_KEY` is therefore never set. The mic would have been
+    /// shell environment exists and `OPENAI_API_KEY` was therefore never set. The mic would have been
     /// blocked, with a message telling the user to export a variable nothing reads.
     ///
-    /// **`missingAPIKeyVoiceMessage` and this seam both stay**, unreachable in the shipping app and
-    /// deliberately so: the "export a variable" strings and the final environment-variable removal
-    /// belong to `feature/row-12-degradation`, which cannot run until both gateways land, and
-    /// SONNY-136 owns what an unreachable backend says instead. What a *signed-out* user is told is
-    /// theirs too — today they record, and the transcriber answers "Sign in to Sonny to run this."
+    /// **The seam stays and its old message is gone** (SONNY-136). `missingAPIKeyVoiceMessage` was
+    /// kept here unreachable until the ticket owning the environment-variable surface could remove
+    /// it; that ticket has run, and a constant for a sentence nothing can produce went with the
+    /// variable it was about. What a *signed-out* user is told is unchanged and is not this
+    /// property's business: they record, and the transcriber answers "Sign in to Sonny to run this."
     var voiceConfigurationBlocker: String? {
         if let voiceConfigurationBlockerOverride {
             return voiceConfigurationBlockerOverride()
@@ -2912,11 +2914,54 @@ final class AgentViewModel: ObservableObject {
         refreshPermissions()
     }
 
+    /// Recompute the Settings readiness rows, and ask the Keychain whether a session is held.
+    ///
+    /// **Two steps rather than one, because one of the two inputs is behind an actor** (SONNY-136).
+    /// The permission checks are synchronous reads of TCC state; the account check is
+    /// `SonnyBackendClient.restoredIdentity()`, and the client is an actor because its single-flight
+    /// refresh guard is shared mutable state. So the rows are rendered immediately from what is
+    /// already known — `.undetermined` on the very first pass, which reads *"Check when used"* and
+    /// is the honest answer before anything has asked — and recomputed the moment the account
+    /// answers. Making this whole function `async` was the alternative and it is worse: every caller
+    /// is a SwiftUI action or an `onAppear`, so it would have put a `Task` at each of the four call
+    /// sites instead of one here, and a page would have shown *no* rows until the Keychain answered
+    /// rather than seven of eight.
     func refreshPermissions() {
+        recomputePermissionItems()
+        Task { [weak self] in
+            await self?.refreshModelAccessReadiness()
+            self?.recomputePermissionItems()
+        }
+    }
+
+    private func recomputePermissionItems() {
         permissionItems = permissionReadinessService.currentStatus(
-            hasAPIKey: hasAPIKey,
+            modelAccess: modelAccessReadiness,
             hotKeyReady: voiceHotKeyReady
         )
+    }
+
+    /// Read the Keychain and publish whether a session is held.
+    ///
+    /// **The client, not `SonnyAccountModel`.** Both would answer the same today — `main.swift`
+    /// hands this view model the very client the account model built, so there is one token cache
+    /// for the process — but the client is the Keychain's own answer while the account model holds a
+    /// copy refreshed at launch and after a sign-in. Reading the copy would make this row a mirror
+    /// of a mirror, and a stale one exactly when the session changed underneath.
+    ///
+    /// **A throw is `.undetermined`, never `.signedOut`.** Bytes this build cannot decode are not
+    /// evidence that nobody is signed in, and `SonnyAccountModel.restore()` already refuses to
+    /// delete a credential store on the strength of a decode failure. `.signedOut` here would put a
+    /// red "sign in" row in front of a user whose session is fine and whose next sign-in would be
+    /// the one thing that overwrites the bytes.
+    func refreshModelAccessReadiness() async {
+        do {
+            modelAccessReadiness = try await backendClient.restoredIdentity() == nil
+                ? .signedOut
+                : .signedIn
+        } catch {
+            modelAccessReadiness = .undetermined
+        }
     }
 
     func refreshSavedItems() {
@@ -3031,7 +3076,10 @@ final class AgentViewModel: ObservableObject {
     /// Internal and separated from its one call site for the same reason
     /// `recentArtifactStoreForThisRun` is (PR #67 review, F1): the decision was previously inline in
     /// `makeLiveVisionEnvironment()`, which **no test in this repository can execute** — under test
-    /// `makeVisionEnvironment` returns `nil` without an API key, and the vision tests inject
+    /// the vision tests inject their own environment and never reach the live builder, so they
+    /// bypass it. (This used to add "`makeVisionEnvironment` returns `nil` without an API key";
+    /// SONNY-131 made that builder non-Optional and SONNY-136 removed the key, so the reason the
+    /// live builder is unreachable from a test is the injection alone.)
     /// `visionSessionEnvironment` directly, bypassing the function. So a mutation handing over the
     /// store regardless of policy survived the whole suite. Asserting the decision *is* asserting
     /// the suppression, because row I built a `nil` journal store as "run the session, record
@@ -4744,6 +4792,10 @@ final class AgentViewModel: ObservableObject {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
+            // The published answer rather than a fresh read: `PermissionReadinessCapabilityAdapter`
+            // is synchronous and this is the same value the Settings page is showing, so the tool
+            // and the page cannot disagree about the account.
+            modelAccessReadiness: { [weak self] in self?.modelAccessReadiness ?? .undetermined },
             // **`nil` now means only "this caller asked for no vision"** (SONNY-131) — the dry-run
             // resolver above is the one that does, and a vision session dispatched into that
             // executor fails loudly with `visionUnavailable` rather than half-running. It used to
@@ -6846,9 +6898,15 @@ enum AgentStepStatus: String {
 }
 
 @MainActor
+/// The planner handed to a run whose plan is already made — a pre-built plan from the screen, or
+/// one the instant resolver produced. Asking it for a plan is a bug, and it says so.
+///
+/// **It threw `PlannerError.missingAPIKey` until SONNY-136**, which meant a user who somehow reached
+/// this was told to export `OPENAI_API_KEY`: a live path wearing the message of a dead one. The case
+/// is `noPlannerRan` now, named for what this actually is.
 private struct InstantOnlyFallbackPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }
 

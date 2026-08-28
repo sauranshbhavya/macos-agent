@@ -1,12 +1,14 @@
 import Foundation
 
 public enum TavilySearchError: Error, Equatable, LocalizedError, CarriesBackendError {
-    /// **Unreachable since SONNY-130 and deliberately kept.** No search provider reads a vendor key
-    /// any more; removing the case and the sentence naming the variable is
-    /// `feature/row-12-degradation`'s, which cannot run until both gateways land.
-    case missingAPIKey
-    /// Unreachable for the same reason: no HTTP status is read here any more.
-    case badResponse(Int, String)
+    /// **`missingAPIKey` and `badResponse(Int, String)` are gone** (SONNY-136), for the reason
+    /// `TranscriptionError` records at its own declaration: SONNY-130 kept both unreachable only so
+    /// that the sentence naming `TAVILY_API_KEY` could be removed by the ticket that owns the
+    /// environment-variable surface, and a case with no producer and no sentence is not worth
+    /// keeping once the sentence goes.
+    ///
+    /// **The type still has exactly one case, and that is not an oversight.** `backend` is what a
+    /// failed search is now, in every direction: no key to be missing, no status read here.
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence, never the
     /// server's own `message` (§7.1).
     case backend(SonnyBackendError)
@@ -23,10 +25,6 @@ public enum TavilySearchError: Error, Equatable, LocalizedError, CarriesBackendE
 
     public var errorDescription: String? {
         switch self {
-        case .missingAPIKey:
-            return "TAVILY_API_KEY is not set. Add it to the environment before launching the app."
-        case .badResponse(let status, let body):
-            return "Tavily search failed with HTTP \(status): \(body)"
         case .backend(let error):
             return SonnyBackendCopy.sentence(for: error)
         }

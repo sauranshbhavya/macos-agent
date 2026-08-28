@@ -16,7 +16,10 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .showPermissionReadiness,
                 name: "Show permission readiness",
-                description: "Show readiness for OpenAI key, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.",
+                // **Names no provider** (SONNY-136, founder decision 2026-08-19). This read "OpenAI
+                // key" and the row it referred to is gone; the planner is given the tool's real
+                // subject instead, which is the Sonny account.
+                description: "Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.",
                 requiredFields: [],
                 sideEffects: [],
                 dryRunBehavior: "Show permission readiness without requesting new permissions.",
@@ -59,12 +62,14 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(plan: plan, previews: previews, summary: summary)
     }
 
+    /// **This read `ProcessInfo.processInfo.environment["OPENAI_API_KEY"]` until SONNY-136**, which
+    /// made a capability that prompts for nothing and touches nothing report on a variable no client
+    /// reads — and made it the only environment read left in `MacAgentCore` outside the DOCX mock and
+    /// the debug-only staging pointer. Both inputs now come from the context, so this adapter reads
+    /// no process state of its own.
     private func permissionItems(context: CapabilityExecutionContext) -> [PermissionReadinessItem] {
-        let hasAPIKey = !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-        return context.permissionReadinessService.currentStatus(
-            hasAPIKey: hasAPIKey,
+        context.permissionReadinessService.currentStatus(
+            modelAccess: context.modelAccessReadiness(),
             hotKeyReady: context.hotKeyReady()
         )
     }
