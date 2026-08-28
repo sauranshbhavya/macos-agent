@@ -2128,6 +2128,71 @@ struct AgentActionExecutorTests {
         }
     }
 
+    /// **The preview-side twin of `twoSiblingRoutinesThatEachDraftKeepBothDocuments`, and the shape
+    /// that makes the *claims* half of the nested preview's seed load-bearing.**
+    ///
+    /// The nested preview resolves from the same two seeds the nested execute does, and this branch's
+    /// own mutation battery found only one of them held: dropping `claimedEarlierInThisRun` from the
+    /// resolve left the whole suite green (`scripts/mutate`, mutant R4, at `a0a0462`). The reason is
+    /// that the two orderings above are both covered by the *plan-intent* half — an outer
+    /// `create_local_draft` carries an `outputPath` after `prepare`, so `PlannedDestinations` holds
+    /// it either way round.
+    ///
+    /// Two sibling `run_routine` steps are the shape where that half is structurally empty: a
+    /// `run_routine` step carries no `outputPath` at all, so nothing the routines will generate is in
+    /// the plan's own set, and the only thing between the second routine's previewed draft and the
+    /// first routine's is `previewChain`'s `claimed.recordWrite(written)` — the preview's own
+    /// accumulation, filled in from what the first segment's preview said it would do. Same third
+    /// door the review found for the execution side, one layer up.
+    @Test
+    func twoSiblingRoutinesArePreviewedAsTheTwoDistinctFilesTheyWrite() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        for (name, body) in [("Morning", "From the first routine."), ("Evening", "From the second routine.")] {
+            try routineStore.save(
+                StoredRoutine(
+                    name: name,
+                    steps: [
+                        AgentStep(
+                            id: "nested-draft",
+                            operation: .createLocalDraft,
+                            description: "Create note",
+                            // The same title in both, so both generate the identical default name.
+                            draftTitle: "Note",
+                            draftContent: body
+                        )
+                    ]
+                )
+            )
+        }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: { stamp })
+
+        let prepared = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Run the Morning routine and then the Evening routine.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(id: "run-first", operation: .runRoutine, description: "Run routine", routineName: "Morning"),
+                    AgentStep(id: "run-second", operation: .runRoutine, description: "Run routine", routineName: "Evening")
+                ]
+            )
+        )
+        let promised = prepared.previews.flatMap(\.writes)
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let written = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("draft-") }
+            .map { root.appendingPathComponent($0).path }
+        #expect(Set(promised) == Set(written), "approved \(promised.sorted()), wrote \(written.sorted())")
+        #expect(Set(promised).count == 2, "the preview named \(promised.count) path(s), \(Set(promised).count) distinct")
+        #expect(
+            Set(written.map { ($0 as NSString).lastPathComponent })
+                == ["draft-note-\(Timestamp.fileSafe(stamp)).md", "draft-note-\(Timestamp.fileSafe(stamp))-2.md"]
+        )
+    }
+
     /// The over-correction guard, and the mirror of `aNestedRoutinesDraftKeepsItsOwnNameWhenNothingElseNamesIt`
     /// one layer up: resolving the nested plan before previewing it must not *invent* a bump. A
     /// routine run as the only step of a plan competes with nothing, so the panel names the routine's
