@@ -987,8 +987,35 @@ issue_re = re.compile(r"Test (.+?) recorded an issue\b.*? at \S+:\d+:\d+: (.*)$"
 # and the cost is over-capture — an open block absorbs a few lines it should not — which can only
 # make a failure look MORE declared than it is. Undercounting a kill is the safe direction; the
 # truncation this replaces was the other one.
+#
+# The verb is `recorded`, not `recorded an issue`, and that one word is SONNY-315 (found in PR #139's
+# cycle-2 battery at 157ef03). A KNOWN issue's record line — `Test <name> recorded a known issue at
+# File.swift:174:55: Issue recorded`, which swift-testing prints for every `withKnownIssue` — carries
+# none of the four old verbs, so it did not end a block. HangBackstopTests emits one on every single
+# run by design, and when it landed between a killing test's issue line and that test's failure line,
+# its detail lines — a declared signature among them — were read as the KILLING test's own message.
+# The mutant came back UNATTRIBUTED: a real kill excused, which is the mirror of the manufactured
+# kill this whole mechanism exists to stop, and it understates coverage and sends the reader hunting
+# for a test that already exists. It depends on where a parallel suite's output lands rather than on
+# what the mutant is, so any mutant can hit it and re-running usually does not: PR #139's battery
+# reported it once, then `--only` named the killing test, then a second full battery was clean.
+#
+# What the widened verb costs, since a boundary that fires too eagerly is PR #112's F3 in the other
+# direction: within a line that already begins — after a prefix carrying no letters — with `Test ` or
+# `Suite ` and a non-space, the verb set now admits any "recorded". A message line of exactly that
+# shape carrying the word "recorded" and none of the other four would end its own block early. That
+# is narrower than what it buys, which is every "recorded ..." event kind swift-testing has or grows
+# rather than the one wording seen so far.
+#
+# It does not, and cannot, protect a message SPLIT by an interleaved record line: everything after
+# the split is dropped, so a signature there would be lost and the failure would count as evidence.
+# What makes that safe in practice is that swift-testing emits an event's lines together — measured
+# on a real 2305-test run of this repository's suite, where both multi-line known-issue events came
+# out contiguous, and where every interleaving is between events. Nothing here can tell a split
+# message from a foreign event, so the choice is which of the two to be wrong about; being wrong
+# about the observed one was costing real kills.
 boundary_re = re.compile(
-    r"^[^A-Za-z]*(?:Test|Suite) \S.*?\b(?:started|passed|failed|skipped|recorded an issue)\b"
+    r"^[^A-Za-z]*(?:Test|Suite) \S.*?\b(?:started|passed|failed|skipped|recorded)\b"
 )
 failed_re = re.compile(r"^.*\sTest (.*) failed after ")
 
@@ -2167,6 +2194,70 @@ printf "◇  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
               "did not become idle before timeout"
   st_absent "the first line of the message did not end the block" "$ST_OUT" "KILLED"
+
+  # SONNY-315, found in PR #139's cycle-2 battery at 157ef03. A KNOWN issue is not a failure, and
+  # its detail lines are not the message of whatever test was mid-issue when it arrived.
+  # HangBackstopTests records one on every run by design, so the ingredient is always present and
+  # only the interleaving varies — which is why the battery that reported this saw it once, named
+  # the killing test when re-run with --only, and came back clean on the next full run.
+  #
+  # The wrapped line with no glyph in front of it is not decoration: that is how the real suite
+  # prints a message's continuation, measured on a 2305-test run, and it is the line the declared
+  # signature sits on.
+  local known_issue_between_a_kill_and_its_summary='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test labelIsMorningBeforeNoon() recorded an issue at Fixture.swift:5:9: Expectation failed: (label) == \"Morning\"\n"
+  printf "↳  // And it is its own label, not the one before it.\n"
+  printf "✘  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() recorded a known issue at HangBackstopTests.swift:174:55: Issue recorded\n"
+  printf "↳  timed out after 13.4s waiting for: something that never happens.\n"
+  printf "   This deadline is a deadlock backstop, not a timing assertion — it fires only after enough looks.\n"
+  printf "↳  the backstop must fire when the condition never becomes true\n"
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 19.325 seconds with 1 issue.\n"
+  printf "✔  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() passed after 53.423 seconds with 1 known issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 19.4 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A concurrent known issue does not excuse the test it interrupted\n'
+  st_run "$known_issue_between_a_kill_and_its_summary" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the kill is counted" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test that caught it is named" "$ST_OUT" "labelIsMorningBeforeNoon()"
+  st_absent "the known issue did not excuse it" "$ST_OUT" "UNATTRIBUTED"
+  st_absent "and the signature that is not its own is nowhere in the report" "$ST_OUT" \
+            "deadlock backstop"
+
+  # The other direction, and the reason this fix is not simply "end a block sooner". The same
+  # interleaving around a genuinely DECLARED failure must still excuse it, on the signature IT
+  # recorded — a boundary that truncated the interrupted test's own message would turn load into a
+  # manufactured kill, which is the failure PR #112's F3 was. Before SONNY-315 this log did reach
+  # UNATTRIBUTED, and reached it for the wrong reason: the report named the known issue's signature
+  # rather than the failing test's own, so the two assertions below are what separate the fix from
+  # the defect.
+  local declared_failure_then_a_known_issue='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() recorded a known issue at HangBackstopTests.swift:174:55: Issue recorded\n"
+  printf "↳  timed out after 13.4s waiting for: something that never happens.\n"
+  printf "   This deadline is a deadlock backstop, not a timing assertion — it fires only after enough looks.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 1.2 seconds with 1 issue.\n"
+  printf "✔  Test aConditionThatNeverBecomesTrueOnAHealthyActorStillFails() passed after 53.423 seconds with 1 known issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 1.3 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> and a declared failure it interrupts is still excused, on its own signature\n'
+  st_run "$declared_failure_then_a_known_issue" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is named" "$ST_OUT" "aRunThatNeverSettled()"
+  st_contains "and the signature shown is the one it recorded itself" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_absent "not the one belonging to the known issue beside it" "$ST_OUT" "deadlock backstop"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
 
   # F1. The guard on the declaration file cannot be excused by the declaration file. Its failure
   # message quoted the signature it had caught going missing, the classifier matched it, and the
