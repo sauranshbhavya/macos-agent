@@ -78,17 +78,46 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # outside its `if (auth)` — so a container started without these serves them and answers
 # `502 provider.unavailable`, which is honest and is not what a manual pass wants.
 #
-# The other three provider names in `config.ts` — `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY`,
-# `VISION_API_KEY` — are **not** here, because no route reads them yet: the vision route is
-# SONNY-131's and the provider router is SONNY-132's. Same rule as mail above, one row down.
+# **SONNY-132 added two of the three names that sentence held open, and left the third.** The
+# sentence said `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY` and `VISION_API_KEY` were absent because no
+# route read them. The provider router now reads two: `ANTHROPIC_API_KEY` serves `/v1/plan` and
+# `/v1/research/synthesize` as the shipped failover candidate, and `CEREBRAS_API_KEY` serves them
+# whenever a `MODEL_ROUTE_*` chain names it. `VISION_API_KEY` stays absent for the original reason —
+# `/v1/screen/analyze` is SONNY-131's and no route reads it yet.
 #
-# **The endpoint and model settings SONNY-130 also added are deliberately not here either** —
-# `OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`. Every one
-# has a real default matching what the Mac app compiled in before the gateway existed, so a
-# container that forwards none of them behaves correctly, and this list is for values a container
-# cannot invent. Pointing a local run at a stub instead of at a vendor is done by editing this array
-# for that run, and the count and absent-name lines below both derive from its length, so nothing
-# else needs touching.
+# **A container given no Anthropic key is not broken.** The chain drops an entry it has no credential
+# for, so a local run with only `OPENAI_API_KEY` behaves exactly as it did before the router existed.
+# Forwarding the name costs nothing when it is unset, and is what makes a founder's failover check a
+# matter of exporting one variable.
+#
+# **The endpoint, model, routing and data-policy settings are forwarded too, by a second array**,
+# `PASSTHROUGH_SETTINGS` below. They are not credentials — every one has a real default and none is
+# a secret — so they are reported as a count rather than by name, and the credential lines above and
+# below keep meaning exactly what they meant: "did my key get in".
+#
+# **They are forwarded because otherwise the one thing this ticket exists to demonstrate cannot be
+# demonstrated with this command.** SONNY-132's headline acceptance criterion is that a planner
+# request is served by one provider or another *purely by changing server configuration*, and the
+# founder's manual rows are written as `MODEL_ROUTE_PLAN=anthropic ./scripts/deploy.sh local`. With
+# only credentials forwarded, that line starts a container that silently uses the default chain and
+# prints a routing log saying so — measured, at `06031ac`, before this array existed: `MODEL_ROUTE_PLAN`
+# exported as `anthropic,openai`, the container's own line reading `"plan":["openai","anthropic"]`.
+# A demonstration that quietly does not demonstrate the thing is worse than one that refuses.
+#
+# **The rule the two arrays together track is "a name that changes what the gateway does with a
+# request", not "every name `config.ts` reads".** What is deliberately still absent is the set that
+# describes the *container* rather than the traffic: `SONNY_ENV` and `LOG_LEVEL` are set explicitly
+# below, `PORT`, `HOST` and `SONNY_BUILD_ID` are the image's own and injected at build time, and
+# `TRUSTED_PROXIES` is correct empty with no proxy in front and actively wrong inherited from a
+# shell. `VISION_API_KEY` is absent for its own reason, above.
+#
+# **The paragraph stamped at `f65e72e` says "eleven names ... the five that remain are these", and
+# both halves are that tree's rather than this one's.** Re-measured on the working tree: the schema
+# holds **26** names (`grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort | wc -l` -> 26),
+# `providerDataPolicies` reads a further **10** off the environment that the schema never sees, this
+# credential array holds **11** and the settings array **25**. The historical figure is left as it
+# was written, per this repository's rule about dated records, rather than edited to agree with a
+# tree it was not taken on.
 #
 # **No value is read, stored, defaulted, printed or written down here.** `docker run -e NAME` with
 # no `=` is Docker's own pass-from-the-environment form: the value never reaches a variable in this
@@ -134,13 +163,52 @@ PASSTHROUGH=(
   SUPABASE_ANON_KEY
   DATABASE_URL
   RATE_LIMIT_SALT
-  # SONNY-130's two. See the block above for why these two and not the other three.
+  # SONNY-130's two, and SONNY-132's two. See the block above for why these four and not VISION_API_KEY.
   OPENAI_API_KEY
   TAVILY_API_KEY
   # SONNY-131's one, on the same rule: `POST /v1/screen/analyze` is mounted by a running container
   # whatever the environment holds, so a container without this serves `502 provider.unavailable`.
-  # The other two provider names -- ANTHROPIC and CEREBRAS -- stay off, because no route reads them.
   VISION_API_KEY
+  # SONNY-132's two. The sentence that stood here said ANTHROPIC and CEREBRAS "stay off, because no
+  # route reads them"; the provider router reads both, so both are forwarded. A container given
+  # neither is unchanged -- a chain entry with no credential is not a candidate.
+  ANTHROPIC_API_KEY
+  CEREBRAS_API_KEY
+)
+
+# Everything else that changes what the gateway does with a request: where each provider sends, what
+# it asks for, which providers serve which route, and what this deployment has been told about each
+# provider's retention and training terms. Not secrets, all defaulted, so absence is uninteresting
+# and is reported as a count rather than as a list of names.
+PASSTHROUGH_SETTINGS=(
+  OPENAI_BASE_URL
+  OPENAI_TEXT_MODEL
+  OPENAI_TRANSCRIPTION_MODEL
+  SEARCH_BASE_URL
+  ANTHROPIC_BASE_URL
+  ANTHROPIC_TEXT_MODEL
+  ANTHROPIC_MAX_OUTPUT_TOKENS
+  CEREBRAS_BASE_URL
+  CEREBRAS_TEXT_MODEL
+  # SONNY-131's, on this array's own rule: they change what the gateway does with a request, they are
+  # not credentials, and they have real defaults. The vision route is not part of the provider router,
+  # so it has no MODEL_ROUTE_* entry — only an endpoint and a model.
+  VISION_BASE_URL
+  VISION_MODEL
+  MODEL_ROUTE_PLAN
+  MODEL_ROUTE_SYNTHESIZE
+  MODEL_ROUTE_TRANSCRIPTIONS
+  MODEL_ROUTE_SEARCH
+  OPENAI_DATA_RETENTION
+  OPENAI_TRAINING
+  ANTHROPIC_DATA_RETENTION
+  ANTHROPIC_TRAINING
+  CEREBRAS_DATA_RETENTION
+  CEREBRAS_TRAINING
+  TAVILY_DATA_RETENTION
+  TAVILY_TRAINING
+  VISION_DATA_RETENTION
+  VISION_TRAINING
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --
@@ -149,6 +217,7 @@ PASSTHROUGH=(
 PASSTHROUGH_ARGS=()
 PASSTHROUGH_ABSENT=()
 PASSTHROUGH_FORWARDED=0
+SETTINGS_FORWARDED=0
 
 usage() { echo "usage: $0 <local|staging|production>" >&2; exit 2; }
 [[ -z "$TARGET" ]] && usage
@@ -199,6 +268,14 @@ collect_passthrough() {
       PASSTHROUGH_FORWARDED=$((PASSTHROUGH_FORWARDED + 1))
     else
       PASSTHROUGH_ABSENT+=("$name")
+    fi
+  done
+  # Same `-e NAME` form, same no-value guarantee. Counted separately so the credential lines above
+  # keep saying only what they have always said.
+  for name in "${PASSTHROUGH_SETTINGS[@]}"; do
+    if [[ -n "${!name:-}" ]]; then
+      PASSTHROUGH_ARGS+=(-e "$name")
+      SETTINGS_FORWARDED=$((SETTINGS_FORWARDED + 1))
     fi
   done
 }
@@ -257,6 +334,12 @@ case "$TARGET" in
       # Names only. No value is read to produce this line, and none could be.
       echo "    not set here, so not forwarded: ${PASSTHROUGH_ABSENT[*]}"
     fi
+    # A count, not names: these are defaulted settings rather than credentials, so "not set" is the
+    # ordinary case and listing twenty-five of them every run would bury the credential line above.
+    # What the container actually resolved to is printed by the gateway itself, at startup, on its
+    # `"msg":"model routing"` line -- which is the honest place to read routing from, since it
+    # reports what the process decided rather than what this script forwarded.
+    echo "    forwarding ${SETTINGS_FORWARDED} of ${#PASSTHROUGH_SETTINGS[@]} routing/endpoint settings; the rest take their defaults"
     docker rm -f sonny-gateway-local >/dev/null 2>&1
     docker run -d --name sonny-gateway-local -p 8080:8080 \
       -e SONNY_ENV=local -e LOG_LEVEL=debug \

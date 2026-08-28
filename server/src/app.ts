@@ -9,7 +9,7 @@ import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
-import { modelProvidersFrom } from "./model/providers.js";
+import { describeRouting, modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
 import { visionProviderFrom } from "./model/vision.js";
 import { registerScreenRoutes } from "./routes/screen.js";
@@ -43,9 +43,15 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  * unsalted, or every protected route refuse every caller, at request time.
  */
 /**
+/**
  * Seams a test may replace, and nothing a deployment sets.
  *
- * **One field, and it exists so the flagged `npm test` can cover contract §9.2 at all** (SONNY-300).
+ * **Two fields, added by two branches for the same reason, kept as one type.** SONNY-300 added the
+ * first and SONNY-132 arrived with a second of its own, `BuildAppOptions`; two parallel
+ * test-seam parameters on one function is the shape where the next ticket adds a third, so they are
+ * one type here rather than one each.
+ *
+ * **`idempotencyStore` exists so the flagged `npm test` can cover contract §9.2 at all** (SONNY-300).
  * The idempotency store is Postgres, and a database-backed test runs only when `DATABASE_URL` is
  * set — which `npm test` deliberately does not do. Without this seam every behaviour §9.2 names
  * would be verified only in `npm run test:db`, so the run this repository gates on would be silent
@@ -53,10 +59,20 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  * real app — the gate, the account scope, the error envelope, the routes — against a store the test
  * controls, and `idempotency.db.test.ts` proves the SQL underneath separately.
  *
+ * **`logStream` exists because two behaviours were unpinned** (SONNY-132, PR #143's F3). A mutation
+ * battery on the provider router killed nineteen of twenty mutants; the three that survived were all
+ * on the *recording* half — `recordServingProvider` gutted, the provider it records hard-coded, and
+ * the `model routing` line deleted from this function. SONNY-132's third acceptance criterion is
+ * that "the recorded metering says which provider actually served it", and the startup line is what
+ * all four `deploy.sh` demonstrations and the founder's manual row 7 read. Neither could be asserted
+ * because pino writes to fd 1 through `sonic-boom`, which `process.stdout.write` never sees.
+ *
  * The same seam and the same reason as `PoolOptions.createPool` and `SupabaseAuthConfig.fetch`.
+ * Both are absent in every shipping path, so nothing a deployment does changes.
  */
 export interface AppOverrides {
   readonly idempotencyStore?: KeyStore;
+  readonly logStream?: NodeJS.WritableStream;
 }
 
 export function buildApp(
@@ -67,6 +83,7 @@ export function buildApp(
   const app = Fastify({
     logger: {
       level: config.logLevel,
+      ...(overrides.logStream === undefined ? {} : { stream: overrides.logStream }),
       /**
        * Redaction, added before the adapter that would need it exists (PR #87 F11).
        *
@@ -240,12 +257,28 @@ export function buildApp(
   /**
    * `POST /v1/screen/analyze` (SONNY-131), mounted on the same terms and for the same reasons.
    *
-   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above, and that
-   * is a lane boundary rather than a design preference — `model/providers.ts` belongs to SONNY-132's
-   * branch, running in parallel, and the two collapse when that one lands. The route reads no
-   * `ModelProviders` field, so nothing here changes shape when it does.
+   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above.
+   *
+   * **That was written as a lane boundary that would end when SONNY-132 landed — "the two collapse
+   * when that one lands" — and SONNY-132 has now landed without collapsing them.** Nothing forced
+   * the collapse: this route reads no `ModelProviders` field, exactly as that comment predicted, so
+   * the provider router grew `plan`, `synthesize`, `transcriptions` and `search` chains and left
+   * this route untouched. Collapsing it is a real and probably worthwhile change — a
+   * `MODEL_ROUTE_SCREEN_ANALYZE` chain would give the vision route the same failover and the same
+   * per-provider retention policy the other four now have, which is precisely what SONNY-110 needs
+   * of it — but the vision route and `VisionModelClient` are on SONNY-132's never-touch list, so it
+   * is not that branch's to take. Whoever owns it next starts here.
    */
   registerScreenRoutes(app, visionProviderFrom(config));
+
+  // **What this deployment's routing actually resolved to, printed once** (SONNY-132). Which
+  // provider serves which route is configuration now, and per-provider retention/training terms are
+  // configuration that nothing routes on until SONNY-110 answers — so both are said out loud at
+  // startup, where an operator can see what the container was told rather than inferring it from
+  // which requests succeed. `describeRouting` carries provider names, policy words and a boolean
+  // per credential, and never a key. It describes the four routes the router owns; the vision route
+  // above is not among them, for the reason its own comment gives.
+  app.log.info(describeRouting(config), "model routing");
 
   if (auth) {
     requireRateLimitSalt(config);

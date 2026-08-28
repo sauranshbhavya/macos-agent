@@ -20,8 +20,10 @@ public enum PlannerError: Error, LocalizedError, Equatable {
     /// Unreachable for the same reason: no client here reads an HTTP status any more. The gateway's
     /// typed failures arrive as `backend` below.
     case badResponse(Int, String)
-    /// Still live. `OpenAIResponseParser` throws it, and `VisionModelClient` and `CerebrasPlanner`
-    /// both use that parser — neither of which this ticket touches.
+    /// Still live. `OpenAIResponseParser` throws it and `VisionModelClient` uses that parser.
+    /// **This named `CerebrasPlanner` as a second user until SONNY-132 deleted that class** — the
+    /// open-weights planner is a server-side provider now, so its parsing happens in
+    /// `server/src/model/cerebras.ts` and nothing on this side reads its wire shape.
     case missingOutputText
     /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence for it, never
     /// the server's own `message` (§7.1).
@@ -43,12 +45,19 @@ public enum PlannerError: Error, LocalizedError, Equatable {
 
 /// The shipped planner, **talking to Sonny's own backend rather than to a provider** (SONNY-130).
 ///
-/// The type name is unchanged, and that is deliberate rather than an oversight. `CerebrasPlanner`
-/// — on this ticket's never-touch list — calls `OpenAIPlanner.systemPrompt(toolRegistry:)`, and the
-/// API contract itself cites that symbol as the post-move prompt builder (§4.2). What the ticket's
+/// The type name is unchanged, and that is deliberate rather than an oversight. What SONNY-130's
 /// sixth requirement is actually about is the model identifier, the vendor endpoint and the
 /// provider choice, and all three are gone from here: they now live in `server/src/model/`, which
 /// is what turns SONNY-110's move to a paid zero-retention route into a redeploy.
+///
+/// **One of the two reasons for the name went with SONNY-132 and the other did not.** The first was
+/// that `CerebrasPlanner` called `OpenAIPlanner.systemPrompt(toolRegistry:)`, so renaming the type
+/// meant editing a file that ticket's never-touch list forbade; that class is deleted now, so the
+/// argument is gone. The second stands on its own: `docs/sonny-backend-api-contract.md` §4.2 cites
+/// this exact symbol as the post-move prompt builder, so the name is part of a document the server
+/// and both clients are written against. **This class is not OpenAI-specific and has not been since
+/// SONNY-130** — which provider serves a plan is `MODEL_ROUTE_PLAN`, and on any given request it
+/// may be any of three.
 @MainActor
 public final class OpenAIPlanner: Planning {
     private let client: SonnyBackendClient
@@ -143,8 +152,10 @@ public final class OpenAIPlanner: Planning {
     /// Declaration order via `allCases`, because a `Set` has none and a sentence that reordered
     /// itself between processes would make the golden untestable and defeat prompt caching.
     ///
-    /// One sentence covers both providers: `CerebrasPlanner` builds on `systemPrompt` and appends
-    /// only a schema suffix, so a fix here cannot land on one planner and not the other.
+    /// One sentence covers every provider, and it still does after SONNY-132 moved the second one
+    /// server-side. This prompt is `messages[0]` on the wire (§4.2), so whichever provider the
+    /// router picks receives this text — the Cerebras adapter appends a schema suffix to its *copy*
+    /// and edits nothing here. A fix here cannot land on one provider and not the others.
     nonisolated private static var forbiddenRoutineStepPhrase: String {
         let names = AgentOperation.allCases
             .filter { StoredRoutine.forbiddenStepOperations.contains($0) }
@@ -208,25 +219,45 @@ public final class OpenAIPlanner: Planning {
     }
 }
 
-extension OpenAIPlanner {
-    nonisolated public static let providerID = "openai"
+/// How a run's planner is built, as the one seam a call site needs (SONNY-132).
+///
+/// **This replaces `PlannerProviderRegistry`, which is deleted.** That type mapped a client-side
+/// *selection* — `SONNY_PLANNER`, an id, a display name, a fallback notice — onto one of several
+/// registered providers. Every part of that is now the server's: `MODEL_ROUTE_PLAN` names the
+/// chain, the gateway walks it, and §4.2 forbids the response from naming which provider answered.
+/// A client-side registry of providers would be a client that knows about providers, which is the
+/// one thing row 12 exists to prevent.
+///
+/// What the registry genuinely bought at the construction site was narrower than the type: a way to
+/// hand `performStart` something that makes a planner for *this run*, without `performStart` naming
+/// a concrete class. That is a closure, and this is it. The two facts it takes are the two that
+/// cannot be defaulted — the run's `BackendTaskContext`, which carries a retention answer nobody
+/// may guess, and the run's usage recorder.
+///
+/// **It does not throw, and the absence is the point.** The registry's whole fallback machinery
+/// existed because a provider's construction could fail — a missing `CEREBRAS_API_KEY` was the
+/// canonical case. There is one planner now and it holds no credential: a call made with no session
+/// signed in fails at the *request* with `notSignedIn`, which is a sentence the user can act on.
+/// Nothing between choosing a planner and making the call can fail any more, so nothing has to be
+/// reported there.
+public typealias PlannerFactory = @MainActor @Sendable (
+    BackendTaskContext, any TaskUsageRecording
+) -> any Planning
 
-    /// Registry descriptor for the shipped default planner (SONNY-85).
+extension OpenAIPlanner {
+    /// The shipping app's planner factory: one that talks to Sonny's backend.
     ///
-    /// **`construct` now takes the backend client and the task context from the registry's caller**
-    /// (SONNY-130), because neither can be defaulted — the client is shared process-wide and the
-    /// task context carries a retention answer nobody may guess. It no longer throws for a missing
-    /// environment key, because there is no key: a call made with no session signed in fails at the
-    /// request with `notSignedIn`, which is a sentence the user can act on rather than a startup
-    /// failure they never asked about.
-    nonisolated public static func provider(client: SonnyBackendClient) -> PlannerProvider {
-        PlannerProvider(
-            id: providerID,
-            displayName: "OpenAI",
-            throughTheGateway: { taskContext, usageRecorder in
-                OpenAIPlanner(client: client, taskContext: taskContext, usageRecorder: usageRecorder)
-            }
-        )
+    /// **A function of the backend client rather than a stored value** (SONNY-130's reasoning,
+    /// carried over from `PlannerProviderRegistry.default`): there is exactly one
+    /// `SonnyBackendClient` in the process, it holds the single-flight refresh guard that makes ten
+    /// concurrent 401s cause one rotation, and a second one would defeat it. Taking it here rather
+    /// than reaching for a shared instance is why no call site can acquire it by saying nothing.
+    nonisolated public static func throughSonnysBackend(
+        client: SonnyBackendClient
+    ) -> PlannerFactory {
+        { taskContext, usageRecorder in
+            OpenAIPlanner(client: client, taskContext: taskContext, usageRecorder: usageRecorder)
+        }
     }
 }
 

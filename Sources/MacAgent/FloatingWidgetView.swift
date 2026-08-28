@@ -186,19 +186,13 @@ struct FloatingWidgetView: View {
                     }
                 }
 
-                // The planner router's "never a silent planner swap" surface (SONNY-85): when
-                // the configured planner selection couldn't be honored, this says who actually
-                // planned the task and why. The widget renders it because the widget is where
-                // a run is watched; it is not a failure — the task ran.
-                if let notice = viewModel.plannerFallbackNotice {
-                    WidgetNoticeStrip(
-                        message: notice,
-                        icon: "exclamationmark.triangle",
-                        dismissAccessibilityLabel: "Dismiss planner notice"
-                    ) {
-                        viewModel.plannerFallbackNotice = nil
-                    }
-                }
+                // **A second notice strip stood here and is gone** (SONNY-132). It was the planner
+                // router's "never a silent planner swap" surface (SONNY-85), naming which planner
+                // had actually planned a task when the configured selection could not be honored.
+                // Provider choice is a server decision now, the response is forbidden from naming
+                // which provider served it (contract §4.2), and a task that fails outright still
+                // says so through `errorMessage` below. `AgentViewModel`'s own note where the
+                // published property used to be enumerates all four states and where each went.
 
                 // **Bottom-aligned since the pill can carry a chip row** (SONNY-150). With
                 // `.center` the two circular buttons would float against the middle of a 66pt pill
@@ -327,14 +321,17 @@ struct FloatingWidgetView: View {
         // follows below. Something that needs a human does not shrink itself away, and this notice
         // has an explicit Dismiss control, so nothing is stuck — the user ends it by reading it.
         //
-        // Deliberately only this channel. `localStorageNotice` and `plannerFallbackNotice` have the
-        // same hole and are not this ticket's; SONNY-187 records them rather than widening the
-        // guard past what was decided. That is still where they sit: SONNY-187 has since closed its
-        // *other* half — the storage notice no longer posts a notification carrying a Retry that
-        // runs an unrelated task — and the founder's decision of 2026-08-21 left this half open,
-        // because holding the widget open for two more channels is a behaviour change nobody has
-        // asked for and the two are not symmetrical (a planner fallback is informational and the
-        // task ran; a storage problem is ongoing).
+        // Deliberately only this channel. `localStorageNotice` has the same hole and is not this
+        // ticket's; SONNY-187 records it rather than widening the guard past what was decided. That
+        // is still where it sits: SONNY-187 has since closed its *other* half — the storage notice
+        // no longer posts a notification carrying a Retry that runs an unrelated task — and the
+        // founder's decision of 2026-08-21 left this half open, because holding the widget open for
+        // another channel is a behaviour change nobody has asked for.
+        //
+        // **This named `plannerFallbackNotice` as a second channel with the same hole, and SONNY-132
+        // deleted that channel** — provider choice moved server-side, so the state it described
+        // cannot occur. SONNY-187's open half is now one channel rather than two, and the sentence
+        // that used to argue the two were "not symmetrical" has nothing left to compare.
         guard viewModel.scheduledRunNotice == nil else {
             return false
         }
