@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { errorBody } from "../errors.js";
+import { noteContent } from "../content/hook.js";
 import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import { BODY_LIMIT_BYTES, DEADLINE_MS } from "../model/limits.js";
 import {
@@ -29,13 +30,19 @@ import {
  * decision to write one at all, are `metering/hook.ts`', on this instance, for every route. A route
  * here that deposited nothing would still be metered, with the provider column empty.
  *
- * **What this ticket deliberately does not do with `retention`.** The field is required and
- * validated on every one of the four (§2.4.2 makes an omitted `retention` a loud `400` rather than
- * a quiet guess, in either direction). What it is *not* is honoured, because this ticket stores no
- * content at all — there is no content store yet, and SONNY-134 builds it along with the rule that
- * §10.1 states: enforced where the storing happens, not at the call site. Validating the field now
- * means the client's half is real and testable from the day it ships; claiming the guarantee now
- * would be claiming a promise nothing keeps.
+ * **`retention` is validated here and honoured somewhere else, and the split is the guarantee**
+ * (updated 2026-08-28, SONNY-134). The field is required on every one of the four and §2.4.2 makes
+ * an omitted one a loud `400` rather than a quiet guess in either direction — that part is
+ * unchanged. This paragraph used to continue "what it is *not* is honoured, because this ticket
+ * stores no content at all", which was true of SONNY-130 and is not true now: the content store
+ * exists. What has not changed is that **no line in this file consults the field to decide whether
+ * to store**, which is §10.1's rule rather than an omission — "enforced where the storing happens,
+ * not at the call site" — and `content/hook.ts` is where that happens.
+ *
+ * What these routes contribute to retention is the same shape as what they contribute to metering:
+ * the facts the hook cannot see for itself. There are two — the serving provider, beside the
+ * metering deposit, and `/v1/transcriptions`' audio, which is the one piece of request content that
+ * is not in `request.body`.
  */
 
 /** §2.4: required on all five model routes, never defaulted. */
@@ -108,6 +115,10 @@ function recordServingProvider(
   served: ProviderAttribution,
 ): void {
   noteMetering(request, { provider: served.provider, failedOver: served.failedOver });
+  // The same fact on the content row, so a retained response says which provider produced it
+  // without a join to a table on a different clock (SONNY-134). `failedOver` is not copied: it is
+  // failover accounting and belongs to the metering event alone.
+  noteContent(request, { provider: served.provider });
   const detail = { route, provider: served.provider, failedOver: served.failedOver };
   if (served.failedOver.length > 0) {
     request.log.warn(detail, "model route served after failover");
@@ -419,6 +430,25 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       }
 
       const recording = audio;
+      // **Voice audio into the content store, deposited by hand for the same reason the two fields
+      // above are** (SONNY-134). This is the one route whose request content the content hook
+      // cannot read for itself: §4.4's body is `multipart/form-data`, consumed by `request.parts()`
+      // above, so `request.body` is undefined here. §10.3 names voice audio explicitly as content —
+      // "the most personally sensitive of the four types and the one most likely to be overlooked
+      // because nobody listed it" — and this line is the whole of why it is not.
+      //
+      // **Depositing is not storing**: the hook keeps nothing unless this request declared
+      // `retention: "standard"`, so a recording made with "Don't save this task" on is deposited on
+      // a draft that is discarded. Deposited after the meta part has been validated, because that
+      // is the first point `retention` is known to be what it claims.
+      noteContent(request, {
+        // Deposited because this route's body is not readable by the hook — without it, the one
+        // content type §10.3 names as most easily overlooked would be the one that is never kept.
+        retention: parsedMeta.data.retention,
+        voiceAudio: recording,
+        voiceAudioMediaType: contentType,
+        voiceAudioFilename: filename,
+      });
       try {
         const result = await meteredUpstreamCall(request, () =>
           withDeadlines(DEADLINE_MS.transcriptions, (signal) =>

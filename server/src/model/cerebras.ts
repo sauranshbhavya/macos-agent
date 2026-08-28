@@ -1,5 +1,6 @@
 import {
   estimatedTextUsage,
+  providerErrorDetail,
   ProviderRejected,
   readJSONBody,
   reportedTokenUsage,
@@ -191,7 +192,10 @@ export function makeCerebrasTextAdapter(
       throw upstreamTransportError(error, "cerebras");
     }
 
-    if (!response.ok) throw upstreamStatusError(response.status, "cerebras");
+    if (!response.ok) {
+      // Body to the content store, never to the thrown message. `openai.ts` carries the reasoning.
+      throw upstreamStatusError(response.status, "cerebras", await providerErrorDetail(response));
+    }
 
     const parsed: unknown = await readJSONBody(response, "cerebras");
     const content = messageContent(parsed);

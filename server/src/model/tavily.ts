@@ -1,4 +1,5 @@
 import {
+  providerErrorDetail,
   readJSONBodyOrUnparsed,
   upstreamStatusError,
   upstreamTransportError,
@@ -58,7 +59,11 @@ export function makeTavilySearchAdapter(
       throw upstreamTransportError(error, "search");
     }
 
-    if (!response.ok) throw upstreamStatusError(response.status, "search");
+    if (!response.ok) {
+      // Body to the content store, never to the thrown message. `openai.ts` carries the reasoning;
+      // on this route the echoed request is the user's search query.
+      throw upstreamStatusError(response.status, "search", await providerErrorDetail(response));
+    }
 
     const parsed: unknown = await readJSONBodyOrUnparsed(response, "search");
     const results =

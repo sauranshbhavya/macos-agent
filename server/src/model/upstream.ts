@@ -16,11 +16,54 @@
  * anything to the user.
  */
 
+/**
+ * What a provider said when it refused, carried back for the content store (SONNY-134).
+ *
+ * **A provider's error body is content and belongs on the content clock**, which is §10.3 in one
+ * line: "An error body that echoes the input is content arriving in a field nobody classified. It
+ * goes into the content store on the content clock, not into an unclassified log. Provider request
+ * IDs are kept for correlation."
+ *
+ * **Until this existed the adapters' only safe move was to drop the body unread**, and each said so
+ * in a comment of its own — §7.1 makes `message` a field the support lookup reads, and a body that
+ * carries the user's own command back has no business there. Those comments were right about where
+ * it must not go and left nowhere for it to go instead. This type is that place: the body travels on
+ * the error, is deposited by `meteredUpstreamCall`, and is written by the content hook under exactly
+ * the same `retention` rule as everything else the call carried — so an incognito run's provider
+ * error body is not stored either, which a log line could never have promised.
+ *
+ * `body` is `null` when the response could not be read at all, which is a real outcome on the path
+ * where things are already going wrong. `providerRequestId` survives independently of it: it is a
+ * header, so it is there even when the body is not, and it is the half that makes a vendor support
+ * ticket possible.
+ */
+export interface ProviderErrorDetail {
+  readonly status: number;
+  readonly body: string | null;
+  readonly providerRequestId: string | null;
+}
+
+/**
+ * The base the three upstream failures share, so a `detail` can ride on any of them.
+ *
+ * Every existing `new ProviderRejected("…")` still compiles: the detail is optional and absent means
+ * "there was no provider response to describe", which is exactly the case for a refusal this gateway
+ * decided on its own — an answer with no usable text, a reply over the response cap.
+ */
+export class UpstreamError extends Error {
+  readonly detail: ProviderErrorDetail | undefined;
+
+  constructor(message: string, detail?: ProviderErrorDetail) {
+    super(message);
+    this.detail = detail;
+  }
+}
+
 /** The provider could not be reached, or answered in a way that says "try again" (§7.2 case 5). */
-export class ProviderUnavailable extends Error {}
+export class ProviderUnavailable extends UpstreamError {}
 
 /** The provider did not answer inside the route's upstream deadline (§7.2 case 5a). */
-export class ProviderTimedOut extends Error {}
+export class ProviderTimedOut extends UpstreamError {}
 
 /**
  * The provider understood the request and refused it (§7.2 case 5b).
@@ -30,7 +73,56 @@ export class ProviderTimedOut extends Error {}
  * identically. Mapping a refusal to `unavailable` would put the client into a retry loop against a
  * wall that has already answered.
  */
-export class ProviderRejected extends Error {}
+export class ProviderRejected extends UpstreamError {}
+
+/**
+ * The headers a provider names its own request id in, in the order they are consulted.
+ *
+ * Enumerated rather than guessed at from one vendor's spelling: OpenAI and its API-compatible
+ * neighbours use `x-request-id`, Anthropic uses `request-id`. A provider that names it something
+ * else contributes nothing here and its status and body still travel, which is the direction this
+ * should fail in — a missing correlation id is worse diagnostics, never a worse answer.
+ */
+const REQUEST_ID_HEADERS = ["x-request-id", "request-id", "x-amzn-requestid"] as const;
+
+/**
+ * The longest provider error body read off the wire, in bytes.
+ *
+ * Read bounded rather than whole, because this runs on the failure path and the body is a third
+ * party's: an error response that streams indefinitely must not become this gateway's problem. The
+ * content hook bounds again before storing, at the same size — two bounds because they answer
+ * different questions, how much is read and how much is kept, and either alone would leave the other
+ * unanswered.
+ */
+export const PROVIDER_ERROR_BODY_BYTES = 8192;
+
+/**
+ * Read a failed provider response into a `ProviderErrorDetail`, and never throw doing it.
+ *
+ * **Every failure here answers with a partial detail rather than propagating**, which is the whole
+ * contract of this function: it is called from a path that is already reporting an error, and an
+ * exception raised while describing one would replace a `502 provider.unavailable` the client knows
+ * how to handle with a `500` about this gateway. So a body that cannot be read is `null` beside a
+ * status and a request id that are already known.
+ */
+export async function providerErrorDetail(response: Response): Promise<ProviderErrorDetail> {
+  let providerRequestId: string | null = null;
+  for (const header of REQUEST_ID_HEADERS) {
+    const value = response.headers.get(header);
+    if (value !== null && value.trim().length > 0) {
+      providerRequestId = value.trim().slice(0, 200);
+      break;
+    }
+  }
+  let body: string | null = null;
+  try {
+    const text = await response.text();
+    body = text.length > 0 ? text.slice(0, PROVIDER_ERROR_BODY_BYTES) : null;
+  } catch {
+    body = null;
+  }
+  return { status: response.status, body, providerRequestId };
+}
 
 /**
  * **`UpstreamRequestTooLarge` stood here and is gone** (PR #139, F11). It was thrown by one branch
@@ -259,14 +351,29 @@ export function upstreamTransportError(error: unknown, provider: string): Error 
  * vendor with a body all of them will refuse, spending the route's whole deadline to arrive at the
  * same answer more slowly.
  */
-export function upstreamStatusError(status: number, provider: string): Error {
+export function upstreamStatusError(
+  status: number,
+  provider: string,
+  detail?: ProviderErrorDetail,
+): Error {
   if (status === 408 || status === 504) {
-    return new ProviderTimedOut(`${provider} answered ${status}`);
+    return new ProviderTimedOut(`${provider} answered ${status}`, detail);
   }
   if (status === 401 || status === 402 || status === 403 || status === 429 || status >= 500) {
-    return new ProviderUnavailable(`${provider} answered ${status}`);
+    return new ProviderUnavailable(`${provider} answered ${status}`, detail);
   }
-  return new ProviderRejected(`${provider} answered ${status}`);
+  return new ProviderRejected(`${provider} answered ${status}`, detail);
+}
+
+/**
+ * The detail a thrown upstream failure carries, or `undefined` when it carries none.
+ *
+ * A function rather than a cast at the call site, so the one place that knows the class hierarchy is
+ * this file. `undefined` for anything that is not an `UpstreamError` at all — a bug in this gateway
+ * throwing a plain `Error` must not become a content row claiming a provider said something.
+ */
+export function detailOf(error: unknown): ProviderErrorDetail | undefined {
+  return error instanceof UpstreamError ? error.detail : undefined;
 }
 
 /**

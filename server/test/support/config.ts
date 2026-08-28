@@ -39,6 +39,10 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     logLevel: "fatal",
     trustProxy: false,
     rateLimitSalt: "test-salt",
+    // The shipped defaults, so a test that says nothing about retention gets the retention a
+    // deployment that says nothing about it gets. A test that cares about the clock overrides them.
+    contentRetentionDays: 30,
+    contentExpirySweepSeconds: 3600,
     ...TEST_SUPABASE_CONFIG,
     openAIBaseUrl: "https://openai.invalid/v1",
     openAITextModel: "test-text-model",
