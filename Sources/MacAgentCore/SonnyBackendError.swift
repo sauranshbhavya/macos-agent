@@ -236,7 +236,7 @@ public extension SonnyBackendError {
     /// did, so the fourth shape above was recognised on one route and hidden on the other four; a
     /// stop on any of them read as a failure. The population is
     /// the error *type* rather than the route — four declarations,
-    /// `git grep -cE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 files at `7642715`
+    /// `git grep -cE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 files at `1830b9e`
     /// — and they answer for five routes, because **`WebResearchSynthesizer.swift`
     /// declares no error of its own**: `WebResearchNoteDecodingError` there has three cases,
     /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote`, and no `.backend` at all, so
@@ -246,14 +246,14 @@ public extension SonnyBackendError {
     /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
     /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
     /// (`git grep -cE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 files at
-    /// `7642715`; the `public enum` anchor is load-bearing there, because without it the same
+    /// `1830b9e`; the `public enum` anchor is load-bearing there, because without it the same
     /// command answers 5 — the protocol's own declaration below is the fifth.)
     ///
     /// **The `^ *` on the first of those two is a guard, not a fix, and PR #144's F6 was wrong about
     /// what it guards against** (SONNY-320). F6 wrote that the unanchored form "matches its own
     /// citation in `SonnyBackendError.swift` and answers five". It does not:
     /// `git grep -cE 'case backend\(SonnyBackendError\)' -- Sources` answers **4 files at
-    /// `7642715`**, the same as the anchored form. A citation has to escape its parentheses —
+    /// `1830b9e`**, the same as the anchored form. A citation has to escape its parentheses —
     /// a bare `(` opens an ERE group rather than matching a bracket — so the text sitting in this
     /// file is `\(`, and a pattern looking for a literal `(` never matches it. Five is what a looser
     /// pattern answers, not what the written one does. Keep the anchor anyway, against a later
