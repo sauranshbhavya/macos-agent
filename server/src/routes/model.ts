@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { errorBody } from "../errors.js";
+import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import { BODY_LIMIT_BYTES, DEADLINE_MS } from "../model/limits.js";
 import {
   ProviderRejected,
@@ -18,9 +19,15 @@ import {
  *
  * All four are authenticated — `auth/gate.ts` covers them by *not* listing them in `PUBLIC_ROUTES`,
  * which is the deny-by-default property that file exists for — and none of them reads the caller's
- * account for anything yet. Entitlement checks are SONNY-135's and metering is SONNY-133's; both
- * are non-goals here, and neither is stubbed, because a stub of an entitlement check is a check
- * that has been written and does nothing.
+ * account for anything. Entitlement checks are SONNY-135's, and are not stubbed here, because a
+ * stub of an entitlement check is a check that has been written and does nothing.
+ *
+ * **Metering has since landed and these routes deposit into it** (SONNY-133). This paragraph used to
+ * name it as a non-goal alongside entitlements. What the routes contribute is the three facts the
+ * hook cannot see for itself — that an upstream call was opened, how long it took, and which
+ * provider served it — through `noteMetering` and `meteredUpstreamCall`; the event itself, and the
+ * decision to write one at all, are `metering/hook.ts`', on this instance, for every route. A route
+ * here that deposited nothing would still be metered, with the provider column empty.
  *
  * **What this ticket deliberately does not do with `retention`.** The field is required and
  * validated on every one of the four (§2.4.2 makes an omitted `retention` a loud `400` rather than
@@ -81,9 +88,15 @@ const transcriptionMeta = z
  * **This is the only place the fact leaves the router, and it never leaves this server.** §4.2:
  * "The response names no provider and no model." §11 puts `provider` on the metering event —
  * "Which provider actually served it. Required for failover accounting (SONNY-132) and never
- * returned to the client" — so the log line below is where it lives until SONNY-133 builds the
- * event that will carry it. `request.id` ties it to the `Sonny-Request-Id` the caller was given,
- * which §2.3 makes the join key for exactly this kind of lookup.
+ * returned to the client" — and **that event now exists**, so this function does two things: it
+ * deposits the attribution onto the request's metering draft, and it logs. `request.id` ties both to
+ * the `Sonny-Request-Id` the caller was given, which §2.3 makes the join key for exactly this kind
+ * of lookup.
+ *
+ * The log line is kept beside the write rather than replaced by it. They answer different questions:
+ * a log line is what an operator reads while a deploy is going wrong, and the event is what a cost
+ * question is answered from a month later. `logStream` in `app.ts` exists because this line was
+ * unpinned by any assertion (PR #143's F3), and it stays pinned.
  *
  * A failover is logged at `warn` and an ordinary request at `debug`: the first is a provider
  * having a bad hour and is worth noticing without anyone asking, the second is every request that
@@ -94,6 +107,7 @@ function recordServingProvider(
   route: string,
   served: ProviderAttribution,
 ): void {
+  noteMetering(request, { provider: served.provider, failedOver: served.failedOver });
   const detail = { route, provider: served.provider, failedOver: served.failedOver };
   if (served.failedOver.length > 0) {
     request.log.warn(detail, "model route served after failover");
@@ -252,17 +266,20 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       if (adapter === undefined) return noProvider(request, reply);
 
       try {
-        const result = await withDeadlines(deadlines, (signal) =>
-          adapter({
-            messages: parsed.data.messages,
-            responseSchemaName: parsed.data.response_schema_name,
-            responseSchema: parsed.data.response_schema,
-            reasoningEffort: parsed.data.reasoning_effort,
-            verbosity: parsed.data.verbosity,
-            signal,
-          }),
+        const result = await meteredUpstreamCall(request, () =>
+          withDeadlines(deadlines, (signal) =>
+            adapter({
+              messages: parsed.data.messages,
+              responseSchemaName: parsed.data.response_schema_name,
+              responseSchema: parsed.data.response_schema,
+              reasoningEffort: parsed.data.reasoning_effort,
+              verbosity: parsed.data.verbosity,
+              signal,
+            }),
+          ),
         );
         recordServingProvider(request, route, result.served);
+        noteMetering(request, { usage: result.usage });
         return reply.send({
           request_id: request.id,
           output_text: result.outputText,
@@ -295,8 +312,10 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
     const maxResults = Math.min(Math.max(requested, 1), 20);
 
     try {
-      const result = await withDeadlines(DEADLINE_MS.search, (signal) =>
-        search({ query: parsed.data.query, maxResults, signal }),
+      const result = await meteredUpstreamCall(request, () =>
+        withDeadlines(DEADLINE_MS.search, (signal) =>
+          search({ query: parsed.data.query, maxResults, signal }),
+        ),
       );
       recordServingProvider(request, "search", result.served);
       return reply.send({
@@ -385,16 +404,29 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       if (meta === UNPARSEABLE) return invalid(request, reply, "The meta part is not JSON.");
       const parsedMeta = transcriptionMeta.safeParse(meta);
       if (!parsedMeta.success) return invalid(request, reply, "The meta part failed validation.");
+      // **The one route whose §2.4 fields the metering hook cannot read for itself.** Everywhere
+      // else it reads `request.body`; §4.4's body is `multipart/form-data`, consumed above by
+      // `request.parts()`, so `request.body` is undefined here and the `meta` part is deposited by
+      // hand. Deposited after validation because that is the first point these two values are known
+      // to be what they claim; a `meta` part that fails validation leaves them null on an event that
+      // is written anyway, with `outcome: refused`.
+      noteMetering(request, {
+        taskId: parsedMeta.data.task_id,
+        retention: parsedMeta.data.retention,
+      });
       if (audio === undefined || audio.byteLength === 0) {
         return invalid(request, reply, "The audio part is required and must not be empty.");
       }
 
       const recording = audio;
       try {
-        const result = await withDeadlines(DEADLINE_MS.transcriptions, (signal) =>
-          transcribe({ audio: recording, filename, contentType, signal }),
+        const result = await meteredUpstreamCall(request, () =>
+          withDeadlines(DEADLINE_MS.transcriptions, (signal) =>
+            transcribe({ audio: recording, filename, contentType, signal }),
+          ),
         );
         recordServingProvider(request, "transcription", result.served);
+        noteMetering(request, { usage: result.usage });
         return reply.send({
           request_id: request.id,
           text: result.text,

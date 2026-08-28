@@ -9,6 +9,7 @@ import { registerErrorHandlers } from "../src/errors.js";
 import { registerHealth } from "../src/routes/health.js";
 import { TEST_JWT_POLICY, accessTokenFor, tokenWithBrokenSignature, tokenWithClaims } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
+import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 
 /**
  * The gate as a routing decision, with no database in reach (SONNY-203).
@@ -41,54 +42,12 @@ const noDatabase: WithConnection = async () => {
 const build = () => buildApp(config, { provider: new UnusedProvider(), withConnection: noDatabase });
 
 /**
- * Every route the built server actually serves, one entry per method, **read off the app rather than
- * listed here**.
- *
- * **This enumerated two hard-coded registrars and called itself the population** (PR #104's
- * adversarial review, F5). It built a throwaway instance, called `registerHealth` and
- * `registerAuth`, and its comment promised that "a route added by a later ticket appears here
- * automatically" — which was true only of routes added by those two functions. A third registrar's
- * routes were invisible, and the assertion that the protected set is exactly two kept passing while
- * saying nothing about them. A slip that put `GET /v1/account/entitlements` into `PUBLIC_ROUTES`
- * would have had nothing between it and production but someone reading a seven-line literal.
- *
- * `printRoutes` asks the router, so the answer covers every route registered by anything — a route
- * added directly, one inside a plugin, one nested two plugins deep, one in a second plugin beside a
- * first, and one behind a prefix. **This docstring called a plugin registered on the instance a
- * "sibling plugin" and said the gate does not cover it; both halves were wrong** (PR #104's
- * verification pass, V1).
- * A plugin registered on the `buildApp` instance is a *descendant* of the gate's context, not a
- * sibling of it, and F3's table answers 401 for that row. The wiring the gate really misses needs
- * the gate itself to be inside a plugin, which `buildApp` never does — measured, all five shapes
- * above answer 401 on a `buildApp` instance, so **no route registered on one can escape the gate at
- * all**. What this scan is for is therefore the simpler and still-real hazard: a route classified
- * into `PUBLIC_ROUTES` by mistake, which the behavioural test below then fails on.
- *
- * The parse is guarded against silently returning nothing: a format change fails the assertions in
- * `expectPopulationIsReal` instead of turning every population test vacuous.
+ * The route population and its "did the parse really parse" guard now live in
+ * `test/support/routes.ts`, because `metering.test.ts` asks the router the same question about a
+ * different classification and a copied parser is two things to keep in step (SONNY-133). The
+ * reasoning that made this a scan rather than a list — PR #104's F5, and the V1 correction about
+ * which plugin shapes the gate covers — moved with it, unchanged.
  */
-async function registeredRoutes(app: FastifyInstance): Promise<{ method: string; url: string }[]> {
-  await app.ready();
-  const collected: { method: string; url: string }[] = [];
-  for (const line of app.printRoutes({ commonPrefix: false }).split("\n")) {
-    const match = /(\/\S*)\s+\(([A-Z, ]+)\)\s*$/.exec(line);
-    if (!match) continue;
-    for (const method of match[2]!.split(",").map((m) => m.trim())) {
-      collected.push({ method, url: match[1]! });
-    }
-  }
-  return collected;
-}
-
-/** The parse really parsed something: a format change must fail loudly, not quietly return []. */
-function expectPopulationIsReal(routes: { method: string; url: string }[]): void {
-  expect(routes.length).toBeGreaterThanOrEqual(7);
-  const pairs = routes.map((route) => `${route.method} ${route.url}`);
-  expect(pairs).toContain("DELETE /v1/account");
-  expect(pairs).toContain("GET /v1/health");
-  expect(pairs).toContain("HEAD /v1/health");
-  expect(pairs).toContain("POST /v1/auth/email/verify");
-}
 
 describe("which routes the gate challenges", () => {
   it("PUBLIC_ROUTES is exactly the contract §4.1 set with no Authorization header", () => {
