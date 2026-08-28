@@ -371,6 +371,43 @@ struct SonnyBackendClientTests {
     /// So: a stored expiry sixty seconds ahead of *this Mac's* clock, and a server whose `Date`
     /// header puts it an hour behind that. Judged locally the token is inside the 180-second margin
     /// and gets refreshed for nothing; judged in server time it has an hour of life and does not.
+    /// **What this client will vouch for only ever moves forward** (SONNY-135, and the mutant S19
+    /// that survived at `0fefe0d` without it).
+    ///
+    /// `serverNow()` is a *correction* to the local clock and tracks it exactly, which is why it is
+    /// not a defence against a clock a user sets. `lastObservedServerTime()` is the defence: an
+    /// instant a server actually reported, paired with a monotonic reading. A response reporting an
+    /// **earlier** instant than one already seen — a proxy with a slow clock, a replayed response —
+    /// must not lower it, or the guarantee could be walked back by the party it guards against.
+    @Test
+    func theLastObservedServerTimeNeverMovesBackwards() async throws {
+        let localNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let later = localNow.addingTimeInterval(100 * 60 * 60)
+        let earlier = localNow.addingTimeInterval(60)
+        let harness = try Harness(now: { localNow })
+        let reported = ReportedInstant(later)
+        harness.serve { _ in
+            .reply(
+                statusCode: 200,
+                headers: ["Date": SonnyHTTPDate.formatter.string(from: reported.value)],
+                body: Data("{}".utf8)
+            )
+        }
+
+        _ = try await harness.client.send(harness.publicRequest())
+        let first = try #require(await harness.client.lastObservedServerTime())
+        #expect(abs(first.serverInstant.timeIntervalSince(later)) < 1)
+
+        // A second response reporting an earlier instant. The offset follows it — that is what an
+        // offset is — and the observation does not.
+        reported.set(earlier)
+        _ = try await harness.client.send(harness.publicRequest())
+        let second = try #require(await harness.client.lastObservedServerTime())
+        #expect(abs(second.serverInstant.timeIntervalSince(later)) < 1)
+        #expect(second.serverInstant > earlier)
+        #expect(abs(await harness.client.serverNow().timeIntervalSince(earlier)) < 1)
+    }
+
     @Test
     func expiryIsJudgedAgainstTheServerClockAndNotTheLocalOne() async throws {
         let localNow = Date(timeIntervalSince1970: 1_800_000_000)
@@ -1315,6 +1352,26 @@ final class RecordedStrings: @unchecked Sendable {
     func record(_ value: String) {
         lock.lock()
         values.append(value)
+        lock.unlock()
+    }
+}
+
+/// A `Date` a `@Sendable` stub handler can be told to change between requests.
+final class ReportedInstant: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
+
+    init(_ instant: Date) { self.instant = instant }
+
+    var value: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return instant
+    }
+
+    func set(_ next: Date) {
+        lock.lock()
+        instant = next
         lock.unlock()
     }
 }

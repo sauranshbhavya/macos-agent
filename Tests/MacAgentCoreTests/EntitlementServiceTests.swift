@@ -68,6 +68,26 @@ struct EntitlementServiceTests {
         }
     }
 
+    /// What instant the stub's `Date` header reports, in a form a `@Sendable` handler may read.
+    final class Reported: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Date
+
+        init(instant: Date) { value = instant }
+
+        var instant: Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func set(_ instant: Date) {
+            lock.lock()
+            value = instant
+            lock.unlock()
+        }
+    }
+
     /// Whether the stub answers at all, in a form a `@Sendable` handler may read.
     final class Reachability: @unchecked Sendable {
         private let lock = NSLock()
@@ -466,6 +486,57 @@ struct EntitlementServiceTests {
         // The owner sets the Mac's clock back to an hour after the claim was issued. Monotonic time
         // does not move, because nothing a user can do moves it.
         clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+    }
+
+    @Test
+    @MainActor
+    func aServerSayingMoreTimeHasPassedIsBelievedOverThisMacsOwnClock() async throws {
+        // **The observation path, held independently of the persisted mark** (found by mutant S6
+        // surviving at `0fefe0d`: deleting the observation from `effectiveNow` left the suite green,
+        // because every other clock test reaches the answer through the mark's own anchor).
+        //
+        // The case only the observation answers: this Mac's clock has barely moved — a minute — and
+        // the *server* says a hundred hours have passed. That is a Mac whose clock is simply wrong,
+        // not one whose owner rolled it back, and the claim really has lapsed. The failing response
+        // is deliberate: a `Date` header is recorded before the status is looked at, so an
+        // observation arrives without a claim being adopted, which is the only way to move the clock
+        // without also handing the Mac a fresh entitlement.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let serverSays = Reported(instant: Self.issuedAt)
+        let succeed = Reachability()
+        fixture.register { _ in
+            let headers = [
+                "Content-Type": "application/json",
+                "Date": SonnyHTTPDate.formatter.string(from: serverSays.instant)
+            ]
+            guard succeed.isReachable else { return .reply(statusCode: 500, headers: headers, body: Data()) }
+            return .reply(
+                statusCode: 200,
+                headers: headers,
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        _ = try await service.refreshNow()
+        #expect(await service.decision(for: Self.capability) == .entitled)
+
+        // A minute of local time, and a server that reports a hundred hours.
+        clocks.advance(by: 60)
+        succeed.goOffline()
+        serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
+        _ = try? await service.refreshNow()
+
         #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
     }
 
