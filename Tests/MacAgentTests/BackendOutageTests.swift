@@ -159,6 +159,94 @@ struct BackendOutageTests {
         #expect(fixture.viewModel.finalSummary.contains("42"))
     }
 
+    // MARK: - What the readiness page says while the backend is down
+
+    /// **A dead backend does not sign anyone out, and the readiness row must not say it did**
+    /// (SONNY-136). `refreshModelAccessReadiness()` reads the Keychain through the client, which is
+    /// a local read behind an actor rather than a network call — that is the whole reason the row
+    /// stayed a presence check, and this is the case that makes the choice visible: every request
+    /// this fixture makes fails at the transport, and the account row still reports the truth.
+    @Test
+    func theAccountRowStaysReadyWhileEveryRequestFails() async throws {
+        let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost))
+        defer { fixture.tearDown() }
+
+        await fixture.viewModel.refreshModelAccessReadiness()
+
+        #expect(fixture.viewModel.modelAccessReadiness == .signedIn)
+        #expect(fixture.recorded.all.isEmpty, "reading the session reached the network")
+    }
+
+    /// The other two answers, from the two things that actually produce them.
+    ///
+    /// **The undecodable case is the one worth writing.** `SonnyAccountTokenStore` throws
+    /// `undecodableStoredSession` for bytes this build cannot read, and the honest answer to that is
+    /// "cannot say" rather than "signed out": bytes that will not decode are not evidence that
+    /// nobody is signed in, and a red *sign in* row would send a user to the one action that
+    /// overwrites the credential this build could not read.
+    @Test
+    func noSessionReadsAsSignedOutAndUnreadableBytesReadAsUndetermined() async throws {
+        let empty = try makeFixture(
+            networkFailure: URLError(.cannotConnectToHost),
+            client: makeHermeticBackendClient()
+        )
+        defer { empty.tearDown() }
+        await empty.viewModel.refreshModelAccessReadiness()
+        #expect(empty.viewModel.modelAccessReadiness == .signedOut)
+
+        let keychain = InMemoryKeychainSecretStore()
+        keychain.plant(
+            Data("not a session".utf8),
+            service: KeychainAccountTokenStore.defaultService,
+            account: KeychainAccountTokenStore.defaultAccount
+        )
+        let damaged = try makeFixture(
+            networkFailure: URLError(.cannotConnectToHost),
+            client: makeHermeticBackendClient(keychain: keychain)
+        )
+        defer { damaged.tearDown() }
+        await damaged.viewModel.refreshModelAccessReadiness()
+        #expect(damaged.viewModel.modelAccessReadiness == .undetermined)
+    }
+
+    /// `refreshPermissions()` is what the Settings page calls, and it must end up with the account
+    /// row the account state says — including the first pass, which renders before the actor answers.
+    @Test
+    func refreshingPermissionsRendersTheRowsImmediatelyAndThenTheAccountAnswer() async throws {
+        let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost))
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.refreshPermissions()
+
+        // Synchronously, before the actor has answered: eight rows, and the account one honestly
+        // says it has not been asked yet rather than guessing in either direction.
+        #expect(fixture.viewModel.permissionItems.count == 8)
+        let firstPass = try #require(fixture.viewModel.permissionItems.first { $0.id == "sonny-account" })
+        #expect(firstPass.state == .unknown)
+
+        try await waitUntilAccountRow(fixture.viewModel, is: .ready)
+        let settled = try #require(fixture.viewModel.permissionItems.first { $0.id == "sonny-account" })
+        #expect(settled.detail == "Signed in.")
+    }
+
+    /// Waits on the published rows rather than on a clock: the refresh is a `Task` this view model
+    /// starts, so the only honest signal is the value it publishes. The deadline is a hang backstop
+    /// and nothing is asserted about how long it took (`CLAUDE.md`, "a test that bets on a
+    /// wall-clock window does not fail honestly").
+    private func waitUntilAccountRow(
+        _ viewModel: AgentViewModel,
+        is state: PermissionReadinessState
+    ) async throws {
+        let deadline = Date().addingTimeInterval(HangBackstop.deadlockDeadline)
+        while viewModel.permissionItems.first(where: { $0.id == "sonny-account" })?.state != state {
+            if Date() > deadline {
+                Issue.record("the account row never became \(state)")
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     // MARK: - Fixture
 
     @MainActor
@@ -231,7 +319,14 @@ struct BackendOutageTests {
     /// about what happens when the *real* planner cannot reach the gateway, so it takes the default
     /// — `OpenAIPlanner.throughSonnysBackend(client:)` over the dead client — and the control test
     /// above is the one that proves the difference is real.
-    private func makeFixture(networkFailure: URLError) throws -> Fixture {
+    private func makeFixture(
+        networkFailure: URLError,
+        /// A client of the caller's own, for the two readiness tests that need a Keychain in a state
+        /// `SignedInBackendFixture` cannot produce — empty, and holding bytes that will not decode.
+        /// The stub host is registered either way, so `recorded` still answers for a client that
+        /// never reaches it.
+        client: SonnyBackendClient? = nil
+    ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("BackendOutageTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -329,7 +424,7 @@ struct BackendOutageTests {
                 )
             ),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
-            backendClient: backend.client,
+            backendClient: client ?? backend.client,
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
             userDefaults: userDefaults,
