@@ -1754,22 +1754,31 @@ already proves.
       the SONNY-226 row above deliberately — that one asks about paragraph structure after the
       prompt fold, this one about the source-and-timestamp contract §4A.2 sets.)
 
-### The approval panel names the file a nested routine will write (new 2026-08-28, SONNY-218)
+### `fix/three-small-client-defects` owes no rows, and here is why (2026-08-28, SONNY-264 / SONNY-218 / SONNY-259)
 
-One row, and it is the only founder-visible thing on `fix/three-small-client-defects`. SONNY-264's
-half of that branch changes no surface at all: it refuses an output path that leads out of
-`~/Desktop`/`~/Documents` with the same sentence that has always been shown for a path the user
-named, and reproducing it needs a symbolic link planted by hand.
+**No rows, stated rather than left as an absence** — and this section replaces one that was written
+and then withdrawn, which is the more useful record (PR #157's review, F1). All three tickets on that
+branch are internal-contract fixes with no surface a founder can read.
 
-- [ ] **(SONNY-218)** Save a routine that creates a draft — "teach Sonny a routine called Notes that
-      drafts a note" — then ask, in one command, for **a note *and* that routine**: "draft a note
-      called Note, then run the Notes routine". Read the approval panel before approving: its
-      "Will include:" lines must name **two different files**, the second ending `-2.md`. Approve,
-      and both of those exact files must exist afterwards. The bug this fixes is the panel naming
-      one filename twice while the run wrote two — so a panel that shows the same name twice, or a
-      filename on disk that the panel never mentioned, is the finding. Worth running the two steps
-      in the other order too ("run the Notes routine, then draft a note called Note"), which is a
-      different code path and had the same defect.
+- **SONNY-264** refuses an output path that leads out of `~/Desktop`/`~/Documents` using the same
+  sentence that has always been shown for a path the user named, and reaching it at all needs a
+  symbolic link planted by hand. Nothing rendered changes.
+- **SONNY-259** is test-only. `Sources/` is untouched.
+- **SONNY-218** shipped with a row asking the founder to read the approval panel's "Will include:"
+  lines before approving. **That row could not have detected anything, in either half, and it is
+  withdrawn rather than reworded.** "Will include:" is written at one site, in
+  `SaveRoutineCapabilityAdapter`, it interpolates a preview's *title* rather than a path, and the
+  row's own scenario contains no `save_routine` step, so nothing produces the line. More
+  fundamentally, no surface renders `ActionPreview` at all — `git grep -c "ActionPreview" --
+  Sources/MacAgent` exits 1 — and what the approval panel does render, `RiskApprovalCopy`, builds
+  its file line by walking the *outer* plan's steps, where a nested routine's destination can never
+  appear. The half that is checkable, "both files exist afterwards", passes on `main` too: the
+  on-disk behaviour was fixed by SONNY-190 and SONNY-220 and is held by tests at the cut point.
+
+**An unrunnable row is worse than no row**, because a founder either files a false failure or ticks
+something that checked nothing, and a ticked row suppresses re-checks. What SONNY-218 actually fixed
+is that `previewChain` seeds each segment's nested preview from the paths the previous one reported,
+so a wrong nested preview mis-seeds the next — held by tests, not by a human at the app.
 
 ## 8. How to report back
 

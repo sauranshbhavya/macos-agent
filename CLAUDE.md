@@ -180,6 +180,27 @@ an event's lines together, measured on a 2305-test run of this suite where both 
 known-issue events came out contiguous and every interleaving sat between events, while being wrong
 about the observed case was costing real kills.
 
+**A test whose only failure signal is a `HangBackstop` timeout can never be counted a kill, and that
+is the mechanism working rather than a sixth seam** (SONNY-259). Every wording that type emits is
+declared in `scripts/mutate-untrusted-failures`, correctly — a wait that times out may only be
+reporting the shared main actor's queue depth — so a mutant such a test is the *only* thing standing
+against comes back `UNATTRIBUTED`, on a run where the test failed for exactly the right reason. It is
+the same family as SONNY-315 above, a manufactured NON-kill, and it is worse to notice: a
+manufactured kill prints the line a real one prints, while this prints a word that reads as a note
+about a busy machine, so the reader re-runs, sees it again and files it under flake. **The remedy is
+the caller's**: record a second issue in wording no declaration matches, gated on
+`observations >= HangBackstop.observationFloor` — that is the type's own `.stuck` verdict, since
+`.stuck` is checked first and `.starved` requires being below the floor, so the gate cannot fire on
+starvation. **And close the cascade above it**, or the gate is a lie: a wait whose own precondition
+never arrived reaches the floor at a perfectly healthy cadence, so the test must bail before
+asserting when an earlier backstop gave up. **The population is large and growing, which is why this
+is a rule rather than a note on one test**: `grep -cE 'waitUntil[(]' Tests/MacAgentTests/VisionSessionRunTests.swift`
+answers 71 in that one suite, and the two view-model backstop wordings answer 6 and 2 across eight
+others (`grep -rc "did not become idle before timeout" Tests` and the same for "did not settle before
+timeout", all four at SHA_STAMP). `scripts/mutate-untrusted-failures` records 65 for the first of
+those, which was true when it was written; a new test using the same helper joins the population the
+day it lands, and no count of it stays current.
+
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
 fires.

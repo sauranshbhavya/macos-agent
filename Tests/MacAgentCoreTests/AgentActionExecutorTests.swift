@@ -3060,6 +3060,42 @@ struct AgentActionExecutorTests {
         #expect(result.previews.flatMap(\.writes).contains(target.path))
     }
 
+    /// **The fifth composition site, which SONNY-264's enumeration missed** (PR #157's review, F4).
+    /// `AgentActionExecutor.unclaimedOutputPath` composes `<stem>-<n>.<ext>` onto the folder of a
+    /// destination an adapter validated a moment earlier — the same generated-leaf-onto-a-checked-
+    /// folder shape as the other four — and it now goes through the same door.
+    ///
+    /// **Asserting the refusal here would assert nothing**, and that is worth writing down rather
+    /// than discovering: a dangling link planted at the bumped name is refused by `prepare` and
+    /// `execute` with or without this change, because the bumped path is written into the step's
+    /// `outputPath` and re-read through `validateOutputPath` on the next pass. That second pass is
+    /// what SONNY-264 exists to stop depending on, so the discriminating property is the *other*
+    /// direction: a bumped leaf that is a link staying **inside** the roots is now resolved where it
+    /// is composed, so the path the prepared plan names is the path the bytes reach. Before the
+    /// change the plan named the link and the resolution happened later and elsewhere.
+    @Test
+    func aBumpedDestinationIsResolvedWhereItIsComposedRatherThanOnTheNextPass() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let bumped = "draft-draft-two-notes-\(Timestamp.fileSafe(stamp))-2.md"
+        let target = archive.appendingPathComponent("kept.md")
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(bumped),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, now: { stamp })
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil))
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(prepared.plan.steps.last?.outputPath == target.path)
+        #expect(prepared.previews.flatMap(\.writes).contains(target.path))
+        #expect(try String(contentsOf: target, encoding: .utf8).contains("Second note."))
+    }
+
     /// The other side of "only the records that will be written", and it is a decision rather than an
     /// optimisation: a skipped record's PDF already exists and neither converter touches it, so
     /// validating it could only refuse a whole scan over a file nothing is going to write.

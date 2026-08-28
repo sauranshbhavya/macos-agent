@@ -384,8 +384,18 @@ public final class AgentActionExecutor {
     /// half — execution also seeds from what earlier units really wrote, assessment has nothing to
     /// seed from because nothing has run — so a capability whose writes are not its steps'
     /// `outputPath`s (docx conversion, whose destinations are per-document) can still bump further at
-    /// execution than at assessment. That residual predates this ticket and is the preview/assessment
-    /// agreement question SONNY-218 owns, not the data-loss one this ticket closes.
+    /// execution than at assessment. That residual predates SONNY-220 and is not the data-loss
+    /// question it closed.
+    ///
+    /// **It used to name SONNY-218 as its owner, and that ticket is now Done without having touched
+    /// it** (PR #157's review, F9). Worse, SONNY-218 changed the shape of the disagreement rather
+    /// than leaving it alone: preview now seeds its nested resolve from *both* halves, matching
+    /// execution, while this function still seeds from plan intent only — correctly, since nothing
+    /// has run and there are no claims to seed from. So the three gates no longer divide
+    /// two-against-one the way the sentence above describes. The question is re-homed on
+    /// **SONNY-346**, which owns deciding whether that divergence is a defect or an invariant and
+    /// rewriting this paragraph to say which. A pointer to a closed ticket is worse than none: the
+    /// next reader follows it and finds a completed ticket that never mentions the residual.
     private func assessRisk(
         plan: AgentPlan,
         scope: TaskWorkspaceScope,
@@ -1154,7 +1164,7 @@ public final class AgentActionExecutor {
                       !generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     continue
                 }
-                claimedForUnit.steps[index].outputPath = Self.unclaimedOutputPath(
+                claimedForUnit.steps[index].outputPath = try unclaimedOutputPath(
                     from: generated,
                     claimed: claimedOutputPaths
                 )
@@ -1241,7 +1251,21 @@ public final class AgentActionExecutor {
     /// that already exists on disk to `-2`, which is precisely how the tier-3 "output already exists"
     /// escalation would get suppressed, and the first mutation battery only covered the candidate
     /// half (PR #41 review, SONNY-35 F2).
-    private static func unclaimedOutputPath(from path: String, claimed: Set<String>) -> String {
+    ///
+    /// **This is the fifth generated-leaf composition site, and it goes through the same door as the
+    /// other four** (PR #157's review, F4). SONNY-264 enumerated four places that appended a
+    /// generated leaf onto an already-validated folder and handed the result on unchecked, and named
+    /// this one in neither — the bump composes `<stem>-<n>.<ext>` onto the folder of a path an
+    /// adapter validated a moment earlier, which is the identical shape. It was measured safe: the
+    /// bumped path is written into the step's `outputPath` and re-read through `validateOutputPath`
+    /// on the next pass, so a dangling link planted at `largest-files-<stamp>-2.zip` is refused by
+    /// both `prepare` and `execute` and its target is never created. **That is precisely the second
+    /// pass SONNY-264 describes itself as removing dependence on**, so leaving the fifth site resting
+    /// on it would have made the fix's own argument untrue of the fix.
+    ///
+    /// The entry path is not validated here and does not need to be: it is either a destination an
+    /// adapter already put through the whitelist, or one this function is about to replace.
+    private func unclaimedOutputPath(from path: String, claimed: Set<String>) throws -> String {
         guard claimed.contains(DestinationKey.folded(path)) else {
             return path
         }
@@ -1249,13 +1273,14 @@ public final class AgentActionExecutor {
         let url = URL(fileURLWithPath: path)
         let pathExtension = url.pathExtension
         let base = url.deletingPathExtension()
+        let folder = base.deletingLastPathComponent()
         var suffix = 2
         while true {
-            let stem = base.deletingLastPathComponent()
-                .appendingPathComponent("\(base.lastPathComponent)-\(suffix)")
-            let candidate = pathExtension.isEmpty ? stem : stem.appendingPathExtension(pathExtension)
+            let stem = base.lastPathComponent + "-\(suffix)"
+            let leaf = pathExtension.isEmpty ? stem : "\(stem).\(pathExtension)"
+            let candidate = folder.appendingPathComponent(leaf)
             if !claimed.contains(DestinationKey.folded(candidate.path)) {
-                return candidate.path
+                return try whitelist.validateOutputFile(named: leaf, in: folder).path
             }
             suffix += 1
         }
@@ -1745,11 +1770,22 @@ public final class AgentActionExecutor {
             // first act is `resolveDefaultOutputs` — seeded from the run's claims since SONNY-190 and
             // from what the enclosing plan already names since SONNY-220 — so a nested routine's
             // generated draft is bumped to `draft-<title>-<stamp>-2.md` when the outer plan owns the
-            // unbumped name. Nothing did that on the preview side: the panel read "Will include:"
-            // from an unresolved plan and named `draft-<title>-<stamp>.md`, a file the run would not
-            // create. Since `Timestamp.fileSafe` is whole-second and two writes in one run are
-            // milliseconds apart, the collision is the ordinary case, so the disagreement was too.
-            // The two closures now resolve from the identical pair of inputs.
+            // unbumped name. Nothing did that on the preview side, so the nested `ActionPreview`
+            // named `draft-<title>-<stamp>.md`, a file the run would not create. Since
+            // `Timestamp.fileSafe` is whole-second and two writes in one run are milliseconds apart,
+            // the collision is the ordinary case, so the disagreement was too. The two closures now
+            // resolve from the identical pair of inputs.
+            //
+            // **Which contract that broke is an internal one, and this comment said an approval
+            // panel** (PR #157's review, F2). It is not: nothing in `Sources/MacAgent` reads
+            // `ActionPreview` at all — `git grep -c "ActionPreview" -- Sources/MacAgent` exits 1 —
+            // the approval surfaces render `RiskApprovalCopy`, whose file line is built by walking
+            // the *outer* plan's steps, and a nested routine's destination is in no outer step. What
+            // a wrong nested preview really costs is downstream of itself: `previewChain` seeds the
+            // next segment's preview from `claimed.recordWrite(written)` over exactly these paths,
+            // so one wrong answer mis-seeds the next, and any future renderer inherits it. The one
+            // rendered string built from a nested preview is `SaveRoutineCapabilityAdapter`'s
+            // "Will include: …", which interpolates the preview's *title* and never a path.
             //
             // **A resolution that answers with a *clarification* is not a resolution, and the
             // unresolved plan is previewed in that case.** `InvokeShortcutCapabilityAdapter`

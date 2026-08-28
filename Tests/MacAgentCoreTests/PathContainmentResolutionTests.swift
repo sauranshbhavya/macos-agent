@@ -539,6 +539,55 @@ struct PathContainmentResolutionTests {
         #expect(attempt.landedAt == SymlinkTree.physicalPath(of: tree.root.appendingPathComponent("draft.md")))
     }
 
+    /// **The door's other half, which a reviewer's mutation battery found held by nothing**
+    /// (PR #157's review, F5, mutant V4). `validateOutputFile(named:in:)` routes through
+    /// `validateOutputPath` rather than `validateInsideWhitelist`, and swapping the two leaves
+    /// containment perfectly intact while dropping the parent checks — the whole suite stayed green.
+    ///
+    /// Those checks are a decision SONNY-264 recorded and nothing pinned: `defaultOutputFile`'s
+    /// no-folder branch now refuses a whitelist root that does not exist, where before it handed back
+    /// a URL and the write failed later with `Data.write(to:)`'s own message naming a folder rather
+    /// than the missing one. Both refusals are asserted, because the two are different sentences a
+    /// user reads — a folder that is not there, and a "folder" that is a file.
+    @Test
+    func theDoorRefusesAFolderThatIsMissingOrIsNotAFolderRatherThanComposingIntoIt() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let missing = tree.root.appendingPathComponent("NotCreatedYet", isDirectory: true)
+        let file = tree.root.appendingPathComponent("a-file.txt")
+        try Data("bytes".utf8).write(to: file)
+
+        let intoMissing = tree.attemptWrite { try tree.whitelist.validateOutputFile(named: "note.md", in: missing) }
+        let intoFile = tree.attemptWrite { try tree.whitelist.validateOutputFile(named: "note.md", in: file) }
+
+        #expect(intoMissing.landedAt == nil, "bytes reached \(intoMissing.landedAt ?? "")")
+        #expect(tree.isParentMissing(intoMissing.error), "expected parentMissing, got \(intoMissing.errorText)")
+        #expect(intoFile.landedAt == nil, "bytes reached \(intoFile.landedAt ?? "")")
+        #expect(tree.isNotDirectory(intoFile.error), "expected notDirectory, got \(intoFile.errorText)")
+    }
+
+    /// The same decision at the caller SONNY-264's closing comment names: a whitelist whose only root
+    /// does not exist refuses the generated default outright, instead of handing back a URL whose
+    /// write fails later with a message naming the wrong thing.
+    @Test
+    func aGeneratedDefaultIsRefusedWhenTheWhitelistRootDoesNotExist() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacAgentTests-\(UUID().uuidString)", isDirectory: true)
+        let whitelist = PathWhitelist(roots: [root])
+
+        var caught: Error?
+        do {
+            _ = try whitelist.defaultOutputFile(name: "draft", extension: "md")
+        } catch {
+            caught = error
+        }
+
+        guard let validation = caught as? PathValidationError, case .parentMissing = validation else {
+            Issue.record("expected parentMissing, got \(String(describing: caught))")
+            return
+        }
+    }
+
     /// A leaf that is not a link at all still has to reach the containment check, because
     /// `appendingPathComponent` will happily compose `..` out of the folder. Nothing generates such a
     /// name today — every caller passes a slug or a timestamp — so this pins the property rather than
@@ -648,6 +697,13 @@ private struct SymlinkTree {
 
     func isParentMissing(_ error: Error?) -> Bool {
         guard let validation = error as? PathValidationError, case .parentMissing = validation else {
+            return false
+        }
+        return true
+    }
+
+    func isNotDirectory(_ error: Error?) -> Bool {
+        guard let validation = error as? PathValidationError, case .notDirectory = validation else {
             return false
         }
         return true
