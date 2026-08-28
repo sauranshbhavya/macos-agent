@@ -126,7 +126,7 @@ export interface SearchResult {
  * no model." §11's metering event carries a `provider` column — "Which provider actually served it.
  * Required for failover accounting (SONNY-132) and never returned to the client". So this rides
  * back to the route handler, which logs it; SONNY-133 is what records it on the event. Nothing here
- * reaches a response body, and `test/routing.test.ts` asserts that on the bytes.
+ * reaches a response body, and `test/provider-router.test.ts` asserts that on the bytes.
  *
  * `failedOver` is empty on the ordinary path, which is the case worth keeping cheap: a request the
  * primary served allocates one empty array and says exactly that.
@@ -185,7 +185,7 @@ export type RoutedTextAdapter = (request: TextRequest) => Promise<Routed<TextRes
 /**
  * What one provider's adapter looks like, before the router wraps it.
  *
- * Named so `model/routing.ts` can talk about "a text adapter" without importing four types, and so
+ * Named so `model/provider-router.ts` can talk about "a text adapter" without importing four types, and so
  * the difference between an adapter and a routed adapter is visible in the type rather than only in
  * the prose above.
  */
@@ -281,7 +281,7 @@ export function upstreamStatusError(status: number, provider: string): Error {
  * healthy second provider, and the user told *"Sonny couldn't do this one."* — the sentence
  * `SonnyBackendCopy` reserves for a retry that would fail identically — over a transient stall.
  * Reproduced by PR #143's reviewer against a local server that writes headers and then stalls;
- * `theStalledProviderProbeShape` in `test/routing.test.ts` is that probe as a test.
+ * `theStalledProviderProbeShape` in `test/provider-router.test.ts` is that probe as a test.
  *
  * **The distinction this draws, which the swallow could not:** a body that never finished arriving
  * is a transport failure and is retryable — `upstreamTransportError` sorts an abort from a dead
