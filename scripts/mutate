@@ -947,7 +947,9 @@ log_path, decl_path = sys.argv[1], sys.argv[2]
 # emptying the list.
 ALWAYS_TRUSTED = frozenset({
     "theDeclarationFileParsesAndEveryRecordIsComplete",
+    "everyTestTreeThisScanReadsIsReadToSomething",
     "everyDeclaredSourceStillAppearsAtTheSiteCountItDeclares",
+    "theSiteCountCheckRefusesARecordThatDeclaresNoSites",
     "theHarnessAlwaysTrustsExactlyTheTestsInThisSuite",
     "noDeclaredSignatureAppearsInThisSuitesOwnSource",
 })
@@ -2405,6 +2407,20 @@ exit 1'
   st_eq "every signature carries the site count that makes the source check bite" \
         "$sites_count" "$signature_count"
   st_eq "every signature carries a reason" "$reason_count" "$signature_count"
+
+  # And none of those counts is zero (SONNY-334). `found == sites` in the Swift guard is satisfied
+  # by a scan that finds nothing when a record declares nothing, so a record can be zeroed into
+  # protecting nothing while the file still reads as protection — which is the shape the count was
+  # added to prevent, through the one door it did not watch. Checked here as well as there for the
+  # reason the empty-signature guard above is: this harness must not depend on the Swift suite
+  # having been run, and a battery over a server-half diff never runs it at all.
+  # A positive count rather than a search for zeros, so that a blank, a negative and a non-numeric
+  # value are all refused by the same check instead of one shape at a time.
+  local positive_sites
+  positive_sites="$(grep -c '^>>> sites [1-9][0-9]*[[:space:]]*$' "$UNTRUSTED_FILE" || true)"
+  positive_sites="${positive_sites//[^0-9]/}"
+  st_eq "every site count is a positive number, so none of them declares nothing" \
+        "$positive_sites" "$signature_count"
 
   printf '\n==> The default suite command — the one every real battery uses — is isolated\n'
   # Nothing else here can reach this line. Every check in this selftest replaces the suite
