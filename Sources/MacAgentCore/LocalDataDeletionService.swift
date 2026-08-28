@@ -54,10 +54,16 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 /// destructive control wants to know — whether their own thing is in it. A figure would also go
 /// stale exactly the way the list did, while reading as current.
 ///
-/// **It names every store rather than every Memory row**, which would have been three phrases
-/// shorter. The Memory page folds the vision journal, plan details and Shortcut history under Task
+/// **It names every store rather than every Memory row**, which would have been four phrases
+/// shorter — nine against thirteen, `MemoryCategory` having nine cases
+/// (`awk '/^public enum MemoryCategory/,/^    public var id: String/' Sources/MacAgentCore/MemorySettings.swift | grep -cE '^    case '`
+/// → 9). The Memory page folds the vision journal, plan details and Shortcut history under Task
 /// history, so a row-derived sentence would stop saying "records of what Sonny did on screen" — the
 /// most sensitive store in the product, and the one a wipe's description least deserves to drop.
+/// (**Three and ten** stood here and in the changelog entry until PR #155's review recounted them,
+/// which is this branch's own subject arriving in the prose written to explain it: nine categories
+/// give nine phrases, and the ten came from adding the uncategorised store back — contradicting the
+/// very next sentence, which says the row-derived form under-promises by one.)
 ///
 /// **The order is `LocalStore.allCases`'** rather than a second list that can disagree with it. That
 /// puts the screen records first, which is right for a destructive-action disclosure rather than

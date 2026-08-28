@@ -98,20 +98,51 @@ struct MemorySettingsTests {
         }
     }
 
-    /// The two nouns the row and its sheet each need, pinned by value.
+    /// **Every row's noun, by value** — the check the population test above cannot make.
     ///
-    /// `outputLocations` is the row the founder reported and `resumableTasks` is the one the ticket
-    /// asked to check beside it. Both are spelled out here rather than left to the population check
-    /// above, which cannot tell a right noun from a plausible one.
+    /// That test compares `countedEntries` against the same two properties it reads, so it holds
+    /// structure and is blind to a wrong word by construction. **All nine are pinned rather than the
+    /// five this started with** (PR #155 review, F4): the reviewer's V2, V3 and V4 renamed
+    /// *artifacts* to "files", *apps* to "programs" and *routines* to "automations", and all three
+    /// survived the whole suite. **Artifacts is the sharpest of the three**, because it is one of
+    /// the nouns the new §7 Memory manual row asks the founder to look at hardest — a word under
+    /// active question with nothing holding whichever answer comes back.
+    ///
+    /// A nine-row table rather than three added lines, for the reason the wipe sentence's own table
+    /// gives: these are the page's product vocabulary, and a pass that rewords one should have to
+    /// say so here.
     @Test
-    func theRowsTheFounderComparedNameFoldersAndUnfinishedTasks() {
+    func everyMemoryRowsNounIsTheOneTheFoundersChose() throws {
+        let nouns: [MemoryCategory: (singular: String, plural: String)] = [
+            .routines: ("routine", "routines"),
+            .workspaces: ("workspace", "workspaces"),
+            .taskHistory: ("task", "tasks"),
+            .recentArtifacts: ("artifact", "artifacts"),
+            .outputLocations: ("folder", "folders"),
+            .clipboardHistory: ("copied item", "copied items"),
+            .snippets: ("snippet", "snippets"),
+            .approvedApps: ("app", "apps"),
+            .resumableTasks: ("unfinished task", "unfinished tasks")
+        ]
+
+        // The table covers the population rather than a subset of it, so a tenth row fails here too.
+        #expect(Set(nouns.keys) == Set(MemoryCategory.allCases))
+
+        for category in MemoryCategory.allCases {
+            // `try #require` rather than a subscript: a missing key traps the whole test process,
+            // and a trapped process costs every other test in the run its result.
+            let expected = try #require(nouns[category], "\(category.title) has no expected noun")
+            #expect(category.countedEntries(1) == "1 \(expected.singular)", "\(category.title)")
+            #expect(category.countedEntries(2) == "2 \(expected.plural)", "\(category.title)")
+        }
+
+        // The two the founder actually compared, spelled out at real counts so the pair the report
+        // was about is readable here rather than only in the ticket's history.
         #expect(MemoryCategory.outputLocations.countedEntries(1) == "1 folder")
-        #expect(MemoryCategory.outputLocations.countedEntries(3) == "3 folders")
+        #expect(MemoryCategory.taskHistory.countedEntries(184) == "184 tasks")
         // Not "1 task": task history's rows are tasks too, the two rows sit on one page, and the
         // stores are disjoint — so a bare noun here invites adding the two counts together.
         #expect(MemoryCategory.resumableTasks.countedEntries(1) == "1 unfinished task")
-        #expect(MemoryCategory.taskHistory.countedEntries(184) == "184 tasks")
-        #expect(MemoryCategory.clipboardHistory.countedEntries(12) == "12 copied items")
     }
 
     /// Task history is the one row that speaks for more than one file, and the three it carries are

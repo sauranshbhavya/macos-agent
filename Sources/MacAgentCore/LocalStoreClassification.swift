@@ -209,8 +209,17 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     ///
     /// **Lower case and standing alone**, because the sentence puts each of these mid-list. The
     /// wording is the user's rather than the file's, in the vocabulary the rest of the product
-    /// already uses for these stores — the same choice `LocalStorageLoadFailureSource.label` makes,
-    /// and where the two overlap they say the same thing.
+    /// already uses for these stores — the same choice `LocalStorageLoadFailureSource.label` makes.
+    ///
+    /// **Where the two overlap they agree on seven of eleven and differ on four, each deliberately**
+    /// (PR #155 review, F3; this said they "say the same thing", which is false and invites a
+    /// well-meant repair). The four are `routines` and `workspaces`, which the banner calls *saved
+    /// routines* and *saved workspaces*; `clipboardHistorySettings`, *clipboard history settings*
+    /// there and *clipboard settings* here; and `outputLocations`, *where your outputs usually go*
+    /// there and *common output locations* here. **A banner names a thing standing alone and this
+    /// sentence puts it mid-list among twelve others**, so the two want different lengths — "saved"
+    /// distributes over the whole list here and cannot in a banner, and a sentence naming thirteen
+    /// things has no room for a clause. Neither vocabulary is the other's to restore.
     public var deletionCopyName: String {
         switch self {
         case .visionSessionJournal:
