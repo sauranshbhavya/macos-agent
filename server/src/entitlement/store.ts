@@ -313,12 +313,49 @@ export async function settle(
 /**
  * Reclaim every hold whose request never came back, and answer how many **holds** were reclaimed.
  *
- * The aggregation that makes this correct lives in the migration, with the record of the defect it
- * was written against; this is the call.
+ * **The aggregation in `per_period` is the whole of this function's correctness, and it is here
+ * because the obvious version loses money silently** (SONNY-125, PR #82 cycle 1, F2). `UPDATE … FROM`
+ * is a join: when several source rows match one target row Postgres applies exactly one of them and
+ * discards the rest. A version that subtracted straight from the expired reservations therefore
+ * reclaimed a single hold per (account, period) while marking every one of them settled — so the
+ * remainder became permanently unusable cap with no row left to reclaim it from. Reproduced before it
+ * was fixed: three orphaned 300-unit holds against a 1000 cap left 600 lost for good, and the
+ * function reported success. Summing per (account, period) first gives the one-source-row-per-target-
+ * row shape the statement requires.
+ *
+ * **The return value counts holds, not periods, and that is the second half of the same defect.** The
+ * broken version counted `usage_period` rows and called them holds, so it answered `1` for that
+ * three-hold case — a plausible number that agreed with the bug instead of exposing it.
+ *
+ * **It is application SQL rather than a database function, and a mutation battery is what moved it.**
+ * As a `plpgsql` function in migration `0013` it was unreachable by any test run against a database
+ * that already held the migration — the runner's ledger skips an applied file — so a mutant restoring
+ * the defect above ran against the *correct* function still in the database, and was recorded killed
+ * on the strength of an unrelated timeout. Here the mutant reaches the code, and
+ * `reclaims EVERY expired hold across several accounts, not one per period` is what catches it.
+ *
+ * One statement, so it is one transaction of its own with no `BEGIN` needed: every row it touches is
+ * touched inside it.
  */
 export async function sweepExpiredReservations(client: pg.Client, now: Date): Promise<number> {
   const result = await client.query<{ reclaimed: string }>(
-    "SELECT sonny.sweep_expired_reservations($1) AS reclaimed",
+    `WITH dead AS (
+       UPDATE sonny.usage_reservation
+          SET settled = true
+        WHERE NOT settled AND expires_at < $1
+       RETURNING account_id, period_start, amount
+     ), per_period AS (
+       SELECT account_id, period_start, sum(amount) AS total, count(*) AS holds
+         FROM dead
+        GROUP BY account_id, period_start
+     ), released AS (
+       UPDATE sonny.usage_period u
+          SET reserved = u.reserved - p.total
+         FROM per_period p
+        WHERE u.account_id = p.account_id AND u.period_start = p.period_start
+       RETURNING p.holds
+     )
+     SELECT coalesce(sum(holds), 0) AS reclaimed FROM released`,
     [now],
   );
   return Number(result.rows[0]?.reclaimed ?? 0);

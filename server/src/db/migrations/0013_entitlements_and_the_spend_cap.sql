@@ -27,8 +27,16 @@
 -- behind one address have no consistency story anywhere else.
 --
 -- `usage_reservation` is one row per hold, and it exists for the residual §9.5 names: a request the
--- host kills between reserve and settle leaks cap until something reclaims it. `expires_at` and
--- `sweep_expired_reservations()` are that reclamation.
+-- host kills between reserve and settle leaks cap until something reclaims it. `expires_at` and the
+-- sweep in `server/src/entitlement/store.ts` are that reclamation.
+--
+-- **The sweep is application SQL and not a function in this file, and that is a deliberate move
+-- rather than the obvious placement.** It began here as a `plpgsql` function and a mutation battery
+-- showed what that costs: a migration is applied once and recorded in a ledger, so a database that
+-- already holds 0013 never re-reads this file — a mutant that broke the sweep's aggregation was
+-- therefore never executed, and the battery reported it killed on the strength of an unrelated
+-- timeout. A function nothing can test is a function nothing is holding. It also makes fixing the
+-- sweep a schema migration rather than a deploy, which is the wrong shape for a bug fix in a query.
 --
 -- ## The CHECK is a backstop and deliberately not the interface
 --
@@ -115,7 +123,8 @@ CREATE TABLE sonny.usage_reservation (
 
 COMMENT ON TABLE sonny.usage_reservation IS
   'One row per hold taken before a provider call. Exists so a request killed between reserve and '
-  'settle does not leak cap forever: sonny.sweep_expired_reservations() reclaims expired holds.';
+  'settle does not leak cap forever: the sweep in server/src/entitlement/store.ts reclaims '
+  'expired holds.';
 
 -- The sweep's only query: unsettled holds past their expiry. Partial, because a settled hold is
 -- never read again and they are the overwhelming majority.
@@ -128,56 +137,7 @@ CREATE INDEX usage_reservation_account_idx
   ON sonny.usage_reservation (account_id, period_start)
   WHERE NOT settled;
 
--- Reclaim every expired hold, and return how many HOLDS were reclaimed.
---
--- **The aggregation in `per_period` is the whole of this function's correctness, and it is here
--- because the obvious version loses money silently** (SONNY-125, PR #82 cycle 1, F2). `UPDATE …
--- FROM` is a join: when several source rows match one target row Postgres applies exactly one of
--- them and discards the rest. A version that subtracted straight from the expired reservations
--- therefore reclaimed a single hold per (account, period) while marking every one of them settled —
--- so the remainder became permanently unusable cap with no row left to reclaim it from. Reproduced
--- before it was fixed: three orphaned 300-unit holds against a 1000 cap left 600 lost for good, and
--- the function reported success. Summing per (account, period) first gives the one-source-row-per-
--- target-row shape the statement requires.
---
--- **The return value counts holds, not periods, and that is the second half of the same defect.**
--- The broken version counted `usage_period` rows and called them holds, so it answered 1 for that
--- three-hold case — a plausible number that agreed with the bug instead of exposing it.
-CREATE FUNCTION sonny.sweep_expired_reservations(p_now timestamptz)
-RETURNS bigint
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  reclaimed bigint;
-BEGIN
-  WITH dead AS (
-    UPDATE sonny.usage_reservation
-       SET settled = true
-     WHERE NOT settled AND expires_at < p_now
-    RETURNING account_id, period_start, amount
-  ), per_period AS (
-    SELECT account_id, period_start, sum(amount) AS total, count(*) AS holds
-      FROM dead
-     GROUP BY account_id, period_start
-  ), released AS (
-    UPDATE sonny.usage_period u
-       SET reserved = u.reserved - p.total
-      FROM per_period p
-     WHERE u.account_id = p.account_id AND u.period_start = p.period_start
-    RETURNING p.holds
-  )
-  SELECT coalesce(sum(holds), 0) INTO reclaimed FROM released;
-  RETURN reclaimed;
-END;
-$$;
-
-COMMENT ON FUNCTION sonny.sweep_expired_reservations(timestamptz) IS
-  'Reclaims expired reservations and returns the number of HOLDS reclaimed, not periods. The '
-  'per-period aggregation is load-bearing: UPDATE ... FROM applies one source row per target row, '
-  'so subtracting straight from the expired rows strands every hold but one. SONNY-125, PR #82 F2.';
-
 -- @rollback
-DROP FUNCTION IF EXISTS sonny.sweep_expired_reservations(timestamptz);
 DROP INDEX IF EXISTS sonny.usage_reservation_account_idx;
 DROP INDEX IF EXISTS sonny.usage_reservation_expiry_idx;
 DROP TABLE IF EXISTS sonny.usage_reservation;

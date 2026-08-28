@@ -428,7 +428,12 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(next).toMatchObject({ capUnits: 100, spent: 0, reserved: 1 });
     });
 
-    it("opens a period safely when two requests reach it at once", async () => {
+    // The same hang backstop, and the same reason, as the fifty-way race above: two connections and
+    // two transactions contending for one row are well inside this and can exceed vitest's
+    // five-second default under the load a mutation battery puts on the machine — measured, in a
+    // battery where this timeout was read as a mutant being caught. Nothing here asserts an elapsed
+    // time.
+    it("opens a period safely when two requests reach it at once", { timeout: 60_000 }, async () => {
       // Two racers, no period row, one cap. The `INSERT … ON CONFLICT DO NOTHING` is idempotent and
       // decides nothing; the conditional `UPDATE` beside it decides everything, and it runs as its
       // own statement so it takes a fresh snapshot in which the winner's row is committed.
