@@ -160,8 +160,26 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
                 let page = try await context.webPageLoader.load(rawURL: sourceURL.absoluteString)
                 log(.observe, "Extracted readable content from \(page.sourceURL.absoluteString)")
                 pages.append(page)
-            } catch is CancellationError {
-                throw CancellationError()
+            } catch let error where SonnyBackendError.isCancellation(error) {
+                // **The arm that keeps a stop out of the swallow below, and it used to match
+                // `CancellationError` alone** (SONNY-328). Everything `load` can raise here comes
+                // off a `URLSession` — the page request in `URLSessionWebPageFetcher.fetch`, and
+                // `robotsChecker.canFetch`'s own request one call earlier — and the async
+                // `URLSession` methods raise `URLError(.cancelled)` when their task is cancelled,
+                // never `CancellationError`. So a stop fell through to the general catch and was
+                // recorded as an unreachable source, which produced one of two wrong endings: with
+                // something already loaded the loop carried on cancelling the rest, completed, and
+                // wrote a Markdown file naming the cancelled sources as *skipped*; with nothing
+                // loaded it threw `allSourcesFailed`, which no cancellation predicate recognises,
+                // so `performStart` marked every step failed and wrote a `.failed` history row for
+                // a deliberate stop.
+                //
+                // `SonnyBackendError.isCancellation` is asked rather than a shape matched, because
+                // it already knows all four and this loop should not hold a fifth opinion. And the
+                // error is rethrown as it arrived rather than reminted as a fresh
+                // `CancellationError()`: the caller's own predicate reads whatever the stop
+                // actually was, and minting one discards which layer it came from.
+                throw error
             } catch {
                 log(.observe, "Skipped \(sourceURL.absoluteString): \(error.localizedDescription)")
                 skippedSources.append(
