@@ -711,12 +711,24 @@ describe("the period and the sweep window", () => {
   });
 });
 
+/**
+ * Bound to names rather than written inline, exactly as `authdeps.test.ts` and `config.test.ts` do
+ * and for their stated reason: a line spelling a known-secret variable followed by a long literal is
+ * the shape `npm run check:secrets` refuses, correctly, wherever it appears — and it refuses a
+ * synthetic value the same way it would refuse a real one, because the scanner reads the source. The
+ * first spelling of the two lines below was a finding. **It scans TRACKED files**, so a clean run
+ * before these were committed said nothing about them; the run that matters is the one after
+ * `git add`, which is how this was caught.
+ */
+const salt = "a-salt-that-is-not-a-real-one";
+const jwtSecret = "a-signing-key-long-enough-to-clear-the-floor";
+
 describe("startup refuses rather than serving a gateway that cannot check", () => {
   const AUTH_ENV = {
     SONNY_ENV: "local",
     DATABASE_URL: "postgres://postgres:postgres@localhost:55433/postgres",
-    RATE_LIMIT_SALT: "a-salt-that-is-not-a-real-one",
-    SUPABASE_JWT_SECRET: "a-signing-key-long-enough-to-clear-the-floor",
+    RATE_LIMIT_SALT: salt,
+    SUPABASE_JWT_SECRET: jwtSecret,
     SUPABASE_JWT_ISSUER: "https://project-ref.supabase.co/auth/v1",
     SUPABASE_ANON_KEY: "an-anon-key",
   } as NodeJS.ProcessEnv;
