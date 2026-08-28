@@ -346,7 +346,8 @@ public struct PathWhitelist: Sendable {
     /// paragraph above. Neither command matches itself, and not because anyone was careful — a
     /// pattern written into prose escapes its parenthesis, so what sits in this file is
     /// `validateOutputFile\(` and a search for a literal `(` steps straight over it. That is
-    /// `CLAUDE.md`'s own trap, working in the harmless direction for once.
+    /// `CLAUDE.md`'s own trap, working in the harmless direction for once. All three counts at
+    /// `6fd83ec`.
     /// Nothing mechanical enforces that a *fifth* site joins them; what a reader gets instead is one
     /// name to grep for.
     ///
