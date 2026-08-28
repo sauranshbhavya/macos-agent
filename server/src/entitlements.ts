@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { publicKeyMaterial } from "./entitlement/claim.js";
 import { entitlementSigningKeyFrom } from "./entitlement/claim.js";
+import { staleWindowsBefore, sweep as sweepRateLimitWindows } from "./auth/ratelimit.js";
 import {
   readEntitlement,
   readPeriodUsage,
@@ -36,8 +37,9 @@ Commands:
   revoke <account-id>        Mark the entitlement revoked. The next claim it mints carries no
                              capabilities; the row and its plan key are kept.
   restore <account-id>       Undo a revoke.
-  sweep                      Reclaim every reservation whose request never came back, and say
-                             how many holds were reclaimed.
+  sweep                      Reclaim every reservation whose request never came back, and delete
+                             every rate-limit window nothing counts against any more. Says how
+                             many of each. Safe to run on a timer; safe to run twice.
   public-key                 The public half of ENTITLEMENT_SIGNING_KEY, base64url, as a client's
                              shipped key set holds it. Prints no private material.
 
@@ -244,8 +246,17 @@ async function main(): Promise<void> {
         return;
       }
       case "sweep": {
-        const reclaimed = await sweepExpiredReservations(client, new Date());
-        process.stdout.write(`${reclaimed} expired hold(s) reclaimed\n`);
+        const now = new Date();
+        const reclaimed = await sweepExpiredReservations(client, now);
+        // **Both sweeps, one command** (PR #152's review, F4). The rate-limit table's own sweep had
+        // no caller outside a test, and this branch multiplied what it holds — a row per account per
+        // minute rather than one per sign-in attempt. Two mechanisms with nothing scheduling either
+        // is how a table grows forever; one command is something an operator can put on a timer.
+        const windows = await sweepRateLimitWindows(client, staleWindowsBefore(now));
+        process.stdout.write(
+          `${reclaimed} expired hold(s) reclaimed\n` +
+            `${windows} stale rate-limit window(s) deleted\n`,
+        );
         return;
       }
     }

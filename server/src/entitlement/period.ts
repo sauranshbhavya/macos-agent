@@ -40,11 +40,16 @@ export function periodStart(at: Date): Date {
  * **105,000 ms** — `synthesize` and `screenAnalyze` — and this is that with a wide margin.
  *
  * **The direction that matters is the floor, not the ceiling.** A window *shorter* than a request's
- * own deadline would let the sweep reclaim a hold belonging to a request that is still running, and
- * that request would then settle against a reservation already given back — a double spend, and in
- * the direction that costs the founder money. So the window has to exceed the longest deadline by
- * enough to cover a process that is slow to die, not merely to equal it. Being generous the other
- * way costs only that a crashed request's hold sits unusable for a few minutes.
+ * own deadline would let the sweep reclaim a hold belonging to a request that is still running — and
+ * **that request is then never charged at all**, which is the failure and is not the one this
+ * comment used to name (PR #152's review, F5). It said "a double spend": measured against a real
+ * Postgres — reserve at `T`, sweep at `T + 301 s`, settle afterwards — the settle answers
+ * `already_settled`, because `AND NOT settled` has already closed the row, and the period ends at
+ * `spent 0, reserved 0`. So the money goes the same way, out of the founder's pocket and past the
+ * cap, by the opposite mechanism: not a unit spent twice but a provider call charged to nobody. The
+ * window therefore has to exceed the longest deadline by enough to cover a process that is slow to
+ * die, not merely to equal it. Being generous the other way costs only that a crashed request's hold
+ * sits unusable for a few minutes.
  *
  * `LONGEST_TOTAL_DEADLINE_MS` is read off `DEADLINE_MS` rather than written as a literal, so a route
  * whose deadline grows past this window fails `theSweepWindowClearsTheLongestRouteDeadline` instead
