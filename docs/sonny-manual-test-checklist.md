@@ -1475,9 +1475,13 @@ reach: the loop that fetches each source page. It caught `CancellationError`, an
 underneath it raises `URLError(.cancelled)`, so a stop was recorded as *an unreachable source* and
 the run carried on.
 
-**Setup is the section above's, unchanged** — a local gateway, a real `TAVILY_API_KEY`, the packaged
-app pointed at it. These rows need a command with several sources so there is a fetch window to
-press Stop inside; a single-URL command finishes too fast.
+**Setup is the shared note above's, plus a real `OPENAI_API_KEY` and `TAVILY_API_KEY` exported
+before `./scripts/deploy.sh local`** — the same as the section directly above, because these rows
+run the same kind of command. **So they wait on SONNY-280's resume for the same reason those do**,
+and that is stated here rather than left to be inherited from a neighbouring section: this file's
+own history is sections whose setup notes drifted apart as the thing underneath them changed, which
+is what SONNY-330's shared note exists to stop. These rows additionally need a command with several
+sources, so there is a fetch window to press Stop inside; a single-URL command finishes too fast.
 
 - [ ] **(new 2026-08-28, SONNY-328) — the headline check.** Run **"research what's new in Swift 6
       concurrency and save it as markdown"**, wait for the **"Fetching https://…"** lines to start,
