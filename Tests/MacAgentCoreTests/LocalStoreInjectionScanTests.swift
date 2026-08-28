@@ -157,7 +157,7 @@ struct LocalStoreInjectionScanTests {
                 !parameter.hasDefault,
                 """
                 `AgentViewModel.init`'s `\(label):` has a default again. A defaulted store is \
-                invisible to every call site that predates it: it compiles fifteen fixtures \
+                invisible to every call site that predates it: it compiles every existing fixture \
                 unchanged and points them at ~/Library/Application Support/Sonny, where a test \
                 process writes under a key the packaged app cannot read. Delete the default and let \
                 the compiler ask each call site.
@@ -272,10 +272,11 @@ struct LocalStoreInjectionScanTests {
 
         // The floor keeps a broken matcher or a renamed type from passing this vacuously. It is a
         // floor rather than an equality on purpose: fixtures are added often and the exact number is
-        // not the property under test.
+        // not the property under test — **which the message beside it used to contradict** by
+        // spelling a fixture count, and one the tree had already moved past (SONNY-326).
         #expect(
             constructionsScanned >= 150,
-            "expected the fifteen fixtures' store constructions, scanned \(constructionsScanned)"
+            "expected the fixtures' store constructions, scanned \(constructionsScanned)"
         )
     }
 
