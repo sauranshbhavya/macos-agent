@@ -563,6 +563,11 @@ struct LocalStorageSecurityTests {
 
         // Structure, over the population rather than over the literals above — so a fourteenth store
         // fails here as well as in the table, and says which rule it broke.
+        //
+        // **That makes the table one more stop for a session adding a store**, alongside the file
+        // list and the filename set `theWipeReachesEveryLocalStore` already pins. Deliberate: the
+        // sentence is what a person reads before pressing an irreversible control, and a new store
+        // arriving in it unread is the defect SONNY-233 was filed for.
         #expect(items == LocalStore.allCases.map(\.deletionCopyName))
         #expect(items.count == LocalStore.allCases.count)
         #expect(Set(items).count == items.count, "two stores share a name and one of them is invisible")
