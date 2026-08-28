@@ -874,7 +874,12 @@ final class AgentViewModel: ObservableObject {
     /// **So the convenience is gone, deliberately.** Every construction site names every store, and
     /// a store added later does not compile until each of them has been told about it. The shipping
     /// app's own site is `atItsRealStoreLocations()` below — one named place where the real
-    /// locations are allowed, rather than fifteen places where they arrive by silence.
+    /// locations are allowed, rather than every other construction site inheriting them by silence.
+    /// (**The numeral this sentence carried is gone on purpose** — SONNY-326. It said "fifteen
+    /// places", which was behind the tree by the time anyone read it and would be behind again
+    /// after the next fixture file landed; the count moves with ordinary work and never carried the
+    /// argument. The sentences above and below that still spell fifteen are dated records of what
+    /// SONNY-240 *found*, and stay as written.)
     ///
     /// **The rejected alternative, on the record:** making the store types' *default paths*
     /// test-aware, the way `LocalStorageEncryption.defaultKeyManager()` already makes the key
