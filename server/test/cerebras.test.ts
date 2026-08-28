@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   makeCerebrasTextAdapter,
@@ -9,6 +10,7 @@ import {
 } from "../src/model/cerebras.js";
 import {
   ProviderRejected,
+  ProviderTimedOut,
   ProviderUnavailable,
   type TextRequest,
 } from "../src/model/upstream.js";
@@ -188,6 +190,41 @@ describe("the schema suffix", () => {
   });
 });
 
+/**
+ * Why this adapter puts the schema in the prompt rather than in `response_format` (PR #143, F9).
+ *
+ * **`CerebrasPlannerTests.sharedPlanSchemaStillExceedsTheNativeStructuredOutputCap` pinned this and
+ * died with its class.** It asserted `CerebrasPlanner.schemaJSONText().count > 5_000`, tying the
+ * schema-in-prompt decision to a measured fact so a schema that shrank below the cap would fail
+ * loudly rather than leaving the adapter on the wrong mechanism for a reason that had stopped being
+ * true. The class is deleted; the property outlived it, because `cerebras.ts`'s own doc comment
+ * still rests on it. This is that pin, on the side the decision now lives.
+ *
+ * The cap itself is the vendor's, re-verified live on 2026-08-13 against
+ * inference-docs.cerebras.ai/capabilities/structured-outputs, and strictly enforced since
+ * 2026-07-21 — so an oversized schema is a validation error rather than a silent degradation.
+ */
+describe("the schema is too big for native structured output, which is why it goes in the prompt", () => {
+  const planSchema: unknown = JSON.parse(
+    readFileSync(new URL("./fixtures/agent-plan-schema.json", import.meta.url), "utf8"),
+  );
+
+  it("serializes past the 5,000-character cap the native mode enforces", () => {
+    const serialized = stableSchemaText(planSchema);
+    expect(serialized.length).toBeGreaterThan(5_000);
+  });
+
+  it("still carries the whole schema into the prompt the provider receives", () => {
+    // The pin above is only worth having if the thing it measures is the thing that is sent.
+    const calls = stubUpstream(() => reply("{}"));
+    return makeCerebrasTextAdapter(settings)(request({ responseSchema: planSchema })).then(() => {
+      const system = sentMessages(calls[0]!)[0]!.content;
+      expect(system).toContain(stableSchemaText(planSchema));
+      expect("response_format" in calls[0]!.body).toBe(false);
+    });
+  });
+});
+
 describe("normalizedPlanText", () => {
   it("unwraps a fenced object, with or without a language tag", () => {
     expect(normalizedPlanText('```json\n{"summary":"Open Safari."}\n```')).toBe(
@@ -268,15 +305,33 @@ describe("the reply the seam returns", () => {
     );
   });
 
-  it("maps 5xx to unavailable so the router can fail over, and 4xx to rejected", async () => {
-    stubUpstream(() => jsonResponse({ error: "overloaded" }, 503));
-    await expect(makeCerebrasTextAdapter(settings)(request())).rejects.toBeInstanceOf(
-      ProviderUnavailable,
-    );
-    vi.unstubAllGlobals();
-    stubUpstream(() => jsonResponse({ error: "bad key" }, 401));
+  it("maps 5xx and a bad key to unavailable so the router can fail over, and a bad request to rejected", async () => {
+    // **The 401 arm asserted `ProviderRejected` until PR #143's F1.** A bad key is a fact about our
+    // account, not about the user's request, which is the same argument the 429 arm has always
+    // rested on — so it fails over rather than taking the route down.
+    for (const status of [503, 401]) {
+      stubUpstream(() => jsonResponse({ error: "nope" }, status));
+      await expect(makeCerebrasTextAdapter(settings)(request())).rejects.toBeInstanceOf(
+        ProviderUnavailable,
+      );
+      vi.unstubAllGlobals();
+    }
+    stubUpstream(() => jsonResponse({ error: "malformed request" }, 400));
     await expect(makeCerebrasTextAdapter(settings)(request())).rejects.toBeInstanceOf(
       ProviderRejected,
+    );
+  });
+
+  it("reports a read aborted after headers as a timeout, not as a refusal", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      },
+    }));
+    await expect(makeCerebrasTextAdapter(settings)(request())).rejects.toBeInstanceOf(
+      ProviderTimedOut,
     );
   });
 });

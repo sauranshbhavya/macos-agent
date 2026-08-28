@@ -230,22 +230,109 @@ export function upstreamTransportError(error: unknown, provider: string): Error 
 }
 
 /**
- * Which of the two provider failures an HTTP status from a provider is.
+ * Which of the three provider failures an HTTP status from a provider is.
  *
- * `429` sits on the unavailable side deliberately. It is the provider rate-limiting *this gateway*,
- * which is a fact about our account and not about the user's request — so it is retryable, and it
- * must never surface as `limit.rate`, which §7.2 defines as the *user's* own limit and which
- * SONNY-133 will raise. Telling a user they are over their limit because our upstream account is
+ * **The line is "is this about our account, or about this request".** A status on the first side is
+ * a fact about the gateway's own relationship with a vendor, so another vendor can serve the same
+ * request and `withFailover` should try one. A status on the second side is the provider having
+ * understood the request and refused it, where §9.3's "a retry is guaranteed to fail identically"
+ * holds — and across providers as well as within one, because a refusal is usually about the
+ * content, so shopping it elsewhere is routing around an answer rather than resilience.
+ *
+ * `429` was always on the account side and its reasoning is the whole rule: it is the provider
+ * rate-limiting *this gateway*, which is a fact about our account and not about the user's request.
+ * It must also never surface as `limit.rate`, which §7.2 defines as the *user's* own limit and which
+ * SONNY-133 will raise — telling a user they are over their limit because our upstream account is
  * would be a lie the app renders in the user's own words.
+ *
+ * **`401`, `402` and `403` moved to the account side** (PR #143, F1), and they had been on the wrong
+ * one by exactly the argument the `429` sentence above already made. A revoked or rotated-out key,
+ * an account out of credit, an account suspended: every one is a fact about our relationship with
+ * that vendor, none is anything the user asked for, and each is among the most likely ways this
+ * gateway actually fails. Leaving them as refusals meant an expired `OPENAI_API_KEY` answered
+ * `502 provider.rejected` with `retryable: false` on every request while a healthy Anthropic key sat
+ * configured and was never called — the exact outcome SONNY-132's third requirement exists to
+ * prevent, reached through the most ordinary failure a gateway has.
+ *
+ * What stays on the request side is what genuinely describes the request: `400`, `404`, `409`,
+ * `413`, `422` and the rest of `4xx`. A gateway that failed those over would try every configured
+ * vendor with a body all of them will refuse, spending the route's whole deadline to arrive at the
+ * same answer more slowly.
  */
 export function upstreamStatusError(status: number, provider: string): Error {
   if (status === 408 || status === 504) {
     return new ProviderTimedOut(`${provider} answered ${status}`);
   }
-  if (status === 429 || status >= 500) {
+  if (status === 401 || status === 402 || status === 403 || status === 429 || status >= 500) {
     return new ProviderUnavailable(`${provider} answered ${status}`);
   }
   return new ProviderRejected(`${provider} answered ${status}`);
+}
+
+/**
+ * Read a provider's response body as JSON, or fail in the shape the failure actually was.
+ *
+ * **`await response.json().catch(() => null)` stood at all five call sites and reported a stall as a
+ * refusal** (PR #143, F2). `fetch` resolves as soon as headers arrive, so a provider that accepts
+ * the connection and then stops sending — the ordinary shape of a bad hour — resolves the fetch and
+ * rejects `json()` with an `AbortError` when the route's deadline fires. Swallowed to `null`, that
+ * became "answered without text output", which is `ProviderRejected`: `504 provider.timeout` with
+ * `retryable: true` reported as `502 provider.rejected` with `retryable: false`, no failover to the
+ * healthy second provider, and the user told *"Sonny couldn't do this one."* — the sentence
+ * `SonnyBackendCopy` reserves for a retry that would fail identically — over a transient stall.
+ * Reproduced by PR #143's reviewer against a local server that writes headers and then stalls;
+ * `theStalledProviderProbeShape` in `test/routing.test.ts` is that probe as a test.
+ *
+ * **The distinction this draws, which the swallow could not:** a body that never finished arriving
+ * is a transport failure and is retryable — `upstreamTransportError` sorts an abort from a dead
+ * socket. A body that arrived complete and is not JSON is an intermediary answering for the
+ * provider (a CDN or proxy error page under a `200`, a truncated gateway response), which is also
+ * transient and also worth another provider. A body that arrived, parsed, and simply carries no
+ * usable answer is the one genuine refusal, and it stays one: each adapter's own
+ * `answered without text output` throw is unchanged and is reached only from valid JSON.
+ */
+export async function readJSONBody(response: Response, provider: string): Promise<unknown> {
+  const body = await readJSONBodyOrUnparsed(response, provider);
+  if (body === UNPARSEABLE_BODY) {
+    // The body arrived complete and is not JSON. On these routes that is an intermediary answering
+    // for the provider — a CDN or proxy error page under a `200`, a truncated gateway response —
+    // which is transient and worth another provider, so it is `unavailable` rather than a refusal.
+    // A body that parses and simply carries no usable answer is the genuine refusal and is each
+    // adapter's own throw, unchanged.
+    throw new ProviderUnavailable(`${provider} answered with a body that is not JSON`);
+  }
+  return body;
+}
+
+/**
+ * "This body is not JSON", as a value distinct from every value `JSON.parse` can return.
+ *
+ * `null` is a legitimate parse result, so it cannot stand for the failure — the same reason
+ * `routes/model.ts` has its own `UNPARSEABLE` symbol for the multipart meta part.
+ */
+export const UNPARSEABLE_BODY = Symbol("provider body is not JSON");
+
+/**
+ * `readJSONBody`'s underlying read, for the one route that has somewhere to put an unparseable body.
+ *
+ * **`/v1/search` treats a malformed body as no results, and that is SONNY-130's decision rather than
+ * this ticket's to revisit** (`tavily.ts` carries the reasoning: a search that finds nothing is an
+ * ordinary outcome the research step already handles, and failing a whole task over telemetry-grade
+ * malformation is worse). What PR #143's F2 found is a different case wearing the same coat — a read
+ * that was *aborted* rather than a body that was malformed — and only that one is corrected here.
+ * The two are told apart by what `json()` rejects with: a `SyntaxError` means the bytes arrived and
+ * were not JSON, and anything else means the read did not finish.
+ */
+export async function readJSONBodyOrUnparsed(
+  response: Response,
+  provider: string,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) return UNPARSEABLE_BODY;
+    throw upstreamTransportError(error, provider);
+  }
 }
 
 /**

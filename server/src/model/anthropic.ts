@@ -1,6 +1,7 @@
 import {
   estimatedTextUsage,
   ProviderRejected,
+  readJSONBody,
   reportedTokenUsage,
   upstreamStatusError,
   upstreamTransportError,
@@ -98,10 +99,14 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
 /**
  * The client's JSON Schema, in the subset `output_config.format` accepts.
  *
- * Two transformations, both of them the mapping §4.2 delegates here. Unsupported keywords go, per
- * the set above. And every object node is given `additionalProperties: false` — structured outputs
- * require it and accept no other value, and a node that omitted it would be refused. Our own
- * schemas already set it everywhere, so this is a floor rather than a rewrite.
+ * Three transformations, all of them the mapping §4.2 delegates here.
+ *
+ * 1. **Unsupported keywords go**, per the set above.
+ * 2. **A type *union* becomes an `anyOf`** — see `withoutTypeUnions` below. This one is not
+ *    cosmetic: the plan schema carries 27 of them and a type array is not a documented form.
+ * 3. **Every object node is given `additionalProperties: false`** — structured outputs require it
+ *    and accept no other value, and a node that omitted it would be refused. Our own schemas
+ *    already set it everywhere, so this is a floor rather than a rewrite.
  */
 export function prunedSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(prunedSchema);
@@ -116,7 +121,41 @@ export function prunedSchema(schema: unknown): unknown {
   if (result["type"] === "object" || typeof result["properties"] === "object") {
     result["additionalProperties"] = false;
   }
-  return result;
+  return withoutTypeUnions(result);
+}
+
+/**
+ * `{"type": ["string", "null"]}` becomes `{"anyOf": [{"type":"string"}, {"type":"null"}]}`.
+ *
+ * **The plan schema is made of these and the branch shipped without noticing** (PR #143, F9).
+ * `AgentPlanSchema.schema()` carries **53** type-union nodes once serialized — counted by walking
+ * `test/fixtures/agent-plan-schema.json`, which is that schema checked in — because almost every
+ * optional step field is spelled `["string","null"]` and `stepSchema` is embedded twice, for `steps`
+ * and for the nested `routineSteps`. (The *source* has 27 occurrences,
+ * `grep -c '"type": [' Sources/MacAgentCore/AgentPlan.swift`, which is the figure PR #143's F9
+ * quoted; the wire figure is the one this function has to survive.) Anthropic's structured-output subset documents the scalar types and `anyOf`;
+ * a type *array* is not among the documented forms, so on the reading that it is unsupported,
+ * **every** plan request served by Anthropic would have `400`ed and the shipped default chain's
+ * second entry would have been dead on arrival — a failure no test could see, because no test ran
+ * the real schema through this function and there is no live round in this branch.
+ *
+ * Converting is the safe direction whichever way that reading goes: `anyOf` is documented, the two
+ * spellings are semantically identical in JSON Schema, and a provider that accepted the union would
+ * accept the `anyOf` too. So this costs nothing if the union was fine and saves the route if it was
+ * not.
+ *
+ * **The sibling keywords ride along deliberately.** `mediaProvider` is
+ * `{"type":["string","null"], "enum":[...,null], "description":"…"}`, and splitting the type without
+ * the `enum` would widen what the model may return on that field. Everything other than `type` stays
+ * on the parent, where it constrains both branches — which is what the union spelling meant.
+ */
+function withoutTypeUnions(node: Record<string, unknown>): Record<string, unknown> {
+  const type = node["type"];
+  if (!Array.isArray(type)) return node;
+  // A one-element array is a union of one; unwrap rather than wrap it in a pointless `anyOf`.
+  if (type.length === 1) return { ...node, type: type[0] };
+  const { type: _dropped, ...rest } = node;
+  return { ...rest, anyOf: type.map((member) => ({ type: member })) };
 }
 
 /**
@@ -215,7 +254,7 @@ export function makeAnthropicTextAdapter(
       throw upstreamStatusError(response.status, "anthropic");
     }
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBody(response, "anthropic");
 
     // Two `stop_reason`s mean the answer is not usable, and both are refusals rather than outages:
     // a retry hits the same safety classifier or the same output ceiling. `refusal` is the model

@@ -2,6 +2,7 @@ import {
   estimatedTextUsage,
   estimateTextTokens,
   ProviderRejected,
+  readJSONBody,
   reportedTokenUsage,
   upstreamStatusError,
   upstreamTransportError,
@@ -146,7 +147,7 @@ export function makeOpenAITextAdapter(
       throw upstreamStatusError(response.status, "openai");
     }
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBody(response, "openai");
     const text = outputText(parsed);
     if (text === null) {
       // A 2xx whose body holds no text is the provider answering something this adapter cannot
@@ -239,7 +240,7 @@ export function makeOpenAITranscriptionAdapter(
 
     if (!response.ok) throw upstreamStatusError(response.status, "openai");
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBody(response, "openai");
     const text =
       typeof parsed === "object" && parsed !== null
         ? (parsed as { text?: unknown }).text

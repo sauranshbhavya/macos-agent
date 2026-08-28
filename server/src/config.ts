@@ -147,10 +147,21 @@ const schema = z.object({
    *
    * `ANTHROPIC_MAX_OUTPUT_TOKENS` has no counterpart on the OpenAI side because the Messages API
    * **requires** `max_tokens` on every request — there is no server-side default to inherit. 16000
-   * is the value the API's own guidance gives for a non-streaming request: high enough that a plan
-   * or a research note is never truncated, low enough to stay inside the HTTP timeouts a
-   * non-streaming call has. Hitting it is a `stop_reason: "max_tokens"`, which the adapter turns
-   * into `provider.rejected` rather than handing the client a half-written JSON object.
+   * is the value the API's own guidance gives for a non-streaming request: high enough for a plan or
+   * a research note, low enough to stay inside the HTTP timeouts a non-streaming call has.
+   *
+   * **What that reasoning does not account for, stated rather than left to be discovered** (PR #143,
+   * F10). `max_tokens` bounds thinking **plus** answer, and the configured default model runs
+   * adaptive thinking when `thinking` is omitted, which it is here. So the effective ceiling on the
+   * *answer* is lower than 16000 by an amount nothing in this file controls and nothing in this
+   * branch measured — **this is hedged, not measured**, because no live round was run against a real
+   * key. Hitting it is a `stop_reason: "max_tokens"`, which the adapter refuses rather than handing
+   * the client a half-written JSON object; that refusal is a `provider.rejected`, so it does not
+   * fail over. Latent today: the client hard-codes `reasoning_effort: "medium"`
+   * (`SonnyModelGateway.swift`), and it becomes live if `/v1/research/synthesize` produces a long
+   * note or the effort the client sends ever rises. The first real Anthropic round is where this
+   * gets a number; raise this variable rather than re-deriving the reasoning if a plan ever comes
+   * back truncated.
    */
   ANTHROPIC_BASE_URL: nonEmpty.default("https://api.anthropic.com/v1"),
   ANTHROPIC_TEXT_MODEL: nonEmpty.default("claude-opus-5"),

@@ -1,4 +1,5 @@
 import {
+  readJSONBodyOrUnparsed,
   upstreamStatusError,
   upstreamTransportError,
   type SearchRequest,
@@ -59,15 +60,23 @@ export function makeTavilySearchAdapter(
 
     if (!response.ok) throw upstreamStatusError(response.status, "search");
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBodyOrUnparsed(response, "search");
     const results =
       typeof parsed === "object" && parsed !== null
         ? (parsed as { results?: unknown }).results
         : undefined;
-    // An unreadable body is an empty result list rather than a failure, which is what the client
-    // did before this route existed: a search that finds nothing is an ordinary outcome the
-    // research step already handles, and turning it into an error would fail a whole task over
-    // telemetry-grade malformation.
+    // A body that parsed but carries no `results` array is an empty result list rather than a
+    // failure, which is what the client did before this route existed: a search that finds nothing
+    // is an ordinary outcome the research step already handles, and turning it into an error would
+    // fail a whole task over telemetry-grade malformation.
+    //
+    // **A body that never finished arriving is no longer collapsed into that** (PR #143, F2). It
+    // used to be, because `response.json().catch(() => null)` could not tell an aborted read from a
+    // malformed one — so a search whose provider stalled after headers reported "nothing found",
+    // which is worse here than on the text routes: a wrong *answer* rather than a wrong error, and
+    // a research task that silently proceeds with no sources. `readJSONBodyOrUnparsed` throws that
+    // case as the transport failure it is, and keeps the malformed-body decision above intact —
+    // the two are told apart by whether `json()` rejected with a `SyntaxError`.
     if (!Array.isArray(results)) return { items: [] };
 
     const items: SearchResultItem[] = [];

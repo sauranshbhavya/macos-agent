@@ -12,9 +12,11 @@ import MacAgentCore
 /// `DELETE /v1/tasks/{task_id}` will join on — and that the retention answer is the one the run was
 /// actually assessed under rather than whatever the published switch happens to say.
 ///
-/// The planner stub is what makes the context observable: `PlannerProvider`'s gateway shape hands
-/// the run's `BackendTaskContext` to the constructor, so a provider that records it sees exactly
-/// what a real one would be built with.
+/// The planner stub is what makes the context observable: `PlannerFactory` is handed the run's
+/// `BackendTaskContext`, so a stub that records it sees exactly what the real planner would be
+/// built with. (This described `PlannerProvider`'s gateway shape until SONNY-132 deleted that type;
+/// the fixture below moved to the factory in the same change and this header did not, which is the
+/// stale-enumeration shape this repository keeps writing down.)
 @Suite
 @MainActor
 struct BackendTaskIdentityTests {

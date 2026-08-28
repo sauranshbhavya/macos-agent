@@ -1,6 +1,7 @@
 import {
   estimatedTextUsage,
   ProviderRejected,
+  readJSONBody,
   reportedTokenUsage,
   upstreamStatusError,
   upstreamTransportError,
@@ -192,7 +193,7 @@ export function makeCerebrasTextAdapter(
 
     if (!response.ok) throw upstreamStatusError(response.status, "cerebras");
 
-    const parsed: unknown = await response.json().catch(() => null);
+    const parsed: unknown = await readJSONBody(response, "cerebras");
     const content = messageContent(parsed);
     if (content === null) {
       throw new ProviderRejected("cerebras answered without message content");

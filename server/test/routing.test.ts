@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
@@ -82,6 +83,49 @@ function build(overrides: Partial<Config> = {}) {
     provider: new UnusedAuthProvider(),
     withConnection: signedInConnection,
   });
+}
+
+/**
+ * Every line this app logs, parsed (PR #143, F3).
+ *
+ * pino writes to fd 1 through `sonic-boom`, which `process.stdout.write` never sees, so reading a
+ * log line needs the destination handed in. `buildApp`'s optional `logStream` is that, and its own
+ * doc records why: three mutants on the recording half survived a twenty-mutant battery, and the
+ * acceptance criterion those two behaviours serve had nothing asserting it.
+ */
+class CapturedLog extends Writable {
+  readonly lines: Record<string, unknown>[] = [];
+
+  override _write(chunk: Buffer | string, _encoding: unknown, done: () => void): void {
+    for (const line of String(chunk).split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        this.lines.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {
+        // A non-JSON line is not a log record this test can read; the assertions below name the
+        // record they want, so a line nobody can parse fails them rather than passing silently.
+      }
+    }
+    done();
+  }
+
+  withMessage(message: string): Record<string, unknown>[] {
+    return this.lines.filter((line) => line["msg"] === message);
+  }
+}
+
+/** `build`, with the log captured and the level low enough to carry a `debug` line. */
+function buildLogging(overrides: Partial<Config> = {}): {
+  app: ReturnType<typeof buildApp>;
+  log: CapturedLog;
+} {
+  const log = new CapturedLog();
+  const app = buildApp(
+    bothProviders({ logLevel: "debug", ...overrides }),
+    { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+    { logStream: log },
+  );
+  return { app, log };
 }
 
 const authorization = () => `Bearer ${accessTokenFor(SUPABASE_USER)}`;
@@ -651,6 +695,91 @@ describe("the acceptance criteria, through a running server", () => {
     await app.close();
   });
 
+  /**
+   * **The failure this feature most likely has to survive** (PR #143, F1). An expired or
+   * rotated-out key, an account out of credit, an account suspended: each is a fact about our
+   * relationship with a vendor, not about the user's request, which is the argument `429` has always
+   * rested on. Until PR #143's review these three were refusals, so an expired `OPENAI_API_KEY`
+   * answered `502 provider.rejected` with `retryable: false` on every request while a healthy
+   * Anthropic key sat configured and was never called.
+   */
+  it("fails over when the primary answers 401, 402 or 403 — and the request still succeeds", async () => {
+    for (const status of [401, 402, 403]) {
+      const calls = stubUpstream((call) =>
+        call.url.includes("openai")
+          ? jsonResponse({ error: "no" }, status)
+          : anthropicReply('{"summary":"Open Safari."}'),
+      );
+      const app = build();
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/plan",
+        headers: { authorization: authorization() },
+        payload: planBody(),
+      });
+
+      expect(response.statusCode, `status ${status}`).toBe(200);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://openai.invalid/v1/responses",
+        "https://anthropic.invalid/v1/messages",
+      ]);
+      expect(response.json().output_text).toBe('{"summary":"Open Safari."}');
+      await app.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * The reviewer's probe shape, through the running app (PR #143, F2).
+   *
+   * A provider that writes headers and then stalls resolves the `fetch`; the route's deadline then
+   * aborts the read and `json()` rejects. Swallowed to `null`, that used to reach the client as
+   * `502 provider.rejected`, `retryable: false` — the code §9.3 reserves for "a retry would fail
+   * identically" — over a transient stall, and the app rendered *"Sonny couldn't do this one."*
+   */
+  it("reports a provider that stalls after headers as a timeout the client may retry", async () => {
+    vi.stubGlobal("fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      },
+    }));
+    const app = build();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: { authorization: authorization() },
+      payload: planBody(),
+    });
+
+    expect(response.statusCode).toBe(504);
+    expect(response.json().error.code).toBe("provider.timeout");
+    expect(response.json().error.retryable).toBe(true);
+    await app.close();
+  });
+
+  it("fails over when the primary answers a complete body that is not JSON", async () => {
+    // An intermediary answering for the provider — a CDN or proxy error page under a 200. Transient,
+    // so another provider is worth trying; it used to be a non-retryable refusal.
+    const calls = stubUpstream((call) =>
+      call.url.includes("openai")
+        ? new Response("<html>502 Bad Gateway</html>", { status: 200 })
+        : anthropicReply('{"summary":"Open Safari."}'),
+    );
+    const app = build();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: { authorization: authorization() },
+      payload: planBody(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(calls).toHaveLength(2);
+    await app.close();
+  });
+
   it("serves a plan from Cerebras when the chain names it, with no client change", async () => {
     // The ticket's second acceptance criterion, server half: Cerebras is reachable the same way
     // every other provider is, as a configuration entry rather than an environment variable on the
@@ -668,6 +797,122 @@ describe("the acceptance criteria, through a running server", () => {
     expect(response.statusCode).toBe(200);
     expect(calls[0]!.url).toBe("https://cerebras.invalid/v1/chat/completions");
     expect(response.json().output_text).toBe('{"summary":"Open Safari."}');
+    await app.close();
+  });
+});
+
+describe("what the server records about who served (SONNY-132's third acceptance criterion)", () => {
+  /**
+   * **Three mutants survived a twenty-mutant battery and all three were here** (PR #143, F3):
+   * `recordServingProvider`'s body removed, the provider it records hard-coded to `"openai"`, and
+   * `app.ts`'s `model routing` line deleted. `result.served` was pinned six ways; the two places it
+   * becomes visible to a human were pinned zero ways — which is the half of the acceptance
+   * criterion that says "the recorded metering says which provider actually served it", and the
+   * line every `deploy.sh` demonstration and the founder's manual row 7 read.
+   */
+  it("records the provider that served an ordinary request, at debug", async () => {
+    stubUpstream(() => openAIReply("{}"));
+    const { app, log } = buildLogging();
+    await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: { authorization: authorization() },
+      payload: planBody(),
+    });
+
+    const served = log.withMessage("model route served");
+    expect(served).toHaveLength(1);
+    expect(served[0]!["route"]).toBe("plan");
+    expect(served[0]!["provider"]).toBe("openai");
+    expect(served[0]!["failedOver"]).toEqual([]);
+    // §2.3 makes `Sonny-Request-Id` the one string a user can be asked to quote for support, and
+    // §11 joins the metering event on it. A record naming the provider but not the request is not
+    // a record SONNY-133 can use, so the line has to carry the request id it was logged under.
+    expect(typeof served[0]!["reqId"]).toBe("string");
+    await app.close();
+  });
+
+  /**
+   * The provider recorded is the one that *answered*, not the one the chain names first — which is
+   * the mutant that hard-coded `"openai"` and survived. Asserted on a request where the two differ.
+   */
+  it("records the provider that actually answered after a failover, at warn, with what was tried", async () => {
+    stubUpstream((call) =>
+      call.url.includes("openai")
+        ? jsonResponse({ error: "overloaded" }, 503)
+        : anthropicReply('{"summary":"Open Safari."}'),
+    );
+    const { app, log } = buildLogging();
+    await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: { authorization: authorization() },
+      payload: planBody(),
+    });
+
+    expect(log.withMessage("model route served")).toHaveLength(0);
+    const failedOver = log.withMessage("model route served after failover");
+    expect(failedOver).toHaveLength(1);
+    expect(failedOver[0]!["provider"]).toBe("anthropic");
+    expect(failedOver[0]!["failedOver"]).toEqual(["openai"]);
+    // `warn`, not `debug`: a provider having a bad hour is worth noticing without anyone asking.
+    expect(failedOver[0]!["level"]).toBe(40);
+    await app.close();
+  });
+
+  it("records each text route under its own name, so metering can price them separately", async () => {
+    stubUpstream(() => openAIReply("{}"));
+    const { app, log } = buildLogging();
+    for (const url of ["/v1/plan", "/v1/research/synthesize"]) {
+      await app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: authorization() },
+        payload: planBody(),
+      });
+    }
+    expect(log.withMessage("model route served").map((line) => line["route"])).toEqual([
+      "plan",
+      "research.synthesize",
+    ]);
+    await app.close();
+  });
+
+  /**
+   * The startup line, which is the only surface the retention/training field is observable on and
+   * the line all four `deploy.sh` demonstrations read. Deleting it survived the suite.
+   */
+  it("says what this deployment's routing resolved to, once, at startup", async () => {
+    const { app, log } = buildLogging({
+      routeChains: { ...DEFAULT_ROUTE_CHAINS, plan: ["anthropic", "openai"] },
+      dataPolicies: {
+        ...providerDataPolicies({}),
+        anthropic: { retention: "none", training: "none" },
+      },
+    });
+    await app.ready();
+
+    const routing = log.withMessage("model routing");
+    expect(routing).toHaveLength(1);
+    expect((routing[0]!["routes"] as Record<string, unknown>)["plan"]).toEqual([
+      "anthropic",
+      "openai",
+    ]);
+    const anthropic = (routing[0]!["providers"] as Record<string, unknown>[]).find(
+      (entry) => entry["provider"] === "anthropic",
+    );
+    expect(anthropic).toMatchObject({
+      configured: true,
+      retention: "none",
+      training: "none",
+      meetsZeroRetentionBar: true,
+    });
+    // The same no-credential assertion `describeRouting`'s own test makes, on the bytes that
+    // actually reach a log collector.
+    const rendered = JSON.stringify(routing[0]);
+    expect(rendered).not.toContain("sk-");
+    expect(rendered).not.toContain("tvly-");
+    expect(rendered).not.toContain("csk-");
     await app.close();
   });
 });
