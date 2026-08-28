@@ -19,13 +19,15 @@ public func makeHermeticBackendClient(
     environment: SonnyBackendEnvironment? = nil,
     keychain: InMemoryKeychainSecretStore = InMemoryKeychainSecretStore(),
     session: URLSession? = nil,
-    now: (@Sendable () -> Date)? = nil
+    now: (@Sendable () -> Date)? = nil,
+    monotonicNow: (@Sendable () -> ContinuousClock.Instant)? = nil
 ) -> SonnyBackendClient {
     SonnyBackendClient(
         environment: environment,
         tokenStore: KeychainAccountTokenStore(secretStore: keychain),
         session: session ?? URLSession(configuration: .ephemeral),
-        now: now ?? Date.init
+        now: now ?? Date.init,
+        monotonicNow: monotonicNow ?? { ContinuousClock.now }
     )
 }
 
@@ -50,7 +52,12 @@ public struct SignedInBackendFixture {
     public init(
         accessToken: String = "test-access-token",
         expiresIn: TimeInterval = 3600,
-        now: (@Sendable () -> Date)? = nil
+        now: (@Sendable () -> Date)? = nil,
+        /// The clock a wall-clock change cannot move (SONNY-135). A test that moves `now` backwards
+        /// while leaving this alone is a test of a user setting their Mac's clock back, which is the
+        /// case the entitlement mark exists for — and it needs both clocks to be movable separately
+        /// or it cannot be written at all.
+        monotonicNow: (@Sendable () -> ContinuousClock.Instant)? = nil
     ) {
         let stub = BackendStubURLProtocol.makeSession()
         host = stub.host
@@ -70,7 +77,8 @@ public struct SignedInBackendFixture {
             environment: SonnyBackendEnvironment(baseURL: stub.baseURL, source: .debugOverride),
             tokenStore: store,
             session: stub.session,
-            now: clock
+            now: clock,
+            monotonicNow: monotonicNow ?? { ContinuousClock.now }
         )
     }
 

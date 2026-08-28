@@ -14,9 +14,13 @@ struct EntitlementCopyTests {
         #expect(EntitlementCopy.message(for: .notSignedIn) == "Sign in to Sonny to use this.")
         #expect(EntitlementCopy.message(for: .noClaim) == "Connect once so Sonny can check your plan.")
         #expect(EntitlementCopy.message(for: .unreadableClaim)
-            == "Sonny couldn't check your plan. Sign in again.")
+            == "Sonny couldn't check your plan. Try again in a moment.")
+        // **Its own sentence since PR #152's review, F2.** It shared the one above and told a user
+        // who had just signed in to sign in again, which could not have helped — the state is the
+        // second person on a Mac meeting the first one's claim, and it is now cleared and refetched
+        // rather than merely refused.
         #expect(EntitlementCopy.message(for: .claimIsForAnotherSession)
-            == "Sonny couldn't check your plan. Sign in again.")
+            == "Sonny is catching up with your plan. Try again in a moment.")
         #expect(EntitlementCopy.message(for: .clockUnusable)
             == "Your Mac's date and time are too far off. Set them automatically and try again.")
         #expect(EntitlementCopy.message(for: .lapsed)

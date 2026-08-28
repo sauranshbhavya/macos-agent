@@ -68,6 +68,72 @@ struct EntitlementServiceTests {
         }
     }
 
+    /// Whether the stub answers at all, in a form a `@Sendable` handler may read.
+    final class Reachability: @unchecked Sendable {
+        private let lock = NSLock()
+        private var reachable = true
+
+        var isReachable: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return reachable
+        }
+
+        func goOffline() {
+            lock.lock()
+            reachable = false
+            lock.unlock()
+        }
+    }
+
+    /// A wall clock and a monotonic clock a test can move **separately**, which is the whole of what
+    /// makes SONNY-135's clock defence testable (PR #152's review, F1).
+    ///
+    /// A user setting their Mac's clock back moves the first and not the second. A test that moved
+    /// one closure could not express that, and the two tests that used to hold this property did not
+    /// try — they seeded a `(claim, highWater)` pair directly, which is a state the production
+    /// writer cannot produce, and passed against a tree where the mark could refuse nothing.
+    final class MovableClocks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var wall: Date
+        private var monotonicOffset: Duration = .zero
+        private let monotonicBase = ContinuousClock.now
+
+        init(wall: Date) { self.wall = wall }
+
+        var now: @Sendable () -> Date {
+            { [self] in
+                lock.lock()
+                defer { lock.unlock() }
+                return wall
+            }
+        }
+
+        var monotonic: @Sendable () -> ContinuousClock.Instant {
+            { [self] in
+                lock.lock()
+                defer { lock.unlock() }
+                return monotonicBase.advanced(by: monotonicOffset)
+            }
+        }
+
+        /// Real time passing: both clocks move, which is what an honest hour looks like.
+        func advance(by seconds: TimeInterval) {
+            lock.lock()
+            wall = wall.addingTimeInterval(seconds)
+            monotonicOffset += .seconds(seconds)
+            lock.unlock()
+        }
+
+        /// The attack: the wall clock is set, and monotonic time is untouched because nothing a user
+        /// can do moves it.
+        func setWallClock(to instant: Date) {
+            lock.lock()
+            wall = instant
+            lock.unlock()
+        }
+    }
+
     /// A `EntitlementStoring` in memory, with the two failures a real one has.
     final class MemoryStore: EntitlementStoring, @unchecked Sendable {
         private let lock = NSLock()
@@ -228,6 +294,274 @@ struct EntitlementServiceTests {
             keys: signer.keys
         )
         #expect(await service.decision(for: Self.capability) == .refused(.claimIsForAnotherSession))
+    }
+
+    // MARK: - Recovering, rather than refusing forever
+
+    @Test
+    @MainActor
+    func aMacWithNothingCachedConnectsRatherThanTellingTheUserToConnect() async throws {
+        // **F2's first state.** A Mac that has just signed in has no claim, so the answer is
+        // `.noClaim` — *"Connect once so Sonny can check your plan."* Before this fix nothing ever
+        // connected, because `decision(for:)` returned above the refresh: the sentence described an
+        // action the code did not take.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user")
+        let seen = RecordedBackendRequests()
+        fixture.register { request in
+            seen.append(request)
+            return .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(client: fixture.client, store: store, keys: signer.keys)
+
+        #expect(await service.decision(for: Self.capability) == .refused(.noClaim))
+        await service.awaitPendingRefresh()
+
+        #expect(seen.all.map(\.path) == ["/v1/account/entitlements"])
+        // And the next answer is the right one, which is the whole point of connecting.
+        #expect(await service.decision(for: Self.capability) == .entitled)
+    }
+
+    @Test
+    @MainActor
+    func aClaimThisBuildCannotReadIsRefusedAndReplaced() async throws {
+        // F2's second state. Unreadable bytes are useless, so the recovery is to fetch a claim that
+        // is not — which needs a request, which is what was missing.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let good = signer.claim(subject: "test-user")
+        let seen = RecordedBackendRequests()
+        fixture.register { request in
+            seen.append(request)
+            return .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": good])
+            )
+        }
+        let store = MemoryStore(StoredEntitlement(
+            compactClaim: Signer(keyID: "someone-elses").claim(subject: "test-user"),
+            observedServerTime: Self.issuedAt
+        ))
+        let service = EntitlementService(client: fixture.client, store: store, keys: signer.keys)
+
+        #expect(await service.decision(for: Self.capability) == .refused(.unreadableClaim))
+        await service.awaitPendingRefresh()
+        #expect(seen.all.count == 1)
+        #expect(await service.decision(for: Self.capability) == .entitled)
+    }
+
+    @Test
+    @MainActor
+    func aSecondUserOnTheSameMacGetsTheirOwnClaimRatherThanBeingToldToSignInAgain() async throws {
+        // **F2's third state, and the one whose copy was actively wrong.** The second person to sign
+        // in on a Mac met the first one's claim, was refused every gated capability, and was told
+        // "Sign in again" — which is what they had just done. The stale claim is cleared, a refresh
+        // is started, and the sentence says what is actually happening.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let mine = signer.claim(subject: "test-user")
+        let seen = RecordedBackendRequests()
+        fixture.register { request in
+            seen.append(request)
+            return .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": mine])
+            )
+        }
+        let store = MemoryStore(StoredEntitlement(
+            compactClaim: signer.claim(subject: "the-previous-user"),
+            observedServerTime: Self.issuedAt
+        ))
+        let service = EntitlementService(client: fixture.client, store: store, keys: signer.keys)
+
+        #expect(await service.decision(for: Self.capability) == .refused(.claimIsForAnotherSession))
+        // The stale bytes are gone rather than merely unusable — `discardLocally`'s caller.
+        #expect(store.current == nil || store.current?.compactClaim == mine)
+        await service.awaitPendingRefresh()
+        #expect(seen.all.count == 1)
+        #expect(await service.decision(for: Self.capability) == .entitled)
+        // And the sentence is not the one they had just acted on.
+        #expect(EntitlementCopy.message(for: .claimIsForAnotherSession)
+            != EntitlementCopy.message(for: .notSignedIn))
+        #expect(!EntitlementCopy.message(for: .claimIsForAnotherSession).contains("Sign in"))
+    }
+
+    @Test
+    @MainActor
+    func aMacWithNoSessionStartsNoRefresh() async throws {
+        // The boundary of the three above: with no session there is no token to fetch with, so a
+        // refresh would be a request guaranteed to fail. Nothing is started.
+        let seen = RecordedBackendRequests()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt })
+        defer { fixture.unregister() }
+        fixture.register { request in
+            seen.append(request)
+            return .failure(URLError(.notConnectedToInternet))
+        }
+        let service = EntitlementService(
+            client: makeHermeticBackendClient(),
+            store: MemoryStore(),
+            keys: Signer().keys
+        )
+        #expect(await service.decision(for: Self.capability) == .refused(.notSignedIn))
+        await service.awaitPendingRefresh()
+        #expect(seen.all.isEmpty)
+    }
+
+    // MARK: - The clock the user controls
+
+    @Test
+    @MainActor
+    func aClockRolledBackOfflineCannotReEnterALapsedWindow() async throws {
+        // **The F1 repro, driven entirely through the production write path.** No `(claim, mark)`
+        // pair is seeded: the claim and the mark both arrive by `refreshNow()` fetching a real
+        // response, exactly as they do in the app. On the tree this was found at, the last assertion
+        // answered `.entitled`.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let network = Reachability()
+        fixture.register { _ in
+            guard network.isReachable else { return .failure(URLError(.notConnectedToInternet)) }
+            return .reply(
+                statusCode: 200,
+                // The `Date` header is what the whole defence is built on, so the stub sends one.
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: Self.issuedAt)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+
+        _ = try await service.refreshNow()
+        #expect(await service.decision(for: Self.capability) == .entitled)
+
+        // A hundred hours of real time pass with the Mac offline — past the claim's 24-hour life and
+        // past its 72-hour grace.
+        network.goOffline()
+        clocks.advance(by: 100 * 60 * 60)
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+
+        // The owner sets the Mac's clock back to an hour after the claim was issued. Monotonic time
+        // does not move, because nothing a user can do moves it.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+    }
+
+    @Test
+    @MainActor
+    func theMarkSurvivesARelaunchSoTheRollbackIsStillRefused() async throws {
+        // The half the in-process test cannot show: a new `EntitlementService`, with no anchor and a
+        // client that has seen no response this run, judging from the persisted mark alone. This is
+        // what makes the bound "the last time the app ran with a correct clock" rather than "the
+        // last time this process ran".
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let first = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        first.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: Self.issuedAt)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let live = EntitlementService(
+            client: first.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        _ = try await live.refreshNow()
+        clocks.advance(by: 100 * 60 * 60)
+        #expect(await live.decision(for: Self.capability) == .refused(.lapsed))
+        first.unregister()
+
+        // The mark was written back during that decision, which is what the next launch inherits.
+        let persisted = try #require(store.current?.observedServerTime)
+        #expect(persisted.timeIntervalSince(Self.issuedAt) > 99 * 60 * 60)
+
+        // Relaunch: a fresh service, a fresh client that has never seen a response, and an owner who
+        // has already set the clock back.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
+        let second = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { second.unregister() }
+        second.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        let relaunched = EntitlementService(
+            client: second.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+
+        #expect(await relaunched.decision(for: Self.capability) == .refused(.lapsed))
+    }
+
+    @Test
+    @MainActor
+    func anHonestlyForwardClockIsNotWrittenIntoTheMark() async throws {
+        // The other direction, and it is why `serverNow()` is deliberately excluded from what gets
+        // persisted: a clock pushed a year forward refuses (fail-closed, correct) but must not be
+        // *written down*, or fixing the clock would leave a Mac locked out for a year.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        fixture.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: Self.issuedAt)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        _ = try await service.refreshNow()
+
+        // A year forward on the wall clock alone. It refuses — and the mark stays where real time
+        // put it.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60))
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+        let mark = try #require(store.current?.observedServerTime)
+        #expect(mark.timeIntervalSince(Self.issuedAt) < 60)
+
+        // And putting the clock right brings the claim back, which a persisted year would not have.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(60))
+        #expect(await service.decision(for: Self.capability) == .entitled)
     }
 
     // MARK: - Fetching and caching
