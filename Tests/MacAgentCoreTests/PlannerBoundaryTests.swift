@@ -64,14 +64,24 @@ struct PlannerBoundaryTests {
         assertExactString(OpenAIPlanner.systemPrompt(toolRegistry: .default), expected)
     }
 
+    /// **This asserted `AgentPlanSchema.responseFormat()` until SONNY-321 deleted that wrapper**,
+    /// and it is repointed at `schema()` rather than deleted with it, because only its first three
+    /// lines were ever about the envelope. Everything below them is the schema `OpenAIPlanner`
+    /// actually puts on the wire, including the operation-enum guards SONNY-68 and SONNY-48 left
+    /// here — and those are what a byte-for-byte fixture cannot replace.
+    /// `AgentPlanSchemaFixtureTests` pins the whole serialized schema, but its own failure message
+    /// says "regenerate it", so a change that drops `switch_running_app` from
+    /// `plannerVisibleCases` fails there and is regenerated away. It fails *here* by name.
+    ///
+    /// **The three dropped assertions lost nothing.** `"agent_plan"` is still asserted directly on
+    /// `AgentPlanSchema.name` below, and asserted again where it matters — on the request body, by
+    /// `OpenAIPlannerTests.plannerSendsTheContractsBodyToThePlanRouteUnderTheUsersOwnSession`,
+    /// which reads `response_schema_name` off the bytes. `json_schema` and `strict` were properties
+    /// of a provider envelope this client no longer builds.
     @Test
-    func responseFormatPreservesStrictAgentPlanSchemaShape() throws {
-        let format = AgentPlanSchema.responseFormat()
-        #expect(format["type"] as? String == "json_schema")
-        #expect(format["name"] as? String == "agent_plan")
-        #expect(format["strict"] as? Bool == true)
-
-        let schema = try #require(format["schema"] as? [String: Any])
+    func theAgentPlanSchemaKeepsItsStrictShape() throws {
+        let schema = AgentPlanSchema.schema()
+        #expect(AgentPlanSchema.name == "agent_plan")
         #expect(schema["type"] as? String == "object")
         #expect(schema["additionalProperties"] as? Bool == false)
         #expect(schema["required"] as? [String] == ["summary", "requiresConfirmation", "steps"])

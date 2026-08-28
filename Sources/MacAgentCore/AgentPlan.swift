@@ -501,13 +501,16 @@ public enum AgentPlanSchema {
     /// provider's structured-output mechanism to the server, because "the client does not know
     /// which mechanism was used and must not need to".
     ///
-    /// **`responseFormat()` below has no production caller any more** (SONNY-132). It was one such
-    /// wrapper, kept because `CerebrasPlanner` built its own request from it while that planner
-    /// held its own credential; the provider-router branch moved Cerebras to the gateway and
-    /// deleted the class, so the wrapper is now exercised only by `PlannerBoundaryTests`. It is
-    /// left in place rather than removed here because `WebResearchNoteSchema.responseFormat()` is
-    /// in exactly the same position and has been since SONNY-130, so removing one of a matched pair
-    /// on this branch would be a half-swept tree — filed as **SONNY-321** to be taken together.
+    /// **There is no `responseFormat()` beside this any more, and there should not be one**
+    /// (SONNY-321). It wrapped this schema in OpenAI's `json_schema` envelope — `type`, `name`,
+    /// `strict`, `schema` — for `CerebrasPlanner`, which built its own provider request while it
+    /// held its own credential. SONNY-132 deleted that class and SONNY-130 had already left
+    /// `WebResearchNoteSchema`'s identical wrapper caller-less; both were removed together, because
+    /// removing one of a matched pair is the half-swept state a later reader has to re-derive.
+    /// **A client-side provider envelope is not a shape this client should be able to build:**
+    /// §4.2 puts the bare schema on the wire and makes the mapping the server's, so a wrapper here
+    /// would be the client deciding a mechanism it "must not need to" know. If a future reader
+    /// wants one, that is a contract change first.
     public static func schema() -> [String: Any] {
         [
             "type": "object",
@@ -528,15 +531,6 @@ public enum AgentPlanSchema {
                     "items": stepSchema(allowsRoutineSteps: true)
                 ]
             ]
-        ]
-    }
-
-    public static func responseFormat() -> [String: Any] {
-        [
-            "type": "json_schema",
-            "name": name,
-            "strict": true,
-            "schema": schema()
         ]
     }
 
