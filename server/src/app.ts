@@ -236,17 +236,17 @@ export function buildApp(
    * Contract §11's metering event, on THIS instance for the third time and the same reason
    * (SONNY-133).
    *
-   * **Registered after the idempotency hook, and the order is load-bearing for one of its three
-   * hooks.** Its `onResponse` reads `request.idempotency` to decide whether this request may spend
-   * the key's one metering claim — a replay and a `409` wrote nothing and must not take a claim from
-   * the request that did the work — so the state has to have been set. `preHandler` runs before any
-   * `onResponse` whatever the registration order, so the dependency is on the hook *existing* rather
-   * than on this line's position; it is registered here anyway, beside the thing it reads, because a
-   * reader should not have to work that out.
+   * **Registered after the idempotency hook, and this time the order really is load-bearing.**
+   * Fastify runs `onSend` hooks in registration order, and both modules have one: the idempotency
+   * hook's stores or releases the key's response, and this one writes the metering event and reads
+   * `request.idempotency` to decide whether this request may spend the key's one metering claim — a
+   * replay and a `409` wrote nothing and must not take a claim from the request that did the work.
+   * That state is set in `preHandler`, so it is there either way; what this line's position decides
+   * is that the key's own bookkeeping settles before the event that cites it is written, which is
+   * the order a reader would assume and the only one worth having.
    *
-   * **The other two hooks are `onRequest` and `onSend`, and neither depends on order.** The gate's
-   * `onRequest` runs first because it is registered first, which is what makes `request.auth`
-   * available by `onResponse`; nothing here needs it earlier.
+   * **The gate's `onRequest` runs before both**, because it is registered before both, which is
+   * what makes `request.auth` available by the time the event is built.
    *
    * Takes the same `withConnection` the gate and the key store take, and answers `undefined` for a
    * health-only deployment — which has no database, and no metered route it could reach either,

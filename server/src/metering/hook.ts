@@ -20,26 +20,38 @@ import type { MeteringStore } from "./store.js";
  * passes its own tests, and is free. Coverage is *encapsulation* rather than registration order —
  * this is installed on the root instance, so every route on it and on its descendants is covered.
  *
- * **Three hooks and one listener, because the facts arrive at four different moments.**
+ * **Two hooks and one listener, because the facts arrive at three different moments.**
  *
  * - `onRequest` opens a draft for a metered route and attaches the listener below. It is the
  *   earliest point at which `request.routeOptions.url` is resolved.
- * - `onSend` reads the response — its bytes, and the §7.1 error code inside it if it is a failure.
- *   That is the last moment the payload exists as a value.
- * - `onResponse` writes the event. **After the response has been sent, deliberately**: a metering
- *   write is bookkeeping, and a user should never wait on a database round trip for the answer they
- *   already have. The cost is that a process killed between the response and this hook loses the
- *   event; the alternative is charging every request a write's latency to shrink a window that a
- *   crash opens anyway.
- * - **`close` on the raw response writes it too, and whichever of the two arrives first wins.**
- *   That is not belt-and-braces: **`onResponse` does not fire at all for a request whose caller
- *   disconnected while the handler was still running**, measured on Node v22 — Fastify runs it off
- *   the response's `finish`, and a response nobody is listening to never finishes. Without this
- *   listener the one case §12 says must be recorded would be the one case that is not, and the
- *   symptom would be a missing row rather than a wrong one. `close` fires on both paths and exactly
- *   once, so a `written` flag on the draft is what makes "first one wins" a rule rather than a race.
- *   `onResponse` still wins every ordinary request, which is what keeps the write deterministic for
- *   a test that asserts right after `inject` — under `light-my-request` the two fire in that order.
+ * - `onSend` reads the response — its bytes, and the §7.1 error code inside it if it is a failure —
+ *   and **writes the event, before the response is flushed.**
+ * - **`close` on the raw response writes it too, for the one case `onSend` cannot reach**: a caller
+ *   who disconnects while the handler is still running. `onSend` has not run and will not until the
+ *   handler returns, and §12 says that request may already have cost money. A `written` flag on the
+ *   draft makes "whichever gets there first" a rule rather than a race.
+ *
+ * ## Why the write is on the response path rather than after it
+ *
+ * `onResponse` is the obvious home — bookkeeping after the user has their answer — and it was the
+ * first one. **Two measurements moved it.**
+ *
+ * - **A crash between the response and `onResponse` drops a billing record for a provider call that
+ *   has already been paid for.** This whole ticket exists so that nothing is silently free, and a
+ *   window that loses events in exactly the direction the ticket is about is the wrong one to accept
+ *   for a single local `INSERT`.
+ * - **`onResponse` is not awaited by the caller, so nothing downstream can know the event exists.**
+ *   Measured on Node v22 against Fastify 5, both through `app.inject` and over a real socket: the
+ *   client's promise resolves *before* an async `onResponse` hook finishes. That is not only a test
+ *   inconvenience — it means "the client has its answer" and "the call is recorded" are unordered.
+ *   It surfaced as a real red: SONNY-300's `writes at most one metering claim per key across a
+ *   repeat and a re-run` passed on one run of the database suite and failed on the next, because it
+ *   asks the database a question this hook was still answering.
+ *
+ * The cost is stated rather than hidden: every metered request now waits on one `INSERT`. That is a
+ * third database round trip on a request that already makes two — the idempotency claim in
+ * `preHandler` and its completion in `onSend` — beside a provider call whose deadline §12 measures
+ * in tens of seconds. A write that fails is logged and never fails the response, exactly as before.
  *
  * **What the handler contributes, and why it is a deposit rather than a return value.** The
  * transport facts — status, bytes, durations, the account, the key — are the hook's, and it can read
@@ -243,7 +255,7 @@ function declaredRequestBytes(request: FastifyRequest): number | null {
 }
 
 /**
- * Did the caller go away before this server answered?
+ * Did the caller go away before this server answered? Read only on the `close` path.
  *
  * **`reply.sent` — Fastify's own record of whether a reply was handed to the socket — and not one of
  * Node's writable flags, every one of which was measured and rejected.** On Node v22, at the moment
@@ -254,7 +266,9 @@ function declaredRequestBytes(request: FastifyRequest): number | null {
  * "cancelled" for requests that were not and "fine" for requests that were.
  *
  * `reply.sent` is false exactly when this server has not produced an answer, which is the property
- * §12 is actually about.
+ * §12 is actually about. It is **not** consulted from `onSend`, where it is false by construction
+ * for every request — a reply being assembled has not been sent — and where the answer is known
+ * anyway: a server that is writing a response has not lost its caller.
  *
  * **What this deliberately does not catch**, stated because the gap is real: a caller that
  * disconnects *after* the handler finished and the reply went out is recorded as `ok`. From the
@@ -294,7 +308,7 @@ export function registerMetering(
     // The second writer. See this module's header for why it exists and why it is not redundant
     // with `onResponse`.
     reply.raw.on("close", () => {
-      void writeEvent(request, reply);
+      void writeEvent(request, reply, clientWentAway(reply));
     });
   });
 
@@ -312,11 +326,9 @@ export function registerMetering(
     // produces one today.
     draft.responseBytes = body === undefined ? null : body.byteLength;
     draft.errorCode = body === undefined ? undefined : errorCodeOf(reply.statusCode, body);
+    // `clientGone: false` rather than a predicate: a server assembling a response has a caller.
+    await writeEvent(request, reply, false);
     return payload;
-  });
-
-  app.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
-    await writeEvent(request, reply);
   });
 
   /**
@@ -325,8 +337,16 @@ export function registerMetering(
    * The guard is the first line rather than the caller's, so neither writer has to know about the
    * other, and a third one — should a later ticket find another moment a request can end at — is one
    * more call rather than a new invariant.
+   *
+   * `clientGone` is a parameter rather than something read here, because the two callers know
+   * different things: `onSend` is a server writing a response and cannot have lost its caller, and
+   * the `close` listener is the only place `reply.sent` answers anything.
    */
-  async function writeEvent(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async function writeEvent(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    clientGone: boolean,
+  ): Promise<void> {
     const draft = request.metering;
     if (draft === null || draft.written) return;
     draft.written = true;
@@ -407,7 +427,7 @@ export function registerMetering(
         status: reply.statusCode,
         errorCode: draft.errorCode,
         upstreamAttempted: facts.upstreamAttempted === true,
-        clientGone: clientWentAway(reply),
+        clientGone,
       }),
       taskId: facts.taskId ?? null,
       sessionId: facts.sessionId ?? null,
@@ -440,10 +460,12 @@ export function registerMetering(
         );
       }
     } catch (error) {
-      // **The response was sent long before this ran, so there is nothing left to fail.** What is
-      // lost is the event, which is why it is logged at `error` with the request id: §2.3 makes that
-      // the join key, so a lost event is recoverable by hand from the log rather than gone without
-      // a trace.
+      // **A bookkeeping write never fails the response.** The handler has already done its work —
+      // possibly an upstream call that cost money — and turning that into a 500 because a row could
+      // not be written would be the worst of both, which is the same call `idempotency/hook.ts`
+      // makes for the same reason. What is lost is the event, which is why it is logged at `error`
+      // with the request id: §2.3 makes that the join key, so a lost event is recoverable by hand
+      // from the log rather than gone without a trace.
       request.log.error(
         { err: error, route: draft.route, requestId: request.id },
         "metering event could not be written for this request",
