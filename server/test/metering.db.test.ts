@@ -19,7 +19,7 @@ import {
   postgresMeteringStore,
   writeMeteringEvent,
 } from "../src/metering/store.js";
-import { reportSessions, reportSpan } from "../src/usage.js";
+import { reportRoutes, reportSessions, reportSpan } from "../src/usage.js";
 
 /**
  * Contract §11's table, against a real Postgres (SONNY-133).
@@ -619,12 +619,57 @@ describeDb("the metering event table", () => {
       expect(report).toContain("iterations       12");
       expect(report).toContain(String(12 * 1940));
       expect(report).toContain("outcomes         ok=12");
-      // **No price, and nothing that implies one.** The ticket's never-touch list in one assertion.
-      expect(report).not.toMatch(/[$£€]/);
-      expect(report.toLowerCase()).not.toContain("credit");
-      expect(report.toLowerCase()).not.toContain("price");
       // And the caveat the ticket asks to travel with every figure.
       expect(report).toContain("SONNY-114");
+    });
+
+    it("prints no price on any of the three reports, which is the never-touch list asserted", async () => {
+      // **All three, not just `sessions`** (PR #147's review, F8 — this covered one and the PR body
+      // generalised it). The ticket's never-touch list is one line: no price, no plan, no tier, no
+      // credit weight, and no number that implies one. SONNY-17 turns these figures into money;
+      // anything here that already had would be that ticket's decision taken in the wrong one.
+      //
+      // Driven over a corpus with something on every route, so a report that is empty cannot pass
+      // this by having nothing to say.
+      // **Nothing in the corpus may contain a forbidden word itself**, which is not a hypothetical:
+      // the first draft named this session `session-price`, and the assertion failed on its own
+      // fixture rather than on anything the renderer wrote.
+      for (const iteration of session("session-under-test", 3)) {
+        await insertMeteringEvent(client, iteration);
+      }
+      for (const route of ["plan", "transcription"] as const) {
+        await insertMeteringEvent(
+          client,
+          event({
+            route,
+            idempotencyKey: `${route}-forbidden-words-key`,
+            requestId: `${route}-forbidden-words-request`,
+            sessionId: null,
+            sessionIteration: null,
+            audioDurationSeconds: route === "transcription" ? 4.8 : null,
+          }),
+        );
+      }
+
+      const reports = {
+        sessions: await reportSessions(client, {}),
+        routes: await reportRoutes(client, {}),
+        span: await reportSpan(client, {}),
+      };
+      for (const [name, report] of Object.entries(reports)) {
+        // Named in the assertion rather than looped silently, so a failure says which report.
+        expect(`${name}: ${report.length > 0}`).toBe(`${name}: true`);
+        expect(`${name}: ${/[$£€¥₹]/.test(report)}`).toBe(`${name}: false`);
+        for (const forbidden of ["price", "pricing", "credit", "cost per", "per token", "tier", "plan tier"]) {
+          expect(`${name} contains ${forbidden}: ${report.toLowerCase().includes(forbidden)}`).toBe(
+            `${name} contains ${forbidden}: false`,
+          );
+        }
+      }
+      // The corpus really did reach all three, or the loop above asserted over nothing.
+      expect(reports.sessions).toContain("session session-under-test");
+      expect(reports.routes).toContain("transcription");
+      expect(reports.span).toContain("5 metering event(s)");
     });
 
     it("says nothing rather than an empty table when the window holds no session", async () => {

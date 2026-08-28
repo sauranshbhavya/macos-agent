@@ -1374,20 +1374,46 @@ reason the table exists. **This is where SONNY-17's pricing numbers come from**:
 allowance and the paid price stop being guesses the moment the rows below produce a per-session
 figure.
 
-**Four of the five rows below cannot be run until the deferred identity setup exists, and that is
-recorded here rather than discovered at the terminal.** Every metered route is authenticated, so a
-metering event needs a signed-in caller, so it needs a real Supabase project — its JWT secret, issuer
-and anon key, and a Postgres the container can reach with the migrations applied. **No such project
-exists yet**; it is founder-owned setup, recorded on SONNY-307 and carried by the release sequence on
-SONNY-280, and it is the whole of what stands between these rows and being runnable. The code was
-measured end to end against a real container while this ticket was built — eighteen real events, a
-retry that wrote one, an incognito session that was metered like any other — with an access token
-minted by hand against the same secret the gate verifies. What a founder cannot do that way is sign
-in through the app, which is what these rows are for.
+**Four of the five rows below queue behind the deferred identity sitting, and that is recorded here
+rather than discovered at the terminal.** Every metered route is authenticated, so a metering event
+needs a caller signed in *through the app*, which is the email-code flow. What that waits on is
+**SONNY-280's founder-deferral comment of 2026-08-27, and its numbered resume checklist** — steps
+(1) through (5) of it, in that order. **Do not go looking for the project: it exists.**
 
-**Setup for the four:** the sign-in section's setup, plus the container from "The four routes behind
-the backend", plus `VISION_API_KEY`. Then run `cd server && npm run build` once, and read the reports
-with `DATABASE_URL=<the same one the container uses> npm run usage -- <command>`.
+- **The Supabase project is `zpyyljfsqrxulhmgkhfp` (sonny-dev), and all ten migrations are applied
+  to it.** Use the **session pooler** connection string — `postgres.<ref>` as the username, port
+  5432 — because the direct `db.<ref>` host is IPv6-only and does not resolve on the founder's
+  network. That is the working `DATABASE_URL` form and it is already recorded on SONNY-280.
+- **Three further things block these rows independently, and any one of them is a 401 or a dead
+  end.** (a) **The JWT key mode, which is the first stop** — the project provisioned with an ECC
+  (P-256) key as CURRENT and Legacy HS256 as PREVIOUS, and this gateway verifies HS256 only, so a
+  token minted under the ECC key fails the gate with a 401 and nothing about it looks like a
+  configuration problem. Project Settings → JWT Keys; the rotation back to Legacy HS256 was
+  mid-flight when the deferral landed and **whether it completed is unconfirmed**. (b) **The Magic
+  Link template is LOCKED** until custom SMTP is configured, so `{{ .Token }}` is not in the mail
+  body and no mail can carry a code — Resend test mode is the fast path SONNY-280 records. (c)
+  **`./scripts/deploy.sh local` has never been run with real credentials against that project** —
+  the `auth routes are mounted` probe has fired only against placeholders, which is resume step (4)
+  and is where a founder finds out whether (a) and (b) actually landed.
+- **What is emphatically *not* the blocker: SONNY-280's step 1.** That is the collective manual
+  pass and it finished on 2026-08-25, 27 of 27 items at `140829b`. An earlier draft of this section
+  named it, and named SONNY-307's "no Supabase project exists" — a statement true when written on
+  2026-08-27 at 17:52 and superseded by the deferral comment at 21:39 the same day. Corrected
+  2026-08-28 (PR #147's review, F1). The failure that correction prevents is specific: a founder
+  goes to create a project, finds `sonny-dev` already there with its migrations applied, does not
+  open the JWT Keys page, and meets a 401 on every metered call with nothing here to explain it.
+
+**What was already measured, so these rows are the remaining half rather than the whole thing.** The
+code ran end to end against a real container and a real Postgres while the ticket was built —
+eighteen metering events from nineteen requests, a retry that wrote one, an incognito session metered
+identically — with an access token minted by hand against the same HS256 secret the gate verifies,
+and with the model provider stubbed. What no agent can do is sign in through the app or spend a real
+vendor credential, and that is exactly what these rows are for.
+
+**Setup for the four, once that resume has run:** the sign-in section's setup, plus the container
+from "The four routes behind the backend", plus `VISION_API_KEY`. Then run `cd server && npm run
+build` once, and read the reports with `DATABASE_URL=<the same one the container uses> npm run usage
+-- <command>` — the same session-pooler URI the container is given, not the direct host.
 
 - [ ] **(new 2026-08-28, SONNY-133) — Terminal, needs only a Postgres. This one is runnable today.**
       With a database and `npm run build` done, rehearse the migration both ways:
@@ -1399,7 +1425,7 @@ with `DATABASE_URL=<the same one the container uses> npm run usage -- <command>`
       a re-apply that fails, is the finding — this is the rehearsal that makes a migration safe to
       run against a real database later.
 
-- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup. The headline row, and the
+- [ ] **(new 2026-08-28, SONNY-133) — after SONNY-280's resume steps (1)–(5). The headline row, and the
       one the pricing waits on.** Sign in, then run **three or four real screen-control sessions** of
       different lengths — a short one that finishes in two or three steps, and one that needs eight
       or more. Note the step count the HUD shows for each. Then run
@@ -1410,21 +1436,21 @@ with `DATABASE_URL=<the same one the container uses> npm run usage -- <command>`
       count that does not match the HUD, or `no tokens 0 of N` where you expected numbers and got
       none (that last one is not necessarily wrong — the footer explains why — but say so).
 
-- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup.** Run one screen-control
+- [ ] **(new 2026-08-28, SONNY-133) — after SONNY-280's resume steps (1)–(5).** Run one screen-control
       session with **"Don't save this task"** on. It must appear in `npm run usage -- sessions` like
       any other, with `retention none` on its block. **A missing session is the finding**, and it is
       the one this row exists for: incognito changes what is stored and never what is billed
       (founder, via SONNY-14), so a metering design that dropped these would quietly make exactly
       those runs free.
 
-- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup.** Start a screen-control
+- [ ] **(new 2026-08-28, SONNY-133) — after SONNY-280's resume steps (1)–(5).** Start a screen-control
       session, then **turn Wi-Fi off mid-run and back on** a few seconds later. However the session
       ends, run `npm run usage -- sessions --session <that session>` afterwards and check the
       iteration count against the number of steps the HUD actually took. **A retry must not appear
       twice.** If the count is higher than the steps you saw, that is the finding and it is the one
       the whole idempotency claim exists to prevent.
 
-- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup. Read this row before
+- [ ] **(new 2026-08-28, SONNY-133) — after SONNY-280's resume steps (1)–(5). Read this row before
       running it: it is not "find the usage screen".** There is **no per-task usage surface in the
       app**, and that is not this ticket's to build — Settings → Usage says so in the product's own
       words (*"Sonny tracks approximate usage per task today, but a full summary isn't built yet."*),
@@ -1433,8 +1459,12 @@ with `DATABASE_URL=<the same one the container uses> npm run usage -- <command>`
       the mistake if it had been written from the ticket's wording. **What to check instead:** run an
       ordinary typed command, a spoken one, and a screen-control session, and confirm each behaves
       exactly as it did before — no new pause, no new failure, nothing that reads as the app waiting
-      on something. Every one of those now writes a database row after its response, and this row is
-      the check that a user cannot feel it.
+      on something. **Every one of those now writes a database row *before* the response leaves the
+      server, which is why this row is worth running at all**: the write is on the critical path, a
+      third database round trip ahead of the bytes, so it is the one change on this branch a user
+      could in principle feel. (This row said "after its response" when it was written, one commit
+      before the write moved — the inversion of the branch's own central decision, and it told the
+      founder there was nothing that could be felt. Corrected 2026-08-28, PR #147's review, F2.)
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 

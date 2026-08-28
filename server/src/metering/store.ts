@@ -148,9 +148,9 @@ export async function insertMeteringEvent(
  * life of the pool lease.
  *
  * **Neither `ROLLBACK` below can be caught by a test, and both stay** — recorded because they are
- * the two survivors of this ticket's mutation battery and the next reader deserves the reason rather
- * than a coverage gap to close. Both are *equivalent mutants*, for two different reasons, and
- * neither reason is "nobody wrote the test":
+ * the **two survivors** of this ticket's fourteen-mutant battery, and the next reader deserves the
+ * reason rather than a coverage gap to close. Both are *equivalent mutants*, for two different
+ * reasons, and neither reason is "nobody wrote the test":
  *
  * - **The lost-claim path has written nothing**, because `claimMeteringEvent`'s `UPDATE` matched
  *   zero rows. `COMMIT` and `ROLLBACK` are the same statement over an empty transaction.
@@ -159,6 +159,13 @@ export async function insertMeteringEvent(
  *   aborted transaction with a rollback. Measured on postgres:17 rather than recalled: `BEGIN;
  *   INSERT (ok); INSERT (violates a CHECK); COMMIT;` prints `ROLLBACK` where the commit was, and
  *   the successful insert is gone — `SELECT count(*)` is 0.
+ *
+ * **Both are in the reported denominator, and one of them briefly was not** (PR #147's review, F3).
+ * The first was dropped from the plan once it was understood, so the headline read `13 mutants, 12
+ * killed, 1 survived` while this comment said two — a known survivor removed from the population the
+ * ratio is quoted over, which is the reassuring direction and the wrong one. It is back: fourteen
+ * mutants, twelve killed, two survivors, both measured and both equivalent. A survivor explained is
+ * a better number to publish than a survivor deleted, because only the first says it was measured.
  *
  * What *is* covered is the property those two lines exist for, and a sharper mutant proves it:
  * splitting this into two transactions — commit the claim, then begin again to insert — is killed by

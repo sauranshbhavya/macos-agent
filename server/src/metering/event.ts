@@ -144,12 +144,18 @@ export interface OutcomeInput {
  * 2. **Success is success.** Any 2xx or 3xx is `ok`, whatever else was going on.
  * 3. **This gateway's own failure beats a provider's**, because `server.error` is a 500 and a naive
  *    status test would file every 5xx together.
- * 4. **Nothing spent is `refused`.** A validation 400, a 413 over the image ceiling, a
- *    `409 idempotency.conflict`, and the `502 provider.unavailable` a route with no configured
- *    adapter answers — all of them before any upstream call. SONNY-131's proposal is emphatic about
- *    this last one and it is the least obvious: without the `upstreamAttempted` gate, a deployment
- *    missing a credential would record a provider failure per request against a provider it never
- *    called.
+ * 4. **Nothing spent is `refused`.** A validation 400, a 413 over the image ceiling, and the
+ *    `502 provider.unavailable` a route with no configured adapter answers — all of them before any
+ *    upstream call. SONNY-131's proposal is emphatic about this last one and it is the least
+ *    obvious: without the `upstreamAttempted` gate, a deployment missing a credential would record a
+ *    provider failure per request against a provider it never called.
+ *
+ *    **A `409 idempotency.conflict` would land here too, and the hook never asks** (corrected
+ *    2026-08-28, PR #147's review, F5 — this list named it as if it did). Both 409 paths leave
+ *    `request.idempotency` as `null`, and `metering/hook.ts` returns on that before it builds an
+ *    event: a conflicting request never took the key's claim, so metering it would take the claim
+ *    out from under the request that is doing the work. So the answer this function gives for that
+ *    input is real — `metering.test.ts` drives it — and nothing in the gateway consults it.
  * 5. **Everything left with a provider code is a provider failure**, and anything else is a refusal.
  */
 export function outcomeFor(input: OutcomeInput): MeteringOutcome {
