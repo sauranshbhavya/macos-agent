@@ -1,11 +1,13 @@
 import Foundation
 
+/// Everything a transcription through Sonny's backend can fail with.
+///
+/// **`missingAPIKey` and `badResponse(Int, String)` are gone** (SONNY-136). SONNY-130 kept both
+/// unreachable — no transcriber reads a provider key and none reads an HTTP status — because the
+/// sentence naming the variable was the environment-variable surface, and that surface belonged to
+/// the ticket that owns it. Removing the sentence and keeping the case would have left an enum case
+/// nothing can construct and nothing can throw, so both went together.
 public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackendError {
-    /// **`missingAPIKey` and `badResponse(Int, String)` are gone** (SONNY-136). SONNY-130 kept both
-    /// unreachable — no transcriber reads a provider key and none reads an HTTP status — because the
-    /// sentence naming the variable was this ticket's to remove. Removing the sentence and keeping
-    /// the case would have left an enum case nothing can construct and nothing can throw, so both
-    /// went together.
     case unreadableAudioFile(String)
     case missingText
     /// The recording is longer than Sonny will transcribe. **This is the client half of SONNY-130's

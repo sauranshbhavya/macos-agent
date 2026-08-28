@@ -61,7 +61,9 @@ public struct SystemMicrophonePermissionChecker: MicrophonePermissionChecking {
 /// this" without a network call; it had not merged when SONNY-136 ran, and inventing a second
 /// notion of entitlement here to fill the gap would have been a second answer to a question that
 /// gets exactly one. So this reports the half that is answerable today — a session is held — and the
-/// entitled half is owed. See SONNY-136's closing comment.
+/// entitled half is owed. **SONNY-336 is the landing spot**, filed with what the wiring needs and
+/// the three decisions it has to make; nothing here approximates it and nothing reports ready on
+/// its behalf.
 public enum ModelAccessReadiness: Equatable, Sendable {
     /// A session is stored on this Mac.
     case signedIn

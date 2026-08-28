@@ -186,14 +186,23 @@ struct SonnyBackendCopyTests {
     /// the line we will have other providers as well."** SONNY-177 applied it to one constant;
     /// SONNY-136 removed the last strings that broke it — `PlannerError.missingAPIKey`,
     /// `TranscriptionError.missingAPIKey`, `TavilySearchError.missingAPIKey`,
-    /// `VisionModelClientError.missingAPIKey`, and the readiness row's two halves — and this is
-    /// where the rule now lives, over the whole population of sentences rather than over one of
-    /// them.
+    /// `VisionModelClientError.missingAPIKey`, and the readiness row's two halves.
     ///
-    /// **The population is enumerated rather than sampled.** `SignInFailure` is `CaseIterable` and
-    /// every wire code is listed here, so a code added later that maps to new words is covered the
-    /// moment it is added to `SonnyBackendErrorCode`; the transport cases are listed explicitly
-    /// because `SonnyBackendError` carries associated values and cannot be `CaseIterable`.
+    /// **What this holds is every sentence `SignInCopy` and `SonnyBackendCopy` can produce, and
+    /// nothing else** — stated at that width rather than as "the copy", because it is not the whole
+    /// of the copy. The readiness row's own three sentences are held by
+    /// `PermissionReadinessModelAccessTests.theAccountRowReplacedTheOpenAIRowRatherThanJoiningIt`,
+    /// which walks the whole row list for the same two properties. There is no single place that
+    /// sees both, and saying so is cheaper than a reader discovering it.
+    ///
+    /// **`SignInFailure` is `CaseIterable`, so that half is the real population.** The other two are
+    /// not: `SonnyBackendError` carries associated values and cannot be `CaseIterable`, and
+    /// `SonnyBackendErrorCode` has an `unknown(String)` case for the same reason. Both are therefore
+    /// **hand-maintained lists, and nothing checks them against their enums** — a code added to
+    /// `SonnyBackendErrorCode` is not covered here until somebody adds it to `everyWireCode`. What is
+    /// checked is that each listed code round-trips through `init(wire:)`, which catches a typo'd or
+    /// renamed wire string silently dropping an entry into `.unknown`, where every sentence is the
+    /// same one and the test would pass while covering nothing.
     ///
     /// The environment-variable check is a *shape* rather than a list of names: any
     /// `SCREAMING_SNAKE` token of two or more parts, so a sentence naming a variable this test has
@@ -217,6 +226,15 @@ struct SonnyBackendCopyTests {
         }
         // The scan is worthless if the list came back short; §7.2 alone has more than a dozen cases.
         #expect(sentences.count > 30, "only \(sentences.count) sentences were collected")
+        // And a listed code that no longer round-trips has quietly become `.unknown`, which answers
+        // one shared sentence — so the list would still have the right length while covering fewer
+        // codes than it names. `.unknown` is excluded because it round-trips by construction.
+        for code in Self.everyWireCode where code != .unknown("brand.new") {
+            #expect(
+                SonnyBackendErrorCode(wire: code.wire) == code,
+                "\(code.wire) no longer round-trips — this entry now covers `.unknown` instead"
+            )
+        }
 
         for sentence in sentences {
             #expect(!sentence.isEmpty)
@@ -234,8 +252,10 @@ struct SonnyBackendCopyTests {
         }
     }
 
-    /// Every code the taxonomy has. Shared by the two tests that need the whole population rather
-    /// than the handful either happened to think of.
+    /// Every code the taxonomy has, **hand-maintained**: `SonnyBackendErrorCode` carries an
+    /// `unknown(String)` case and so cannot be `CaseIterable`. Shared by the two tests that need the
+    /// whole list rather than the handful either happened to think of, so a code added to one test's
+    /// reach is added to both — which is the half of the maintenance this file can guarantee.
     private static let everyWireCode: [SonnyBackendErrorCode] = [
         .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
         .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,

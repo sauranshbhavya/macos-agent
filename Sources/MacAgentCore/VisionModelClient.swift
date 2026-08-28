@@ -54,18 +54,20 @@ public protocol VisionModelDeciding: Sendable {
     ) async throws -> String
 }
 
+/// Everything the vision route can fail with.
+///
+/// **Three cases are gone** (SONNY-136), all three unreachable and all three kept by SONNY-131 only
+/// until the ticket owning the environment-variable surface could remove the sentence that named a
+/// variable. `missingAPIKey(String)` interpolated a variable's name into *"Sonny needs … set to use
+/// screen control."*, which was the last user-facing string in the tree naming one;
+/// `badResponse(status:body:)` read an HTTP status no client here reads any more; and
+/// `unreadableReply(String)` described a body without `output_text`, which §4.5 makes a required
+/// field, so such a body fails to decode and arrives as `SonnyBackendError.undecodableResponse`
+/// inside ``backend(_:)``.
+///
+/// **`payloadCarriedNoImage` and `payloadTooLarge` stay because both are live** — SONNY-114's
+/// ceiling refuses before anything is sent, and neither has ever been about a credential.
 public enum VisionModelClientError: Error, Equatable, LocalizedError, CarriesBackendError {
-    /// **Three cases are gone** (SONNY-136), all three unreachable and all three kept by SONNY-131
-    /// only until the ticket owning the environment-variable surface could remove the sentence that
-    /// named a variable. `missingAPIKey(String)` interpolated a variable's name into
-    /// *"Sonny needs … set to use screen control."*, which was the last user-facing string in the
-    /// tree naming one; `badResponse(status:body:)` read an HTTP status no client here reads any
-    /// more; and `unreadableReply(String)` described a body without `output_text`, which §4.5 makes
-    /// a required field, so such a body fails to decode and arrives as
-    /// `SonnyBackendError.undecodableResponse` inside ``backend(_:)``.
-    ///
-    /// **`payloadCarriedNoImage` and `payloadTooLarge` stay because both are live** — SONNY-114's
-    /// ceiling refuses before anything is sent, and neither has ever been about a credential.
     case payloadCarriedNoImage
     case payloadTooLarge(bytes: Int, limit: Int)
     /// A call to Sonny's backend failed. The user sees ``SonnyBackendCopy``'s sentence for it, never
