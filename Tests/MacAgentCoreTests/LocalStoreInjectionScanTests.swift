@@ -280,6 +280,161 @@ struct LocalStoreInjectionScanTests {
         )
     }
 
+    /// **`Sources/` builds a default-path local store in exactly one place, and it is the factory**
+    /// (SONNY-269).
+    ///
+    /// **Why this exists when `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` is right
+    /// there.** That check counts a *type name*. SONNY-248 widened the count from one spelling to
+    /// every spelling that writes `AgentViewModel` beside its parenthesis — `Name(…)`,
+    /// `Name.init(…)`, either qualified by a module — and three spellings name the type nowhere near
+    /// the parenthesis and are therefore outside any name-keyed scan at all: a `typealias` and a
+    /// construction through it, a metatype value (`let t = AgentViewModel.self; t.init(…)`, which a
+    /// `final class` permits with no `required` initializer), and a bare contextual `.init(…)` where
+    /// an annotation or a return type fixes the type. All three compile.
+    ///
+    /// **Probed as a live defect before this test existed**, the way SONNY-248's four doors were. A
+    /// wrapper in `Sources/MacAgent/` built the thirteen stores inline and returned an
+    /// `AgentViewModel` through a `typealias` — so it hands its caller the developer's real
+    /// `~/Library` data and names neither `atItsRealStoreLocations` nor the type. With that file in
+    /// place at `a99a03a`: `LocalStoreInjectionScanTests` passed, **13 tests in 1 suite**, and so did
+    /// the whole flagged suite, **2342 tests in 162 suites**. Nothing in this repository saw it.
+    ///
+    /// **So this keys on a different property, and that is the point rather than a fifth spelling.**
+    /// A wrapper has to get the real stores from *somewhere*; if it builds them, it names a store
+    /// type beside a parenthesis and passes no `fileURL:`, and it fails here — whatever it calls the
+    /// type it returns, and whether or not it returns one at all.
+    ///
+    /// **`Sources/MacAgentCore/` is the one excluded directory, and the argument is written rather
+    /// than implied** — the same debt PR #109's F5 found in the test-tree sweep above. It is the
+    /// stores' own target and it constructs default-path stores legitimately, three ways:
+    /// `LocalDataDeletionService.defaultStoreFileURLs()` builds every store to read its URL, which is
+    /// what a privacy wipe is *for*; `LocalStoreClassification` does the same to answer what each
+    /// store's file is called; and `ClipboardHistoryMonitor`'s own default is how the thirteenth
+    /// store reaches the view model at all. Blanket-flagging those would flag the plumbing this rule
+    /// depends on.
+    ///
+    /// **The residual, so a clean run is not read as a wider claim than it is:** a wrapper written
+    /// inside `Sources/MacAgentCore/` is outside this sweep, and a wrapper anywhere that obtained its
+    /// stores from somewhere else — passed in, or read off an existing view model — names no store
+    /// type and is outside it too. What is closed is the door that was actually open: building them.
+    ///
+    /// **A count, not just a file set**, for the reason PR #109's re-check gives about the factory:
+    /// a second convenience written *inside* `AgentViewModel.swift` would keep the file set identical.
+    /// The expected count is derived from `LocalStore.allCases` rather than written down — every
+    /// store that is a parameter of its own, which is all thirteen except the clipboard history the
+    /// monitor carries.
+    @Test
+    func noAppSourceBuildsALocalStoreWithoutNamingItsFileURL() throws {
+        let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
+        #expect(Set(typeNames).count == LocalStore.allCases.count, "two stores share a type name")
+
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var defaultPathSites: [String: Int] = [:]
+        var filesRead = 0
+        var filesSkipped = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            guard !url.pathComponents.contains("MacAgentCore") else {
+                filesSkipped += 1
+                continue
+            }
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            for typeName in typeNames {
+                for construction in Self.constructions(of: typeName, in: code)
+                where !construction.contains("fileURL:") {
+                    defaultPathSites[url.lastPathComponent, default: 0] += 1
+                }
+            }
+        }
+
+        // Both floors, because either half enumerating to nothing would make this vacuously green
+        // and would do it silently — the exclusion has to be excluding something real, and the swept
+        // half has to be the real app target.
+        #expect(filesRead > 20, "the enumerator saw \(filesRead) swept app sources — too few to be the real tree")
+        #expect(filesSkipped > 100, "the MacAgentCore exclusion skipped \(filesSkipped) files — too few to be that target")
+
+        let expected = LocalStore.allCases.filter { Self.injection(of: $0).parameterLabel != nil }.count
+        let found = defaultPathSites.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
+        #expect(
+            defaultPathSites == ["AgentViewModel.swift": expected],
+            """
+            Sources/ builds default-path local stores in \(found) — it may do so in exactly one \
+            place, AgentViewModel.\(Self.realStoreFactoryName)(), and \(expected) times there. A \
+            store built anywhere else with no fileURL: points at the developer's real \
+            ~/Library/Application Support/Sonny data, and a wrapper handing that out names neither \
+            the factory nor, if it is spelled through a typealias or a metatype, the view model type.
+            """
+        )
+    }
+
+    /// **The sweep above, shown flagging the defect it names** — this suite's own rule, and the
+    /// reason the probe in that comment was run against the real tree first.
+    ///
+    /// The held sample is the wrapper in all three of the spellings a name-keyed scan cannot see. For
+    /// each one, two things are asserted and the pair is the whole point: `constructions(of:
+    /// "AgentViewModel", in:)` finds **nothing**, so the older guard is blind to it; and the
+    /// store-type sweep finds the inline constructions, so this one is not.
+    @Test
+    func theAppSourceSweepFlagsEveryWrapperSpellingTheNameCountCannotSee() {
+        let samples: [(String, String)] = [
+            ("typealias", """
+            typealias ConvenientViewModel = AgentViewModel
+            enum DeveloperConvenience {
+                static func viewModel() -> ConvenientViewModel {
+                    ConvenientViewModel(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """),
+            ("metatype", """
+            enum DeveloperConvenience {
+                static func viewModel() -> AnyObject {
+                    let type = AgentViewModel.self
+                    return type.init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """),
+            ("contextual .init", """
+            enum DeveloperConvenience {
+                static func viewModel() -> AgentViewModel {
+                    .init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """)
+        ]
+        for (label, sample) in samples {
+            #expect(
+                Self.constructions(of: "AgentViewModel", in: sample).isEmpty,
+                Comment(rawValue: "\(label): the name count can see this after all — the sample is not the door")
+            )
+            let inline = LocalStore.allCases
+                .map { Self.injection(of: $0).typeName }
+                .flatMap { Self.constructions(of: $0, in: sample) }
+                .filter { !$0.contains("fileURL:") }
+            #expect(inline.count == 2, Comment(rawValue: "\(label): the store sweep found \(inline.count) of the 2 inline stores"))
+        }
+
+        // And the negative control: the same wrapper handed its stores instead of building them is
+        // not this sweep's to catch, which is the residual the test above writes down.
+        let passedIn = """
+        enum DeveloperConvenience {
+            static func viewModel(routineStore: RoutineStore) -> AgentViewModel {
+                .init(routineStore: routineStore)
+            }
+        }
+        """
+        let inline = LocalStore.allCases
+            .map { Self.injection(of: $0).typeName }
+            .flatMap { Self.constructions(of: $0, in: passedIn) }
+        #expect(inline.isEmpty, "a store that is passed in is not a construction")
+    }
+
     /// **The one door the compiler opens on purpose, and `main.swift` is the whole of who may walk
     /// through it** (PR #109 review F4).
     ///
