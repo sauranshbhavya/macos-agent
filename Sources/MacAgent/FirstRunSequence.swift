@@ -33,14 +33,12 @@ import SwiftUI
 /// not given it is handled by the app doing nothing about it — nothing here reads a consent state,
 /// asks for one, or renders a control for one, and `allCases` is asserted by exact equality so a
 /// third step cannot arrive quietly.
-enum FirstRunStep: String, CaseIterable, Identifiable, Sendable {
+enum FirstRunStep: String, CaseIterable, Sendable {
     /// Sign in. First, because everything after it can restart the app.
     case signIn
     /// Screen Recording, the relaunch, and Accessibility — `ScreenAccessOnboardingView`'s own
     /// sequence, presented whole.
     case screenAccess
-
-    var id: String { rawValue }
 }
 
 // MARK: - The resolver
@@ -216,11 +214,6 @@ final class FirstRunCoordinator: ObservableObject {
             screenRecordingGranted: screenRecordingGranted,
             accessibilityTrusted: accessibilityTrusted
         )
-    }
-
-    /// Where the step on screen is finished later, as a label on the control that defers it.
-    var deferralLabel: String? {
-        presentedStep.map(FirstRunCopy.deferralLabel(for:))
     }
 
     private func resolve(isSignedIn: Bool, screenRecordingGranted: Bool, accessibilityTrusted: Bool) {

@@ -320,12 +320,13 @@ struct FirstRunSequenceTests {
         #expect(FirstRunCopy.deferralLabel(for: .signIn) == "Sign in later")
         #expect(FirstRunCopy.deferralLabel(for: .screenAccess) == "Set up later in Settings")
 
+        // And the label on screen follows the step, which is what makes the second one reachable at
+        // all: it is only ever shown after the first has been declined.
         let coordinator = makeHermeticFirstRunCoordinator()
-        #expect(coordinator.deferralLabel == nil)
         coordinator.begin(isSignedIn: false, screenRecordingGranted: false, accessibilityTrusted: false)
-        #expect(coordinator.deferralLabel == "Sign in later")
+        #expect(coordinator.presentedStep.map(FirstRunCopy.deferralLabel(for:)) == "Sign in later")
         coordinator.skipCurrentStep()
-        #expect(coordinator.deferralLabel == "Set up later in Settings")
+        #expect(coordinator.presentedStep.map(FirstRunCopy.deferralLabel(for:)) == "Set up later in Settings")
     }
 
     /// **No raw error can reach this sequence, and the reason is structural rather than a promise.**
