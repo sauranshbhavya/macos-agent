@@ -1834,6 +1834,12 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       app must not start behaving as though a lapsed plan had become current again. Set the clock
       back to automatic afterwards. Anything that reads as a crash, a hang, or a sudden loss of a
       capability that was working is the finding.
+      **The backward half is the one that changed** (2026-08-28, PR #152's review, F1): until that
+      round the app judged expiry against a clock its owner could set, so rolling it back really did
+      make a lapsed plan current again. It now remembers the latest time a server actually reported
+      and carries it forward on a clock nothing on the Mac can move, so the rollback should do
+      nothing at all. **Do this half offline** — with the container up, any request corrects the
+      clock and there is nothing to see.
 
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
