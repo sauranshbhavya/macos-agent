@@ -161,10 +161,14 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             // so.** Against a tree carrying the pre-fix composition, a dangling link planted at this
             // exact generated name is still refused by both `prepare` and `execute`, and its target
             // is never created: `resolveDefaultOutputs` pins this path into the step's `outputPath`,
-            // and the next pass through `spec` therefore takes the validated branch above. The route
-            // that really was exposed is the dry run — `AgentActionExecutor.preview(plan:)` does not
-            // resolve, so on that tree it reported the link's own path as where the archive would go.
-            // What this line buys is that the property no longer depends on being asked twice.
+            // and the next pass through `spec` therefore takes the validated branch above. **The
+            // route that really was exposed is the nested one, and this comment named the wrong one
+            // first** (PR #157's review, F3): it said "the dry run", but the product's dry run calls
+            // `prepare`, which resolves. What reaches this branch unresolved is a *stored routine*
+            // previewed through `previewNestedPlan` — `.createZip` is not on
+            // `StoredRoutine.forbiddenStepOperations` — and SONNY-218 is what closed that door, in
+            // this same branch. What this line buys is that the property no longer depends on being
+            // asked twice by whichever caller happens to ask.
             outputURL = try context.whitelist.validateOutputFile(
                 named: "largest-files-\(Timestamp.fileSafe(context.now())).zip",
                 in: folder

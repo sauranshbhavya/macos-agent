@@ -226,9 +226,18 @@ public struct PathWhitelist: Sendable {
     /// tree carrying the pre-fix composition, `AgentActionExecutor` refuses that plan at both
     /// `prepare` and `execute` and the link's target is never created — because
     /// `resolveDefaultOutputs` pins the generated path into the step's `outputPath` and the next
-    /// pass through the adapter takes the user-named branch, which has always validated. What was
-    /// really exposed was the dry-run `preview`, which does not resolve and did name a path the
-    /// boundary refuses, and the docx destinations, which are never pinned into a step at all.
+    /// pass through the adapter takes the user-named branch, which has always validated.
+    ///
+    /// **This paragraph said "what was really exposed was the dry-run `preview`", and that named a
+    /// route nothing calls** (PR #157's review, F3). `AgentActionExecutor.preview(plan:)` has one
+    /// caller in `Sources` — `prepare`, which resolves on the line above it — and the one thing the
+    /// product calls a dry run goes through `prepare` too, so it refused the planted link exactly as
+    /// `prepare` did. The reachable route was the **nested** one: `previewNestedPlan` handed
+    /// `preview` an unresolved *stored routine*, and `.createZip` is not on
+    /// `StoredRoutine.forbiddenStepOperations`, so a saved routine carrying a `create_zip` reached
+    /// the generated branch with nothing resolved. That is closed by SONNY-218's half of the same
+    /// branch rather than by this one. The docx destinations were exposed too, and still are in the
+    /// sense that matters: they are never pinned into a step, so no second pass exists for them.
     ///
     /// **So the reason every site routes through here is not that each one leaks today.** It is that
     /// three of the four were correct only by an ordering nothing states and no test holds, and the
