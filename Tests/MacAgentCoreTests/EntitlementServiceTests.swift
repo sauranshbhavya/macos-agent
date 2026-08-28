@@ -597,9 +597,8 @@ struct EntitlementServiceTests {
         #expect(abs(markAfterAdopt.timeIntervalSince(Self.issuedAt)) < 1)
 
         // The Mac is off for a hundred hours — no process, so nothing advances the mark — and comes
-        // back with its clock set back to an hour after the claim was issued.
+        // back with an honest clock.
         clocks.advance(by: 100 * 60 * 60)
-        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
         serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
 
         let second = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
@@ -619,6 +618,16 @@ struct EntitlementServiceTests {
         )
         // One response. It fails, so no claim is adopted; the `Date` header is still read.
         _ = try? await relaunched.refreshNow()
+
+        // **Only now does the owner set the clock back, and the order is the whole test.** Rolling
+        // back *before* the response would leave §3.5's offset carrying the truth — the header is
+        // read against the rolled-back clock, so `serverNow()` lands at the server's instant anyway
+        // and the observation is redundant. Rolling back *after* it fixes the offset at zero and
+        // moves `serverNow()` down with the clock, which leaves the observation as the only
+        // candidate that still knows a hundred hours have passed. The persisted mark cannot help
+        // either: it was anchored at this process's own monotonic reading, so it projects to the
+        // instant it was written at and not an hour later.
+        clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
 
         #expect(await relaunched.decision(for: Self.capability) == .refused(.lapsed))
     }
