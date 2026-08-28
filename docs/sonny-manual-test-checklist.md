@@ -1451,17 +1451,53 @@ against a gateway that answers immediately.
 - [ ] **(new 2026-08-28, SONNY-320)** Run a web-research command that needs a search ("research
       what's new in Swift 6 concurrency and save it as markdown") and press **Stop during the
       "Searching web for …" line**. Same result: "Canceled.", no red banner, a canceled row in Tasks.
-- [ ] **(new 2026-08-28, SONNY-320) — the one that is expected to look wrong, so please do not
-      report it as a failure of this ticket.** Run the same web-research command and press **Stop
+- [ ] **(new 2026-08-28, SONNY-320; expectation corrected 2026-08-28 by SONNY-328 — read this
+      rather than the sentence it replaces.)** Run the same web-research command and press **Stop
       while it is fetching sources** (the "Fetching https://…" lines, which come after the search).
-      That window is **not fixed** and is expected to behave badly — it will either finish and save
-      a note listing the stopped sources as skipped, or fail with a red banner. It is a different
-      mechanism in a different file and is filed as **SONNY-328**. Tick this row once you have
-      *seen* which of the two it does, and say which; that is the observation SONNY-328 wants.
+      **This row originally said the window was not fixed** and asked you to report which of two bad
+      endings you saw — a saved note listing the stopped sources as skipped, or a red banner. Both
+      of those were real, both were reproduced by a test, and **SONNY-328 fixed them in the same
+      branch as this row**, so the expectation is now the same as every other row in this section:
+      **"Canceled.", no red banner, a canceled row in Tasks, and no Markdown file written**. A saved
+      file, or a note whose "Skipped Sources" section lists the sources you stopped, is now the
+      finding rather than the expected result. (SONNY-328's own rows are in the section below,
+      which is where the detail lives.)
 - [ ] **(new 2026-08-28, SONNY-320)** Confirm a **real** failure still reads as a failure. Stop the
       container, then run any command: it should still show the red banner and its own sentence. A
       predicate that answered "cancelled" too eagerly would have swallowed this, and that is the
       direction nothing else in this section would catch.
+### A stop while web research is fetching sources (new 2026-08-28, SONNY-328)
+
+**Same sentence as the section above, one mechanism further down.** SONNY-320 fixed the four text
+routes — planning, transcription, search, synthesis — by making their error types transparent to the
+one cancellation predicate. This is the fifth place a stop can land and the one no conformance could
+reach: the loop that fetches each source page. It caught `CancellationError`, and the `URLSession`
+underneath it raises `URLError(.cancelled)`, so a stop was recorded as *an unreachable source* and
+the run carried on.
+
+**Setup is the shared note above's, plus a real `OPENAI_API_KEY` and `TAVILY_API_KEY` exported
+before `./scripts/deploy.sh local`** — the same as the section directly above, because these rows
+run the same kind of command. **So they wait on SONNY-280's resume for the same reason those do**,
+and that is stated here rather than left to be inherited from a neighbouring section: this file's
+own history is sections whose setup notes drifted apart as the thing underneath them changed, which
+is what SONNY-330's shared note exists to stop. These rows additionally need a command with several
+sources, so there is a fetch window to press Stop inside; a single-URL command finishes too fast.
+
+- [ ] **(new 2026-08-28, SONNY-328) — the headline check.** Run **"research what's new in Swift 6
+      concurrency and save it as markdown"**, wait for the **"Fetching https://…"** lines to start,
+      and press **Stop while they are still going**. Expected: **"Canceled."**, steps canceled
+      rather than failed, **no red banner**, and a **canceled** row in Tasks.
+- [ ] **(new 2026-08-28, SONNY-328) — the half that is easiest to miss, and please check it
+      explicitly.** Look in the folder the note would have been saved to. **There must be no
+      Markdown file for that run.** The defect's quietest ending was a run that completed and saved
+      a note after you pressed Stop; if a file is there, open it — a **"## Skipped Sources"** section
+      listing the sources you stopped is exactly the shape this ticket removed.
+- [ ] **(new 2026-08-28, SONNY-328)** Confirm the per-source tolerance still works, because that is
+      what the fix had to avoid breaking. Run a comparison command over **two real URLs plus one
+      that does not exist** ("compare <url A> and <url B> and <url C> and save it as markdown", with
+      C a 404 on a real host). It should **still succeed**, write the note, and name the dead one
+      under "Skipped Sources". One dead source sinking the whole run would be this fix overreaching.
+
 ### What every call cost (new 2026-08-28, SONNY-133)
 
 **What changed:** the gateway now records one metering event per call, on every route, and screen

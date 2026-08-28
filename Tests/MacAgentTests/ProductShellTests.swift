@@ -1577,6 +1577,121 @@ struct ProductShellTests {
         #expect(MacAgentSource.count(of: "\"Transcribing voice answer\"", inText: completion) == 1)
     }
 
+    /// **SONNY-327 — a stop during a transcription is not a failure, and this is the route where
+    /// nothing was asking.** The catch this replaces called `setError(error.localizedDescription)`
+    /// for anything at all, so a cancellation would have rendered as *"Sonny couldn't finish this
+    /// one. Try again."* — the sentence `TranscriptionError.backend(.cancelled)` carries, because
+    /// its `errorDescription` is `SonnyBackendCopy.sentence(for: .cancelled)`.
+    ///
+    /// Driven through `deliverTranscriptionError`, the seam the real catch calls, for the reason
+    /// `deliverTranscript`'s own doc comment gives: the live path needs a real transcriber and an
+    /// API key, so the completion cannot run in a test process. The scan below is what holds the
+    /// real catch to this seam; without it, this test would pass over a catch that had gone back to
+    /// `setError`.
+    ///
+    /// **All four shapes `SonnyBackendError.isCancellation` knows, not just the obvious one.** The
+    /// shape this route would actually produce is the fourth — `.cancelled` wearing
+    /// `TranscriptionError`, which SONNY-320's conformance made transparent — and a test that tried
+    /// only `CancellationError()` would pass against a predicate that had never learned the
+    /// wrapper. The control at the end is what makes the four mean something: an ordinary
+    /// transcription failure still sets the banner, so a seam that simply stopped calling
+    /// `setError` fails here rather than reading as a pass.
+    ///
+    /// **What no test can reach today, stated so the coverage is not read as more than it is:**
+    /// nothing can cancel a transcription in the shipping app — it runs in an unstructured
+    /// `Task { }` that nothing stores — so this pins the sentence a stop will get, not a stop a user
+    /// can currently perform. Whether one should be able to is SONNY-332's.
+    @Test
+    func aCancelledTranscriptionIsNotReportedAsAFailure() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        let cancellations: [any Error] = [
+            CancellationError(),
+            URLError(.cancelled),
+            SonnyBackendError.cancelled,
+            TranscriptionError.backend(.cancelled)
+        ]
+        for cancellation in cancellations {
+            viewModel.isTranscribingVoice = true
+            viewModel.errorMessage = nil
+            let loggedBefore = viewModel.logStore.events.count
+
+            viewModel.deliverTranscriptionError(cancellation)
+
+            #expect(viewModel.errorMessage == nil, "a stop is not a failure: \(type(of: cancellation))")
+            #expect(viewModel.isTranscribingVoice == false, "and the route still ends: \(type(of: cancellation))")
+            let appended = viewModel.logStore.events.dropFirst(loggedBefore).map(\.message)
+            #expect(
+                appended == ["Transcription canceled by user"],
+                "one line, and it says what happened: \(type(of: cancellation))"
+            )
+        }
+
+        // The control: an ordinary failure of this route still reaches the user, with the sentence
+        // the error carries and the log line that names it a failure.
+        viewModel.isTranscribingVoice = true
+        let failure = TranscriptionError.missingText
+        let loggedBefore = viewModel.logStore.events.count
+
+        viewModel.deliverTranscriptionError(failure)
+
+        #expect(viewModel.isTranscribingVoice == false)
+        #expect(viewModel.errorMessage == "OpenAI transcription response did not include text.")
+        #expect(viewModel.errorMessage == failure.errorDescription)
+        #expect(viewModel.errorIsPersistent == false, "try again and it is just as likely to work")
+        let appended = viewModel.logStore.events.dropFirst(loggedBefore).map(\.message)
+        #expect(appended == ["Transcription failed: OpenAI transcription response did not include text."])
+    }
+
+    /// **The real catch routes through that one seam, and sets no error of its own** (SONNY-327).
+    /// The behavioural test above drives `deliverTranscriptionError` directly; this is what stops a
+    /// later edit from putting `setError(error.localizedDescription)` back into the catch and
+    /// leaving that test passing about a function nothing calls.
+    ///
+    /// Paired counts rather than a presence check, for the reason `MacAgentSource`'s own doc gives:
+    /// a trailing comment can add a token but cannot take one away, so a swap is only visible when
+    /// both sides are counted. The one surviving `setError(` in this function is the *recorder's*
+    /// failure — `audioRecorder.stop()` throwing before any transcription starts — which is a real
+    /// failure and stays one.
+    @Test
+    func theTranscriptionCatchRoutesThroughTheSeamThatAsksTheCancellationPredicate() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let stopAndTranscribe = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func stopVoiceRecordingAndTranscribe() {"
+        )
+
+        #expect(
+            MacAgentSource.count(of: "setError(", inText: stopAndTranscribe) == 1,
+            "the recorder's own failure, and nothing else in this function sets an error directly"
+        )
+        // And that one is outside the transcription entirely — `audioRecorder.stop()` throwing
+        // before any request is made, which is a real failure and stays one. Everything the
+        // transcription itself can end with is inside this task.
+        let transcription = try MacAgentSource.braceBlock(of: stopAndTranscribe, openedBy: "Task {")
+        #expect(MacAgentSource.count(of: "deliverTranscriptionError(error)", inText: transcription) == 1)
+        #expect(MacAgentSource.count(of: "setError(", inText: transcription) == 0)
+
+        // And the seam asks. Counted at the declaration rather than trusted from the behaviour, so
+        // that deleting the guard fails this as well as the test above — two independent reads of
+        // the same property, which is what a one-line guard deserves.
+        let seam = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "func deliverTranscriptionError(_ error: Error) {"
+        )
+        #expect(MacAgentSource.count(of: "guard !isCancellationError(error) else {", inText: seam) == 1)
+        #expect(MacAgentSource.count(of: "setError(", inText: seam) == 1, "exactly one, and it is after the guard")
+        let cancelArm = try MacAgentSource.braceBlock(of: seam, openedBy: "guard !isCancellationError(error) else {")
+        #expect(MacAgentSource.count(of: "setError(", inText: cancelArm) == 0)
+        #expect(MacAgentSource.count(of: "\"Transcription canceled by user\"", inText: cancelArm) == 1)
+
+        // One seam, one caller. A second exit that skipped it would be exactly the defect this
+        // ticket fixed, arriving again somewhere else in the file.
+        #expect(MacAgentSource.count(of: "deliverTranscriptionError(", inText: source) == 2, "the declaration and its one caller")
+    }
+
     /// **PR #119 review, F1 — Return while a spoken answer is still in flight keeps the question,
     /// runs nothing, and the transcript then lands.** `submitClarification` used to clear the
     /// question, the answer, the origin, the binding and the request, arm the restart, and *then*
