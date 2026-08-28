@@ -1320,6 +1320,51 @@ app** — that is the whole thing being checked.
       here that looks at the server rather than the app, and it is the one that would catch a
       credential leaking into a log line.
 
+### A stop on the text routes is a stop, not a failure (new 2026-08-28, SONNY-320)
+
+**What you are checking is one sentence and one history row.** Before this ticket, pressing Stop
+while Sonny was talking to the backend was reported as a failure: the steps went red, the banner
+read *"Sonny couldn't finish this one. Try again."*, and the run was written to Tasks as failed. A
+stop is not a failure, and it should never invite you to retry something you deliberately stopped.
+
+**Setup — the same gateway the three sections above want, and please read this rather than their
+setup notes.** You need `./scripts/deploy.sh local` running with your Supabase variables and a real
+`OPENAI_API_KEY` and `TAVILY_API_KEY` exported (both are in the script's passthrough), the debug
+build pointed at it — `defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`
+— and the packaged app launched from Finder. **The setup notes on the three sections above are
+stale or contradict each other**: SONNY-130's blocks its rows on SONNY-307, which is Done and
+merged; SONNY-131's blocks its rows on "SONNY-307's successor", which is not a ticket that exists;
+SONNY-132's assumes a container that is up and serving. Sorting that out, and finding out whether a
+real sign-in against a real Supabase project actually works today, is **SONNY-330**. If it turns out
+these rows cannot be run after all, that is SONNY-330's answer and not a finding against this
+ticket.
+
+**These rows need a request that is genuinely in flight for a second or two**, so they cannot be run
+against a gateway that answers immediately.
+
+- [ ] **(new 2026-08-28, SONNY-320) — the headline check.** Type an ordinary command and press
+      **Stop while it still says it is planning** — that window is a second or two, so be ready. It
+      should say **"Canceled."**, with the steps shown as canceled rather than failed, and **no red
+      banner at all**. Seeing *"Sonny couldn't finish this one. Try again."* is the defect this
+      ticket fixed coming back.
+- [ ] **(new 2026-08-28, SONNY-320)** Open **Tasks** and find that run. It should be recorded as
+      **canceled**, not failed. This is the half you would still be living with a week later: a
+      history full of red rows for runs you stopped on purpose.
+- [ ] **(new 2026-08-28, SONNY-320)** Run a web-research command that needs a search ("research
+      what's new in Swift 6 concurrency and save it as markdown") and press **Stop during the
+      "Searching web for …" line**. Same result: "Canceled.", no red banner, a canceled row in Tasks.
+- [ ] **(new 2026-08-28, SONNY-320) — the one that is expected to look wrong, so please do not
+      report it as a failure of this ticket.** Run the same web-research command and press **Stop
+      while it is fetching sources** (the "Fetching https://…" lines, which come after the search).
+      That window is **not fixed** and is expected to behave badly — it will either finish and save
+      a note listing the stopped sources as skipped, or fail with a red banner. It is a different
+      mechanism in a different file and is filed as **SONNY-328**. Tick this row once you have
+      *seen* which of the two it does, and say which; that is the observation SONNY-328 wants.
+- [ ] **(new 2026-08-28, SONNY-320)** Confirm a **real** failure still reads as a failure. Stop the
+      container, then run any command: it should still show the red banner and its own sentence. A
+      predicate that answered "cancelled" too eagerly would have swallowed this, and that is the
+      direction nothing else in this section would catch.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 **Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads
