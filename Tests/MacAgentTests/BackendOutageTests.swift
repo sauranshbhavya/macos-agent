@@ -159,6 +159,39 @@ struct BackendOutageTests {
         #expect(fixture.viewModel.finalSummary.contains("42"))
     }
 
+    /// **What a packaged app launched from Finder actually says today**, which is not any of the four
+    /// states above and is worth pinning because it is the sentence the founder's manual pass will
+    /// meet (SONNY-136).
+    ///
+    /// `SonnyBackendHost.productionBaseURL` is `nil` until SONNY-192 chooses a host, and a build with
+    /// no debug pointer set therefore fails every backend call at `backendNotConfigured` before a URL
+    /// is built. That is a fifth state, it has its own sentence, and it must not read as an outage —
+    /// telling someone to try again when no host exists is the same defect as telling them to export
+    /// a variable nothing reads.
+    ///
+    /// **The five local capabilities are unaffected by it**, which is the half that makes acceptance
+    /// criterion 1 true: a build with no backend at all still does everything it can do.
+    @Test
+    func aBuildWithNoBackendHostSaysSoAndStillRunsEverythingLocal() async throws {
+        let fixture = try makeFixture(
+            networkFailure: URLError(.cannotConnectToHost),
+            // No environment, exactly as `SonnyBackendHost.resolve()` answers on a release build
+            // launched from Finder with nothing exported and no `defaults write` set.
+            client: makeHermeticBackendClient()
+        )
+        defer { fixture.tearDown() }
+
+        try await fixture.run("do something no resolver has a pattern for")
+        #expect(fixture.viewModel.errorMessage == "This build has no Sonny account service.")
+        // Nothing was sent, because there was nowhere to send it — so this is not the unreachable
+        // sentence wearing a different name.
+        #expect(fixture.recorded.all.isEmpty)
+
+        try await fixture.run("calc 2 + 2 * 3")
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.finalSummary.contains("8"))
+    }
+
     // MARK: - What the readiness page says while the backend is down
 
     /// **A dead backend does not sign anyone out, and the readiness row must not say it did**

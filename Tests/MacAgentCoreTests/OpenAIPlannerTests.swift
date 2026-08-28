@@ -503,6 +503,55 @@ struct OpenAIPlannerTests {
         #expect(!SonnyBackendError.isCancellation(PlannerError.missingOutputText))
     }
 
+    /// **Every sentence `PlannerError` can show a user, asserted** (SONNY-136).
+    ///
+    /// **Written because a battery found nothing holding one of them.** SONNY-136 renamed
+    /// `missingAPIKey` to `noPlannerRan` — the case's one live producer is
+    /// `InstantOnlyFallbackPlanner`, handed to a run whose plan is already made, so what it reported
+    /// and what it was named after had come apart — and the ticket's own battery then mutated the
+    /// new sentence into the shared *"Sonny couldn't finish this one. Try again."* and the whole
+    /// suite passed (R10, `SURVIVED`, at `b490513`). The case was reachable, its wording was a
+    /// decision, and nothing was watching it.
+    ///
+    /// **The retry assertion is the half that is a rule rather than a literal.** §9.3's non-retryable
+    /// list is not advice — "retrying any of these produces the identical failure and burns a round
+    /// trip" — and a run that reached a planner it was never meant to consult is in exactly that
+    /// position: pressing the button again sends the same plan down the same path. So the sentence
+    /// says what happened and stops. `SonnyBackendCopyTests.aNonRetryableFailureNeverTellsTheUserTo
+    /// TryAgain` holds the same rule for the wire errors; this is the one case of it that
+    /// `SonnyBackendCopy` does not own.
+    @Test
+    func everySentencePlannerErrorCanShowIsHeldHere() {
+        #expect(PlannerError.noPlannerRan.errorDescription == "Sonny couldn't plan this one.")
+        #expect(
+            PlannerError.noPlannerRan.errorDescription?.lowercased().contains("try again") == false,
+            "a retry sends the same plan down the same path"
+        )
+        #expect(
+            PlannerError.missingOutputText.errorDescription == "Sonny couldn't read the plan that came back."
+        )
+
+        // Neither names a provider or a variable — the founder's decision of 2026-08-19, applied to
+        // the two sentences this type owns. `missingOutputText` read "OpenAI response did not
+        // include text output." until SONNY-136.
+        for sentence in [
+            PlannerError.noPlannerRan.errorDescription,
+            PlannerError.missingOutputText.errorDescription,
+        ] {
+            let text = sentence ?? ""
+            #expect(!text.isEmpty)
+            #expect(!text.localizedCaseInsensitiveContains("openai"))
+            #expect(!text.contains("_KEY"))
+        }
+
+        // And the third case is `SonnyBackendCopy`'s, unchanged, so the three are not three places
+        // the copy rules get applied.
+        #expect(
+            PlannerError.backend(.notSignedIn).errorDescription
+                == SonnyBackendCopy.sentence(for: .notSignedIn)
+        )
+    }
+
     // MARK: - Fixtures
 
     private static func planner(
