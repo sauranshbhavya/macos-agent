@@ -2446,6 +2446,30 @@ struct VisionSessionRunTests {
 
         // And §7.2 case 1a's promise: the user is told nothing, because nothing happened to them.
         #expect(fixture.viewModel.errorMessage == nil)
+
+        // **The continuity itself, which nothing above reads** (PR #153's F6). Every assertion so
+        // far is about paths, counts and `Authorization` headers, and a session that refreshed
+        // perfectly and then forgot everything it had done would satisfy all of them — the stub
+        // scripts its replies off a request counter rather than off content, so it would finish
+        // byte-identically. Continuity is held entirely client-side in `VisionSessionRunner`'s own
+        // `history`, which reaches the wire inside the observed block, so a *later* body carrying an
+        // *earlier* iteration's line is the only place it is observable at all.
+        //
+        // Mutating the runner to drop its history from iteration 5 leaves every other assertion here
+        // green, which is the same vacuity the phantom citation had: a test that exists and checks
+        // the wrong thing.
+        let lastScreenBody = try #require(screenCalls.last).text
+        #expect(
+            lastScreenBody.contains("iteration 1: clicked"),
+            "the send after the refresh carried no history from before it"
+        )
+        #expect(
+            lastScreenBody.contains("iteration 4: clicked"),
+            "the send after the refresh lost the iterations either side of the expiry"
+        )
+        // The first send cannot carry a history, which is what makes the two above a real
+        // difference rather than a string that is always present.
+        #expect(!(try #require(screenCalls.first).text.contains("iteration 1: clicked")))
     }
 
     /// A counter the stub handler can advance. `BackendStubURLProtocol` runs its handler on a

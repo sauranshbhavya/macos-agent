@@ -208,6 +208,75 @@ struct HangBackstopTests {
         #expect(observations >= 1)
     }
 
+    // MARK: - Abandonment: the give-up that ends the test
+
+    /// **The property `waitOrAbandon` exists for**: when the wait gives up, the line after it does
+    /// not run.
+    ///
+    /// This is the whole of PR #153's F2 as an assertion. `wait` records and returns, so a caller
+    /// carried on against a precondition that never arrived and recorded ordinary `Expectation
+    /// failed` assertions no declaration covers — which is why a starved run came back looking like
+    /// a mutation kill. The fix is only worth anything if the body really stops, and "it stops" is
+    /// not observable from the outside of a test that has already failed; a flag set on the next
+    /// line is.
+    ///
+    /// Deadline zero and an unreachable ceiling, so the observation floor is the only thing that can
+    /// decide and it ends on the fourth look — four looks, not four seconds, so this is as
+    /// deterministic on a thrashed machine as on an idle one.
+    @Test
+    @MainActor
+    func anAbandonedWaitEndsTheBodyRatherThanReturningToIt() async throws {
+        var reachedTheLineAfterTheWait = false
+        await withKnownIssue("the backstop fires, and the abandonment is thrown behind it") {
+            try await HangBackstop.waitOrAbandon(
+                for: "something that never happens",
+                deadline: 0,
+                ceiling: Self.unreachableWallClock,
+                observationFloor: 4
+            ) { false }
+            reachedTheLineAfterTheWait = true
+        }
+        #expect(
+            reachedTheLineAfterTheWait == false,
+            "the wait returned to its caller instead of ending the body, which is the defect this replaced"
+        )
+    }
+
+    /// The other direction, and the one a mutant that always throws would break: a wait whose
+    /// condition is satisfied hands control back normally and records nothing at all.
+    @Test
+    @MainActor
+    func aSatisfiedWaitHandsControlBackAndRecordsNothing() async throws {
+        var reachedTheLineAfterTheWait = false
+        try await HangBackstop.waitOrAbandon(for: "a condition that is already true") { true }
+        reachedTheLineAfterTheWait = true
+        #expect(reachedTheLineAfterTheWait)
+    }
+
+    /// The abandonment carries the wait's own description and is tellable apart from the two
+    /// verdict wordings — compared and searched, never quoted, for this suite's own reason.
+    ///
+    /// Distinctness matters more here than for the other two: all three can be recorded by one test
+    /// in one run, so a classifier matching a fragment of one against another would excuse an issue
+    /// nobody declared.
+    @Test
+    func theAbandonmentWordingIsItsOwnAndNamesTheWait() {
+        let abandoned = HangBackstop.abandonedMessage("the run to finish")
+        let stuck = HangBackstop.stuckMessage("the run to finish", elapsed: 30, observations: 4_830)
+        let starved = HangBackstop.starvedMessage("the run to finish", elapsed: 180, observations: 2)
+
+        #expect(abandoned.contains("the run to finish"))
+        #expect(abandoned != stuck)
+        #expect(abandoned != starved)
+        #expect(!stuck.contains(abandoned))
+        #expect(!starved.contains(abandoned))
+        #expect(!abandoned.contains(stuck))
+        #expect(!abandoned.contains(starved))
+        // It is what swift-testing will render after `Caught error:`, so it has to survive being
+        // turned into a string by the error rather than by the caller.
+        #expect(String(describing: HangBackstop.Abandoned(description: abandoned)) == abandoned)
+    }
+
     // MARK: - The two wordings
 
     /// The two messages must be tellable apart by a reader and by `scripts/mutate`, and each must

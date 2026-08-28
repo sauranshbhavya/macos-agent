@@ -117,8 +117,16 @@ struct ClientNamesNoProviderScanTests {
     /// `let p = ProcessInfo.processInfo` followed by `p.environment["X"]` is found, and that shape
     /// is not hypothetical — two of the three allowed reads are written exactly that way, and a
     /// grep for `ProcessInfo.processInfo.environment` finds neither.
+    ///
+    /// **A subscript is not the only way to read the environment, and this test alone does not hold
+    /// the property its name claims** (PR #153's F5). It was written asserting that it fails on "a
+    /// fourth environment read of any name"; a planted `getenv("X")` and a planted
+    /// `ProcessInfo.processInfo.environment.first { … }` each passed it. Those two shapes are held
+    /// by the two tests below, and the three together are what the claim rests on — stated here as
+    /// three checks rather than one so that a later reader is not told a single regex does more than
+    /// it does.
     @Test
-    func theOnlyEnvironmentReadsLeftAreTheThreeThatAreNotProviderConfiguration() throws {
+    func theOnlyEnvironmentSubscriptsLeftAreTheThreeThatAreNotProviderConfiguration() throws {
         let allowed = ["\"MAC_AGENT_MOCK_DOCX\"", "\"XCTestConfigurationFilePath\"", "overrideEnvironmentVariable"]
         let subscripts = try NSRegularExpression(pattern: "\\benvironment\\s*\\[\\s*([^\\]]+?)\\s*\\]")
 
@@ -149,6 +157,71 @@ struct ClientNamesNoProviderScanTests {
         for key in allowed {
             #expect(found.contains { $0.key == key }, "\(key) is allowed but no source reads it")
         }
+    }
+
+    /// **The C-level door, which the subscript scan cannot see at all** (PR #153's F5).
+    ///
+    /// `getenv` reaches the same environment without going near `ProcessInfo`, and a planted
+    /// `getenv("SONNY_PLANTED_B")` passed the subscript scan with six green tests. There is no
+    /// allow-list here because there is nothing to allow: no shipping source has ever called any of
+    /// these, and a build that needs one is a build that has acquired an environment dependency,
+    /// which is the thing SONNY-106 section E forbids. `setenv`/`unsetenv` are refused in the same
+    /// breath — a shipping target that *writes* the environment is a stranger defect than one that
+    /// reads it.
+    @Test
+    func noShippingSourceReachesTheEnvironmentThroughTheCLibrary() throws {
+        let forbidden = ["getenv", "setenv", "unsetenv", "environ"]
+        let sources = try shippingSources()
+        #expect(sources.count > 50)
+        for source in sources {
+            for symbol in forbidden {
+                // Word-bounded, so `environment` does not read as `environ` and
+                // `SonnyBackendEnvironment` does not read as either.
+                let pattern = try NSRegularExpression(pattern: "\\b\(symbol)\\b")
+                let range = NSRange(source.text.startIndex..., in: source.text)
+                #expect(
+                    pattern.firstMatch(in: source.text, range: range) == nil,
+                    "\(source.path) calls \(symbol) — SONNY-106 section E is about reads of any shape, not about subscripts"
+                )
+            }
+        }
+    }
+
+    /// **The whole-map capture, which is the shape a maintainer is most likely to reach for**
+    /// (PR #153's F5).
+    ///
+    /// `ProcessInfo.processInfo.environment.first { $0.key == "X" }?.value` reads one variable
+    /// without a subscript anywhere, and it passed the subscript scan. It matters more than the
+    /// `getenv` hole because the shape is *already in the tree*: `SonnyBackendEnvironment.resolve`
+    /// takes `environment: [String: String] = ProcessInfo.processInfo.environment` as a defaulted
+    /// parameter, so a reader copying the nearest example copies a whole-map capture.
+    ///
+    /// **This is the choke point the other two are not.** Every indirection has to obtain the map
+    /// somewhere, and obtaining it means writing `…processInfo.environment` without a following
+    /// `[` — so a read hidden behind any number of local variables, stored properties or helper
+    /// functions is still caught here, at the one line that touches `ProcessInfo`. The one capture
+    /// allowed is the debug-only staging pointer's defaulted parameter, which is a *seam* rather
+    /// than a read: it is what lets every test hand `resolve` a dictionary of its own.
+    @Test
+    func theOnlyWholeEnvironmentCaptureIsTheStagingPointersInjectableParameter() throws {
+        // `ProcessInfo.processInfo.environment` or `ProcessInfo().environment`, wrapping tolerated,
+        // *not* followed by a subscript.
+        let capture = try NSRegularExpression(
+            pattern: "ProcessInfo\\s*(?:\\.\\s*processInfo|\\(\\s*\\))\\s*\\.\\s*environment\\s*(?!\\[)"
+        )
+        var found: [String] = []
+        let sources = try shippingSources()
+        #expect(sources.count > 50)
+        for source in sources {
+            let range = NSRange(source.text.startIndex..., in: source.text)
+            for _ in capture.matches(in: source.text, range: range) {
+                found.append(source.path)
+            }
+        }
+        #expect(
+            found == ["MacAgentCore/SonnyBackendEnvironment.swift"],
+            "the whole process environment is captured somewhere new: \(found)"
+        )
     }
 
     /// No shipping source reaches a model vendor's endpoint.

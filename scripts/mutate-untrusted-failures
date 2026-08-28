@@ -93,8 +93,13 @@
 
 >>> signature the run never finished
 >>> source the run never finished
->>> sites 2
->>> reason The view-model hang backstop in the two suites that assert their deadline inline rather than recording an issue: MemoryCommandCenterTests' own copy, and BackendOutageTests' (SONNY-136), which needed its own because it also has to answer an approval — a routine's plan carries requiresConfirmation, so its loop presses start() again while isAwaitingApproval and cannot use waitForViewModelToBecomeIdle. Same construct, same 30 s HangBackstop.deadlockDeadline, same reason it says nothing about a mutant: reaching it means a wait ran out of wall clock, which is a measurement of the shared main actor's queue depth. Raised from 1 to 2 rather than reworded, per this file's own guidance for the more-than-declared direction.
+>>> sites 1
+>>> reason MemoryCommandCenterTests' own copy of the view-model hang backstop, which asserts its deadline inline rather than recording an issue. Raised to 2 by SONNY-136 when BackendOutageTests hand-rolled the same loop, and back to 1 when PR #153's F1 replaced that loop with HangBackstop.waitOrAbandon — which is the better answer for the reason F1 gives: a wall-clock loop in this process gets one or two looks in thirty seconds, so its deadline was measuring the main actor's queue depth and nothing else, and it failed the flagged suite on an unmodified tree in three of six runs. This site remains because MemoryCommandCenterTests is not this ticket's to change.
+
+>>> signature was abandoned, so this test stopped here rather than asserting against a precondition that never arrived
+>>> source was abandoned, so this test stopped here rather than asserting against a precondition that never arrived
+>>> sites 1
+>>> reason HangBackstop.waitOrAbandon's own error, thrown after the wait above it has already recorded whether it was stuck or starved (SONNY-136, PR #153's F2). Declared for the same reason as the two backstop wordings it rides behind, and it is the half that makes those two worth having: wait() records and returns, so the test body used to run on against a precondition that never arrived and record ordinary Expectation-failed assertions no declaration covers — a starved run indistinguishable from a mutation kill, demonstrated coming back red twice on a mutant neither failing test touches. Throwing makes the set of issues such a test can record finite, and this is the second and last member of it. A genuinely stuck wait is excused with it, which is the same trade the deadlock-backstop signature already makes and for the same reason: the cascade that follows a give-up is what destroys the evidence, whichever verdict caused it.
 
 >>> signature Expectation failed: (elapsed →
 >>> source #expect(elapsed < .seconds(

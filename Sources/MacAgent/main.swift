@@ -22,8 +22,19 @@ let app = NSApplication.shared
 // instances would be two answers to "does this launch still owe a relaunch".
 let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
 let screenAccessModel = ScreenAccessOnboardingModel()
+// **The view model is bound to a name rather than built inline** (SONNY-136, PR #153's F4), because
+// the line below needs to refer to it. It was `viewModel: .atItsRealStoreLocations(…)` in the call.
+let agentViewModel = AgentViewModel.atItsRealStoreLocations(backendClient: accountModel.backendClient)
+// **The session and the readiness row, joined here.** Signing in is a sheet over Command Center and
+// signing out is a menu item, so neither re-fires the `onAppear` that is otherwise the only thing
+// that refreshes the account row — the "show permission readiness" tool then reported a session the
+// user no longer had, or denied one they did. This is the one file that holds both objects, which is
+// why the wiring is a line here rather than a reference inside either.
+accountModel.sessionDidChange = { [weak agentViewModel] in
+    agentViewModel?.refreshPermissions()
+}
 let delegate = AppDelegate(
-    viewModel: .atItsRealStoreLocations(backendClient: accountModel.backendClient),
+    viewModel: agentViewModel,
     accountModel: accountModel,
     screenAccessModel: screenAccessModel,
     firstRunCoordinator: FirstRunCoordinator(store: FirstRunStore(userDefaults: .standard))

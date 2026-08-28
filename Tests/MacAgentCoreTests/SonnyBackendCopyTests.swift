@@ -190,10 +190,14 @@ struct SonnyBackendCopyTests {
     ///
     /// **What this holds is every sentence `SignInCopy` and `SonnyBackendCopy` can produce, and
     /// nothing else** — stated at that width rather than as "the copy", because it is not the whole
-    /// of the copy. The readiness row's own three sentences are held by
+    /// of the copy. The readiness rows' own sentences are held by
     /// `PermissionReadinessModelAccessTests.theAccountRowReplacedTheOpenAIRowRatherThanJoiningIt`,
-    /// which walks the whole row list for the same two properties. There is no single place that
-    /// sees both, and saying so is cheaper than a reader discovering it.
+    /// which walks the whole row list for the same seven provider names and the same
+    /// SCREAMING_SNAKE shape. **That sentence was false when it was written** and is what PR #153's
+    /// F8 found: the row check was three literals, so a row naming `SONNY_VISION_MODEL` or Anthropic
+    /// passed there and would have failed here. It is true now, and the two lists are written the
+    /// same way in both files. There is still no single place that sees both, and saying so is
+    /// cheaper than a reader discovering it.
     ///
     /// **`SignInFailure` is `CaseIterable`, so that half is the real population.** The other two are
     /// not: `SonnyBackendError` carries associated values and cannot be `CaseIterable`, and

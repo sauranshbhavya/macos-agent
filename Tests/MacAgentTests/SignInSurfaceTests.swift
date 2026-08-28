@@ -401,6 +401,101 @@ struct SignInSurfaceTests {
 
     // MARK: - Harness
 
+    // MARK: - The session-change hook (SONNY-136, PR #153's F4)
+
+    /// **A sign-in and a sign-out each announce themselves, so the readiness row can follow.**
+    ///
+    /// The row was stale in both directions and the reason was structural rather than a missed call:
+    /// `AgentViewModel.modelAccessReadiness` is refreshed only by `refreshPermissions()`, whose call
+    /// sites are all Command Center `onAppear`s and its Refresh button — and sign-in is a *sheet*
+    /// over Command Center, so closing it re-fires nothing. This hook is what `main.swift` joins to
+    /// that refresh.
+    ///
+    /// **The negative is the half worth having.** A wrong code must not fire it: `run` swallows the
+    /// failure into `failure`, so a hook called from inside `run` would announce a session that was
+    /// never created, and the row would go green on a failed attempt.
+    @Test
+    func aSuccessfulSignInAnnouncesItselfAndAFailedOneDoesNot() async throws {
+        let harness = Harness()
+        harness.serveTokenResponse()
+        let model = harness.makeModel()
+        var announcements = 0
+        model.sessionDidChange = { announcements += 1 }
+
+        model.emailAddress = "founder@example.com"
+        await model.sendCode()
+        #expect(announcements == 0, "asking for a code is not a session")
+
+        model.code = "123456"
+        await model.verify()
+        try #require(model.isSignedIn)
+        #expect(announcements == 1)
+
+        // A wrong code, on a fresh model over the same Keychain, announces nothing.
+        harness.serve { request in
+            guard request.url?.path == "/v1/auth/email/verify" else {
+                return .reply(statusCode: 200, headers: [:], body: Data(#"{"request_id":"r","expires_in":600}"#.utf8))
+            }
+            return .reply(
+                statusCode: 401,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"error":{"code":"auth.code_invalid","message":"no","retryable":false,"request_id":"r"}}"#.utf8)
+            )
+        }
+        let refused = harness.makeModel()
+        var refusedAnnouncements = 0
+        refused.sessionDidChange = { refusedAnnouncements += 1 }
+        refused.emailAddress = "founder@example.com"
+        refused.code = "000000"
+        await refused.verify()
+        #expect(refused.failure == .codeIncorrect)
+        #expect(refusedAnnouncements == 0, "a refused code announced a session that was never created")
+    }
+
+    /// Signing out announces itself too, **including when the server never confirmed the revoke** —
+    /// `SonnyAccountService.signOut` clears this Mac either way, so the session is gone locally
+    /// whatever happened upstream, and that is precisely the case where a row still reading "Signed
+    /// in." would be worst.
+    @Test
+    func signingOutAnnouncesItselfOnBothOutcomes() async throws {
+        for revokeSucceeds in [true, false] {
+            let harness = Harness()
+            harness.serveTokenResponse()
+            let model = harness.makeModel()
+            model.emailAddress = "founder@example.com"
+            await model.sendCode()
+            model.code = "123456"
+            await model.verify()
+            try #require(model.isSignedIn)
+
+            var announcements = 0
+            model.sessionDidChange = { announcements += 1 }
+            if !revokeSucceeds {
+                harness.serve { _ in .failure(URLError(.cannotConnectToHost)) }
+            }
+            await model.signOut()
+
+            #expect(model.isSignedIn == false, "revokeSucceeds: \(revokeSucceeds)")
+            #expect(announcements == 1, "revokeSucceeds: \(revokeSucceeds)")
+        }
+    }
+
+    /// **`main.swift` is where the hook meets the refresh, and nothing else can hold that.**
+    ///
+    /// It is a top-level file that runs `NSApplication.main`; no test can execute it. The two
+    /// halves are checked separately — this suite holds that the hook fires, and
+    /// `BackendOutageTests` holds that a refresh moves the row — so what is left is the one line
+    /// joining them, and a scan is the only instrument for it. Same shape and same reason as
+    /// `onlyMainAsksForTheRealKeychain`, which guards the neighbouring line in the same file.
+    @Test
+    func mainJoinsTheSessionHookToTheReadinessRefresh() throws {
+        let source = try MacAgentSource.read("main.swift")
+        #expect(source.contains("accountModel.sessionDidChange"), "main.swift no longer sets the hook")
+        #expect(source.contains("refreshPermissions()"), "main.swift's hook no longer refreshes readiness")
+        // And it is one assignment rather than several, so the scan cannot pass on a leftover.
+        #expect(MacAgentSource.count(of: "sessionDidChange", inText: source) == 1)
+    }
+
     private final class Harness {
         let keychain = InMemoryKeychainSecretStore()
         let session: URLSession
