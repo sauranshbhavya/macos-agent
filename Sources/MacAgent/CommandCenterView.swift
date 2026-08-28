@@ -4013,7 +4013,8 @@ struct MemoryRowPresentation: Equatable {
     /// Not defaulted, deliberately: every construction site decides, so a new one cannot inherit
     /// "readable" by saying nothing.
     let readability: MemoryRowReadability
-    /// "12 saved · newest 3:04 PM", the empty-state half on its own, or one of the damaged states.
+    /// "12 copied items · newest 3:04 PM", the empty-state half on its own, or one of the damaged
+    /// states. The count names what it counts, per `MemoryCategory.countedEntries(_:)`.
     let detailText: String
 
     /// Whether this row's Delete is live.
@@ -4045,12 +4046,17 @@ struct MemoryRowPresentation: Equatable {
         self.canChangeRecording = canChangeRecording
         self.readability = readability
 
-        let counted = count == 1 ? "1 saved" : "\(count) saved"
+        // **The unit is named rather than left to be inferred** (SONNY-243). This read "N saved"
+        // for every row until the founder met `1 saved` on Output locations beside a sheet reading
+        // `2 times`, and reported the pair as a contradiction. `MemoryCategory.countedEntries(_:)`
+        // holds the nouns and the reasoning; the short version is that "saved" named no unit, so
+        // nothing on the page distinguished a count of entries from a number inside one of them.
+        let counted = category.countedEntries(count)
 
         switch readability {
         case .unreadable:
             // Neither a count nor a timestamp, because the file will not open and Sonny knows
-            // neither. Saying "0 saved" here is not a smaller version of the truth, it is a
+            // neither. A count of zero here is not a smaller version of the truth, it is a
             // different claim — and it is the one that made Delete look unnecessary.
             self.detailText = "Can't be read"
         case .partlyUnreadable:
@@ -4738,8 +4744,11 @@ enum MemoryDeletionCopy {
     /// The sheet's title when the row's file will not read.
     ///
     /// The empty-state title it replaces — "No output locations yet" — is the same lie the row's
-    /// "0 saved" was: a store that has never been used and a store that will not open are different
-    /// facts, and the sheet is the surface a user opens *because* the row said zero.
+    /// count of zero was: a store that has never been used and a store that will not open are
+    /// different facts, and the sheet is the surface a user opens *because* the row said zero.
+    /// (This quoted `0 saved`, a string the product can no longer produce, and was missed by
+    /// SONNY-243's sweep of the live comments — PR #155 review, F5. The point is unchanged; only
+    /// the string it named is, and it now says the thing rather than one row's spelling of it.)
     static func unreadableTitle(for category: MemoryCategory) -> String {
         "Sonny can't read your \(category.title.lowercased())"
     }
@@ -4877,7 +4886,16 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                     // directly below.
                     id: location.path,
                     title: location.name,
-                    detail: "\(location.displayPath) · \(location.useCount == 1 ? "1 time" : "\(location.useCount) times") · last \(TaskHistoryDateFormatter.relativeTimestamp(for: location.lastUsedAt, now: now))"
+                    // **"used N times", not "N times"** (SONNY-243). This is a per-entry quantity
+                    // sitting under a row whose headline is a count of entries, and the two are
+                    // legitimately different measurements that will never agree: the row says how
+                    // many folders Sonny remembers — which is exactly how many rows this sheet
+                    // lists — and this says how often *this* folder was written into. Naming the
+                    // verb is what stops the second being read as a second answer to the first.
+                    // Every other type's per-entry detail was checked in the same pass: only
+                    // unfinished tasks carries a number too, and "2 of 5 steps left" already says
+                    // what it counts.
+                    detail: "\(location.displayPath) · used \(location.useCount == 1 ? "1 time" : "\(location.useCount) times") · last \(TaskHistoryDateFormatter.relativeTimestamp(for: location.lastUsedAt, now: now))"
                 )
             }
         case .approvedApps:
@@ -5705,9 +5723,15 @@ private struct SettingsDataPage: View {
                     SettingsAdaptiveControlRow {
                         // Single trash icon now lives on the button itself — a second one here
                         // next to the label made the row read as too bold/heavy (2026-07-18).
+                        // **Derived rather than written, and the same sentence the confirmation
+                        // uses** (SONNY-233). This literal named ten of the thirteen stores the
+                        // wipe deleted at the time, having gone stale twice unnoticed as row E,
+                        // row J and row 13's stores landed. `LocalDataDeletionCopy` builds it from
+                        // `LocalStore.allCases` through an exhaustive switch, so a fourteenth store
+                        // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, common output locations, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
+                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes)."
                         )
                     } trailing: {
                         Button {

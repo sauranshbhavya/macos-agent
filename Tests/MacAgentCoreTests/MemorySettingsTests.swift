@@ -65,6 +65,86 @@ struct MemorySettingsTests {
         }
     }
 
+    /// **Every row's count names what it counts** (SONNY-243).
+    ///
+    /// The founder read `1 saved` on the Output locations row beside `2 times` in its sheet and
+    /// reported the pair as a bug. Both numbers were right; "saved" named no unit, so nothing said
+    /// that one counted folders and the other counted one folder's uses. The repair is a noun on
+    /// every row, and this is the population check on it — a tenth category cannot arrive without
+    /// one, and cannot arrive with a plural that was never written.
+    @Test
+    func everyMemoryRowsCountNamesTheThingItCounts() {
+        for category in MemoryCategory.allCases {
+            let one = category.countedEntries(1)
+            let two = category.countedEntries(2)
+            let none = category.countedEntries(0)
+
+            #expect(one == "1 \(category.singularNoun)", "\(category.title)")
+            #expect(two == "2 \(category.pluralNoun)", "\(category.title)")
+            // Zero takes the plural, which is the form the empty row renders.
+            #expect(none == "0 \(category.pluralNoun)", "\(category.title)")
+
+            // A noun, not a bare number and not the unitless word this replaced.
+            #expect(!category.singularNoun.isEmpty, "\(category.title) counts nothing in particular")
+            #expect(category.singularNoun == category.singularNoun.lowercased(), "\(category.title)")
+            #expect(category.pluralNoun == category.pluralNoun.lowercased(), "\(category.title)")
+            for noun in [category.singularNoun, category.pluralNoun] {
+                #expect(!noun.contains("saved"), "\(category.title) still infers its unit")
+            }
+
+            // A copied singular is the mistake this catches: the nouns are written by hand, and
+            // one reading "2 copied item" is invisible to a test that only checks presence.
+            #expect(category.singularNoun != category.pluralNoun, "\(category.title) is not pluralised")
+        }
+    }
+
+    /// **Every row's noun, by value** — the check the population test above cannot make.
+    ///
+    /// That test compares `countedEntries` against the same two properties it reads, so it holds
+    /// structure and is blind to a wrong word by construction. **All nine are pinned rather than the
+    /// five this started with** (PR #155 review, F4): the reviewer's V2, V3 and V4 renamed
+    /// *artifacts* to "files", *apps* to "programs" and *routines* to "automations", and all three
+    /// survived the whole suite. **Artifacts is the sharpest of the three**, because it is one of
+    /// the nouns the new §7 Memory manual row asks the founder to look at hardest — a word under
+    /// active question with nothing holding whichever answer comes back.
+    ///
+    /// A nine-row table rather than three added lines, for the reason the wipe sentence's own table
+    /// gives: these are the page's product vocabulary, and a pass that rewords one should have to
+    /// say so here.
+    @Test
+    func everyMemoryRowsNounIsTheOneTheFoundersChose() throws {
+        let nouns: [MemoryCategory: (singular: String, plural: String)] = [
+            .routines: ("routine", "routines"),
+            .workspaces: ("workspace", "workspaces"),
+            .taskHistory: ("task", "tasks"),
+            .recentArtifacts: ("artifact", "artifacts"),
+            .outputLocations: ("folder", "folders"),
+            .clipboardHistory: ("copied item", "copied items"),
+            .snippets: ("snippet", "snippets"),
+            .approvedApps: ("app", "apps"),
+            .resumableTasks: ("unfinished task", "unfinished tasks")
+        ]
+
+        // The table covers the population rather than a subset of it, so a tenth row fails here too.
+        #expect(Set(nouns.keys) == Set(MemoryCategory.allCases))
+
+        for category in MemoryCategory.allCases {
+            // `try #require` rather than a subscript: a missing key traps the whole test process,
+            // and a trapped process costs every other test in the run its result.
+            let expected = try #require(nouns[category], "\(category.title) has no expected noun")
+            #expect(category.countedEntries(1) == "1 \(expected.singular)", "\(category.title)")
+            #expect(category.countedEntries(2) == "2 \(expected.plural)", "\(category.title)")
+        }
+
+        // The two the founder actually compared, spelled out at real counts so the pair the report
+        // was about is readable here rather than only in the ticket's history.
+        #expect(MemoryCategory.outputLocations.countedEntries(1) == "1 folder")
+        #expect(MemoryCategory.taskHistory.countedEntries(184) == "184 tasks")
+        // Not "1 task": task history's rows are tasks too, the two rows sit on one page, and the
+        // stores are disjoint — so a bare noun here invites adding the two counts together.
+        #expect(MemoryCategory.resumableTasks.countedEntries(1) == "1 unfinished task")
+    }
+
     /// Task history is the one row that speaks for more than one file, and the three it carries are
     /// named rather than counted: a reader wondering where screen records go should find the answer
     /// in an assertion, not in a number.
