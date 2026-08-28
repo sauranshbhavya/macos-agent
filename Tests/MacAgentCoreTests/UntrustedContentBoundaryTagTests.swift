@@ -225,6 +225,108 @@ struct UntrustedContentBoundaryTagTests {
         #expect(scalarLines(of: wrapper).last == "\(fixedTagBoundary.observedEnd) id=screen")
     }
 
+    /// **`Sources/` never mints a boundary of its own, and never pins one across prompts**
+    /// (PR #158 review, F6).
+    ///
+    /// Two properties the type system cannot state were asserted in doc comments as greps that exit
+    /// 1 today, with nothing holding either — which is the exact shape SONNY-269 exists to refuse, so
+    /// leaving them in prose on this branch would have been the branch contradicting its own thesis.
+    ///
+    /// 1. **A caller-chosen tag.** `Delimiters(tag: "A")` is a valid boundary with zero entropy
+    ///    against anyone who can read the source. `init?(tag:)` is `internal` now, which puts it out
+    ///    of `Sources/MacAgent`'s reach by compilation; this covers the half the compiler cannot,
+    ///    a caller inside `MacAgentCore` itself.
+    /// 2. **A pinned tag.** `decisionPrompt`'s `delimiters:` parameter defaults to a fresh draw, but
+    ///    a default prevents nothing once an argument is supplied — a runner that hoisted
+    ///    `forOnePrompt()` out of its per-iteration loop and passed the same value every time would
+    ///    still pass `theTagIsFreshForEveryPromptAndNeverReused`, which drives the builder rather
+    ///    than the loop. So the population of `forOnePrompt` in `Sources/` is pinned instead: its own
+    ///    declaration, and the two default arguments. A fourth mention is a fourth minting site, and
+    ///    the runner is where one would appear.
+    ///
+    /// **Comment-stripped, so the several doc-comment mentions of both names do not mask a real
+    /// one** — and the assertion below would be vacuous without that, since this file's own prose
+    /// names them too.
+    @Test
+    func noProductionSourceMintsABoundaryOfItsOwn() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let walker = try #require(
+            FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil),
+            "could not enumerate Sources/"
+        )
+
+        var callerChosen: [String] = []
+        var minting: [String: Int] = [:]
+        var filesRead = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            if code.contains("Delimiters(tag:") {
+                callerChosen.append(url.lastPathComponent)
+            }
+            let mints = code.components(separatedBy: "forOnePrompt").count - 1
+            if mints > 0 {
+                minting[url.lastPathComponent] = mints
+            }
+        }
+
+        #expect(filesRead > 100, "the enumerator saw \(filesRead) app sources — too few to be the real tree")
+        #expect(
+            callerChosen.isEmpty,
+            """
+            \(callerChosen.sorted()) chooses a boundary tag instead of drawing one. A chosen tag has \
+            no entropy against a reader of this source, and the type still says Delimiters.
+            """
+        )
+        #expect(
+            minting == [
+                "UntrustedContentBoundary.swift": 1,
+                "VisionSessionPromptBuilder.swift": 1,
+                "WebResearchSynthesizer.swift": 1
+            ],
+            """
+            forOnePrompt is minted in \(minting.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }) \
+            — it may appear only as its own declaration and as the two prompt builders' default \
+            arguments. A fourth site is something other than a prompt builder deciding when a tag is \
+            drawn, and a tag drawn anywhere but per-prompt can be pinned across a session.
+            """
+        )
+    }
+
+    /// **The sweep above, shown flagging both defects it names**, this suite's own rule.
+    @Test
+    func theMintingSweepFlagsAChosenTagAndAHoistedDraw() {
+        let chosen = """
+        enum Convenience {
+            static let boundary = UntrustedContentBoundary.Delimiters(tag: "AAAAAAAAAAAAAAAAAAAA")
+        }
+        """
+        #expect(chosen.contains("Delimiters(tag:"))
+
+        let hoisted = """
+        final class Runner {
+            private let delimiters = UntrustedContentBoundary.Delimiters.forOnePrompt()
+            func iterate() -> String {
+                VisionSessionPromptBuilder.decisionPrompt(goal: "g", delimiters: delimiters)
+            }
+        }
+        """
+        #expect(hoisted.components(separatedBy: "forOnePrompt").count - 1 == 1)
+
+        // And the comment-stripping the live sweep runs first does not hide either, while it does
+        // hide the same names written in prose — which is why the live sweep can be exact.
+        let described = "// Delimiters(tag:) and forOnePrompt, described rather than called\nlet x = 1"
+        let stripped = TestSourceTree.codeLines(of: described).map(\.text).joined(separator: "\n")
+        #expect(!stripped.contains("Delimiters(tag:"))
+        #expect(!stripped.contains("forOnePrompt"))
+    }
+
     // MARK: - Telling the model
 
     /// **The rule names all four of this prompt's markers and the tag**, so a rule that declared three

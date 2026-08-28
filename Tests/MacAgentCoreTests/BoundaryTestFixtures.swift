@@ -1,5 +1,8 @@
 import Foundation
-import MacAgentCore
+// `@testable` rather than a plain import, because `Delimiters(tag:)` is `internal` — PR #158's F6.1
+// closed a caller-chosen tag out of `Sources/` with the compiler, and this file is the reason it can
+// be internal at all: every consumer of these two fixtures is in this target.
+@testable import MacAgentCore
 
 // MARK: - A boundary with a tag a test can name (SONNY-234)
 

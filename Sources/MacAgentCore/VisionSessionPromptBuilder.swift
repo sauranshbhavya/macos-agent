@@ -37,10 +37,15 @@ public enum VisionSessionPromptBuilder {
     /// One call is one prompt: an iteration's tag is not the previous iteration's, which is what stops
     /// a model-authored history entry from carrying a live tag back into untrusted content.
     ///
-    /// The parameter exists so a test can name the delimiter text it asserts on. Production never
-    /// passes it — `git grep -n "delimiters:" -- Sources/MacAgentCore/VisionSessionRunner.swift` exits
-    /// 1 — and a caller that did would be pinning a tag across prompts, which is the one thing the
-    /// default is here to prevent.
+    /// The parameter exists so a test can name the delimiter text it asserts on. **A caller that
+    /// passed it could pin one tag across a whole session, and the default prevents nothing once an
+    /// argument is supplied** — this paragraph used to say the opposite, backed by a `git grep` that
+    /// exits 1 today and by nothing that would keep it exiting 1 (PR #158 review, F6.2). What holds
+    /// it is `UntrustedContentBoundaryTagTests.noProductionSourceMintsABoundaryOfItsOwn`, which pins
+    /// the population of `forOnePrompt` in `Sources/` to its own declaration and the two default
+    /// arguments: a runner that hoisted a draw out of its per-iteration loop would be a fourth site.
+    /// Note that `theTagIsFreshForEveryPromptAndNeverReused` would *not* catch that — it drives this
+    /// builder, not the loop.
     public static func decisionPrompt(
         goal: String,
         appDisplayName: String,
@@ -136,16 +141,31 @@ public enum VisionSessionPromptBuilder {
     /// the fold is safe here at all: it emits two characters that appear in no delimiter, so unlike
     /// `escapeAttribute`'s `_` it can never *rebuild* one.
     ///
-    /// **This is the only string interpolated into `systemRules` or `responseContract`, and that is a
-    /// counted claim rather than an impression** (SONNY-231's second scope item). The whole population
-    /// of interpolations in this file is **ten distinct sites** — before this change and after it
-    /// alike (`git show 5339640:Sources/MacAgentCore/VisionSessionPromptBuilder.swift | grep -oE
-    /// '[\\][(][^()]*([(][^()]*[)])?[^()]*[)]' | sort -u | wc -l` -> 10, and the same pipeline over the
-    /// working file -> 10). Of those, `systemRules` interpolates this value and `imageWidth`/`imageHeight`;
-    /// `responseContract` interpolates only `imageWidth`/`imageHeight`. Both are `Int`, so neither can
-    /// carry a line break at all. The remaining sites are `decisionPrompt`'s, which composes segments
-    /// already wrapped or already escaped — including `source=\(appDisplayName)`, which goes through
-    /// `escapeAttribute` — and `observedBlock`'s two, which fold their own.
+    /// **`systemRules` interpolates two strings, and this is one of them** (SONNY-231's second scope
+    /// item, restated after SONNY-234 — PR #158 review, F4). This paragraph used to say "the only
+    /// string" over "ten distinct sites", and **SONNY-234's own edit made both halves false in the
+    /// same diff that introduced them**: the tag rule is an eleventh interpolation, and it goes into
+    /// `systemRules`, four lines below this value.
+    ///
+    /// Counted rather than recalled. The population of interpolations in this file is **eleven
+    /// distinct sites** (`grep -oE '[\\][(][^()]*([(][^()]*[)])?[^()]*[)]'
+    /// Sources/MacAgentCore/VisionSessionPromptBuilder.swift | sort -u | wc -l` -> 11 at the working
+    /// file; the same pipeline over `git show 5339640:…` still answers 10, so SONNY-231's half is
+    /// intact and the eleventh is this branch's). Of those:
+    ///
+    /// - `systemRules` interpolates **two** strings — this one, and `delimiters.segmentTagRule` —
+    ///   plus `imageWidth`/`imageHeight`.
+    /// - `responseContract` interpolates only `imageWidth`/`imageHeight`. Both are `Int`, so neither
+    ///   can carry a line break at all.
+    /// - The rest are `decisionPrompt`'s, which composes segments already wrapped or already escaped
+    ///   — including `source=\(appDisplayName)`, which goes through `escapeAttribute` — and
+    ///   `observedBlock`'s two, which fold their own.
+    ///
+    /// **The second string is not attacker-influenced**, which is why nothing here is unsafe:
+    /// `segmentTagRule` is code-authored prose plus twenty `A`–`Z` letters drawn from the CSPRNG, it
+    /// is one line, and `theSegmentTagRuleOpensNoBoundaryLine` pins that it begins with no delimiter.
+    /// The defect was that the enumeration a reader uses to check *which* interpolated values are
+    /// unescaped no longer matched the file.
     private static func escapedForProse(
         _ value: String,
         delimiters: UntrustedContentBoundary.Delimiters

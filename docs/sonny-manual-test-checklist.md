@@ -2115,9 +2115,13 @@ it is checkable rather than a claim.
       over a line whose only digits are a `something:129-131` citation, or a thousands-separated
       number like `1 011 740`.** Before this change those painted; now they should not.
 - [ ] **(SONNY-278, the other direction)** With a real six-digit code visible on screen — a
-      verification code in a mail or messages window, however it is spelled: `483291`, `483 291` or
-      `483-291` — start the same session. **The code must still be blacked out.** A code that reaches
-      the thumbnail unpainted is the more serious finding of the two.
+      verification code in a mail or messages window, however it is spelled: `483291`, `483 291`,
+      `483-291`, **and a label pressed straight against its colon with no space, `PIN:483-291` or
+      `token:483-291`** — start the same session. **The code must still be blacked out.** A code that
+      reaches the thumbnail unpainted is the more serious finding of the two. (The fourth spelling is
+      here because PR #158's review found the first version of this change had stopped painting it,
+      and the three spellings originally listed all put a space or a context word beside the digits,
+      so none of them could have caught that.)
 
 ## 8. How to report back
 
