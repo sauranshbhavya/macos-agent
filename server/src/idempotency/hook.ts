@@ -112,6 +112,21 @@ const RELEASE_ON_CODES: ReadonlySet<string> = new Set([
  * place it mattered, which is exactly the kind of pairing that rots when a third case arrives.
  */
 type ClaimState =
+  /**
+   * Served without §9.2's guarantees, and said so explicitly rather than by being absent
+   * (SONNY-133).
+   *
+   * Two shapes reach it: a `POST` carrying no `Idempotency-Key`, which is served by founder decision
+   * of 2026-08-28, and a `POST` reaching a deployment with no key store. **The distinction this case
+   * exists to draw is between "no guarantee was available" and "no claim was taken", and it decides
+   * whether a call is billed.** `null` covers several requests that took no claim and must not
+   * take one later — a replay, both `409`s, an over-long key — and metering has to treat those
+   * exactly opposite to a keyless request: the keyless one is metered unconditionally, because
+   * dropping its event would make it free, while a conflicting one must not be metered at all,
+   * because taking this key's one claim would leave the request that really is doing the work with
+   * nothing to spend. `key` is what was presented, if anything, so the event can record it.
+   */
+  | { readonly kind: "unguaranteed"; readonly key: string | undefined }
   | {
       readonly kind: "claimed";
       readonly accountScope: string;
@@ -220,6 +235,7 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
         { route: `POST ${routeUrl}` },
         "POST carries no Idempotency-Key; served without the section 9.2 guarantees",
       );
+      request.idempotency = { kind: "unguaranteed", key: undefined };
       return;
     }
     if (key.length > MAXIMUM_KEY_LENGTH) {
@@ -237,6 +253,7 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
         { route: `POST ${routeUrl}` },
         "Idempotency-Key presented with no key store configured; served without its guarantees",
       );
+      request.idempotency = { kind: "unguaranteed", key };
       return;
     }
 
@@ -277,7 +294,10 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
       if (claim.requestId !== undefined) void reply.header("Sonny-Request-Id", claim.requestId);
       return payload;
     }
-    if (!deps || claim === null) return payload;
+    // `unguaranteed` has no claim to complete or release — that is what it means — so it leaves here
+    // beside `null`. It is a separate case from `null` only for metering, which bills it and does
+    // not bill the others (`metering/hook.ts`).
+    if (!deps || claim === null || claim.kind === "unguaranteed") return payload;
 
     const status = reply.statusCode;
     const body =

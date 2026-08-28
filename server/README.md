@@ -25,6 +25,7 @@ Run from `server/`.
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
 | `npm run revocations` | What provider-side revocation is still owed on closed accounts. Exit 1 when any is. See "Owed revocations" below. |
+| `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
@@ -81,6 +82,66 @@ docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 pos
 DATABASE_URL="postgres://postgres:postgres@localhost:55433/postgres" npm test
 docker rm -f sonny-gw-db
 ```
+
+## Reading what a call cost (SONNY-133)
+
+Every call on every model route writes one row to `sonny.metering_event` — contract §11. The table
+holds **no content**, which is what lets it sit on the long side of §10.3's two clocks: raw request
+and response content lives 30 days, usage lives indefinitely, and nothing in this gateway deletes or
+ages a metering row.
+
+```
+npm run usage -- sessions   # one block per screen-control session
+npm run usage -- routes     # one block per route
+npm run usage -- span       # how many events, and how far back they go
+```
+
+Every command takes `--account`, `--session`, `--task`, `--since` and `--until`.
+
+**`sessions` is the one the pricing waits on.** A screen-control session is up to twelve iterations
+(`VisionSessionLimits.default.maximumIterations`), each its own request, its own upstream call and
+its own row; the gateway holds no session state, so a session's cost is the sum over the rows sharing
+one client-minted `session_id`. That figure is what SONNY-17 turns into a credit weight, and it did
+not exist anywhere before this row of work: `AIUsageCallKind` had three cases and none was vision.
+
+**Two things every figure is read with, and the command prints both under every report.** Image size
+drives vision token cost, and SONNY-114 changed what leaves the Mac — a cost measured over sessions
+that ran before it is a number about to move. And a token count of `0` on `screen.analyze` is an
+*absence* rather than a measurement: that route reports tokens only when the provider did and
+estimates nothing, because the dominant term is an image whose cost is a function of pixel dimensions
+and a provider's own tiling rule. The `no tokens` column counts those calls, and the megapixel figure
+is what sizes them.
+
+**It prints no price, and it must not learn one.** Tokens, bytes, pixels, iterations, durations and
+outcomes are measurements; a rate, a plan or a credit weight is SONNY-17's decision, and putting one
+here would be taking that decision in the wrong ticket.
+
+**A command rather than a screen, by decision of 2026-08-28.** The usage UI is SONNY-214's. What this
+row owes is the founders' pre-launch measurement, answerable before any UI exists.
+
+### What is metered, and what is deliberately not
+
+The five model routes are metered. Every other `POST` this gateway serves is declared unmetered by
+name in `src/metering/event.ts`, and a population test walks the built app's real route table — so a
+sixth content-bearing route fails the suite until somebody classifies it either way, rather than
+shipping free.
+
+Inside a metered route, a request is recorded when it holds its idempotency key's claim, or when it
+carried no key at all. **A repeat that replayed a stored response writes nothing** — it ran nothing —
+and neither does a `409 idempotency.conflict`, which is the subtler of the two: that request never
+took the key's claim, so metering it would take the claim out from under the request that is doing
+the work. Contract §9.2's "at most once per idempotency key, ever" is kept by
+`claimMeteringEvent` in `src/idempotency/store.ts`, taken **inside the same transaction as the
+insert**, and there is no second mechanism beside it — a unique constraint here would change the
+failure shape rather than add safety.
+
+**A retry that genuinely re-ran goes unbilled, and that is the guarantee rather than a gap.** §9.2
+releases the key on a retryable failure so a `429` is not a twenty-four-hour ban on that operation;
+the release does not clear the metering claim, so the second attempt's usage is not charged. The
+direction is deliberate: "unable to double-bill a user" errs toward the user.
+
+**An incognito run is metered identically.** §10.1: incognito changes what is stored, never what is
+billed. Its event carries `retention: none` and every cost field a standard run's carries.
 
 ## Authenticating a request
 
