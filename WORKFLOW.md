@@ -343,8 +343,18 @@ than validating:
   the implementer introduced, which is how one merged on 2026-08-17. **A server-only diff is
   the symmetric case, and it is not the docs/comments exemption:** it touches neither
   `Sources/` nor `Tests/`, so the Swift suite and `scripts/warnings` provably cannot see it
-  (Package.swift's four target paths all name `Sources/…` or `Tests/…`, so nothing under
-  `server/` reaches a Swift target), and rerunning them proves nothing about it — rerun the
+  (Package.swift declares five targets, every one of them with a `path:`, and all five name
+  `Sources/…` or `Tests/…` —
+  `grep -cE '\.(target|testTarget|executableTarget)\(' Package.swift` → 5 and
+  `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `2564273` — so
+  nothing under `server/` reaches a Swift target. **This said *four* until 2026-08-27, and it
+  was true when it was written**: the commit that wrote it, `505ef8a`, has four
+  (`git show 505ef8a:Package.swift | grep -cE '\.(target|testTarget|executableTarget)\('` → 4),
+  and the fifth arrived two and a half minutes later in a parallel lane — SONNY-172's
+  `MacAgentTestSupport`, `a0f249e`, which `git merge-base --is-ancestor a0f249e 505ef8a`
+  rejects with exit 1 because neither session could see the other. A count taken about a file
+  another lane is editing is stale before the branch merges, and nothing re-reads it;
+  SONNY-308), and rerunning them proves nothing about it — rerun the
   server's own commands (`npm run build`, `npm test`, `npm run typecheck`) instead, and the
   Swift reruns are owed only when the diff actually touches the app half. A diff touching
   both halves reruns both. PR #85's reviewer reran the full Swift suite for a server-only
