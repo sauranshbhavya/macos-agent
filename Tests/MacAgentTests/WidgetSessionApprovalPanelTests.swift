@@ -339,13 +339,14 @@ struct WidgetSessionApprovalPanelTests {
         // exact site is the pin — the shape `everySessionControlWearsItsOwnAccessibilityLabel` uses
         // for the same reason.
         //
-        // **Only two of the four sites are pinned this way, and that is stated rather than implied.**
-        // The widget's approval panel is the other one
-        // (`theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive` asserts both
-        // of its arguments). The HUD's and Command Center's session context row's are not pinned by
-        // anything, so a swap at either of those two sites is invisible to this suite today. That is
-        // a coverage gap on code SONNY-303 did not touch, filed as SONNY-310 rather than absorbed
-        // here.
+        // **All four sites are pinned this way now, and the swap is also caught as a property of
+        // the population** (SONNY-310, which is the ticket this comment used to file). This said
+        // that only two were — this one and the approval panel's, in
+        // `theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive` — and that a
+        // swap at the HUD or at Command Center's session context row was invisible to the suite.
+        // Both now have a per-site pin of their own, and
+        // `everyStepLineCallPairsItsArgumentsWithTheirOwnFields` sweeps both files whole, so a fifth
+        // panel inherits the guard rather than needing a fifth assert nobody remembers to write.
         let captureReview = try MacAgentSource.region(
             of: MacAgentSource.read("FloatingWidgetView.swift"),
             from: "private struct WidgetCaptureReviewPanel: View {",
@@ -377,5 +378,184 @@ struct WidgetSessionApprovalPanelTests {
         )
         #expect(MacAgentSource.count(of: "Button(action: onPause)", inText: hud) == 1)
         #expect(MacAgentSource.count(of: "WidgetSessionStopButton(", inText: hud) == 1)
+    }
+
+    /// **The two sites nothing pinned, pinned — and the general rule that makes a fifth site
+    /// inherit the guard** (SONNY-310).
+    ///
+    /// Four sites render a session's step line, all four through
+    /// `ScreenControlSessionPresentation.stepLine(iteration:maximumIterations:)`. Two had their
+    /// arguments asserted at the site and two did not, so
+    /// `stepLine(iteration: progress.maximumIterations, maximumIterations: progress.iteration)`
+    /// compiled, rendered **"Step 12 of 2"** to a user watching Sonny move their cursor, and was
+    /// invisible to the whole suite. The existing scans count the *calls*, which is what "the words
+    /// have one owner" needs and which cannot see an argument order at all.
+    ///
+    /// **Two asserts would have closed the two sites and left the shape open**, which is the
+    /// decision the ticket carried rather than the fix it asked for. The blind spot is not those two
+    /// panels; it is that a call-site count reads as coverage for every argument handed to a shared
+    /// presentation helper. So the primary guard here is a property of the *population*: every
+    /// `stepLine` call in either file pairs `iteration:` with an expression ending in `.iteration`
+    /// and `maximumIterations:` with one ending in `.maximumIterations`. A fifth panel gets it
+    /// without anyone remembering to add a pin, which per-site asserts cannot offer.
+    ///
+    /// **The guard is shown to flag the defect before the live sweep is believed**, the discipline
+    /// `UntrustedContentBoundaryScalarMatchingTests` states after a scan that flagged 0 of 13
+    /// historical instances while its own doc promised otherwise. The swapped call is run through
+    /// the same predicate first, verbatim.
+    ///
+    /// What this does *not* hold is the receiver: `iteration: someOtherProgress.iteration` passes.
+    /// That is what the per-site pins are for, and all four now have one — this test's two, the
+    /// approval panel's in
+    /// `theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive`, and the
+    /// capture review's in `theStepLineHasOneOwnerAndNoPanelHandWritesIt`.
+    @Test
+    func everyStepLineCallPairsItsArgumentsWithTheirOwnFields() throws {
+        // The guard first, against the defect itself. A predicate that cannot see a swap would pass
+        // the sweep below and say nothing, which is the failure mode this shape has already had.
+        #expect(Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.iteration,\n    maximumIterations: progress.maximumIterations\n"))
+        #expect(!Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.maximumIterations,\n    maximumIterations: progress.iteration\n"), "the swap the ticket names")
+        #expect(!Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.iteration,\n    maximumIterations: 12\n"), "a literal is not the session's cap")
+        #expect(!Self.pairsItsArgumentsWithTheirOwnFields("\n    iteration: progress.iteration\n"), "a call that lost an argument")
+
+        // Then the live population, which is both files whole rather than four named regions — a
+        // fifth site anywhere in either of them is swept by the same rule.
+        var calls: [String] = []
+        for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
+            let inFile = Self.stepLineCalls(in: try MacAgentSource.read(file))
+            calls.append(contentsOf: inFile)
+        }
+        #expect(calls.count == 4, "the population the two counts above already fix at 3 + 1")
+        for call in calls {
+            #expect(
+                Self.pairsItsArgumentsWithTheirOwnFields(call),
+                "a step line whose arguments do not pair with their own fields: \(call.trimmingCharacters(in: .whitespacesAndNewlines))"
+            )
+        }
+    }
+
+    /// **The HUD's own site, at the site** (SONNY-310) — the receiver as well as the pairing, which
+    /// the population rule above deliberately does not reach.
+    ///
+    /// Anchored on the type name rather than a line number, which is what the ticket's own rebase
+    /// note asks for: it was filed citing `FloatingWidgetView.swift:1716`, restated at `:1719` after
+    /// one rebase, and the line has moved again since. A region opened by a declaration cannot drift
+    /// that way, and a rename fails it loudly, which is the moment to re-check the property.
+    @Test
+    func theHUDsStepLineReadsTheSessionsOwnIterationAndCap() throws {
+        let hud = try MacAgentSource.region(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            from: "private struct WidgetControllingPanel: View {",
+            to: "private struct WidgetClarificationPanel: View {"
+        )
+
+        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: hud) == 1)
+        #expect(MacAgentSource.count(of: "iteration: progress.iteration", inText: hud) == 1)
+        #expect(MacAgentSource.count(of: "maximumIterations: progress.maximumIterations", inText: hud) == 1)
+    }
+
+    /// **Command Center's session context row, at the site** (SONNY-310). The row that carries the
+    /// session's identity above the approval panel, and the one of the four that lives in the other
+    /// file — so a sweep confined to `FloatingWidgetView.swift` would have missed it, which is why
+    /// the population rule above reads both.
+    ///
+    /// A brace block rather than a region between two declarations, because this row's neighbour
+    /// below it is a doc comment rather than a type and an `to:` anchor there would be pinned to
+    /// prose.
+    @Test
+    func commandCenterSessionContextRowsStepLineReadsTheSessionsOwnIterationAndCap() throws {
+        let row = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            openedBy: "private struct CommandCenterSessionContextRow: View {"
+        )
+
+        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "iteration: progress.iteration", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "maximumIterations: progress.maximumIterations", inText: row) == 1)
+    }
+
+    /// Every `ScreenControlSessionPresentation.stepLine(` call's argument text, read to its own
+    /// closing parenthesis by depth rather than to the end of the line it opens on — the calls in
+    /// both files are written across three lines, so a single-line reader would see a bare
+    /// `stepLine(` and conclude nothing (SONNY-310).
+    ///
+    /// Comments are already gone: `MacAgentSource.read` strips both syntaxes before this sees the
+    /// text, which is what stops a sentence *about* a step line from being counted as one.
+    private static func stepLineCalls(in source: String) -> [String] {
+        let anchor = "ScreenControlSessionPresentation.stepLine("
+        var calls: [String] = []
+        var searchStart = source.startIndex
+        while let found = source.range(of: anchor, range: searchStart..<source.endIndex) {
+            searchStart = found.upperBound
+            var depth = 1
+            var index = found.upperBound
+            var call = ""
+            while index < source.endIndex {
+                let character = source[index]
+                if character == "(" {
+                    depth += 1
+                }
+                if character == ")" {
+                    depth -= 1
+                    if depth == 0 {
+                        break
+                    }
+                }
+                call.append(character)
+                index = source.index(after: index)
+            }
+            calls.append(call)
+        }
+        return calls
+    }
+
+    /// The labelled arguments of one such call, split at commas that are not inside a nested call or
+    /// subscript.
+    private static func arguments(in call: String) -> [(label: String, expression: String)] {
+        var depth = 0
+        var current = ""
+        var pieces: [String] = []
+        for character in call {
+            switch character {
+            case "(", "[":
+                depth += 1
+            case ")", "]":
+                depth -= 1
+            case "," where depth == 0:
+                pieces.append(current)
+                current = ""
+                continue
+            default:
+                break
+            }
+            current.append(character)
+        }
+        pieces.append(current)
+        return pieces.compactMap { piece in
+            let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let colon = trimmed.firstIndex(of: ":") else {
+                return nil
+            }
+            return (
+                label: String(trimmed[trimmed.startIndex..<colon]).trimmingCharacters(in: .whitespaces),
+                expression: String(trimmed[trimmed.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            )
+        }
+    }
+
+    /// Whether one call hands each label the field it is named for. The two suffixes are what
+    /// separates the swap from the correct call — `.maximumIterations` does not end in
+    /// `.iteration`, which is the whole discrimination — and a literal or a missing argument fails
+    /// both.
+    private static func pairsItsArgumentsWithTheirOwnFields(_ call: String) -> Bool {
+        let arguments = arguments(in: call)
+        guard arguments.count == 2 else {
+            return false
+        }
+        guard arguments[0].label == "iteration", arguments[1].label == "maximumIterations" else {
+            return false
+        }
+        return arguments[0].expression.hasSuffix(".iteration")
+            && arguments[1].expression.hasSuffix(".maximumIterations")
     }
 }
