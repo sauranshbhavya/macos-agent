@@ -1030,12 +1030,20 @@ without which the items cannot be run at all.
 
    **What still has to come from outside this repository, and it is the only thing left.** The four
    rows below need a real Supabase project: its JWT secret, issuer and anon key, and a Postgres the
-   container can reach with this repository's migrations applied (`npm run migrate -- up`). **No such project exists yet** — that is founder-owned setup, recorded
-   on SONNY-307, and it is the whole of what stands between these rows and being runnable. The code
-   is in place and measured end to end against the container: the route answers, reaches Postgres,
-   calls Supabase, and is refused only because the project name in the test configuration does not
-   resolve. **The code that mails you is Supabase's, not ours** — so when the project exists,
-   whether the mail arrives is a Supabase project setting (its SMTP), not a change here.
+   container can reach with this repository's migrations applied (`npm run migrate -- up`). **The
+   project exists** — `zpyyljfsqrxulhmgkhfp` (sonny-dev) — and what is left is the founder-owned
+   setup around it, deferred as one sitting on **SONNY-280** (its founder-deferral comment of
+   2026-08-27, resume steps (1) to (5)). **This said "No such project exists yet ... recorded on
+   SONNY-307", which was true when it was written on 2026-08-27 at 17:52 and superseded by that
+   deferral comment the same day** (corrected 2026-08-28, SONNY-330 — the same correction PR #147's
+   review made to "What every call cost", which carries the project detail). The failure the
+   correction prevents is specific: a founder goes to create a project, finds sonny-dev already
+   there with its migrations applied, never opens the JWT Keys page, and meets a 401 on every call
+   with nothing here to explain it. The code is in place and measured end to end against the
+   container: the route answers, reaches Postgres, calls Supabase, and is refused only because the
+   project name in the test configuration does not resolve. **The code that mails you is Supabase's,
+   not ours** — so whether the mail arrives is a Supabase project setting (its SMTP) rather than a
+   change here, and SONNY-280's step (2) is that setting.
 
    The three rows that need only the app can be run today — the two pointed at a host which does
    not answer, and the narrow-window layout one.
@@ -1053,10 +1061,15 @@ bottom-left account row → **Sign in**.
 
 - [ ] **(new 2026-08-27, SONNY-306; updated 2026-08-27, SONNY-307) — Terminal, not the app.** Run
       `cd server && ./scripts/deploy.sh local` twice from the same terminal: once with none of the
-      six variables exported, and once with whichever of them you actually hold exported first.
-      Both runs must end with `==> ok — serving <sha>`. The first must say `forwarding 0 of 6` and
-      then list all six names on the `not set here` line; the second must say `forwarding N of 6`
-      and list only the ones you left out. **No run may print a credential's value anywhere** —
+      eleven credentials exported, and once with whichever of them you actually hold exported first.
+      Both runs must end with `==> ok — serving <sha>`. The first must say `forwarding 0 of 11` and
+      then list all eleven names on the `not set here` line; the second must say `forwarding N of
+      11` and list only the ones you left out. (**The counts said 6 until 2026-08-28**, which was
+      right when this row was written and went stale as SONNY-130, SONNY-131 and SONNY-132 each
+      added provider keys to the same array —
+      `sed -n '/^PASSTHROUGH=(/,/^)/p' server/scripts/deploy.sh | grep -cE '^  [A-Z_]+$'` → 11 at
+      `55f4c9b`. Corrected by SONNY-330. The six the paragraph above names are still the gateway's
+      own; the script's count is over all eleven.) **No run may print a credential's value anywhere** —
       that is the row's real subject, so read the output rather than skimming it. The first run ends
       with `auth routes are NOT mounted`; the second ends with `auth routes are mounted` if you
       exported all six, and otherwise refuses to start naming what is missing.
@@ -1129,25 +1142,101 @@ bottom-left account row → **Sign in**.
       button on one line, or stacked, never character-wrapped. Both are
       `SettingsAdaptiveControlRow`s, which is the pattern that exists for exactly this.
 
+### Setup for every section behind the gateway (new 2026-08-28, SONNY-330)
+
+**Every section from here down that runs something against the gateway wants the same setup, and
+until this note each described that setup for itself.** They drifted apart as the gateway changed
+underneath them, which is what this note exists to stop: SONNY-130's blocked its rows on SONNY-307,
+which had landed; SONNY-131's blocked its rows on "SONNY-307's successor", which was never a ticket
+and is not one now; SONNY-132's assumed a container up and serving while its neighbour said none
+could exist. Each section below now states only what it *adds* to this.
+
+**1. A gateway answering.** `cd server && ./scripts/deploy.sh local`, exactly as the sign-in section
+above describes it — one command, no second hand-run step. It forwards, by name, whichever of
+**eleven** credentials you exported in that shell
+(`sed -n '/^PASSTHROUGH=(/,/^)/p' server/scripts/deploy.sh | grep -cE '^  [A-Z_]+$'` → 11 at
+`55f4c9b`): the six gateway ones that section lists, plus `OPENAI_API_KEY`, `TAVILY_API_KEY`,
+`VISION_API_KEY`, `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY`. Export whichever ones a section names
+*before* that command, and nowhere else.
+
+**2. The debug build pointed at it.** `defaults write com.sonny.MacAgent SonnyBackendBaseURL
+http://127.0.0.1:8080`, as that section describes, with the dialog's debug line as the confirmation.
+
+**3. The packaged app launched from Finder, with no provider key exported in any shell it was
+launched from.** A Finder launch inherits no shell environment, which is the whole point: a row that
+passes only because a key happened to be exported has proved nothing.
+
+**SONNY-307 landed, so nothing below blocks on it.** `src/server.ts` supplies `AuthDeps` now — PR
+#137, `f8f5c75` (`git merge-base --is-ancestor f8f5c75 origin/main` exits 0) — and the container's
+own probe reports what that produced: given `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER` and
+`SUPABASE_ANON_KEY` (the three trigger names) together with `DATABASE_URL` and `RATE_LIMIT_SALT`,
+`./scripts/deploy.sh local` ends `==> auth routes are mounted`. Given none of the three it ends
+`auth routes are NOT mounted` and serves health alone, which is correct rather than a defect. Given
+some of them the container refuses to start and names what is missing, which is also correct.
+
+**What does gate these rows is signing in through the app.** Everything except `/v1/health` and the
+two sign-in routes is authenticated, so every row that runs a command needs a real sign-in, and that
+needs a Supabase project that can mail you a code. **That is the deferred identity sitting:
+SONNY-280's founder-deferral comment of 2026-08-27, and its numbered resume checklist, steps (1)
+through (5), in that order.** SONNY-280 is the ticket to name. There is no "SONNY-307 successor",
+and nothing on the board is waiting to mount auth routes — 93 open items, none of them that
+(`scripts/plane list open`, read 2026-08-28).
+
+**Do not go looking for the project: it exists**, and its migrations were applied. "What every call
+cost" below carries the detail rather than this note repeating it — the project ref, the
+session-pooler connection string that the direct host cannot replace, and the three things that
+block a sign-in independently of one another (the JWT key mode, the locked Magic Link template, and
+a `deploy.sh local` that has never run against the real project). Read that section before the
+sitting, not during it.
+
+**Two migrations landed after that record, so the resume runs `npm run migrate -- up` again first.**
+SONNY-280 recorded ten applied to the real project; the repository carries twelve
+(`ls server/src/db/migrations/*.sql | wc -l` → 12 at `55f4c9b`), and `0011` and `0012` were both
+authored after the deferral comment
+(`git log --diff-filter=A --format='%ad' --date=iso -- 'server/src/db/migrations/001[12]*.sql'` →
+two lines, `2026-08-27 22:06:51 -0400` and `2026-08-27 18:11:32 -0400`, against a deferral comment
+written at `2026-08-27T21:39:52Z`, which is 17:39 -0400 — both after it). Sign-in reaches Postgres
+before it calls Supabase, so a project missing them is a 500 that looks nothing like a missing
+migration.
+
+**None of this was established by running it, and that is deliberate.** The credentials are the
+founders' and the sign-in happens in the app, which no agent tests; what is above is the tree as it
+stands at `55f4c9b` plus what SONNY-280's deferral recorded. **Resume step (4) is where a founder
+finds out** whether steps (1) to (3) actually landed — export the real names, run the one command,
+read the `auth routes are mounted` line.
+
+**What can be run before that resume**, so these sections are not one flat wall:
+
+- **SONNY-132's `model routing` row.** That line is printed at startup by every container, signed in
+  or not (`server/src/app.ts:343` at `55f4c9b`), so it needs step 1 and nothing else.
+- **SONNY-130's three-minute recording row.** The refusal is the Mac's, checked before the file is
+  even read (`Sources/MacAgentCore/OpenAITranscriber.swift:155` at `55f4c9b`) — no container, no
+  sign-in.
+- **SONNY-130's signed-out row.** A build that has never signed in is in the same state as one that
+  signed out: with no tokens stored the request is refused before it is sent
+  (`Sources/MacAgentCore/SonnyBackendClient.swift:436` at `55f4c9b`), which is the sentence that row
+  asks for.
+- **The rows that say "Terminal, not the app" on their own face** — the two in the sign-in section
+  above, and the migration rehearsal in "What every call cost". Those need a Postgres, not a
+  project.
+
+Every other row in these sections waits on the sitting. A 401, a `404 resource.not_found` on a
+sign-in route, or a command that stops with *"Sign in to Sonny to run this."* is that wait showing
+itself — not a defect, and not worth reporting until step (5).
+
 ### The four routes behind the backend (new 2026-08-27, SONNY-130)
 
 **This section is where the row stops being plumbing.** The planner, web-research synthesis, voice
 transcription and web search all run through Sonny's own gateway now, under your sign-in, with no
 provider key anywhere on your Mac.
 
-**Setup — three things, and the third is the one that is easy to get wrong.**
+**Setup is the shared note above, plus `OPENAI_API_KEY` and `TAVILY_API_KEY` exported before
+`./scripts/deploy.sh local`.** Both are already in the script's passthrough, put there by this
+ticket's own work. **Two of the rows below run today** — the three-minute recording row and the
+signed-out row — **and the rest wait on SONNY-280's resume**, for the reason the note gives.
 
-1. A gateway has to be answering *with provider credentials*, **and none exists yet that can**.
-   `./scripts/deploy.sh local` forwards the gateway's own credentials since SONNY-306, but
-   `src/server.ts` supplies no `AuthDeps`, so the container still mounts health alone and every one
-   of these routes answers 401 whatever is forwarded — SONNY-307 is the ticket for that, and these
-   rows cannot be run until it lands. When it has, the same script wants `OPENAI_API_KEY` and
-   `TAVILY_API_KEY` added to its passthrough alongside the Supabase variables.
-2. The debug build pointed at it, exactly as the sign-in section above describes
-   (`defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`).
-3. **Launch the packaged app from Finder, and do not export any provider key in the shell you
-   launched anything from.** A Finder launch inherits no shell environment, which is the whole
-   point: if any of these work only because a key happened to be exported, the row proved nothing.
+*(This paragraph used to block every row on SONNY-307, which is Done and merged, and to ask for two
+keys to be added to a passthrough that already held them. Corrected 2026-08-28, SONNY-330.)*
 
 - [ ] **(new 2026-08-27, SONNY-130) — the headline check.** Sign in, then run an ordinary typed
       command ("open Safari"). It should plan and run exactly as before. **This is the first time in
@@ -1187,8 +1276,11 @@ tests and were measured against a live container while the ticket was built, so 
 hook on *every* `POST` did not disturb ordinary use, which only a real app run shows. The second is
 what a genuinely flaky network does, which no test can stage.
 
-Setup is the sign-in section's setup, plus the container from the section above. Nothing here needs a
-provider key.
+Setup is the shared note above; nothing here needs a provider key. **Every row here waits on
+SONNY-280's resume** — the first two run commands in the app, and the last, though it is a Terminal
+row, needs an access token from a signed-in run. (Pointer added 2026-08-28, SONNY-330: this said
+"the sign-in section's setup, plus the container from the section above" and said nothing about the
+wait.)
 
 - [ ] **(new 2026-08-28, SONNY-300) — the regression row, and the important one.** With the app
       pointed at a local gateway, sign in and run three or four ordinary commands of different kinds
@@ -1225,12 +1317,13 @@ provider key.
 under your sign-in, with no `OPENCODE_API_KEY` anywhere — that variable is read by nothing, and the
 app no longer has a "screen control is not configured" state at all.
 
-**Setup is the section above's, plus one variable.** The same gateway, the same
-`SonnyBackendBaseURL` default, the same Finder launch with no provider key exported — and
-`./scripts/deploy.sh local` now also forwards `VISION_API_KEY`, which is the credential this route
-needs. **These rows cannot be run until SONNY-307's successor gives you a container that mounts
-authenticated routes**, exactly as the section above says of its own; without one every row here
-answers 401.
+**Setup is the shared note above, plus one variable:** `./scripts/deploy.sh local` also forwards
+`VISION_API_KEY`, which is the credential this route needs. **Every row here runs a real
+screen-control session, so every one of them waits on SONNY-280's resume** — a screen-control run
+plans first, and planning is authenticated, so a signed-out app never reaches a capture at all.
+
+*(This paragraph used to block these rows on "SONNY-307's successor". No such ticket has ever
+existed, and SONNY-307 itself is Done and merged. Corrected 2026-08-28, SONNY-330.)*
 
 - [ ] **(new 2026-08-28, SONNY-131) — the headline check.** Packaged `.app` from Finder, no
       environment variables at all. Run a real screen-control task through several iterations — a
@@ -1280,11 +1373,16 @@ your Mac. `SONNY_PLANNER` is gone, `CerebrasPlanner` is gone, and the app holds 
 no vendor endpoint and no model identifier. Anthropic ships as a real second provider, so a route
 can fail over when the first provider is having a bad hour.
 
-**Setup.** The same three things the SONNY-130 section above lists, plus: `./scripts/deploy.sh local`
-now forwards `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY` alongside `OPENAI_API_KEY` and
-`TAVILY_API_KEY`, so exporting a key in the launching shell is all it takes to give the container
-one. **These rows change only what is exported before `./scripts/deploy.sh local`, and never the
-app** — that is the whole thing being checked.
+**Setup is the shared note above, plus the keys you want the container to hold:**
+`./scripts/deploy.sh local` forwards `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY` alongside
+`OPENAI_API_KEY` and `TAVILY_API_KEY`, so exporting a key in the launching shell is all it takes to
+give the container one. **These rows change only what is exported before `./scripts/deploy.sh
+local`, and never the app** — that is the whole thing being checked. **The last row, the startup
+line, runs today**; the rest need a signed-in run and wait on SONNY-280's resume.
+
+*(This paragraph assumed a container up and serving while the SONNY-131 section beside it said no
+such container could exist. Both halves are answered in the note above. Corrected 2026-08-28,
+SONNY-330.)*
 
 - [ ] **(new 2026-08-28, SONNY-132) — the headline check.** Run the same typed command ("open
       Safari") twice from an unchanged app: once with the container started with
@@ -1329,17 +1427,15 @@ while Sonny was talking to the backend was reported as a failure: the steps went
 read *"Sonny couldn't finish this one. Try again."*, and the run was written to Tasks as failed. A
 stop is not a failure, and it should never invite you to retry something you deliberately stopped.
 
-**Setup — the same gateway the three sections above want, and please read this rather than their
-setup notes.** You need `./scripts/deploy.sh local` running with your Supabase variables and a real
-`OPENAI_API_KEY` and `TAVILY_API_KEY` exported (both are in the script's passthrough), the debug
-build pointed at it — `defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`
-— and the packaged app launched from Finder. **The setup notes on the three sections above are
-stale or contradict each other**: SONNY-130's blocks its rows on SONNY-307, which is Done and
-merged; SONNY-131's blocks its rows on "SONNY-307's successor", which is not a ticket that exists;
-SONNY-132's assumes a container that is up and serving. Sorting that out, and finding out whether a
-real sign-in against a real Supabase project actually works today, is **SONNY-330**. If it turns out
-these rows cannot be run after all, that is SONNY-330's answer and not a finding against this
-ticket.
+**Setup is the shared note above, plus a real `OPENAI_API_KEY` and `TAVILY_API_KEY` exported before
+`./scripts/deploy.sh local`.** **Every row here runs a command in the app, so every one of them
+waits on SONNY-280's resume.**
+
+*(This section was written pointing at SONNY-330 because the three setup notes above it were stale
+or contradicted each other, and it asked whether a real sign-in works today. SONNY-330's answer, on
+2026-08-28: the three notes are rewritten into the one above, nothing is blocked on missing code any
+more, and what these rows wait on is the deferred identity sitting. Folded in 2026-08-28,
+SONNY-330.)*
 
 **These rows need a request that is genuinely in flight for a second or two**, so they cannot be run
 against a gateway that answers immediately.
