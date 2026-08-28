@@ -246,13 +246,14 @@ public extension SonnyBackendError {
     /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
     /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
     /// (`git grep -cE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 files at
-    /// `PLACEHOLDER`.)
+    /// `3d42b20`.)
     ///
     /// **Neither of those two anchors does anything, and this paragraph said the opposite twice
-    /// before a reviewer measured it** (SONNY-320, PR #146's F1). All four readings, at
-    /// `PLACEHOLDER`: the case-declaration grep answers **4** with `^ *` and **4** without it, and
-    /// the conformance grep answers **4** as written, **4** with the `^` dropped and **4** with
-    /// `public enum` dropped for `^.*,`. Only a genuinely looser pattern moves the number —
+    /// before a reviewer measured it** (SONNY-320, PR #146's F1). **Six readings**, at
+    /// `3d42b20` — and the numeral is six rather than the four the review measured because the
+    /// case-declaration grep is swept here as well: it answers **4** with `^ *` and **4** without
+    /// it, and the conformance grep answers **4** as written, **4** with the `^` dropped and **4**
+    /// with `public enum` dropped for `^.*,`. Only a genuinely looser pattern moves the number —
     /// `git grep -cE 'CarriesBackendError \{' -- Sources` → **5** — and the fifth line it admits is
     /// `public protocol CarriesBackendError {`, which every one of the other forms excludes because
     /// it contains neither `enum` nor the comma they require. The anchors are decorative here.
