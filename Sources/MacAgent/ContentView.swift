@@ -34,7 +34,12 @@ extension View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings. Generated files and API keys are not deleted.")
+            // **The list is `LocalDataDeletionCopy`'s, shared with Settings' own detail line**
+            // (SONNY-233). This literal named nine of the thirteen stores the wipe deletes — one
+            // fewer than the line on the page behind it, so the two surfaces describing one
+            // irreversible press disagreed with each other as well as with the wipe. What stays
+            // written here is the part that is this dialog's alone: what the press does *not* take.
+            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes). Generated files and API keys are not deleted.")
         }
     }
 }

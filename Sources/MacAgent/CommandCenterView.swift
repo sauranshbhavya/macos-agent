@@ -5720,9 +5720,15 @@ private struct SettingsDataPage: View {
                     SettingsAdaptiveControlRow {
                         // Single trash icon now lives on the button itself — a second one here
                         // next to the label made the row read as too bold/heavy (2026-07-18).
+                        // **Derived rather than written, and the same sentence the confirmation
+                        // uses** (SONNY-233). This literal named ten of the thirteen stores the
+                        // wipe deletes, having gone stale twice unnoticed as row E, row J and row
+                        // 13's stores landed. `LocalDataDeletionCopy` builds it from
+                        // `LocalStore.allCases` through an exhaustive switch, so a fourteenth store
+                        // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, common output locations, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
+                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes)."
                         )
                     } trailing: {
                         Button {

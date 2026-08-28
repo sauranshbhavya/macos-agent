@@ -1027,6 +1027,19 @@ it feels confusing in practice, not just whether it's "technically correct."
       whether these ever flip to confirmed, or stay "?" permanently (worth knowing which either way)
 - [x] **Data:** "Delete Sonny local data" — do this **last**. Confirm it actually deletes everything
       listed, doesn't crash, and every page shows a clean empty state afterward, not errors
+- [ ] **(new 2026-08-28, SONNY-233)** **Read the two sentences before you press anything, and do
+      the press itself last.** The detail line under **Delete Sonny local data** used to name ten of
+      the thirteen kinds of thing the wipe deletes, and the **confirmation dialog** named nine — so
+      the two surfaces describing one irreversible press disagreed with each other as well as with
+      the wipe. Both now read one sentence built from the store list itself, and the four that had
+      gone missing are in it: **what past tasks planned**, **allowed apps**, **unfinished tasks**
+      and (in the dialog) **common output locations**. Check that the page and the dialog say the
+      same thing, and **say whether the sentence is too long to read** — it is thirteen items now,
+      and the alternative considered and rejected was pointing at the Memory page instead, which
+      would have stopped the sentence naming *records of what Sonny did on screen*
+- [ ] **(new 2026-08-28, SONNY-233)** Then press it, as the row above says — confirm the wipe still
+      does what it always did, and that nothing in the new wording promises something the press does
+      not take
 
 ### Account menu / Profile / Learn More
 - [x] Profile → honest "Not designed yet" placeholder (correct)
