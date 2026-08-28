@@ -1219,6 +1219,58 @@ provider key.
       id is the whole guarantee, visible in one line: the second request returned the first one's
       stored response instead of calling a provider again. Then change one word inside the body and
       send it a third time with the same key: it must answer `409` with `idempotency.conflict`.
+### Screen control behind the backend (new 2026-08-28, SONNY-131)
+
+**The fifth and last credential-bearing route.** Screen control now runs through Sonny's own gateway
+under your sign-in, with no `OPENCODE_API_KEY` anywhere — that variable is read by nothing, and the
+app no longer has a "screen control is not configured" state at all.
+
+**Setup is the section above's, plus one variable.** The same gateway, the same
+`SonnyBackendBaseURL` default, the same Finder launch with no provider key exported — and
+`./scripts/deploy.sh local` now also forwards `VISION_API_KEY`, which is the credential this route
+needs. **These rows cannot be run until SONNY-307's successor gives you a container that mounts
+authenticated routes**, exactly as the section above says of its own; without one every row here
+answers 401.
+
+- [ ] **(new 2026-08-28, SONNY-131) — the headline check.** Packaged `.app` from Finder, no
+      environment variables at all. Run a real screen-control task through several iterations — a
+      goal needing three or four clicks on small controls. It should behave exactly as it did
+      before. **Nothing on your Mac holds a vision key now**, so if it works, the credential has
+      moved.
+- [ ] **(new 2026-08-28, SONNY-131)** Run one on the **largest display available**, with heavy
+      content on screen (a photo library, a paused video, a map). It must not fail with *"The window
+      screenshot is N bytes…"*. That message appearing at all is worth reporting with the number it
+      quotes: the ceiling is now the same number on both sides of the network, so seeing it means
+      the two have come apart.
+- [ ] **(new 2026-08-28, SONNY-131)** Switch to **Safe mode** and start a session. The capture-review
+      panel must still appear before each send, showing the screenshot. **The reason to run it is
+      that this is the only place a human sees what is about to leave**, and the capture path is what
+      this ticket rewired around. (The parenthetical here used to say the panel is where a *wire*
+      shape change would show as a blank frame; PR #144's R4 corrected it. The panel is built from
+      `payload.redactedImageData` directly — `VisionSessionRunner.swift:366` — and never sees the
+      request body, so a change to the wire cannot blank it.)
+- [ ] **(new 2026-08-28, SONNY-131)** Put something secret-shaped on screen (an `sk-`-prefixed string
+      in a text editor is enough) and start a Safe-mode session. The preview must show a solid black
+      rectangle over it, hard-edged, no ghosting. **Redaction is upstream of everything this ticket
+      touched and must be exactly as it was** — this row is the check that says so.
+- [ ] **(new 2026-08-28, SONNY-131)** Stop a session mid-run with the **emergency stop**. It must
+      stop immediately, and what you are told must read as a stop rather than as a failure — no
+      *"Sonny couldn't finish this one. Try again."*. (That sentence really did appear here during
+      this ticket, on a stop that reached a request already in flight, and the fix is the reason this
+      row exists.)
+- [ ] **(new 2026-08-28, SONNY-131; rewritten the same day after PR #144's F1)** After a session,
+      run `docker logs <the gateway container>` and count the `POST /v1/screen/analyze` lines. There
+      should be **one per iteration**, matching the step count the HUD showed. That is the whole of
+      what this ticket's metering requirement can be checked against from outside the app, and it is
+      a real check: one usage record per iteration is the decision, and the request count on the wire
+      is that decision made visible.
+      **Do not look in Tasks for a usage line — there is none, and that is not this ticket's to
+      build.** Nothing in the app renders `taskUsageSummary` (`git grep -n taskUsageSummary --
+      Sources` → 4 lines, all in `AgentViewModel.swift`, none of them a view), `CompletedTaskRecord`
+      carries no usage field, and Settings → Usage says so in the product's own words: *"Sonny tracks
+      approximate usage per task today, but a full summary isn't built yet."* The record exists and is
+      asserted by tests; **the surface is SONNY-133-adjacent work.** The first version of this row
+      sent you to Tasks to find something no view draws.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 

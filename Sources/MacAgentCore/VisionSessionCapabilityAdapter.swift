@@ -260,9 +260,14 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         )
         // **The third door, and it comes before the availability check on purpose.** Ordered the
         // other way round for one commit, which made the ban conditional on screen control being
-        // configured at all — a build with no `OPENCODE_API_KEY` refused a terminal for the wrong
+        // configured at all — a build with no vision credential refused a terminal for the wrong
         // reason, and would have started refusing for the right one only once someone set the key.
         // A structural deny should not depend on whether the feature it guards is switched on.
+        //
+        // **That build can no longer exist** (SONNY-131) — the credential is the gateway's, so
+        // `context.visionSession` is only ever `nil` for a caller that asked for no vision. The
+        // ordering stays, because what it protects is the principle rather than that one build.
+
         if let refusal = verdict.refusal {
             throw VisionSessionError.targetNotControllable(refusal)
         }

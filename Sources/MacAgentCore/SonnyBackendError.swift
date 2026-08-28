@@ -201,6 +201,63 @@ public enum SonnyBackendError: Error, Equatable, Sendable {
     case backendNotConfigured
 }
 
+/// An error that is really a backend failure wearing a caller's own type.
+///
+/// **One question needs answering through these wrappers and only one: is this a cancellation?**
+/// Every client that talks to `SonnyBackendClient` catches `SonnyBackendError` and rethrows it inside
+/// a case of its own — `VisionModelClientError.backend`, `PlannerError.backend` — because the caller
+/// above it wants one error type. That is right, and it hides `SonnyBackendError.cancelled`, which is
+/// the one case that must never be reported as a failure: it means the user pressed stop.
+///
+/// Conforming is one line and it is what `SonnyBackendError.isCancellation` reads.
+public protocol CarriesBackendError {
+    var backendError: SonnyBackendError? { get }
+}
+
+public extension SonnyBackendError {
+    /// Is this error the user stopping something, rather than something failing?
+    ///
+    /// **Three shapes, and they arrive from three different layers** (SONNY-131). `CancellationError`
+    /// is what `Task.cancel()` produces; `URLError(.cancelled)` is what `URLSession` raises when its
+    /// task is cancelled underneath, which is the emergency stop reaching a request already in
+    /// flight; and ``SonnyBackendError/cancelled`` is the shared client's own typed name for the same
+    /// event, raised so a Foundation error never escapes it. The fourth is the third wearing a
+    /// caller's type, which is what ``CarriesBackendError`` is for.
+    ///
+    /// **This exists as one function because it was two, and the second one was incomplete.**
+    /// `AgentViewModel.isCancellationError` knew the first two shapes, which was the whole population
+    /// while every client held its own provider key; the moment the vision route moved behind the
+    /// gateway, a stop mid-send arrived as the third and was recorded in the session journal as
+    /// `failed` and shown to the user as "Sonny couldn't finish this one. Try again." — the exact
+    /// wrong sentence for someone who had just pressed stop. `aCancellationDuringASendIsNotReported
+    /// AsASendFailure` is the test that found it.
+    ///
+    /// **What it does not yet reach**, stated rather than left to be discovered: the text clients'
+    /// own wrappers do not conform to ``CarriesBackendError``, so a cancellation on those routes
+    /// still reads as a failure. Those files are SONNY-130's and are outside this ticket's region;
+    /// **SONNY-320** carries them.
+    ///
+    /// **Three conformances, not four, and the population is the error type rather than the route**
+    /// (PR #144, F6). The population is four declarations —
+    /// `git grep -nE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4, anchored to the start
+    /// of a line so this sentence does not count itself, which the unanchored form does — and one of
+    /// them is ``VisionModelClientError``'s, which already conforms. The other three are
+    /// `PlannerError`, `TranscriptionError` and `TavilySearchError`. **`WebResearchSynthesizer.swift`
+    /// needs no edit**: it declares `WebResearchNoteDecodingError`, whose three cases are
+    /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote` — no `.backend` at all — and it
+    /// throws `PlannerError.backend` (`:407`), so conforming `PlannerError` once covers both
+    /// `/v1/plan` and `/v1/research/synthesize`. This said "the four" and SONNY-320's description
+    /// named that file, which would have sent its session looking for a fourth error type and
+    /// finding an unrelated decoding enum.
+    static func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if (error as? URLError)?.code == .cancelled { return true }
+        if let backend = error as? SonnyBackendError { return backend == .cancelled }
+        if let wrapped = (error as? any CarriesBackendError)?.backendError { return wrapped == .cancelled }
+        return false
+    }
+}
+
 extension SonnyBackendError: LocalizedError {
     /// **For logs and tests, never for the user.** Every user-facing sentence in the sign-in flow
     /// comes from `SignInCopy`, which maps a `code` to client-owned words.

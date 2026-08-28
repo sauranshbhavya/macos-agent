@@ -1,6 +1,84 @@
 import CoreGraphics
 import Foundation
 
+/// A session that stopped because a *send* failed — SONNY-131's mid-loop failure decision, as a
+/// type.
+///
+/// **The decision, in one paragraph.** When `decide` fails partway through a session, the session
+/// **aborts at that iteration, keeps everything it has already done, and reports how far it got**.
+/// It does not retry, and it does not carry on. The contract's §12 names three candidates — retry,
+/// abort with partial history, or a new typed error — and requires SONNY-131 to pick one and pin it
+/// with a test rather than let it emerge. This is that pick, and it is the second and third together:
+/// an abort whose partial history is what the typed error carries.
+///
+/// **Why not retry, which is the answer that looks obvious.** By the time a failure reaches this
+/// loop, every retry §9.3 allows has already happened one layer down.
+/// `SonnyBackendClient.send` retries on the failure's own `code`, with `maximumAttempts` per code —
+/// `provider.unavailable`, `server.error` and `server.unavailable` get three attempts with backoff,
+/// `provider.timeout` and `limit.rate` get two, everything else gets one — reusing the operation's
+/// idempotency key so a retry cannot double-bill. So a second loop here would not be "retry once
+/// more", it would be *multiplying* those ceilings: three attempts becomes nine, on a route whose
+/// client timeout is 120 seconds, inside a session a person is sitting and watching. It would also
+/// mint a fresh idempotency key per attempt, which §9.1 forbids — one key per logical operation is
+/// the whole mechanism §9.2's at-most-once metering rests on.
+///
+/// **The token-expiry case the ticket names is already invisible, and that is the same answer read
+/// from the other end.** `auth.token_expired` between iteration 4 and 5 never reaches this type:
+/// the shared client refreshes once, under the single-flight generation guard, and replays the
+/// request. §7.2 case 1a's own words for what the user gets are "nothing — this is invisible when it
+/// works", and `aTokenExpiryMidSessionIsInvisibleAndTheSessionCarriesOn` is what holds it.
+///
+/// **Why abort rather than continue.** A vision iteration is not optional work: every pass begins
+/// with a fresh capture and the model's answer is what decides the next action. There is nothing to
+/// carry on *with* — and `docs/sonny-backend-api-contract.md` §4.5 rule 5 means there is nothing to
+/// resume from either, since the gateway holds no session state and continuity lives entirely in
+/// this runner's own `history`.
+///
+/// **Why a typed error rather than an ``VisionSessionOutcome/Ending``.** An ending makes the run
+/// *succeed* with an explanatory summary, which is right for `.refused` — a containment refusal is
+/// Sonny deciding not to, and the user asked a question that got an answer. A backend that could not
+/// be reached is Sonny failing to, and the task did not happen; routing it through the outcome would
+/// write a completed row into the task history for a run that achieved nothing.
+public struct VisionSessionInterrupted: Error, Equatable, LocalizedError, Sendable {
+    /// The iteration whose send failed, 1-based — the same number the HUD was showing.
+    public let iteration: Int
+    /// How many actions the session had already performed. **This is the partial history**, in the
+    /// only form that survives the session: the actions are done and cannot be undone, the journal
+    /// holds one entry each, and this is what the sentence tells the user.
+    public let actionsTaken: Int
+    public let appDisplayName: String
+    /// The app's own sentence for whatever failed, which for a backend failure is
+    /// ``SonnyBackendCopy``'s. **Carried rather than re-derived**, because the runner should not
+    /// switch on error types to produce copy: every error this can wrap is a `LocalizedError` whose
+    /// `errorDescription` is already the sentence its own layer decided on, and §7.1's rule that the
+    /// server's `message` is never displayed is enforced there rather than restated here.
+    public let sentence: String
+
+    public init(iteration: Int, actionsTaken: Int, appDisplayName: String, sentence: String) {
+        self.iteration = iteration
+        self.actionsTaken = actionsTaken
+        self.appDisplayName = appDisplayName
+        self.sentence = sentence
+    }
+
+    /// **Functional, not explanatory** (founder, 2026-08-14): what happened, and how far it got.
+    /// Nothing about servers, providers, iterations or retries.
+    ///
+    /// The step count is there because it is the one thing a user cannot see for themselves once the
+    /// HUD is gone, and because the actions really did happen — a session that clicked three times
+    /// and then stopped has left the app in a state the user needs to know about. A session that had
+    /// done nothing yet says nothing extra, because "stopped after 0 steps" is noise.
+    public var errorDescription: String? {
+        guard actionsTaken > 0 else { return sentence }
+        let steps = actionsTaken == 1 ? "1 step" : "\(actionsTaken) steps"
+        return "\(sentence) It stopped after \(steps) in \(appDisplayName)."
+    }
+
+    /// §13.5's reason code for the session journal, so a reader can tell this ending apart from the
+    /// generic `failed` every other throw produces.
+    static let reasonCode = "send_failed"
+}
+
 /// How a session ended.
 public struct VisionSessionOutcome: Equatable, Sendable {
     /// How a session ended, with the model-authored endings carrying `RedactedPayload` rather than
@@ -121,8 +199,23 @@ final class VisionSessionRunner {
             //
             // The record is closed with the honest reason rather than a generic one: a cancellation
             // is `user_stopped`, everything else is `failed` with the error's own text.
-            if error is CancellationError {
+            // **`isCancellation` rather than `error is CancellationError`, and the difference is a
+            // real defect this branch fixed** (SONNY-131). A stop that reaches a request already in
+            // flight arrives as `SonnyBackendError.cancelled`, not as a `CancellationError` — so the
+            // narrower check closed the session's record as `failed` and put "Sonny couldn't finish
+            // this one. Try again." in front of someone who had just pressed stop.
+            if SonnyBackendError.isCancellation(error) {
                 finishRecord(reasonCode: VisionContainmentRefusal.cancelled.reasonCode, summary: "Stopped.")
+            } else if let interrupted = error as? VisionSessionInterrupted {
+                // **Recorded here rather than at the throw site, so the record is written once.**
+                // `runLoop` throwing into this `catch` is the only path a `VisionSessionInterrupted`
+                // takes, and a `finishRecord` at both ends would write the session twice with two
+                // different reason codes — the second overwriting the first, which is the quieter of
+                // the two ways to get it wrong.
+                finishRecord(
+                    reasonCode: VisionSessionInterrupted.reasonCode,
+                    summary: interrupted.localizedDescription
+                )
             } else {
                 finishRecord(reasonCode: "failed", summary: error.localizedDescription)
             }
@@ -310,7 +403,36 @@ final class VisionSessionRunner {
                 imageHeight: sentImage.pixelHeight
             )
             log(.observe, "vision: iteration \(iteration) — sending a redacted capture of \(target.displayName)")
-            let reply = try await environment.modelClient.decide(prompt: prompt, payload: payload)
+            let reply: String
+            do {
+                reply = try await environment.modelClient.decide(
+                    prompt: prompt,
+                    payload: payload,
+                    // §4.5's two session fields. The journal id rather than a second identifier, so
+                    // a request on the wire and the row in the task history name the same run.
+                    session: VisionSessionRequestContext(sessionID: record.id, iteration: iteration)
+                )
+            } catch let error where SonnyBackendError.isCancellation(error) {
+                // **A cancellation is not a send failure and must stay one rethrow.** The user
+                // pressing stop, or the emergency hotkey, cuts the request — and §12's own first rule
+                // is that cancellation beats every timeout. Wrapping it would tell someone who
+                // stopped a session that something went wrong.
+                throw error
+            } catch {
+                // SONNY-131's mid-loop decision, in one place. `VisionSessionInterrupted`'s own
+                // declaration carries the reasoning; what happens here is only that the session stops
+                // where it is and says how far it got.
+                throw VisionSessionInterrupted(
+                    iteration: iteration,
+                    actionsTaken: actionsTaken,
+                    appDisplayName: target.displayName,
+                    // Every error reaching here is a `LocalizedError` whose sentence its own layer
+                    // already decided — `SonnyBackendCopy`'s for a backend failure, the client's own
+                    // for an oversize capture. Re-deriving one here would be a second place for the
+                    // copy rules to be applied, and §7.1's is the one that must not be.
+                    sentence: error.localizedDescription
+                )
+            }
             let decision = try VisionDecisionParser.decision(from: reply)
             log(.act, "vision: iteration \(iteration) — \(decision.actionDescription)")
 

@@ -4,6 +4,35 @@ public enum AIUsageCallKind: String, Codable, Equatable, Sendable {
     case planner
     case webResearchSynthesis = "web_research_synthesis"
     case transcription
+    /// One `POST /v1/screen/analyze` — **one iteration of a screen-control session, not a session**
+    /// (SONNY-131).
+    ///
+    /// **It had no case at all until this ticket, and the omission was total**: nothing on the vision
+    /// path recorded usage, so the most expensive call the product makes was the one thing its own
+    /// per-task summary said nothing about. Screen control is also SONNY-17's only paid line, so the
+    /// gap was in the direction that matters.
+    ///
+    /// **Per iteration rather than per session**, because that is what a usage record is everywhere
+    /// else here — one provider call — and because a session's twelve iterations are twelve separate
+    /// upstream requests with twelve separate costs. A user's summary saying "12 screen-control
+    /// calls" is the truth; saying "1" would hide the term that grows.
+    ///
+    /// The wire value is `screen_control` rather than `screen.analyze`, because it names the *thing
+    /// the user did* and stays stable when the route's path changes. `AIUsageRecord.model` carries
+    /// the route name (`SonnyModelRoute.screenAnalyze.usageModelName`), which is where a path
+    /// belongs.
+    ///
+    /// **The reason above used to say these raw values are "persisted in `CompletedTaskRecord`", and
+    /// nothing persists them** (PR #144, F2). `CompletedTaskRecord` has no usage field
+    /// (`grep -cin usage Sources/MacAgentCore/TaskHistoryStore.swift` → 0, exit 1) and
+    /// `TaskUsageRecorder` is an in-memory array reset per run, so no raw value has ever reached a
+    /// file. The *choice* is unchanged and still right; what was wrong was calling a durability
+    /// constraint as the reason for it. **A later session reading the old sentence would have written
+    /// a migration or a decode-tolerance test for values nothing writes** — SONNY-133's most likely,
+    /// since this branch's proposal comment on that ticket repeated it. The constraint becomes real
+    /// the day something persists usage, which is that ticket's; until then this is a name chosen to
+    /// age well rather than one already committed to.
+    case screenControl = "screen_control"
 
     public var displayName: String {
         switch self {
@@ -13,6 +42,8 @@ public enum AIUsageCallKind: String, Codable, Equatable, Sendable {
             return "Web research"
         case .transcription:
             return "Transcription"
+        case .screenControl:
+            return "Screen control"
         }
     }
 }

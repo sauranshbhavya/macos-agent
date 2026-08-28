@@ -1,6 +1,7 @@
 import Foundation
 
-/// The four model routes the Mac app calls, on top of the one shared backend client (SONNY-130).
+/// The five model routes the Mac app calls, on top of the one shared backend client (SONNY-130; the
+/// vision route is SONNY-131's).
 ///
 /// **What moved and what did not.** Before this file, four clients each read a vendor key out of the
 /// user's own environment, each posted to a vendor endpoint, and each named a model identifier in
@@ -68,6 +69,8 @@ enum SonnyModelRoute {
     case researchSynthesis
     case transcription
     case search
+    /// §4.5, the screen-control route (SONNY-131).
+    case screenAnalyze
 
     var path: String {
         switch self {
@@ -75,6 +78,7 @@ enum SonnyModelRoute {
         case .researchSynthesis: return "/v1/research/synthesize"
         case .transcription: return "/v1/transcriptions"
         case .search: return "/v1/search"
+        case .screenAnalyze: return "/v1/screen/analyze"
         }
     }
 
@@ -84,6 +88,7 @@ enum SonnyModelRoute {
         case .researchSynthesis: return SonnyBackendTimeouts.researchSynthesis
         case .transcription: return SonnyBackendTimeouts.transcription
         case .search: return SonnyBackendTimeouts.search
+        case .screenAnalyze: return SonnyBackendTimeouts.screenAnalyze
         }
     }
 
@@ -93,6 +98,7 @@ enum SonnyModelRoute {
         case .researchSynthesis: return "research.synthesize"
         case .transcription: return "transcriptions"
         case .search: return "search"
+        case .screenAnalyze: return "screen.analyze"
         }
     }
 }

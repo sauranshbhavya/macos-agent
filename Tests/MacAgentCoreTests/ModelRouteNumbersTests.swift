@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// §12's timeout table, the client half — **eight numbers and one ordering** (PR #139, F2).
+/// §12's timeout table, the client half — **ten numbers and one ordering** (PR #139, F2; the vision
+/// row is SONNY-131's).
 ///
-/// **Nothing read these before this suite.** `SonnyBackendTimeouts`' four constants reach
+/// **Nothing read these before this suite.** `SonnyBackendTimeouts`' five model-route constants reach
 /// `SonnyModelRoute.timeout`, which reaches a `URLRequest.timeoutInterval`, and no test looked at
 /// any of it: a mutant moving any one of them survived the whole suite, and so did one swapping two
 /// routes' constants. Both shapes are held here.
@@ -12,11 +13,11 @@ import Testing
 /// **Why the server's numbers are literals in a Swift test.** §12's rule is a relation *between* the
 /// two sides — "the client's timeout is always longer than the server's total deadline" — and
 /// neither side can see the other's code. So each side writes the whole table down and asserts its
-/// own half against it: `server/test/model.test.ts` holds `DEADLINE_MS` the same way. Moving a
-/// number on one side without the other now fails on that side.
+/// own half against it: `server/test/model.test.ts` holds `DEADLINE_MS` the same way, including the
+/// vision row. Moving a number on one side without the other now fails on that side.
 ///
-/// **The margin is not a constant, and two of this branch's own doc comments said it was.** It is
-/// fifteen seconds on the three long routes and five on `search` — §12's table, not one rule. The
+/// **The margin is not a constant, and two of SONNY-130's own doc comments said it was.** It is
+/// fifteen seconds on the four long routes and five on `search` — §12's table, not one rule. The
 /// first draft of the server's half asserted fifteen everywhere and went red on `search`, which is
 /// what found the wrong claim. What holds on every row is the ordering.
 struct ModelRouteNumbersTests {
@@ -27,6 +28,7 @@ struct ModelRouteNumbersTests {
         (.researchSynthesis, 105, 120),
         (.transcription, 75, 90),
         (.search, 25, 30),
+        (.screenAnalyze, 105, 120),
     ]
 
     @Test
@@ -35,15 +37,17 @@ struct ModelRouteNumbersTests {
         #expect(SonnyBackendTimeouts.researchSynthesis == 120)
         #expect(SonnyBackendTimeouts.transcription == 90)
         #expect(SonnyBackendTimeouts.search == 30)
-        // The row SONNY-128 declared, unchanged by this branch and asserted so it cannot drift
-        // while the four beside it are held.
+        #expect(SonnyBackendTimeouts.screenAnalyze == 120)
+        // The row SONNY-128 declared, unchanged by either branch and asserted so it cannot drift
+        // while the five beside it are held.
         #expect(SonnyBackendTimeouts.auth == 20)
     }
 
     @Test
     func eachRouteResolvesToItsOwnTimeoutAndNotANeighboursName() {
         // The mutant this kills is a swap: `case .plan: return SonnyBackendTimeouts.transcription`
-        // type-checks, and until this test nothing looked. Two of the four share a value, so the
+        // type-checks, and until this test nothing looked. Two pairs of the five share a value —
+        // `plan`/`transcription` at 90 and `researchSynthesis`/`screenAnalyze` at 120 — so the
         // assertion is per route against the table rather than against the set of values.
         for row in Self.table {
             #expect(row.route.timeout == row.client, "\(row.route.path) carries the wrong timeout")
@@ -70,6 +74,7 @@ struct ModelRouteNumbersTests {
         #expect(SonnyBackendTimeouts.plan - 75 == 15)
         #expect(SonnyBackendTimeouts.researchSynthesis - 105 == 15)
         #expect(SonnyBackendTimeouts.transcription - 75 == 15)
+        #expect(SonnyBackendTimeouts.screenAnalyze - 105 == 15)
         #expect(SonnyBackendTimeouts.search - 25 == 5)
         #expect(SonnyBackendTimeouts.auth - 15 == 5)
     }
@@ -77,11 +82,12 @@ struct ModelRouteNumbersTests {
     @Test
     func everyRoutePathIsTheOneTheContractNames() {
         // §4.1's table. A path typo is a 404 the client reads as `resource.not_found`, which it
-        // does not retry and cannot explain — and no other test in the tree reads all four.
+        // does not retry and cannot explain — and no other test in the tree reads all five.
         #expect(SonnyModelRoute.plan.path == "/v1/plan")
         #expect(SonnyModelRoute.researchSynthesis.path == "/v1/research/synthesize")
         #expect(SonnyModelRoute.transcription.path == "/v1/transcriptions")
         #expect(SonnyModelRoute.search.path == "/v1/search")
+        #expect(SonnyModelRoute.screenAnalyze.path == "/v1/screen/analyze")
     }
 
     @Test
@@ -94,8 +100,9 @@ struct ModelRouteNumbersTests {
             SonnyModelRoute.researchSynthesis.usageModelName,
             SonnyModelRoute.transcription.usageModelName,
             SonnyModelRoute.search.usageModelName,
+            SonnyModelRoute.screenAnalyze.usageModelName,
         ]
-        #expect(names == ["plan", "research.synthesize", "transcriptions", "search"])
+        #expect(names == ["plan", "research.synthesize", "transcriptions", "search", "screen.analyze"])
         #expect(Set(names).count == names.count)
     }
 }

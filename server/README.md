@@ -293,18 +293,34 @@ rather than a `primary`/`secondary` pair: with two named fields, retiring the pr
 two variables at once, and a deploy that catches them half-applied has either a duplicated key or
 none. `test/config.test.ts` walks all three steps and asserts a usable key at every one.
 
-## The four model routes (SONNY-130)
+## The five model routes (SONNY-130, and SONNY-131's vision row)
 
-`POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions` and `POST /v1/search`.
-All four are authenticated — they are covered by *not* appearing in `PUBLIC_ROUTES`, which is what
-deny-by-default means — and all four hold the provider credential here so the Mac app never sees
-one. `docs/sonny-backend-api-contract.md` §4.2–§4.4 is the wire shape; what belongs here is the
-operational half.
+`POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions`, `POST /v1/search` and
+`POST /v1/screen/analyze`. All five are authenticated — they are covered by *not* appearing in
+`PUBLIC_ROUTES`, which is what deny-by-default means — and all five hold the provider credential
+here so the Mac app never sees one. `docs/sonny-backend-api-contract.md` §4.2–§4.5 is the wire
+shape; what belongs here is the operational half.
 
-**Which provider serves which route is one function**, `modelProvidersFrom` in
-`src/model/providers.ts`, reading the endpoints and model identifiers from the environment. That is
-what makes SONNY-110's move to a paid zero-retention route a redeploy: nothing in the Mac app names
-a provider, a model or an endpoint, so changing any of the three never needs an app release.
+**Which provider serves which route is two functions rather than one, and that is temporary.**
+`modelProvidersFrom` in `src/model/providers.ts` answers for the four text routes;
+`visionProviderFrom` in `src/model/vision.ts` answers for `/v1/screen/analyze`. They are separate
+because SONNY-131 and SONNY-132 ran in parallel and `providers.ts` is SONNY-132's, which reshapes it
+for the provider router; the two collapse when that branch lands. Both read the endpoint and model
+identifier from the environment, which is what makes SONNY-110's move to a paid zero-retention route
+a redeploy: nothing in the Mac app names a provider, a model or an endpoint, so changing any of the
+three never needs an app release.
+
+**`/v1/screen/analyze` is the one route with a body worth thinking about, and its limit is derived
+rather than chosen.** `src/model/limits.ts` holds `MAXIMUM_IMAGE_BYTES` — 3,000,000, the same
+ceiling `RedactedCaptureEncoder` on the Mac encodes down to — and computes §6.1's 4,200,000 body
+limit from it, so the two numbers cannot drift apart. The image is refused above that ceiling with
+a `413 request.too_large` carrying `limit_bytes` and `actual_bytes`, which a correct client never
+sees: the Mac refuses at the same number before it builds a request body. **The server never
+resamples, re-encodes, crops or rotates the image** (§4.5 rule 1) — the base64 string the client
+sent is spliced into the provider's data URL verbatim, and the only decode is the one that counts
+its bytes. A server-side resize would leave every coordinate the model returns scaled by a factor
+nothing on the Mac knows about, which is a click landing inside the window, plausible-looking, and
+wrong.
 
 **A route whose provider has no credential answers `502 provider.unavailable`, not `404`.** The
 route table does not change shape with the environment, because a 404 tells the client "no such
@@ -313,8 +329,8 @@ route" — which it does not retry and cannot explain — when the truth is a de
 **Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
 contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in
 `Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each above this server's
-total deadline for the same route — by fifteen seconds on the three long routes and by five on
-`search`, which is §12's table rather than one constant. The *ordering* is the governing rule — the
+total deadline for the same route — by fifteen seconds on `plan`, `synthesize`, `transcriptions` and
+`screenAnalyze`, and by five on `search`, which is §12's table rather than one constant. The *ordering* is the governing rule — the
 client's timeout is always longer than the server's — so a slow route surfaces as this server's
 typed `504 provider.timeout` rather than as the client's opaque transport timeout, which it cannot
 tell apart from a dead network.
@@ -328,8 +344,8 @@ bitrate, 180 s is roughly 2 MB, so the client's cap binds an order of magnitude 
 the byte ceiling is the backstop for a client that is not ours, or is broken.
 
 **`retention` is validated and not yet honoured, and that is stated rather than implied.** §2.4.2
-makes an omitted `retention` a loud `400` rather than a quiet guess in either direction, and these
-routes enforce that. What they do not do is store anything at all — there is no content store yet,
+makes an omitted `retention` a loud `400` rather than a quiet guess in either direction, and all
+five routes enforce that. What they do not do is store anything at all — there is no content store yet,
 and SONNY-134 builds it along with §10.1's rule that retention is enforced where the storing
 happens rather than at the call site. Claiming the guarantee now would be claiming a promise nothing
 keeps.
@@ -343,9 +359,10 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 **It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
-`SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added by SONNY-130 at the extension
-point SONNY-306 left — `OPENAI_API_KEY` and `TAVILY_API_KEY`, the two credentials the four model
-routes need. `SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
+`SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added at the extension point
+SONNY-306 left, by SONNY-130 then SONNY-131 — `OPENAI_API_KEY`, `TAVILY_API_KEY` and
+`VISION_API_KEY`, the three credentials the five model routes need. Nine names
+(`awk '/^PASSTHROUGH=\(/,/^\)/' server/scripts/deploy.sh | grep -cE '^  [A-Z]'` → 9). `SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
 `SUPABASE_SERVICE_ROLE_KEY` is **not** forwarded, above. It tracks `src/config.ts`, which is the
 only thing that decides what the gateway reads, and the script's own comment carries the command
 that re-derives it. Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the
@@ -371,21 +388,23 @@ deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The s
 image, says plainly what did not happen, and lists the four things a real target needs. It does not
 pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
 
-**The four model routes still answer `401` against that container**, and the reason is the one the
+**The five model routes still answer `401` against that container**, and the reason is the one the
 subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
 the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-307 is
 what makes the forwarded credentials matter; until it lands, forwarding more of them changes
 nothing a caller can see.
 
-**The passthrough carries seven names, and SONNY-130 added two of them** — `OPENAI_API_KEY` and
-`TAVILY_API_KEY`, the credentials the four model routes need. It stops there on purpose, and the
-block above the array in `deploy.sh` carries the same reasoning: `ANTHROPIC_API_KEY`,
-`CEREBRAS_API_KEY` and `VISION_API_KEY` are excluded because no route reads them yet, and
-`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` are
-excluded because each has a real default and this list is for values a container cannot invent.
-Pointing a local run at a stub instead of at a vendor — which is how SONNY-130 demonstrated all four
-routes end to end with no vendor key anywhere — is done by editing the array for that run, and both
-the count and the absent-name lines derive from its length, so nothing else needs touching.
+**The passthrough carries nine names: SONNY-130 added two and SONNY-131 a third** —
+`OPENAI_API_KEY` and `TAVILY_API_KEY` for the four text routes, `VISION_API_KEY` for
+`/v1/screen/analyze`. It stops there on purpose, and the block above the array in `deploy.sh`
+carries the same reasoning: `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY` are excluded because no route
+reads them yet, and
+`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`,
+`VISION_BASE_URL` and `VISION_MODEL` are excluded because each has a real default and this list is
+for values a container cannot invent. Pointing a local run at a stub instead of at a vendor — which
+is how SONNY-130 demonstrated all four text routes and SONNY-131 the vision route, end to end with
+no vendor key anywhere — is done by editing the array for that run, and both the count and the
+absent-name lines derive from its length, so nothing else needs touching.
 
 ## `GET /v1/health`
 
