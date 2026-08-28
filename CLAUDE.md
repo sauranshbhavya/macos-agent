@@ -193,13 +193,16 @@ the caller's**: record a second issue in wording no declaration matches, gated o
 `.stuck` is checked first and `.starved` requires being below the floor, so the gate cannot fire on
 starvation. **And close the cascade above it**, or the gate is a lie: a wait whose own precondition
 never arrived reaches the floor at a perfectly healthy cadence, so the test must bail before
-asserting when an earlier backstop gave up. **The population is large and growing, which is why this
-is a rule rather than a note on one test**: `grep -cE 'waitUntil[(]' Tests/MacAgentTests/VisionSessionRunTests.swift`
-answers 71 in that one suite, and the two view-model backstop wordings answer 6 and 2 across eight
-others (`grep -rc "did not become idle before timeout" Tests` and the same for "did not settle before
-timeout", all four at SHA_STAMP). `scripts/mutate-untrusted-failures` records 65 for the first of
-those, which was true when it was written; a new test using the same helper joins the population the
-day it lands, and no count of it stays current.
+asserting when an earlier backstop gave up.
+**It is not `HangBackstop`'s alone** — the rule is about any construct whose every wording is
+declared, so the server half's own backstop (SONNY-241's, declared since PR #156) reads the same way.
+**And the population is large and growing, which is why this is a rule rather than a note on one
+test**: `grep -cE 'waitUntil[(]' Tests/MacAgentTests/VisionSessionRunTests.swift` → **71** in that
+one suite, `grep -r -F "did not become idle before timeout" Tests | wc -l` → **6** and the "did not
+settle" twin → **2** for the view-model backstops, and the server one → **1**.
+`scripts/mutate-untrusted-failures` records 65 for the first of those, which was true
+when written; a new test using the same helper joins the population the day it lands and no count of
+it stays current, so re-run the command rather than quoting either number.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
