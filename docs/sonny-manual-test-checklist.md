@@ -1269,8 +1269,10 @@ answers 401.
       Sources` → 4 lines, all in `AgentViewModel.swift`, none of them a view), `CompletedTaskRecord`
       carries no usage field, and Settings → Usage says so in the product's own words: *"Sonny tracks
       approximate usage per task today, but a full summary isn't built yet."* The record exists and is
-      asserted by tests; **the surface is SONNY-133-adjacent work.** The first version of this row
-      sent you to Tasks to find something no view draws.
+      asserted by tests; **the surface is SONNY-214's** (corrected 2026-08-28, SONNY-133 — this row
+      said "SONNY-133-adjacent work", and that ticket landed on the same day with "a usage UI" in its
+      own non-goals, so it would have sent the next reader to a ticket that had already declined it).
+      The first version of this row sent you to Tasks to find something no view draws.
 ### Which provider serves a route, and failover (new 2026-08-28, SONNY-132)
 
 **What changed:** which model provider plans a command is now a server setting, not a fact about
@@ -1364,6 +1366,75 @@ against a gateway that answers immediately.
       container, then run any command: it should still show the red banner and its own sentence. A
       predicate that answered "cancelled" too eagerly would have swallowed this, and that is the
       direction nothing else in this section would catch.
+### What every call cost (new 2026-08-28, SONNY-133)
+
+**What changed:** the gateway now records one metering event per call, on every route, and screen
+control — which recorded nothing anywhere before SONNY-131 gave it a client-side record — is the
+reason the table exists. **This is where SONNY-17's pricing numbers come from**: the free-tier
+allowance and the paid price stop being guesses the moment the rows below produce a per-session
+figure.
+
+**Four of the five rows below cannot be run until the deferred identity setup exists, and that is
+recorded here rather than discovered at the terminal.** Every metered route is authenticated, so a
+metering event needs a signed-in caller, so it needs a real Supabase project — its JWT secret, issuer
+and anon key, and a Postgres the container can reach with the migrations applied. **No such project
+exists yet**; it is founder-owned setup, recorded on SONNY-307 and carried by the release sequence on
+SONNY-280, and it is the whole of what stands between these rows and being runnable. The code was
+measured end to end against a real container while this ticket was built — eighteen real events, a
+retry that wrote one, an incognito session that was metered like any other — with an access token
+minted by hand against the same secret the gate verifies. What a founder cannot do that way is sign
+in through the app, which is what these rows are for.
+
+**Setup for the four:** the sign-in section's setup, plus the container from "The four routes behind
+the backend", plus `VISION_API_KEY`. Then run `cd server && npm run build` once, and read the reports
+with `DATABASE_URL=<the same one the container uses> npm run usage -- <command>`.
+
+- [ ] **(new 2026-08-28, SONNY-133) — Terminal, needs only a Postgres. This one is runnable today.**
+      With a database and `npm run build` done, rehearse the migration both ways:
+      `npm run migrate -- up`, then `npm run migrate -- down`, then `npm run migrate -- up` again.
+      The `down` must say `rolled back: 0012_metering_records_what_every_call_cost` and the table
+      must be gone (`\dt sonny.*` in `psql`); the second `up` must bring it back. Then run
+      `npm run usage -- span` against the empty table: it must say *"no metering events in this
+      window"* rather than printing an empty report or an error. A rollback that leaves the table, or
+      a re-apply that fails, is the finding — this is the rehearsal that makes a migration safe to
+      run against a real database later.
+
+- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup. The headline row, and the
+      one the pricing waits on.** Sign in, then run **three or four real screen-control sessions** of
+      different lengths — a short one that finishes in two or three steps, and one that needs eight
+      or more. Note the step count the HUD shows for each. Then run
+      `npm run usage -- sessions`. There must be one block per session, `iterations` matching the
+      step count you saw, and a `megapixels sent` figure that is larger for the longer sessions.
+      **Send me the whole output** — this is the measurement, and the numbers in it are what SONNY-17
+      turns into a credit weight. What would be a finding: a session missing entirely, an iteration
+      count that does not match the HUD, or `no tokens 0 of N` where you expected numbers and got
+      none (that last one is not necessarily wrong — the footer explains why — but say so).
+
+- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup.** Run one screen-control
+      session with **"Don't save this task"** on. It must appear in `npm run usage -- sessions` like
+      any other, with `retention none` on its block. **A missing session is the finding**, and it is
+      the one this row exists for: incognito changes what is stored and never what is billed
+      (founder, via SONNY-14), so a metering design that dropped these would quietly make exactly
+      those runs free.
+
+- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup.** Start a screen-control
+      session, then **turn Wi-Fi off mid-run and back on** a few seconds later. However the session
+      ends, run `npm run usage -- sessions --session <that session>` afterwards and check the
+      iteration count against the number of steps the HUD actually took. **A retry must not appear
+      twice.** If the count is higher than the steps you saw, that is the finding and it is the one
+      the whole idempotency claim exists to prevent.
+
+- [ ] **(new 2026-08-28, SONNY-133) — needs the deferred identity setup. Read this row before
+      running it: it is not "find the usage screen".** There is **no per-task usage surface in the
+      app**, and that is not this ticket's to build — Settings → Usage says so in the product's own
+      words (*"Sonny tracks approximate usage per task today, but a full summary isn't built yet."*),
+      nothing renders `taskUsageSummary`, and the surface is SONNY-214's. SONNY-131's row was
+      rewritten the same day to stop sending you to look for one, and this row would have repeated
+      the mistake if it had been written from the ticket's wording. **What to check instead:** run an
+      ordinary typed command, a spoken one, and a screen-control session, and confirm each behaves
+      exactly as it did before — no new pause, no new failure, nothing that reads as the app waiting
+      on something. Every one of those now writes a database row after its response, and this row is
+      the check that a user cannot feel it.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
