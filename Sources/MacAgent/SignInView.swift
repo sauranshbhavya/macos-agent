@@ -42,6 +42,27 @@ final class SonnyAccountModel: ObservableObject {
 
     private let service: SonnyAccountService
 
+    /// Called after this Mac's session changes — a sign-in that succeeded, or a sign-out that
+    /// cleared it (SONNY-136, PR #153's F4).
+    ///
+    /// **It exists because the readiness row was stale in both directions, and the direction that
+    /// matters is the second one.** `AgentViewModel.modelAccessReadiness` is refreshed only by
+    /// `refreshPermissions()`, whose call sites are all Command Center `onAppear`s and the Refresh
+    /// button — and sign-in is a *sheet* over Command Center, so the window's `onAppear` does not
+    /// re-fire when it closes. Signing in then left the "show permission readiness" tool answering
+    /// *"Sign in to Sonny in Command Center."* for a signed-in user; signing out left it answering
+    /// *"Signed in."* for a session that no longer exists, which is PR #139's F10 in its own words —
+    /// readiness that is not readiness — reappearing at the surface this ticket was assigned to fix.
+    ///
+    /// **A callback rather than this type reaching for the view model.** `SonnyAccountModel` knows
+    /// about a client and a service and nothing about the agent; giving it a reference to
+    /// `AgentViewModel` would invert that for one notification. `main.swift` owns both objects and
+    /// is where the two are already joined by the shared client, so it is where this is wired.
+    ///
+    /// Not called by `restore()`: that runs at launch, before any window exists, and the view model
+    /// refreshes on the first `onAppear` anyway.
+    var sessionDidChange: (@MainActor () -> Void)?
+
     /// The one backend client this process holds, exposed so `main.swift` can hand the *same* one to
     /// `AgentViewModel` (SONNY-130).
     ///
@@ -135,6 +156,10 @@ final class SonnyAccountModel: ObservableObject {
             code = ""
             step = .signedIn
         }
+        // **Outside `run`, and only when a session really arrived.** `run` swallows the failure into
+        // `failure`, so a call inside it would fire on a wrong code too — and the whole point of
+        // this hook is that the readiness row follows the session rather than the attempt.
+        if identity != nil { sessionDidChange?() }
     }
 
     func useAnotherAddress() {
@@ -156,6 +181,11 @@ final class SonnyAccountModel: ObservableObject {
                 notice = SignInCopy.signedOutLocallyOnly
             }
         }
+        // **Fires on both sign-out outcomes, including the one that failed to revoke**, because
+        // `SonnyAccountService.signOut` clears this Mac either way — so the session is gone locally
+        // whatever the server managed, and a row still reading "Signed in." would be wrong in
+        // exactly the case the user is most likely to check.
+        if identity == nil { sessionDidChange?() }
     }
 
     /// One place that clears the previous outcome, flips the busy flag, and turns anything thrown

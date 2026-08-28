@@ -21,6 +21,14 @@ import Testing
 /// third state exists and it is never `.ready`.
 @Suite
 struct PermissionReadinessModelAccessTests {
+    /// The provider names and the variable shape this file refuses, kept identical to
+    /// `SonnyBackendCopyTests`' — two copies of one rule rather than one, because the two suites are
+    /// in the same target but the sentences they cover come from different types and neither owns
+    /// the other's. They are asserted to agree by being written the same way and by the
+    /// cross-reference in that file, which PR #153's F8 made true rather than aspirational.
+    static let providerNames = ["OpenAI", "Cerebras", "Tavily", "OpenCode", "Anthropic", "GPT", "Whisper"]
+    static let environmentVariableShape = try! NSRegularExpression(pattern: "[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{2,}")
+
     /// **Not about readiness, and it is here rather than in a file of its own for one reason: this
     /// is where SONNY-136's "no user-facing string mentions an environment variable" sweep is
     /// held.** The row above was one of the two sites that criterion was written for. The other was
@@ -41,9 +49,11 @@ struct PermissionReadinessModelAccessTests {
         #expect(sentence == "Microsoft Word isn't available, so Sonny can't convert this document.")
         #expect(!sentence.contains("MAC_AGENT_MOCK_DOCX"))
         // The shape rather than the name, so a *different* variable in this sentence fails too.
-        let variableShape = try NSRegularExpression(pattern: "[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{2,}")
         #expect(
-            variableShape.firstMatch(in: sentence, range: NSRange(sentence.startIndex..., in: sentence)) == nil
+            Self.environmentVariableShape.firstMatch(
+                in: sentence,
+                range: NSRange(sentence.startIndex..., in: sentence)
+            ) == nil
         )
         // And the mechanism the founder's ratification put out of bounds is still there, so this
         // test cannot be satisfied by deleting the mock path (SONNY-136's never-touch list).
@@ -109,10 +119,29 @@ struct PermissionReadinessModelAccessTests {
             #expect(items.first?.id == "sonny-account", "the account row is still the first one")
             // And no row in the whole list names a provider or a variable, which is the founder's
             // decision of 2026-08-19 applied to the surface it was originally about.
+            //
+            // **The same two properties `SonnyBackendCopyTests` checks over its own sentences, and
+            // checked the same way** (PR #153's F8). This was three literals — `openai`, `_KEY` and
+            // `export ` — while the copy sweep two files away used a seven-name provider list and a
+            // SCREAMING_SNAKE *shape*, so a detail naming `SONNY_VISION_MODEL`, or Anthropic, passed
+            // here and would have failed there. That gap was invisible because a cross-reference in
+            // the other file said this test held "the same two properties"; it does now.
             for item in items {
-                #expect(!item.title.localizedCaseInsensitiveContains("openai"))
-                #expect(!item.detail.localizedCaseInsensitiveContains("openai"))
-                #expect(!item.detail.contains("_KEY"))
+                for field in [item.title, item.detail] {
+                    for provider in Self.providerNames {
+                        #expect(
+                            !field.localizedCaseInsensitiveContains(provider),
+                            "a readiness row names \(provider): \(field)"
+                        )
+                    }
+                    #expect(
+                        Self.environmentVariableShape.firstMatch(
+                            in: field,
+                            range: NSRange(field.startIndex..., in: field)
+                        ) == nil,
+                        "a readiness row carries an environment-variable-shaped token: \(field)"
+                    )
+                }
                 #expect(!item.detail.localizedCaseInsensitiveContains("export "))
             }
         }

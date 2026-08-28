@@ -263,21 +263,159 @@ struct BackendOutageTests {
     }
 
     /// Waits on the published rows rather than on a clock: the refresh is a `Task` this view model
-    /// starts, so the only honest signal is the value it publishes. The deadline is a hang backstop
-    /// and nothing is asserted about how long it took (`CLAUDE.md`, "a test that bets on a
-    /// wall-clock window does not fail honestly").
+    /// starts, so the only honest signal is the value it publishes. Nothing is asserted about how
+    /// long it took (`CLAUDE.md`, "a test that bets on a wall-clock window does not fail honestly").
+    ///
+    /// **This was the second hand-rolled loop PR #153's F1/F2 found**, and it carried the sharper
+    /// half of F2: its `Issue.record("the account row never became …")` was declared *nowhere*, so
+    /// under load it produced an undeclared issue on its own before the cascade even began. It is
+    /// `HangBackstop.waitOrAbandon` now, so it cannot record a sentence of its own at all.
     private func waitUntilAccountRow(
         _ viewModel: AgentViewModel,
         is state: PermissionReadinessState
     ) async throws {
-        let deadline = Date().addingTimeInterval(HangBackstop.deadlockDeadline)
-        while viewModel.permissionItems.first(where: { $0.id == "sonny-account" })?.state != state {
-            if Date() > deadline {
-                Issue.record("the account row never became \(state)")
-                return
-            }
-            try await Task.sleep(nanoseconds: 5_000_000)
+        try await HangBackstop.waitOrAbandon(for: "the account row to become \(state)") {
+            viewModel.permissionItems.first(where: { $0.id == "sonny-account" })?.state == state
         }
+    }
+
+    /// **The row follows the session in both directions, over the one client the process shares**
+    /// (PR #153's F4).
+    ///
+    /// The two halves this joins are held separately — `SignInSurfaceTests` holds that a sign-in and
+    /// a sign-out each announce themselves and that a refused code does not, and
+    /// `mainJoinsTheSessionHookToTheReadinessRefresh` holds the line in `main.swift` that turns an
+    /// announcement into a refresh. What neither can show is that a refresh *arriving* actually
+    /// moves the row, because the answer travels through `SonnyBackendClient`'s own token cache:
+    /// `hasReadStore` means the client answers `restoredIdentity()` from memory after the first
+    /// read, so the row only follows if signing in and out go through the same client the view model
+    /// holds. `main.swift` gives it the account model's, and this is that arrangement.
+    ///
+    /// Driven through `refreshPermissions()` rather than `refreshModelAccessReadiness()` directly,
+    /// because that is what the hook calls.
+    @Test
+    func theAccountRowFollowsASignInAndASignOutThroughTheSharedClient() async throws {
+        let stub = BackendStubURLProtocol.makeSession()
+        BackendStubURLProtocol.register(host: stub.host) { request in
+            if request.url?.path == "/v1/auth/email/start" {
+                return .reply(statusCode: 200, headers: [:], body: Data(#"{"request_id":"r","expires_in":600}"#.utf8))
+            }
+            return .reply(
+                statusCode: 200,
+                headers: [:],
+                body: try! JSONSerialization.data(withJSONObject: [
+                    "access_token": "issued-access",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                    "expires_at": "2026-08-28T10:41:07Z",
+                    "refresh_token": "issued-refresh",
+                    "user": ["id": "acct_7f3c"],
+                ])
+            )
+        }
+        defer { BackendStubURLProtocol.unregister(host: stub.host) }
+
+        let client = makeHermeticBackendClient(
+            environment: SonnyBackendEnvironment(baseURL: stub.baseURL, source: .production),
+            session: stub.session
+        )
+        let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost), client: client)
+        defer { fixture.tearDown() }
+        let account = SonnyAccountModel(client: client)
+        account.sessionDidChange = { [weak viewModel = fixture.viewModel] in viewModel?.refreshPermissions() }
+
+        // Signed out to begin with: nothing is in the Keychain.
+        fixture.viewModel.refreshPermissions()
+        try await waitUntilAccountRow(fixture.viewModel, is: .needsAction)
+
+        account.emailAddress = "founder@example.com"
+        await account.sendCode()
+        account.code = "123456"
+        await account.verify()
+        try #require(account.isSignedIn)
+        try await waitUntilAccountRow(fixture.viewModel, is: .ready)
+        #expect(
+            fixture.viewModel.permissionItems.first { $0.id == "sonny-account" }?.detail == "Signed in."
+        )
+
+        await account.signOut()
+        try #require(account.isSignedIn == false)
+        try await waitUntilAccountRow(fixture.viewModel, is: .needsAction)
+        #expect(
+            fixture.viewModel.permissionItems.first { $0.id == "sonny-account" }?.detail
+                == "Sign in to Sonny in Command Center."
+        )
+    }
+
+    // MARK: - The readiness tool, through the executor the app builds
+
+    /// **The closure at `AgentViewModel.makeExecutor`'s `modelAccessReadiness:` is the one place the
+    /// view model's answer reaches the capability adapter, and it was held by nothing** (PR #153's
+    /// F3). Replacing it with `{ .undetermined }` survived the whole suite: every test that read the
+    /// account row read it either off `PermissionReadinessService` directly or off
+    /// `viewModel.permissionItems`, and neither goes through an executor.
+    ///
+    /// **Why that is worth a test rather than a comment.** The parameter is defaulted — to
+    /// `.undetermined`, deliberately, so a context with no account wiring cannot report readiness
+    /// nobody checked — which means a later refactor can *drop the argument* and still compile. The
+    /// "show permission readiness" tool would then answer "Sonny checks this when it needs it."
+    /// forever, on a signed-in Mac, with a green suite. That is PR #139's F10 in its own words —
+    /// readiness that is not readiness — arriving at the one surface SONNY-171 was filed about.
+    ///
+    /// It reads the adapter's own preview text rather than the item list, because that is what a
+    /// user of the tool sees, and it drives it through `viewModel.makeExecutor()` rather than
+    /// constructing a context by hand, because a hand-built context is exactly the thing that cannot
+    /// catch a dropped argument.
+    @Test
+    func theReadinessToolReportsTheAccountTheViewModelHolds() async throws {
+        let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost))
+        defer { fixture.tearDown() }
+
+        await fixture.viewModel.refreshModelAccessReadiness()
+        try #require(fixture.viewModel.modelAccessReadiness == .signedIn)
+
+        let details = try Self.readinessDetails(from: fixture.viewModel)
+        #expect(
+            details.contains("Sonny account: Ready - Signed in."),
+            "the tool did not carry the view model's answer: \(details)"
+        )
+
+        // **The other direction through the same seam**, so the assertion cannot be satisfied by a
+        // closure that always answers `.signedIn` either. A second fixture rather than a sign-out on
+        // this one: `SonnyBackendClient` caches the Keychain read behind `hasReadStore`, so emptying
+        // the store under a client that has already answered would change nothing and the test would
+        // pass for the wrong reason.
+        let signedOut = try makeFixture(
+            networkFailure: URLError(.cannotConnectToHost),
+            client: makeHermeticBackendClient()
+        )
+        defer { signedOut.tearDown() }
+        await signedOut.viewModel.refreshModelAccessReadiness()
+        try #require(signedOut.viewModel.modelAccessReadiness == .signedOut)
+        let whenSignedOut = try Self.readinessDetails(from: signedOut.viewModel)
+        #expect(
+            whenSignedOut.contains("Sonny account: Needs action - Sign in to Sonny in Command Center."),
+            "the tool did not carry the signed-out answer: \(whenSignedOut)"
+        )
+    }
+
+    /// The `showPermissionReadiness` preview, as the executor the view model builds produces it.
+    @MainActor
+    private static func readinessDetails(from viewModel: AgentViewModel) throws -> [String] {
+        let plan = AgentPlan(
+            summary: "Show permission readiness.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "permissions",
+                    operation: .showPermissionReadiness,
+                    description: "Show readiness"
+                )
+            ]
+        )
+        let previews = try viewModel.makeExecutor().preview(plan: plan)
+        let readiness = try #require(previews.first { $0.title == "Permission readiness" })
+        return readiness.details
     }
 
     // MARK: - Fixture
@@ -326,21 +464,38 @@ struct BackendOutageTests {
         /// **The approval loop is `start()` again**, which is the app's own door: `start()` routes
         /// to `approvePendingRun()` while `isAwaitingApproval`, so a test that called a private
         /// approve would be exercising a path no surface takes. A saved routine's plan carries
-        /// `requiresConfirmation`, so without this the routine test would time out on a question
+        /// `requiresConfirmation`, so without this the routine test would wait forever on a question
         /// nobody answered.
+        ///
+        /// **`HangBackstop.waitOrAbandon`, not a hand-rolled wall-clock loop** (PR #153's F1/F2).
+        /// This was `while … { if Date() > deadline { Issue.record(…); return } }`, and that shape
+        /// failed the *flagged suite* on an unmodified tree in 3 of 6 clean-tree full runs — while
+        /// the same eleven tests pass in 0.757 s under `--filter`. Thirty seconds of wall clock buys
+        /// a poll loop one or two looks in this process, not thousands, because both targets share
+        /// one main actor whose queue is hundreds of jobs deep; `HangBackstop`'s own doc has the
+        /// measurements. The two tests here that drive the real planner over the URL stub are the
+        /// longest waits in the tree and so the first to starve.
+        ///
+        /// **`waitOrAbandon` rather than `wait`, and that is the half F2 was about.** Recording an
+        /// issue and returning let the test body run on against a precondition that never arrived,
+        /// recording ordinary `Expectation failed` assertions that no declaration covers — so a
+        /// starved run was indistinguishable from a mutation kill, and was demonstrated coming back
+        /// red twice on a mutant neither test touches. Throwing ends the test, which makes the set
+        /// of issues these tests can record finite: the backstop's own wording, and the abandonment.
+        /// Both are declared.
+        ///
+        /// The condition presses the pending approval as a side effect, which is deliberate and is
+        /// why the wait is not a pure predicate: the question arrives asynchronously, so the only
+        /// place that can answer it is the loop that is already looking. `approvePendingRun` guards
+        /// on `!isRunning`, which it sets synchronously, so a second press cannot land.
         func run(_ command: String) async throws {
             viewModel.command = command
             viewModel.start()
-            let deadline = Date().addingTimeInterval(HangBackstop.deadlockDeadline)
-            while viewModel.isRunning || viewModel.isAwaitingApproval {
+            try await HangBackstop.waitOrAbandon(for: "the run to finish: \(command)") {
                 if viewModel.isAwaitingApproval, !viewModel.isRunning {
                     viewModel.start()
                 }
-                if Date() > deadline {
-                    Issue.record("the run never finished: \(command)")
-                    return
-                }
-                try await Task.sleep(nanoseconds: 5_000_000)
+                return !viewModel.isRunning && !viewModel.isAwaitingApproval
             }
         }
     }
