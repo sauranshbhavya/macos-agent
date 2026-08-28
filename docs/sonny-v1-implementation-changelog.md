@@ -170,6 +170,77 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/row-12-first-run
+Status: complete — SONNY-137 Done; written 2026-08-28 before the PR opened
+Date: 2026-08-28
+Tickets: **SONNY-137** (first run as one ordered sequence: sign in, Screen Recording, the relaunch, Accessibility, and back into a signed-in app at the right step). One session, one branch, cut from `4824e50` (PR #151's merge) and **rebased once onto `a9a8e0a`** (PR #154, docs only) before any figure below was taken. It carries the coordinator's amendment of 2026-08-28 in full: the sequencing that put this after SONNY-136, and the ruling that the headline acceptance cannot be verified today because it needs a live sign-in.
+Reviewed by: fresh session per WORKFLOW.md step 7 — pending when this entry was written; this line is restated before merge.
+
+Spec sections covered: **SONNY-106 section E**'s "first run works from a clean machine … with no raw errors reaching the user" gets the ordering it never had an owner for — the permissions and account halves; **model access** is SONNY-136's and is not re-answered here. **§13.2**'s two required grants are now reached by a sequence rather than by hitting an error and going looking. §6.12's Permission Center is untouched: it is Settings, and it is where a declined step is finished.
+
+Files changed, **10** — 5 under `Sources/` (1 new), 3 under `Tests/` (2 new) and the 2 `docs/` records.
+- `Sources/MacAgent/FirstRunSequence.swift` — **new, and it is the whole ticket**: `FirstRunStep`, the pure resolver, the `UserDefaults`-backed store, the coordinator, the two labels, and `FirstRunSequenceView`, which hosts the two existing dialogs.
+- `Sources/MacAgent/AppDelegate.swift` — the sequence is begun inside the task that awaits `accountModel.restore()`; two more undefaulted parameters.
+- `Sources/MacAgent/main.swift` — the one place the real `UserDefaults` domain and the real TCC checker are named.
+- `Sources/MacAgent/AppWindowCoordinator.swift` — both threaded to Command Center.
+- `Sources/MacAgent/CommandCenterView.swift` — the first-run sheet; `SettingsSecurityAccessPage` stops building its own `ScreenAccessOnboardingModel` and is handed the shared one.
+- `Tests/MacAgentTests/FirstRunSequenceTests.swift` and `FirstRunTestFixtures.swift`, both new; `ProductShellTests.swift` — 9 fixture sites take the two new parameters.
+
+**Nothing under `Sources/MacAgentCore/` changed, and nothing under `server/`.** The sequence is presentation and ordering; the two things it sequences already existed.
+
+**Every figure below is measured at `7498b5c`**, the code commit; this entry's own commit sits directly on it and differs from it in `docs/` only.
+
+Tests: the flagged command → **2342 in 162 suites**, exit 0, at `7498b5c`. `swift build` exit 0. `scripts/warnings` **0 warnings**, stamp `7498b5c (clean)` — the script's own line, not inferred. **The one earlier set of figures is discarded rather than translated**: they were taken at `9074ef7`, the pre-rebase code commit, which `git merge-base --is-ancestor 9074ef7 HEAD` rejects. The Swift tree is identical across that rebase and the numbers came out the same; they were re-run anyway, because a figure repointed across a rebase describes a tree it was not taken on and the cheap thing here was to run it again.
+
+**The baseline is 2320 in 161 and the delta is arithmetic rather than a borrowed figure.** That number is PR #151's, restated by SONNY-136's entry for `4824e50`; `a9a8e0a` differs from `4824e50` in three files, all under `docs/` and `WORKFLOW.md` (`git diff --name-only 4824e50 a9a8e0a` → 3, none of them compiled by either Swift target), so it cannot have moved. This branch adds one suite, `FirstRunSequenceTests`, with **22** tests and changes no other test's existence — 2320 + 22 = 2342 and 161 + 1 = 162, which is what the run answers.
+
+**Mutation battery through `scripts/mutate`: 11 mutants, 11 killed, 0 survived, 0 unattributed, run at `7498b5c`**, over a green baseline of 2342 in 162. The population is one mutant per decision this ticket made about where a user lands. **Four results are worth reading rather than counting.**
+- **R1 swaps the two enum cases**, which is the whole ticket inverted, and eight tests catch it — including the exhaustive property, which is the one that would still catch it if every scenario test were deleted.
+- **R10 is the two-line mistake in the launch path**, moving `begin` out of the task that awaits `restore()` and beside it. It is killed by exactly one test, `theLaunchPathDecidesFirstRunOnlyAfterTheKeychainHasBeenRead`, and nothing else in the suite can see it: the resolver is correct under this mutant and every runtime test of it passes. That single scan is the whole of the defence on the ordering that makes the product's headline property hold at run time rather than only in theory.
+- **R8 and R9 are each killed by one test too**, and by the one written for them — `nothingIsDecidedBeforeTheKeychainHasBeenRead` and `skippingWithNothingPresentedRecordsNothing`. Both are about a guard, and a guard removed leaves a suite that is otherwise entirely green.
+- **R11 rewrites `"Set up later in Settings"` as `"Skip"`**, which is requirement 4's second half deleted: the step is still declinable and the user is no longer told where to finish it. One test holds it, and it holds the string rather than its non-emptiness.
+
+Behavior added:
+- **A launch on a Mac with no Sonny state starts a sequence.** Sign in, then Screen Recording, the relaunch macOS forces, then Accessibility. Before this, `applicationDidFinishLaunching` showed Command Center and the widget unconditionally with no first-run branch of any kind, and a new user found out what was missing by hitting errors.
+- **The order is a property, not a coincidence of how two enum cases are written.** `FirstRunSequence.step(...)` can never answer `.screenAccess` while sign-in is outstanding — neither done nor declined — and that is asserted over all 64 combinations of its five inputs rather than over the two a reader would think of. It is the sequence-level form of the constraint SONNY-128 holds at the Keychain: the session has to be on disk before anything can restart the app.
+- **The app comes back into the sequence at the step that is left.** Nothing writes down where the user was; the sequence resolves from live state, so the process that comes back after the relaunch reads a session from the Keychain and a granted Screen Recording from TCC and lands on screen access.
+- **Every step is declinable and the sequence is resumable.** Declining is the hosted dialog's own close control, or a button whose label says where the step is finished later — *"Set up later in Settings"* and *"Sign in later"*. Declining one step moves to the next rather than ending the sequence; quitting mid-sequence resumes at the same step.
+- **Going through it once means it never runs again**, including after signing out. Signing out is not a new first run.
+
+Behavior preserved (required, no blanket claims):
+- **`ScreenAccessOnboardingModel`'s granting and relaunch logic is byte-identical** — the ticket's never-touch list, and `ScreenAccessOnboardingTests`' eight tests are unchanged and pass.
+- **SONNY-128's headline property is untouched and still asserted end to end.** `SignInSurfaceTests.theSessionIsAlreadyOnDiskWhenTheScreenRecordingGrantRestartsTheApp` passes unchanged; this branch adds the ordering that makes the situation it describes the only reachable one.
+- **The two manual doors are unchanged.** The account menu still opens sign-in and nowhere else in Command Center opens it, and Settings › Security & Access still opens screen access — `commandCenterOpensTheSignInDialogFromTheAccountMenuAndNowhereElse` passes with its counts untouched, because the sequence is a different file rather than a second control on that page. `eachHostedDialogHasItsManualDoorAndTheSequenceAndNoOther` is the widened population, over the whole target.
+- **`firstRunApprovalExplainerLines` and the approval panel are untouched**, and the exception stays a single one: the sequence adds two labels and no explanatory line.
+- **The launch path's audited presentation is unchanged.** `theNotificationClickAndLaunchKeepTheirAuditedPresentationPaths` reads the region this branch edits and still passes: `widgetController.show()` in the launch method, `requestWidgetPresentation()` nowhere in it.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A step finer than the thing the user can close produces a loop, which is why there are two steps and not three.** The obvious model has one step per beat — sign in, Screen Recording, Accessibility — and it breaks on the first skip: the last two beats are one sheet, so closing it marks only `screenRecording` declined, `accessibility` becomes the next step, and the same sheet re-opens on the same launch. **The unit of skipping has to be the unit of presentation.** What the user walks through is still four beats; `ScreenAccessOnboardingView` already owns three of them and this ticket does not rebuild it.
+
+**A resolver survives a relaunch that a stored position does not.** The tempting design writes down which step the user is on. That value has to be written before the restart and read after it — one more thing to get wrong at exactly the moment the whole ticket is about. Asking live state instead makes the post-relaunch launch take the same path as any other: the same function that answers `.signIn` on a clean Mac answers `.screenAccess` once a session and a grant exist, with nothing recorded about where anyone was. Only what live state genuinely cannot say is persisted — which steps were declined, and whether the sequence is over.
+
+**Deciding first run outside the task that awaits the Keychain read reproduces the exact bug the sequence exists to prevent.** `restore()` is asynchronous and everything after it in `applicationDidFinishLaunching` runs first, so a decision taken beside it rather than inside it sees `isSignedIn == false` on *every* launch — including the one right after the Screen Recording grant, where it hands a sign-in step to a user who signed in ninety seconds ago. That is "grant a permission, come back signed out" wearing a different coat, and it is a two-line mistake that no test of the resolver could catch. `R10` is that mutant, and the scan that kills it reads the ordering inside the launch task rather than the presence of a call.
+
+**A second `ScreenAccessOnboardingModel` is two answers to whether this launch still owes a relaunch.** Settings › Security & Access built its own with `@StateObject`, which was right while it was the only door. First run is a second door, and `screenRecordingRequestedThisLaunch` — the flag that reveals the relaunch guidance — is per instance: a user who pressed Request access in the sequence would find the Settings page showing no guidance for the request it never saw, on the one step where the relaunch is the entire mechanic. Built once in `main.swift` now, threaded down, and the construction-site population is asserted.
+
+**"Nine of the sixty-four" was written as twelve first, and the assertion is what caught it.** The exhaustive property test also counts how often the case it is about actually occurs, because a property nothing can satisfy is a property nothing holds. The count was written from a reading of the conditions rather than from running them — the failure mode `CLAUDE.md`'s counted-number rule names — and it failed on the first run. **The general form worth keeping: an exhaustive property test should assert its own reachability with a number, precisely because that number is the part a session will guess at.**
+
+**The sequence does not block the floating widget, and that is a decision rather than an oversight.** It is a sheet on Command Center, so the widget — a separate always-on panel — stays usable throughout, and a user can type a command while the first step is on screen. Blocking it was considered and rejected twice over: requirement 4 says a user who declines gets a Sonny that does less rather than one that is stuck, and making the sequence modal to the whole app is a design decision belonging to SONNY-109's pass, not to the ticket that owns the ordering.
+
+**A test's hermetic fixture is not optional here, and one of the defaults is worse than dirty.** A bare `ScreenAccessOnboardingModel()` in a fixture takes `DefaultAppRelauncher`, whose `relaunch()` ends with `NSApp.terminate(nil)` — a test that reached it would end the test process rather than fail a check. `FirstRunStore` has the ordinary version of the same problem, one domain out: `.standard` is shared by every packaged build on this Mac, and the flag it holds is "first run is over". Neither has a default parameter anywhere on the path from `main.swift` down, which is SONNY-240's rule reaching two things that are not local stores.
+
+Known limitations / deferred scope:
+- **The headline acceptance is verified in two halves and only one of them was runnable, exactly as the coordinator's amendment of 2026-08-28 instructed.** "Sign in, grant Screen Recording, relaunch, come back signed in at the next step" needs a live sign-in, which is the identity sitting deferred on **SONNY-280** (its founder-deferral comment of 2026-08-27 and its numbered resume checklist, steps (1)–(5)) — the same gate SONNY-133, SONNY-134 and SONNY-135 declared for their own rows. **The half that is owed is only the signed-in half.** The relaunch-and-resume mechanic itself is a founder row that runs today, because declining the sign-in step reaches the same relaunch on the same sequence; and the resumption is pinned by test either way, with a second coordinator over the same `UserDefaults` suite standing in for the process that comes back. **No agent packaged or launched the app**; `./scripts/package-app.sh` and the Finder run are the founder's, per this repository's standing rule.
+- **A second sign-in method is designed for and not built.** SONNY-129 (Google, then Apple near launch) is deferred behind the same sitting. The requirement it leaves here — that adding one must not mean revisiting first-run ordering — is met structurally: the step is satisfied by "a session is held", which is what every method produces, so the buttons land inside `SignInDialogView`'s address step and nothing in `FirstRunSequence.swift` moves. `theSequenceNamesNoSignInMethod` is that claim as a scan, because a file that named a method would be a file the third method has to be added to.
+- **Clean-machine testing here is a rehearsal, by the founder's decision of 2026-08-17 not to open the Developer Program account yet.** Nothing in this ticket is blocked by it — the founder can produce a Mac with no Sonny state — but the first genuinely clean first run by someone who is not a founder happens after notarization (row 20, SONNY-108), close to launch. That is why the manual section says how to reset the two keys: without it, every row passes trivially on a Mac that has already been through the sequence.
+- **Nothing was left alone that this ticket needed.** The regions SONNY-136 is rewriting — the readiness model and `modelAccessReadiness` in `AgentViewModel`, `PermissionReadinessService`'s account row, the four unreachable-backend sentences, the provider clients' messages — are untouched here by design rather than by luck: this branch changes no file under `Sources/MacAgentCore/` at all, and its one shared file with PR #153 is `Tests/MacAgentTests/ProductShellTests.swift`, where the two diffs sit in different regions (that branch at the stored-property list, a transcription sentence and a doc comment; this one at nine fixture construction sites). A first-run sequence that showed or drove readiness rows would have collided head on, and it does neither.
+
+Open questions (required, write "none" if true): **none.**
+
+Next branch: none owed by this one. SONNY-109's UI/UX pass owns how this sequence looks — it ships functional and unpolished by design, which is what row 12's plan §8.2 already recorded for the first-run surface.
+
+
 ### Branch: feature/row-12-entitlements
 Status: complete — SONNY-135 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28
@@ -274,8 +345,7 @@ Open questions (required, write "none" if true):
 - **Whether the per-user spend cap is evaluated per iteration or per session**, raised by SONNY-131 and left to this ticket by SONNY-133. **Answered: per request.** A screen-control session is twelve requests and spends twelve units, because the gateway holds no session state and a per-session cap would need one — and because a per-request cap is the one that bounds a leaked token, which is what SONNY-16 recorded. If SONNY-212 wants a per-session price it is a `GROUP BY session_id` over the metering events, which already exist.
 - **What the deployment's cap should be**, which is an operator's number today and SONNY-212's allowance tomorrow. Nothing in this repository sets one.
 
-Next branch: `feature/row-12-retention` (SONNY-134) is the remaining half of the pair the row-12 plan marks as parallel-able after SONNY-133, and is server-only.
-### Branch: fix/three-surfaces-say-what-they-mean
+Next branch: `feature/row-12-retention` (SONNY-134) is the remaining half of the pair the row-12 plan marks as parallel-able after SONNY-133, and is server-only.### Branch: fix/three-surfaces-say-what-they-mean
 Status: complete — SONNY-243, SONNY-251 and SONNY-233 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28
 Tickets: **SONNY-243** (Memory's Output locations row counts folders while its sheet counts uses), **SONNY-251** (four icon-only widget controls name themselves only through `.help`), **SONNY-233** (Settings' Delete-Local-Data copy names nine of the twelve stores it deletes). Three tickets, one session, one branch, cut from `main` at `4824e50` (PR #151's merge) and **rebased three times** — onto `a9a8e0a` (PR #154's merge) after PR #155's review, then onto `5e8d7cf` (#156's) and `5c71bdd` (#157's) as `main` moved under the fix round. **Every figure below is measured at `d41b34d`, the head the last of those produced, and none is carried across any of them** — the rule for a rebase, and the opposite of the rule for the 2026-08-24 rewrite. **The three differ in what they could break, and the sweep the rebase gotcha asks for was run on each rather than assumed from the conflict list.** #154 is docs-only. #156 moved `scripts/mutate` and two test files, so the battery's own classifier changed beneath this branch — a figure measured under the old one is not a figure under the new. #157 is the only one that touched `Sources/`, so `Sources` stopped being byte-identical there: `git rev-parse 0d50bff:Sources e6cc390:Sources` printed one hash twice across #156's rebase and the same check across #157's does not. Each rebase conflicted in this file alone, both branches inserting under `## Entries`, resolved keep-both in **merge** order every time — this entry above #157's, #156's and #154's, since all three have merged and this has not. Spawned **SONNY-338** (the compact capsule and the menu bar both say "Open Sonny" for two different destinations), filed rather than decided because it is product vocabulary.
@@ -373,7 +443,6 @@ Open questions (required, write "none" if true):
 - **Whether "Open Sonny" should stay on both the capsule and the menu bar** — SONNY-338.
 
 Next branch: none assigned by this branch — the three tickets were routed to it individually rather than as a roadmap row.
-
 ### Branch: fix/three-small-client-defects
 Status: complete — SONNY-264, SONNY-218 and SONNY-259 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28
@@ -487,8 +556,6 @@ Known limitations / deferred scope:
 Open questions (required, write "none" if true): **whether the server half should adopt the construct more widely, and on what evidence.** Two tests carry it because three sightings say they need it. Applying it to every `.db.test.ts` would be a bound applied to tests that have never approached one, which buys nothing and costs a wider declaration; applying it to none but these leaves the next such test to be found the way these were. The measurement that would settle it is a per-test duration distribution over the server suite under battery load, which this branch did not take.
 
 Next branch: unassigned — this is a standalone tooling lane, not a roadmap row.
-
-
 ### Branch: docs/four-records-catch-up
 Status: complete — SONNY-205, SONNY-275, SONNY-276 and SONNY-170 Done; written 2026-08-28 before the PR opened
 Date: 2026-08-28

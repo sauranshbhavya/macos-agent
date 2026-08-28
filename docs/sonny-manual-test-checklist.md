@@ -1187,6 +1187,76 @@ bottom-left account row → **Sign in**.
       button on one line, or stacked, never character-wrapped. Both are
       `SettingsAdaptiveControlRow`s, which is the pattern that exists for exactly this.
 
+### First run as one sequence (new 2026-08-28, SONNY-137)
+
+**What changed:** launching on a Mac with no Sonny state now starts an ordered sequence — sign in,
+then Screen Recording, the relaunch macOS forces, then Accessibility — instead of dropping you into
+an empty Command Center to find out what is missing by hitting errors. The two steps are the dialogs
+that already existed; what is new is that something triggers them, in that order, and that the app
+comes back into the sequence after the relaunch rather than at the beginning or at the end.
+
+**Read this before the rows, because without it every row below passes trivially.** The sequence
+records that it is over, so on a Mac that has already been through it — or one that was already
+signed in and already granted when this build first ran, which is the founder's Mac — nothing
+appears and the rows have tested nothing. **Reset it between rows** in a terminal, with Sonny quit:
+
+```
+defaults delete com.sonny.MacAgent com.sonny.state.firstRunFinished
+defaults delete com.sonny.MacAgent com.sonny.state.firstRunSkippedSteps
+```
+
+Either command prints *"does not exist"* when the key was never written, which is not an error. The
+domain is the packaged app's, so **run the packaged `.app`** (`./scripts/package-app.sh`, then open
+the bundle) — a bare `swift run` writes to a different domain and has no bundle identity for the
+permission prompts this sequence drives.
+
+**One row needs a live sign-in and waits; the rest run today.** The headline check — sign in, grant
+Screen Recording, relaunch, come back **signed in** at the next step — needs a real account, which
+is **SONNY-280's founder-deferral comment of 2026-08-27 and its numbered resume checklist, steps
+(1) through (5)**, plus the sign-in section's own setup above. Every other row is runnable now,
+including the resume itself: declining the sign-in step reaches the same relaunch on the same
+sequence, so the mechanic is checkable without an account and only the signed-in half is owed.
+
+- [ ] **(new 2026-08-28, SONNY-137) — the clean-machine row.** Quit Sonny. Revoke Sonny's **Screen
+      Recording** and **Accessibility** grants in System Settings → Privacy & Security, sign out if
+      you are signed in, and run both `defaults delete` lines above. Launch the packaged app. The
+      sequence must open on **sign in** — not on an empty Command Center, and not on the screen-access
+      dialog. Nothing anywhere in it may show a raw error, a status code, a URL or a variable name.
+- [ ] **(new 2026-08-28, SONNY-137) — the resume mechanic, runnable today without an account.** From
+      the state above, press **Sign in later** on the first step. The screen-access dialog must
+      appear next. Press **Request access** under Screen Recording, switch Sonny on in System
+      Settings, and use the dialog's **Relaunch Sonny** button. When the app comes back it must open
+      **on the screen-access step with Screen Recording showing Granted** — not on sign-in, and not
+      on nothing. That is "comes back at the right step"; the row below is the same journey with an
+      account.
+- [ ] **(new 2026-08-28, SONNY-137) — the headline row, and it waits on SONNY-280's resume steps
+      (1)–(5)** plus the sign-in section's setup. Reset as above, launch, and **sign in for real** on
+      the first step. The sequence must move to screen access by itself. Grant Screen Recording,
+      relaunch from the dialog, and confirm two things when the app comes back: you are **still
+      signed in** (bottom-left account row reads *Account* with your address), and you are back **on
+      the screen-access step**. A user who signs in, grants a permission and finds themselves signed
+      out has hit the worst bug this row can ship, on their first run.
+- [ ] **(new 2026-08-28, SONNY-137)** Reset, launch, and decline **both** steps — **Sign in later**,
+      then **Set up later in Settings**. Confirm Sonny is usable rather than stuck: type a command
+      into the widget and run something that needs neither the backend nor a screen grant (a
+      calculation, opening a saved workspace). Then confirm the stated way to finish is really there
+      — Settings → Security & Access → Screen access → **Set up** opens the same dialog, and the
+      bottom-left account row still offers **Sign in**.
+- [ ] **(new 2026-08-28, SONNY-137)** Reset, launch, and quit while the sequence is on screen without
+      pressing anything. Reopen. It must come back on the **same step** rather than starting over or
+      skipping ahead.
+- [ ] **(new 2026-08-28, SONNY-137)** Get to the end of the sequence once — by finishing it or by
+      declining both steps — then quit and reopen **twice**. It must not run again either time.
+      Then sign out and reopen: it must still not run. Signing out is not a new first run.
+- [ ] **(new 2026-08-28, SONNY-137)** With the screen-access step on screen from the sequence, press
+      **Request access** under Screen Recording, then close the sequence and open Settings → Security
+      & Access → Screen access. The relaunch guidance must be there too — it is the same model behind
+      both doors, and a second one would tell you a relaunch is owed in one place and not the other.
+- [ ] **(new 2026-08-28, SONNY-137) — if feasible.** A genuinely clean macOS user account. That is
+      the only true clean-machine test, and it is a rehearsal rather than the real thing until
+      notarization (row 20, SONNY-108): the first genuinely clean first run by someone who is not a
+      founder happens after that, close to launch.
+
 ### Setup for every section behind the gateway (new 2026-08-28, SONNY-330)
 
 **Every section from here down that runs something against the gateway wants the same setup, and
