@@ -193,6 +193,61 @@ struct EntitlementClaimTests {
     }
 
     @Test
+    func aSecondSpellingOfTheSameBytesIsRefused() throws {
+        // **The half of `decodeSegment` the alphabet check does not cover, and a mutation battery is
+        // what found it uncovered.** The test above perturbs a segment with a character outside the
+        // alphabet, which the alphabet check catches — so deleting the re-encode comparison left the
+        // whole suite green (S3, survived, at `5b3db64`). This is the case only that comparison
+        // catches: the final quantum of a base64url segment has unused bits, so changing them
+        // produces a **different string that decodes to identical bytes**. Foundation's decoder
+        // accepts both, measured rather than assumed. Without the comparison, two distinct strings
+        // would carry one signature — which is the same class of thing
+        // `server/test/support/tokens.ts` calls a "second spelling" and covers on the gateway side.
+        let segments = Self.goldenClaim.split(separator: ".").map(String.init)
+        let secondSpelling = Self.perturbingUnusedBits(of: segments[2])
+
+        // It really is a second spelling: a different string, the same bytes.
+        #expect(secondSpelling != segments[2])
+        #expect(secondSpelling.count == segments[2].count)
+        #expect(Self.lenientlyDecoded(secondSpelling) == Self.lenientlyDecoded(segments[2]))
+        #expect(Self.lenientlyDecoded(secondSpelling) != nil)
+
+        // And it is refused, for its shape rather than for its signature — which is what says the
+        // canonicality check ran, since the bytes it carries are the correct signature.
+        let claim = "\(segments[0]).\(segments[1]).\(secondSpelling)"
+        #expect(EntitlementVerifier.verify(claim, against: Self.goldenKeys).failure
+            == .malformed("signature"))
+        // The unperturbed claim verifies, so the refusal above is the perturbation's doing.
+        #expect(EntitlementVerifier.verify(Self.goldenClaim, against: Self.goldenKeys).failure == nil)
+    }
+
+    /// The base64url alphabet, and the perturbation that changes only a final quantum's unused bits.
+    ///
+    /// A segment whose length is `4n + 2` carries one byte in its last two characters — twelve bits
+    /// for eight — so the final character's low four bits contribute nothing to the decoded value.
+    /// The signature segment of an Ed25519 claim is 86 characters, which is that shape.
+    static let base64urlAlphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+    static func perturbingUnusedBits(of segment: String) -> String {
+        let characters = Array(segment)
+        let last = characters[characters.count - 1]
+        let index = base64urlAlphabet.firstIndex(of: last)!
+        let replacement = base64urlAlphabet[(index & ~0b1111) | ((index + 1) & 0b1111)]
+        return String(characters[0..<(characters.count - 1)]) + String(replacement)
+    }
+
+    /// What a *permissive* decoder would answer — the behaviour `Base64URL.decode` deliberately does
+    /// not have. Used only to show that the two spellings really do carry the same bytes.
+    static func lenientlyDecoded(_ value: String) -> Data? {
+        var padded = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let remainder = padded.count % 4
+        if remainder == 2 { padded += "==" } else if remainder == 3 { padded += "=" } else if remainder != 0 {
+            return nil
+        }
+        return Data(base64Encoded: padded)
+    }
+
+    @Test
     func aPayloadThisBuildCannotReadIsRefusedRatherThanReadOptimistically() throws {
         // Each case is one field wrong and everything else right, so the refusal is attributable.
         let base: [String: Any] = [
