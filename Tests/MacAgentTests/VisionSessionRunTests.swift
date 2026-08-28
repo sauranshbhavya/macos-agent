@@ -25,19 +25,37 @@ struct VisionSessionRunTests {
     /// on what was actually sent as well as on what came back.
     private final class ScriptedVisionModel: VisionModelDeciding, @unchecked Sendable {
         private let replies: [String]
+        /// What to throw instead of answering, and at which 1-based iteration (SONNY-131).
+        ///
+        /// **A property of this double rather than a second double**, because what the mid-loop tests
+        /// need is a session that runs normally and *then* fails: a separate always-failing model
+        /// could only ever test iteration one, which is the case the decision is least about.
+        private let failure: (iteration: Int, error: any Error)?
         private(set) var prompts: [String] = []
         private(set) var payloads: [RedactedPayload] = []
+        /// Every session context the loop passed, in order — so a test can assert on §4.5's two
+        /// session fields as the runner produced them rather than as a client happened to send them.
+        private(set) var sessions: [VisionSessionRequestContext] = []
         private var index = 0
 
-        init(_ replies: [String]) {
+        init(_ replies: [String], failingAt failure: (iteration: Int, error: any Error)? = nil) {
             self.replies = replies
+            self.failure = failure
         }
 
         var transcriptDescription: String { "scripted" }
 
-        func decide(prompt: String, payload: RedactedPayload) async throws -> String {
+        func decide(
+            prompt: String,
+            payload: RedactedPayload,
+            session: VisionSessionRequestContext
+        ) async throws -> String {
             prompts.append(prompt)
             payloads.append(payload)
+            sessions.append(session)
+            if let failure, failure.iteration == session.iteration {
+                throw failure.error
+            }
             defer { index += 1 }
             // Running off the end means the loop iterated more than the test scripted, which is a
             // test bug worth failing loudly rather than a stop condition worth papering over.
@@ -326,7 +344,10 @@ struct VisionSessionRunTests {
         egressPolicy: VisionCaptureEgressPolicy = .default,
         /// What the OCR pass reads off each capture. The default finds nothing, which is a window
         /// with no secrets and no shell on it; SONNY-139's tests supply screens instead.
-        recognizer: (any ImageTextRecognizing)? = nil
+        recognizer: (any ImageTextRecognizing)? = nil,
+        /// A send that fails at a chosen iteration — SONNY-131's mid-loop decision (`nil` for every
+        /// test that is not about it).
+        modelFailure: (iteration: Int, error: any Error)? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -398,7 +419,7 @@ struct VisionSessionRunTests {
         )
         viewModel.interactionMode = mode
 
-        let model = ScriptedVisionModel(replies)
+        let model = ScriptedVisionModel(replies, failingAt: modelFailure)
         let synthesizer = RecordingSynthesizer(frontmost: frontmost)
         let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(
@@ -2295,6 +2316,192 @@ struct VisionSessionRunTests {
 
     /// The iteration cap, through the whole stack: a model that never says done is stopped, with an
     /// honest sentence and no product surface offering to continue.
+    // MARK: - SONNY-131: mid-loop failure, decided rather than discovered
+
+    /// **The decision, exercised end to end: a send that fails at iteration 3 of a longer session
+    /// stops the session there, keeps the two actions it already took, and says so.**
+    ///
+    /// `VisionSessionInterrupted`'s own declaration carries the reasoning for each half. What this
+    /// asserts is the concrete outcome the contract's §12 asks SONNY-131 to pick and pin: not a
+    /// retry, not a carry-on, and not a silent stop.
+    @Test
+    func aSendThatFailsMidSessionStopsTheSessionThereAndKeepsWhatItDid() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0),
+            modelFailure: (
+                iteration: 3,
+                error: VisionModelClientError.backend(.api(SonnyBackendAPIError(
+                    code: .providerUnavailable,
+                    statusCode: 502,
+                    message: "Server-authored sentence the client must never display.",
+                    requestID: "req_err_1",
+                    retryAfter: nil,
+                    envelopeSaysRetryable: true
+                )))
+            )
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click a few times", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // **It stopped at the failing iteration**, rather than carrying on to the cap of 8. Three
+        // sends were attempted and two clicks landed, so the session really was mid-flight.
+        #expect(fixture.model.prompts.count == 3)
+        #expect(fixture.synthesizer.clickCount == 2)
+
+        // **The partial history is what the user is told**, and the sentence is the app's own.
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message == "Sonny couldn't finish this one. Try again. It stopped after 2 steps in Safari.")
+        // §7.1: never the server's sentence, and never a status.
+        #expect(!message.contains("Server-authored"))
+        #expect(!message.contains("502"))
+
+        // **The journal closes with a reason of its own**, so a reader can tell a send failure apart
+        // from the generic `failed` every other throw produces — and the two actions that did happen
+        // are still recorded, which is the durable half of "partial history".
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "send_failed")
+        #expect(record.entries.count == 2)
+        #expect(record.endSummary == message)
+    }
+
+    /// **No retry loop here, and the count is the assertion.** Three sends for three iterations —
+    /// not six, not nine. Every retry §9.3 allows has already happened inside `SonnyBackendClient`,
+    /// which retries on the failure's own `code` and reuses the operation's idempotency key; a
+    /// second loop at this level would multiply those ceilings on a route whose client timeout is
+    /// 120 seconds, and would mint a fresh key per attempt, which §9.1 forbids.
+    ///
+    /// The failure used is the *most* retryable code in §7.2 — `server.error`, three attempts with
+    /// backoff — so if this loop retried anything, it would retry this.
+    @Test
+    func aRetryableFailureIsNotRetriedAgainByTheSessionLoop() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0),
+            modelFailure: (
+                iteration: 3,
+                error: VisionModelClientError.backend(.api(SonnyBackendAPIError(
+                    code: .serverError,
+                    statusCode: 500,
+                    message: "irrelevant",
+                    requestID: nil,
+                    retryAfter: nil,
+                    envelopeSaysRetryable: true
+                )))
+            )
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click a few times", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.count == 3, "the loop must not send iteration 3 more than once")
+        // And the code really is one the shared client would have retried, so the count above is
+        // about this loop rather than about an unretryable failure.
+        #expect(SonnyBackendErrorCode.serverError.maximumAttempts == 3)
+        #expect(SonnyBackendErrorCode.serverError.isRetryable(envelopeSaysRetryable: true))
+    }
+
+    /// **A session that fails on its very first send says nothing about steps**, because "stopped
+    /// after 0 steps" is noise. The other half of the sentence rule the test above pins.
+    @Test
+    func aSendThatFailsBeforeAnyActionSaysNothingAboutSteps() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 4),
+            modelFailure: (iteration: 1, error: VisionModelClientError.backend(.offline))
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click once", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 0)
+        let message = try #require(fixture.viewModel.errorMessage)
+        // §7.2 case 7's whole point: offline is the one failure that means every local capability
+        // still works, and the sentence has to say so rather than "something went wrong".
+        #expect(message == "You're offline. Everything Sonny does on this Mac still works.")
+        #expect(!message.contains("step"))
+    }
+
+    /// **An oversize capture is refused with a message naming the real problem**, through the same
+    /// mid-loop path — so the acceptance criterion holds where a user actually meets it rather than
+    /// only at the client's own unit test.
+    ///
+    /// The failure injected is the exact error `SonnyVisionModelClient` throws above its ceiling.
+    @Test
+    func anOversizeCaptureEndsTheSessionWithASentenceNamingTheScreenshot() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 4),
+            modelFailure: (
+                iteration: 1,
+                error: VisionModelClientError.payloadTooLarge(bytes: 5_000_000, limit: 3_000_000)
+            )
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click once", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.contains("The window screenshot is 5000000 bytes"))
+        #expect(message.contains("over the 3000000-byte limit"))
+    }
+
+    /// **A cancellation mid-send stays a cancellation**, and does not become a send failure.
+    ///
+    /// §12's first rule is that cancellation beats every timeout, and the sentence a user who pressed
+    /// stop gets must not say something went wrong. The journal is the checkable half: `user_stopped`
+    /// rather than `send_failed`.
+    @Test
+    func aCancellationDuringASendIsNotReportedAsASendFailure() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0),
+            // `SonnyBackendError.cancelled` is what the shared client raises when its request is cut,
+            // which is the shape the emergency stop actually produces — not a bare `CancellationError`.
+            modelFailure: (iteration: 2, error: VisionModelClientError.backend(.cancelled))
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click a few times", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "user_stopped")
+        #expect(record.endSummary == "Stopped.")
+        #expect(fixture.viewModel.errorMessage == nil, "a stop is not a failure to report")
+    }
+
+    /// **Every send carries §4.5's two session fields, and they are the runner's own numbers.**
+    ///
+    /// The iteration is 1-based and matches the HUD's; the session id is the journal's, so a request
+    /// on the wire and the row in the task history name the same run. One id across every iteration
+    /// is the property that lets metering price a session rather than a request.
+    @Test
+    func everySendCarriesTheJournalsSessionIdAndItsOwnIterationNumber() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: click, count: 3)
+                + [#"{"action":"done","rationale":"finished."}"#],
+            limits: VisionSessionLimits(maximumIterations: 6, settleNanoseconds: 0)
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click a few times", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(fixture.model.sessions.map(\.iteration) == [1, 2, 3, 4])
+        #expect(Set(fixture.model.sessions.map(\.sessionID)) == [record.id])
+    }
+
     @Test
     func aSessionThatNeverFinishesStopsAtTheIterationCap() async throws {
         let keepClicking = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#

@@ -1709,8 +1709,15 @@ final class AgentViewModel: ObservableObject {
     /// cancellation lands. Catching only `CancellationError` meant a cancel that happened mid-network-
     /// call fell through to the generic failure path: styled red, a Retry button, "cancelled" as the
     /// error text — a deliberate user cancellation rendered as if it were a real failure.
+    /// **Delegated rather than declared, since SONNY-131.** It used to test two shapes —
+    /// `CancellationError` and `URLError(.cancelled)` — which was the whole population while every
+    /// client held its own provider key. The moment a route moved behind the gateway, a stop that
+    /// reached a request already in flight started arriving as `SonnyBackendError.cancelled` wrapped
+    /// in the calling client's own error type, and this answered `false`: the user who pressed stop
+    /// was told something went wrong. `SonnyBackendError.isCancellation` is the one predicate now,
+    /// and its own doc comment says which wrappers it does not yet reach.
     func isCancellationError(_ error: Error) -> Bool {
-        error is CancellationError || (error as? URLError)?.code == .cancelled
+        SonnyBackendError.isCancellation(error)
     }
 
     private func performStart(
@@ -4612,20 +4619,34 @@ final class AgentViewModel: ObservableObject {
     ///
     /// The handle is why this is not inline: `pauseVisionSession()` needs the *same* monitor the
     /// running session is consulting, and a second one built later would be a Pause button wired to
-    /// nothing.
-    private func makeLiveVisionEnvironment() -> VisionSessionEnvironment? {
+    /// nothing. (The summary line above wrote this function's name without its parameter until
+    /// PR #144's R3; it takes `recordingPolicy:` since SONNY-131.)
+    /// - Parameter recordingPolicy: **already resolved**, never the Optional. It answers two
+    ///   different questions that have to agree — which local stores this run writes to, and what
+    ///   `retention` the vision route puts on the wire — and resolving it twice from two places is
+    ///   how those two come apart. `makeExecutor` resolves it once and hands it to both.
+    ///
+    /// **No longer Optional** (SONNY-131): the vision client holds no credential, so there is nothing
+    /// left that can fail to construct. `makeVisionEnvironment`'s own doc comment carries the reason
+    /// and what it means for `visionUnavailable`.
+    private func makeLiveVisionEnvironment(recordingPolicy: TaskRecordingPolicy) -> VisionSessionEnvironment {
         let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
-        guard let environment = Self.makeVisionEnvironment(
+        let environment = Self.makeVisionEnvironment(
             interaction: self,
+            // The shared client, not a second one: §3.3's single-flight refresh guard is state on
+            // that actor, and a vision session is the only caller in this app that makes twelve
+            // authenticated requests in a row — so it is the one most able to raise ten concurrent
+            // 401s if the process ever held two clients.
+            backendClient: backendClient,
+            taskContext: backendTaskContext(recordingPolicy: recordingPolicy),
+            usageRecorder: taskUsageRecorder,
             userPauseMonitor: monitor,
             // The seam row I already built: `VisionSessionEnvironment.journalStore` is Optional, and
             // a nil one runs the session normally and records nothing. So "Don't save this task"
             // withholds the store rather than adding a branch inside the loop — which the ticket's
             // never-touch list forbids, and which would have been a second place to forget.
             journalStore: visionSessionJournalStoreForThisRun
-        ) else {
-            return nil
-        }
+        )
         visionUserPauseMonitor = monitor
         return environment
     }
@@ -4633,9 +4654,13 @@ final class AgentViewModel: ObservableObject {
     /// - Parameter recordingPolicy: defaulted to this run's policy. The scheduled path passes
     ///   `.record` explicitly — see `performScheduledRun`.
     func makeExecutor(recordingPolicy: TaskRecordingPolicy? = nil) -> AgentActionExecutor {
-        makeExecutor(
-            recordingPolicy: recordingPolicy,
-            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment()
+        // Resolved here rather than left Optional, because it now decides two things that have to
+        // agree: what the executor records locally, and what `retention` the vision route sends
+        // (SONNY-131). Passing the resolved value to both is what keeps them one answer.
+        let resolved = recordingPolicy ?? taskRecordingPolicy
+        return makeExecutor(
+            recordingPolicy: resolved,
+            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment(recordingPolicy: resolved)
         )
     }
 
@@ -4724,11 +4749,13 @@ final class AgentViewModel: ObservableObject {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
-            // `nil` when OPENCODE_API_KEY is unset — the vision route still reads a key, because
-            // moving it is `feature/row-12-gateway-vision`'s. A vision session dispatched into an
-            // executor built that way fails loudly with `visionUnavailable` rather than
-            // half-running; `visionSessionEnvironment` is an injectable seam so a test supplies its
-            // own substrate and never touches the machine.
+            // **`nil` now means only "this caller asked for no vision"** (SONNY-131) — the dry-run
+            // resolver above is the one that does, and a vision session dispatched into that
+            // executor fails loudly with `visionUnavailable` rather than half-running. It used to
+            // also mean "`OPENCODE_API_KEY` is unset", which was a real state a real user could be
+            // in; there is no key to be unset now, so `makeLiveVisionEnvironment` always builds one.
+            // `visionSessionEnvironment` is still an injectable seam so a test supplies its own
+            // substrate and never touches the machine.
             visionSession: visionSession
         )
     }

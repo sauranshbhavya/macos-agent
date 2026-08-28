@@ -137,6 +137,10 @@ PASSTHROUGH=(
   # SONNY-130's two. See the block above for why these two and not the other three.
   OPENAI_API_KEY
   TAVILY_API_KEY
+  # SONNY-131's one, on the same rule: `POST /v1/screen/analyze` is mounted by a running container
+  # whatever the environment holds, so a container without this serves `502 provider.unavailable`.
+  # The other two provider names -- ANTHROPIC and CEREBRAS -- stay off, because no route reads them.
+  VISION_API_KEY
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --

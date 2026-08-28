@@ -15,13 +15,13 @@ import Foundation
 /// | auth, account, meta, health, delete | 15 s | 20 s |
 ///
 /// SONNY-128 declared only the last row, because a constant for a route nobody sends is a number
-/// that goes stale before anything reads it. SONNY-130 added the four it built beside it; the vision
-/// route is still SONNY-131's and is still not here.
+/// that goes stale before anything reads it. SONNY-130 added the four it built beside it, and
+/// SONNY-131 the vision row — so the table is complete and every row is a route something sends.
 ///
 /// Each of these sits above the server's own total deadline for the same route
 /// (`server/src/model/limits.ts`), which is the whole of §12's governing rule. **The margin is not
 /// a constant, and this comment said it was fifteen seconds until PR #139's F2** — it is fifteen on
-/// the three long routes and **five** on `search` and on the auth row, straight from §12's table.
+/// the four long routes and **five** on `search` and on the auth row, straight from §12's table.
 /// `ModelRouteNumbersTests` holds both halves of that table as literals, so neither side can move
 /// without the other failing.
 public enum SonnyBackendTimeouts {
@@ -30,6 +30,36 @@ public enum SonnyBackendTimeouts {
     public static let researchSynthesis: TimeInterval = 120
     public static let transcription: TimeInterval = 90
     public static let search: TimeInterval = 30
+    /// §12's longest client budget, shared with `researchSynthesis` (SONNY-131).
+    ///
+    /// **What the margin buys is a retry, and nothing else the user can see** — which is worth
+    /// stating exactly, because the sentence that stood here claimed more and had it backwards
+    /// (PR #144, F7). A slow iteration that ends as the server's typed `504 provider.timeout` is
+    /// retried once by `SonnyBackendClient` (`SonnyBackendErrorCode.providerTimeout.maximumAttempts`
+    /// is 2); one that ends as this client's own transport timeout is not retried at all
+    /// (`attemptCeiling` returns `nil` for `.timedOut`). 120 s against the server's 105 s total is
+    /// the fifteen seconds §12 gives the long routes, and that fifteen seconds is what makes the
+    /// first outcome reachable instead of the second.
+    ///
+    /// **The user sees the same sentence either way, and that is a real gap rather than a nuance.**
+    /// Traced end to end at this head: server upstream (90 s) and server total (105 s) both arrive as
+    /// `504 provider.timeout` → `SignInFailure.backendUnreachable`; the client's own 120 s arrives as
+    /// `SonnyBackendError.timedOut` → the same case; and `SonnyBackendCopy.sentence` answers all
+    /// three with **"Sonny couldn't finish this one. Try again."**, which
+    /// `VisionSessionInterrupted` then suffixes with the step count. So the old claim — that the
+    /// client "cannot tell apart" a transport timeout from a dead network — is inverted twice over:
+    /// a dead network is `SonnyBackendError.offline`, which is the one case that *does* get its own
+    /// sentence ("You're offline. Everything Sonny does on this Mac still works."), and the two that
+    /// share one are the two the comment said were distinguishable.
+    ///
+    /// **One sentence for three deadline outcomes is defensible here and is not this file's to
+    /// change.** All three mean the same thing to a person — Sonny waited and gave up — and none
+    /// suggests a different action, so three sentences would be three ways to say "try again" and
+    /// would breach the standing rule that the product does not explain itself. What is *not*
+    /// defensible is a comment implying the app already distinguishes them. Making the unreachable
+    /// states distinguishable where it genuinely matters is SONNY-136's, and a dated comment on that
+    /// ticket says this route currently collapses three into one.
+    public static let screenAnalyze: TimeInterval = 120
 }
 
 /// One request, described in the terms the contract's rules are written in.
