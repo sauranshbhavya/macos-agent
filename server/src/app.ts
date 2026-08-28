@@ -4,6 +4,8 @@ import { requireRateLimitSalt, requireSupabaseJwtPolicy, type Config } from "./c
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
+import { registerIdempotency } from "./idempotency/hook.js";
+import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
@@ -34,7 +36,28 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  * `requireSupabaseJwtPolicy` refuse at startup rather than letting `bucketKey` hash addresses
  * unsalted, or every protected route refuse every caller, at request time.
  */
-export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
+/**
+ * Seams a test may replace, and nothing a deployment sets.
+ *
+ * **One field, and it exists so the flagged `npm test` can cover contract §9.2 at all** (SONNY-300).
+ * The idempotency store is Postgres, and a database-backed test runs only when `DATABASE_URL` is
+ * set — which `npm test` deliberately does not do. Without this seam every behaviour §9.2 names
+ * would be verified only in `npm run test:db`, so the run this repository gates on would be silent
+ * about the guarantee that stops a retry double-billing a user. With it, those tests drive the whole
+ * real app — the gate, the account scope, the error envelope, the routes — against a store the test
+ * controls, and `idempotency.db.test.ts` proves the SQL underneath separately.
+ *
+ * The same seam and the same reason as `PoolOptions.createPool` and `SupabaseAuthConfig.fetch`.
+ */
+export interface AppOverrides {
+  readonly idempotencyStore?: KeyStore;
+}
+
+export function buildApp(
+  config: Config,
+  auth?: AuthDeps,
+  overrides: AppOverrides = {},
+): FastifyInstance {
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -157,6 +180,24 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   );
 
   registerHealth(app, config);
+
+  /**
+   * Contract §9's `Idempotency-Key`, on THIS instance for the same reason the gate is (SONNY-300).
+   *
+   * A `preHandler`/`onSend` pair covering every `POST` this instance and its descendants serve, so
+   * the routes SONNY-131 and SONNY-132 are adding inherit §9.2's guarantees by existing rather than
+   * by each remembering to wire them. Coverage is encapsulation, not registration order —
+   * `auth/gate.ts` carries the seven wirings that were measured, and the conclusion is the same one
+   * here: what matters is that this is `app` and not a scope.
+   *
+   * Takes the same `withConnection` the gate takes, and answers `undefined` for a health-only
+   * deployment, which has no database and — because `registerAuthGate` refuses every non-public
+   * route — no reachable `POST` for the store to protect.
+   */
+  const idempotencyStore =
+    overrides.idempotencyStore ??
+    (auth ? postgresKeyStore(auth.withConnection) : undefined);
+  registerIdempotency(app, idempotencyStore ? { store: idempotencyStore } : undefined);
 
   /**
    * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),
