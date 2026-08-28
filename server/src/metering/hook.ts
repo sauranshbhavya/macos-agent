@@ -135,6 +135,29 @@ export function noteMetering(request: FastifyRequest, facts: MeteringFacts): voi
 }
 
 /**
+ * Did this request open a call to a provider?
+ *
+ * **Deposited by the route through `meteredUpstreamCall` rather than inferred from a status**, which
+ * is why this is worth exposing instead of re-deriving. It is the same fact `outcomeFor` uses to
+ * tell §11's `refused` from its `provider_error`, and the spend cap needs exactly it: a request that
+ * never reached a provider cost nothing and must have its hold released, while one that did may
+ * have been billed by the vendor whatever this gateway then answered.
+ *
+ * Reading it off `reply.statusCode` instead would get two cases wrong in the expensive direction —
+ * a `502 provider.unavailable` raised because this deployment holds no credential looks identical to
+ * one raised after a real call failed, and a `504` on the route's *total* deadline can fire before
+ * the upstream call was ever opened.
+ *
+ * `false` for a request that is not metered at all, which is the honest answer: no provider call was
+ * recorded, because nothing was recording.
+ *
+ * Added by SONNY-135. It reads the draft and changes nothing about §11's event.
+ */
+export function upstreamWasAttempted(request: FastifyRequest): boolean {
+  return request.metering?.facts.upstreamAttempted === true;
+}
+
+/**
  * Run a provider call, recording that one was opened and how long it took.
  *
  * **`upstreamAttempted` is set before the call and the duration in a `finally`**, so a call that

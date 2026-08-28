@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { z } from "zod";
 import type { SupabaseJwtPolicy } from "./auth/token.js";
+import { entitlementSigningKeyFrom, type EntitlementSigningKey } from "./entitlement/claim.js";
 import {
   parseRouteChain,
   providerDataPolicies,
@@ -117,6 +118,51 @@ const schema = z.object({
    * this into a busy loop against the database.
    */
   CONTENT_EXPIRY_SWEEP_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+
+  /**
+   * The Ed25519 private key the entitlement claim is signed with (SONNY-135), as base64 of its
+   * PKCS#8 DER:
+   *
+   *   openssl genpkey -algorithm ed25519 -outform DER | base64
+   *
+   * **No default, for the same reason `RATE_LIMIT_SALT` and `SUPABASE_JWT_SECRET` have none, and
+   * the consequence here is the sharpest of the three.** A development default would be a working
+   * *minting* key for every entitlement claim, shipped in the repository, and anyone holding it
+   * could grant themselves any capability on any deployment that had not changed it. Base64 of DER
+   * rather than PEM because a PEM is multi-line and an environment variable is not.
+   *
+   * Required wherever an authenticated route is mounted; `requireEntitlementSigningKey` refuses at
+   * the point of use, and `auth/deps.ts` names it alongside everything else a sign-in deployment
+   * needs so an operator fixes them in one pass.
+   */
+  ENTITLEMENT_SIGNING_KEY: nonEmpty.optional(),
+  /**
+   * Which key that is, as the `kid` in every claim's JWS header (contract §5.3).
+   *
+   * A name rather than a fingerprint, so rotation reads as a rotation: a client holding two public
+   * keys picks by `kid` and verifies claims signed by either, which is what lets a key be replaced
+   * without a client release. It has no default because a shared default across two environments
+   * would have two different keys answering to one name, which is the one thing `kid` exists to
+   * prevent.
+   */
+  ENTITLEMENT_SIGNING_KEY_ID: nonEmpty.optional(),
+  /**
+   * The per-account, per-period spend cap for an account whose entitlement row names no cap of its
+   * own — in units, where **one metered call is one unit** (`entitlement/store.ts` carries why the
+   * unit is a call and what it does and does not bound).
+   *
+   * **No default, and this is the variable most likely to be read as a product decision, so:** it
+   * is a deployment's own ceiling on how much a single credential can spend before something says
+   * no, not a plan's allowance. Plans, prices and allowances are SONNY-212's, and this repository
+   * sets none of them — which is exactly why there is no number here. An operator choosing 1000 for
+   * their own gateway has not created a tier.
+   *
+   * Required wherever an authenticated route is mounted. **The alternative was to treat "unset" as
+   * "uncapped", and that is the failure this whole requirement exists to prevent**: SONNY-16
+   * recorded a leaked token billing the founder as an accepted cost, and a cap that quietly does
+   * not apply is that cost with a mechanism in front of it.
+   */
+  SPEND_CAP_UNITS: z.coerce.number().int().min(0).optional(),
 
   /**
    * The Supabase project's **JWT secret**, which is what every access token this gateway accepts is
@@ -279,6 +325,9 @@ export interface Config {
   readonly rateLimitSalt: string;
   readonly contentRetentionDays: number;
   readonly contentExpirySweepSeconds: number;
+  readonly entitlementSigningKey: string | undefined;
+  readonly entitlementSigningKeyId: string | undefined;
+  readonly spendCapUnits: number | undefined;
   readonly supabaseJwtSecret: string | undefined;
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
@@ -466,6 +515,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
     contentRetentionDays: value.CONTENT_RETENTION_DAYS,
     contentExpirySweepSeconds: value.CONTENT_EXPIRY_SWEEP_SECONDS,
+    entitlementSigningKey: value.ENTITLEMENT_SIGNING_KEY,
+    entitlementSigningKeyId: value.ENTITLEMENT_SIGNING_KEY_ID,
+    spendCapUnits: value.SPEND_CAP_UNITS,
     supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
@@ -519,6 +571,59 @@ export function requireRateLimitSalt(config: Config): string {
     );
   }
   return config.rateLimitSalt;
+}
+
+/**
+ * The entitlement signing key, or a startup failure naming what is missing.
+ *
+ * **Same shape and same reason as `requireRateLimitSalt`**: absent at load so a health-only
+ * deployment need not invent one, refused at the point of use so a deployment that mounts
+ * authenticated routes cannot start without it. The alternative — mounting
+ * `GET /v1/account/entitlements` and answering an error on the first real request — is the shape
+ * `deps.ts` already argues against for the Supabase names: a gateway that looks healthy and fails
+ * every client is worse than one that will not start.
+ *
+ * Both names are required together, and the message says both, because a key with no `kid` signs
+ * claims no client can select a key for.
+ */
+export function requireEntitlementSigningKey(config: Config): EntitlementSigningKey {
+  const missing = [
+    config.entitlementSigningKey ? undefined : "ENTITLEMENT_SIGNING_KEY",
+    config.entitlementSigningKeyId ? undefined : "ENTITLEMENT_SIGNING_KEY_ID",
+  ].filter((name): name is string => name !== undefined);
+  if (missing.length > 0) {
+    throw new ConfigError(
+      `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required wherever an ` +
+        "authenticated route is mounted: the entitlement claim is signed with Ed25519 and named by " +
+        "its key id (contract section 5.3). Generate a key with: openssl genpkey -algorithm " +
+        "ed25519 -outform DER | base64. Values are omitted deliberately; see server/.env.example " +
+        "for the expected shape.",
+    );
+  }
+  // Non-null by the sweep above. `entitlementSigningKeyFrom` refuses a key that is not base64 PKCS#8
+  // DER, and one that is not Ed25519, without ever putting the value in the message.
+  return entitlementSigningKeyFrom(config.entitlementSigningKey!, config.entitlementSigningKeyId!);
+}
+
+/**
+ * The deployment's spend cap, or a startup failure naming it.
+ *
+ * **`0` is a legitimate value and `undefined` is not**, which is why this tests for `undefined`
+ * rather than for falsiness: an operator setting `SPEND_CAP_UNITS=0` has said "this deployment
+ * spends nothing", which is a real answer and a useful one while a gateway is being brought up. An
+ * *unset* variable is not an answer, and treating it as "uncapped" would be the accepted-cost of
+ * SONNY-16 with a mechanism in front of it doing nothing.
+ */
+export function requireSpendCapUnits(config: Config): number {
+  if (config.spendCapUnits === undefined) {
+    throw new ConfigError(
+      "SPEND_CAP_UNITS is required wherever an authenticated route is mounted: it is the " +
+        "per-account, per-period ceiling on metered calls, and an unset one would mean no ceiling " +
+        "at all. It is this deployment's own ceiling and not a plan's allowance -- plans, prices " +
+        "and allowances are SONNY-212's. See server/.env.example for the expected shape.",
+    );
+  }
+  return config.spendCapUnits;
 }
 
 /**

@@ -1,6 +1,8 @@
 import {
   ConfigError,
+  requireEntitlementSigningKey,
   requireRateLimitSalt,
+  requireSpendCapUnits,
   requireSupabaseAuthCredentials,
   requireSupabaseJwtPolicy,
   type Config,
@@ -76,10 +78,28 @@ const AUTH_INTENT: readonly (readonly [name: string, read: (config: Config) => u
   ["SUPABASE_ANON_KEY", (config) => config.supabaseAnonKey],
 ];
 
-/** Everything auth needs beyond the three triggers above, in the order an operator would fix them. */
+/**
+ * Everything auth needs beyond the three triggers above, in the order an operator would fix them.
+ *
+ * **SONNY-135 added the last three, and they are required here rather than at the route for the
+ * reason this whole module exists**: an operator who has configured sign-in has said what they
+ * want, and a gateway that mounts authenticated routes it cannot check entitlements or spend for is
+ * the "looks healthy, fails every request" shape the middle row of the table above refuses. The
+ * spend cap in particular has to be a startup requirement rather than a defaulted one — SONNY-16
+ * recorded a leaked token billing the founder as an accepted cost, and a cap whose absence means
+ * "uncapped" is that cost with a mechanism in front of it doing nothing.
+ *
+ * `SPEND_CAP_UNITS` is read through `!== undefined` rather than by the truthiness test the other
+ * four use, because **`0` is a legitimate value here and the others have no such value**: an
+ * operator setting it to zero has said this deployment spends nothing, and a presence sweep that
+ * treated that as missing would refuse to start over an answer somebody gave.
+ */
 const AUTH_ALSO_REQUIRED: readonly (readonly [name: string, read: (config: Config) => unknown])[] = [
   ["DATABASE_URL", (config) => config.databaseUrl],
   ["RATE_LIMIT_SALT", (config) => config.rateLimitSalt],
+  ["ENTITLEMENT_SIGNING_KEY", (config) => config.entitlementSigningKey],
+  ["ENTITLEMENT_SIGNING_KEY_ID", (config) => config.entitlementSigningKeyId],
+  ["SPEND_CAP_UNITS", (config) => config.spendCapUnits !== undefined],
 ];
 
 export interface AuthWiring {
@@ -96,13 +116,16 @@ export function intendsAuth(config: Config): boolean {
 /**
  * Build the wiring, refuse, or answer `undefined` for a health-only deployment.
  *
- * **Every validation the two existing `require*` functions perform still runs**, and they run
- * *before* a pool is opened: `requireSupabaseJwtPolicy` checks the secret's length floor and that the
- * issuer parses as an http(s) URL, `requireRateLimitSalt` refuses an empty salt, and
- * `requireSupabaseAuthCredentials` names the two API keys. The presence sweep below is not a
- * replacement for any of them — it exists to report *all* the missing names in one message instead of
- * one per restart, and to distinguish "nothing configured" from "half configured", which no
- * individual `require*` can see.
+ * **Every validation the `require*` functions perform still runs**, and they all run *before* a pool
+ * is opened: `requireSupabaseJwtPolicy` checks the secret's length floor and that the issuer parses
+ * as an http(s) URL, `requireRateLimitSalt` refuses an empty salt, `requireSupabaseAuthCredentials`
+ * names the two API keys, and — since SONNY-135 — `requireEntitlementSigningKey` refuses a key that
+ * is not base64 PKCS#8 DER or is not Ed25519, and `requireSpendCapUnits` refuses an unset cap. **The
+ * count is not written here**, because a sentence naming one is a copy of the call list below that
+ * can go stale independently, which is the mistake this file's own `AUTH_INTENT` comment records
+ * being made twice. The presence sweep below is not a replacement for any of them — it exists to
+ * report *all* the missing names in one message instead of one per restart, and to distinguish
+ * "nothing configured" from "half configured", which no individual `require*` can see.
  */
 export function authWiringFrom(config: Config): AuthWiring | undefined {
   if (!intendsAuth(config)) return undefined;
@@ -132,6 +155,11 @@ export function authWiringFrom(config: Config): AuthWiring | undefined {
   const policy = requireSupabaseJwtPolicy(config);
   const { anonKey, serviceRoleKey } = requireSupabaseAuthCredentials(config);
   requireRateLimitSalt(config);
+  // The presence sweep above says the key is *there*; this says it parses as an Ed25519 PKCS#8 key.
+  // A malformed one would otherwise be discovered by `buildApp`, which is after the pool is open —
+  // and by a deployment whose first symptom is every client rejecting every claim.
+  requireEntitlementSigningKey(config);
+  requireSpendCapUnits(config);
 
   const provider = new SupabaseAuthProvider({
     // The issuer *is* the auth base URL — one variable, so the project this gateway calls and the

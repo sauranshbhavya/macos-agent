@@ -15,6 +15,7 @@ import {
 } from "../src/model/provider-router.js";
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "../src/model/upstream.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 
 /**
@@ -79,10 +80,15 @@ function bothProviders(overrides: Partial<Config> = {}): Config {
 }
 
 function build(overrides: Partial<Config> = {}) {
-  return buildApp(bothProviders(overrides), {
-    provider: new UnusedAuthProvider(),
-    withConnection: signedInConnection,
-  });
+  return buildApp(
+    bothProviders(overrides),
+    { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+    // SONNY-135's check runs on every authenticated route and is Postgres-backed, so a suite
+    // with no database injects the fake store `support/entitlement.ts` documents. It answers
+    // "admitted" and records what it was asked; what the cap actually does is proved against a
+    // real Postgres in `entitlement.db.test.ts`.
+    { entitlementStore: fakeEntitlementStore() },
+  );
 }
 
 /**
@@ -123,7 +129,7 @@ function buildLogging(overrides: Partial<Config> = {}): {
   const app = buildApp(
     bothProviders({ logLevel: "debug", ...overrides }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-    { logStream: log },
+    { logStream: log, entitlementStore: fakeEntitlementStore() },
   );
   return { app, log };
 }

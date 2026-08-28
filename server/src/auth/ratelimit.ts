@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 
 /**
- * Fixed-window rate limiting for the auth endpoints.
+ * Fixed-window rate limiting for the auth endpoints, and — since SONNY-135 — for an authenticated
+ * account's own request rate.
  *
  * **The limits exist for two different reasons and are therefore two different buckets.** Per
  * address stops one mailbox being flooded; per source stops one caller enumerating addresses or
@@ -79,6 +80,33 @@ export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 }
 export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
 
 /**
+ * How many requests one signed-in account may make in a minute: **120**.
+ *
+ * **This is an abuse ceiling, not an allowance** (SONNY-135). The distinction is what keeps it out
+ * of SONNY-212's territory: an allowance is what a plan buys and is measured over a billing period,
+ * while this bounds how fast a single credential can be driven and clears by waiting a minute. The
+ * two refusals are different codes for exactly that reason — §7.2 gives `limit.rate` a `Retry-After`
+ * and denies `limit.spend` one, "because waiting seconds does not fix it".
+ *
+ * **Sized against the busiest thing Sonny legitimately does.** A screen-control session is at most
+ * twelve iterations, one gateway call each, and every one of them waits on a vision round trip
+ * measured in seconds (§12 gives that route a 90-second upstream deadline). So a real session cannot
+ * approach two calls a second even if the model answered instantly, and a user running several
+ * sessions and a few planning calls at once is still an order of magnitude below this. A leaked
+ * token driven flat out by a script meets it immediately, which is the case it exists for — and the
+ * spend cap is what bounds that token over the period, since 120 a minute is a great deal over a
+ * month.
+ *
+ * **Keyed on the account and never on the address**, unlike the four limits above: those protect an
+ * unauthenticated endpoint, where the caller has no identity yet and the source is all there is.
+ * Here the caller is verified, so the bucket is the thing being protected — and keying this one on
+ * the source would put every user behind one office NAT or one carrier CGNAT into a shared ceiling,
+ * which the `CODE_VERIFY_PER_SOURCE` docstring above already records as the cost of doing that where
+ * there was no alternative. Here there is one.
+ */
+export const ACCOUNT_REQUESTS: Limit = { max: 120, windowSeconds: 60 };
+
+/**
  * Salted hash of a bucket key. Raw addresses and source identifiers are personal data, and a table
  * of them is a liability that buys nothing — rate limiting only ever needs equality.
  *
@@ -86,7 +114,7 @@ export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 }
  * rainbow-table lookup away from the address itself.
  */
 export function bucketKey(
-  kind: "addr" | "src" | "verify" | "verifysrc",
+  kind: "addr" | "src" | "verify" | "verifysrc" | "acct",
   value: string,
   salt: string,
 ): string {
@@ -107,6 +135,13 @@ function windowStart(limit: Limit, now: Date): Date {
 
 /**
  * Consume one unit against `bucket`, atomically.
+ *
+ * **`sonny.auth_rate_limit`'s name is historical and its shape is not.** The table is
+ * `(bucket, window_start, count)` and knows nothing about authentication; SONNY-135 counts an
+ * account's request rate in it rather than adding a second counter beside it, for the reason the
+ * host decision gives about the spend cap — a second mechanism for the same question is how the
+ * question ends up answered by neither. The `kind` prefix on every bucket key is what keeps the two
+ * populations from ever meeting.
  *
  * The whole mechanism is the single `INSERT … ON CONFLICT DO UPDATE … WHERE`: the row is created or
  * incremented in one statement, and the `WHERE` on the update is what refuses the increment once the

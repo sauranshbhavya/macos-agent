@@ -1,0 +1,260 @@
+import { pathToFileURL } from "node:url";
+import pg from "pg";
+import { publicKeyMaterial } from "./entitlement/claim.js";
+import { entitlementSigningKeyFrom } from "./entitlement/claim.js";
+import {
+  readEntitlement,
+  readPeriodUsage,
+  sweepExpiredReservations,
+} from "./entitlement/store.js";
+
+/**
+ * `npm run entitlements` — read and set what an account is allowed, and reclaim orphaned holds
+ * (SONNY-135).
+ *
+ * **A command and not a surface, and not a product decision either.** Row 13 owns account and plan
+ * UI; SONNY-212 owns what the plans are. What is owed *here* is the ability to put an account into a
+ * state and look at it — which is what makes the founder's manual items runnable at all, since
+ * nothing else in the system writes `sonny.entitlement` yet. Every value it sets comes from the
+ * command line; it invents no plan, no price and no allowance, and `grant` refuses to make one up.
+ *
+ * The same CLI shape as `revocations.ts` and `usage.ts`, down to the `pathToFileURL` guard, which
+ * `db/migrate.ts`'s own comment explains: a template-string comparison makes the whole command a
+ * silent no-op under any path containing a space, and this repository's checkouts live under such
+ * paths.
+ */
+
+const USAGE = `Usage: npm run entitlements -- <command> [options]
+
+Commands:
+  show <account-id>          What this account is allowed, and what it has spent this period.
+  grant <account-id>         Write or replace this account's entitlement row.
+      --plan <key>             An opaque plan key. Required. Not a tier this repository defines.
+      --capability <key>       A capability key. Repeatable. Omit for none.
+      --cap <units>            This account's own per-period cap, in metered calls.
+                               Omit to fall back to the deployment's SPEND_CAP_UNITS.
+  revoke <account-id>        Mark the entitlement revoked. The next claim it mints carries no
+                             capabilities; the row and its plan key are kept.
+  restore <account-id>       Undo a revoke.
+  sweep                      Reclaim every reservation whose request never came back, and say
+                             how many holds were reclaimed.
+  public-key                 The public half of ENTITLEMENT_SIGNING_KEY, base64url, as a client's
+                             shipped key set holds it. Prints no private material.
+
+Reads DATABASE_URL, and ENTITLEMENT_SIGNING_KEY for public-key alone.
+`;
+
+export type ParsedEntitlementArguments =
+  | {
+      readonly kind: "show" | "revoke" | "restore";
+      readonly command: "show" | "revoke" | "restore";
+      readonly accountId: string;
+    }
+  | {
+      readonly kind: "grant";
+      readonly accountId: string;
+      readonly plan: string;
+      readonly capabilities: readonly string[];
+      readonly capUnits: number | null;
+    }
+  | { readonly kind: "sweep" }
+  | { readonly kind: "public-key" }
+  | { readonly kind: "help" }
+  | { readonly kind: "error"; readonly message: string };
+
+/**
+ * Parse `argv`.
+ *
+ * **A pure function so the parsing is testable without a database**, the same split `usage.ts` makes
+ * and for the same reason. Every refusal names the offending argument: a `--cap` that is not a
+ * number is a typo an operator can fix, and treating it as "no cap" would silently put the account
+ * on the deployment's default while the operator believed they had set one.
+ */
+export function parseEntitlementArguments(argv: readonly string[]): ParsedEntitlementArguments {
+  const first = argv[0];
+  if (first === undefined || first === "--help" || first === "-h" || first === "help") {
+    return { kind: "help" };
+  }
+  if (first === "sweep") return { kind: "sweep" };
+  if (first === "public-key") return { kind: "public-key" };
+  if (first !== "show" && first !== "grant" && first !== "revoke" && first !== "restore") {
+    return { kind: "error", message: `unknown command ${JSON.stringify(first)}` };
+  }
+  const accountId = argv[1];
+  if (accountId === undefined || accountId.startsWith("--")) {
+    return { kind: "error", message: `${first} needs an account id` };
+  }
+  if (first !== "grant") return { kind: first, command: first, accountId };
+
+  let plan: string | undefined;
+  let capUnits: number | null = null;
+  const capabilities: string[] = [];
+  for (let index = 2; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      return { kind: "error", message: `${flag} needs a value` };
+    }
+    index += 1;
+    switch (flag) {
+      case "--plan":
+        plan = value;
+        break;
+      case "--capability":
+        capabilities.push(value);
+        break;
+      case "--cap": {
+        const units = Number(value);
+        if (!Number.isInteger(units) || units < 0) {
+          return { kind: "error", message: `--cap is not a whole number of units: ${value}` };
+        }
+        capUnits = units;
+        break;
+      }
+      default:
+        return { kind: "error", message: `unknown option ${JSON.stringify(flag)}` };
+    }
+  }
+  // **Refused rather than defaulted.** A plan key this command chose would be a tier this repository
+  // invented, which is the one thing the ticket's never-touch list names twice.
+  if (plan === undefined) return { kind: "error", message: "grant needs --plan" };
+  return { kind: "grant", accountId, plan, capabilities, capUnits };
+}
+
+export async function grant(
+  client: pg.Client,
+  input: {
+    accountId: string;
+    plan: string;
+    capabilities: readonly string[];
+    capUnits: number | null;
+  },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO sonny.entitlement (account_id, plan, capabilities, cap_units, updated_at)
+          VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (account_id) DO UPDATE
+        SET plan = excluded.plan,
+            capabilities = excluded.capabilities,
+            cap_units = excluded.cap_units,
+            -- A grant clears a revocation: an operator writing a fresh plan onto a cancelled
+            -- account means to restore it, and leaving revoked_at set would mint capability-less
+            -- claims for an account the operator can see capabilities on.
+            revoked_at = NULL,
+            updated_at = now()`,
+    [input.accountId, input.plan, [...input.capabilities], input.capUnits],
+  );
+}
+
+export async function setRevoked(
+  client: pg.Client,
+  accountId: string,
+  revoked: boolean,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE sonny.entitlement
+        SET revoked_at = $2, updated_at = now()
+      WHERE account_id = $1`,
+    [accountId, revoked ? new Date() : null],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function describeAccount(
+  client: pg.Client,
+  accountId: string,
+  now: Date,
+): Promise<string> {
+  const record = await readEntitlement(client, accountId);
+  const usage = await readPeriodUsage(client, accountId, now);
+  const lines = [
+    `account ${accountId}`,
+    `  plan             ${record.plan}`,
+    `  capabilities     ${record.capabilities.join(", ") || "-"}`,
+    `  cap              ${record.capUnits === null ? "(deployment default)" : record.capUnits}`,
+    `  revoked          ${record.revokedAt === null ? "no" : record.revokedAt.toISOString()}`,
+  ];
+  if (usage === undefined) {
+    lines.push("  this period      nothing spent and nothing held");
+  } else {
+    lines.push(
+      `  this period      ${usage.spent} spent, ${usage.reserved} held, of ${usage.capUnits} ` +
+        `(period opened ${usage.periodStart.toISOString()})`,
+    );
+  }
+  // Said on every read, because the number above is a call count and the temptation to read it as
+  // money is exactly what this row's never-touch list exists to prevent.
+  lines.push(
+    "",
+    "Units are metered calls, not money and not credits. What a call costs in credits is",
+    "SONNY-212's, and this gateway holds no price of any kind.",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+async function main(): Promise<void> {
+  const parsed = parseEntitlementArguments(process.argv.slice(2));
+  if (parsed.kind === "help") {
+    process.stdout.write(USAGE);
+    return;
+  }
+  if (parsed.kind === "error") {
+    process.stderr.write(`${parsed.message}\n\n${USAGE}`);
+    process.exit(2);
+  }
+  if (parsed.kind === "public-key") {
+    const encoded = process.env["ENTITLEMENT_SIGNING_KEY"];
+    const keyId = process.env["ENTITLEMENT_SIGNING_KEY_ID"];
+    if (!encoded || !keyId) {
+      process.stderr.write("ENTITLEMENT_SIGNING_KEY and ENTITLEMENT_SIGNING_KEY_ID are not set\n");
+      process.exit(78);
+    }
+    const key = entitlementSigningKeyFrom(encoded, keyId);
+    process.stdout.write(`${key.keyId}  ${publicKeyMaterial(key)}\n`);
+    return;
+  }
+
+  const url = process.env["DATABASE_URL"];
+  if (!url) {
+    process.stderr.write("DATABASE_URL is not set\n");
+    process.exit(78);
+  }
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  try {
+    switch (parsed.kind) {
+      case "show":
+        process.stdout.write(await describeAccount(client, parsed.accountId, new Date()));
+        return;
+      case "grant":
+        await grant(client, parsed);
+        process.stdout.write(await describeAccount(client, parsed.accountId, new Date()));
+        return;
+      case "revoke":
+      case "restore": {
+        const found = await setRevoked(client, parsed.accountId, parsed.kind === "revoke");
+        if (!found) {
+          // An account with no row is already entitled to nothing, so a revoke is a no-op — but
+          // saying "done" would let an operator believe they had acted on the right id after a typo.
+          process.stderr.write(`no entitlement row for account ${parsed.accountId}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(await describeAccount(client, parsed.accountId, new Date()));
+        return;
+      }
+      case "sweep": {
+        const reclaimed = await sweepExpiredReservations(client, new Date());
+        process.stdout.write(`${reclaimed} expired hold(s) reclaimed\n`);
+        return;
+      }
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+// Only as a CLI, never on import — the same guard and the same reason as `db/migrate.ts`.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

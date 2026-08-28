@@ -9,6 +9,7 @@ import { registerErrorHandlers } from "../src/errors.js";
 import { registerHealth } from "../src/routes/health.js";
 import { TEST_JWT_POLICY, accessTokenFor, tokenWithBrokenSignature, tokenWithClaims } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 
 /**
@@ -39,7 +40,15 @@ const noDatabase: WithConnection = async () => {
   throw new Error("the gate reached the database on a request it should have refused first");
 };
 
-const build = () => buildApp(config, { provider: new UnusedProvider(), withConnection: noDatabase });
+// SONNY-135's check runs on every authenticated route and is Postgres-backed, so this suite — whose
+// whole premise is that no refusal may touch the database — injects the fake store. A request that
+// gets past the gate reaches it; one that does not must never reach either.
+const build = () =>
+  buildApp(
+    config,
+    { provider: new UnusedProvider(), withConnection: noDatabase },
+    { entitlementStore: fakeEntitlementStore() },
+  );
 
 /**
  * The route population and its "did the parse really parse" guard now live in
@@ -82,6 +91,12 @@ describe("which routes the gate challenges", () => {
       // so being challenged is not a formality — an unauthenticated caller could otherwise delete
       // any task whose client-minted id they could guess.
       "DELETE /v1/tasks/:task_id",
+      // SONNY-135's, arriving the same way as everything below it — and it is also the route that
+      // found the scan's own defect: its path sits *under* `DELETE /v1/account`, so Fastify prints
+      // it as a child node and the parser read it as `GET /entitlements`, a path nothing serves.
+      // `test/support/routes.ts` carries what that would have cost.
+      "GET /v1/account/entitlements",
+      "HEAD /v1/account/entitlements",
       "POST /v1/auth/signout",
       // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
       // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
@@ -137,6 +152,13 @@ describe("which routes the gate challenges", () => {
       const response = await app.inject({ method: route.method as "GET", url: route.url });
       expect(`${route.method} ${route.url} -> ${response.statusCode}`)
         .toBe(`${route.method} ${route.url} -> 401`);
+      // **A `HEAD` response carries no body, by HTTP's own definition**, so there is no envelope to
+      // read and `response.json()` throws on the empty payload. The status is the whole of what
+      // `HEAD` can say, and it is asserted above for every route including these. This branch
+      // arrived with SONNY-135: `GET /v1/account/entitlements` is the first *protected* route with a
+      // `GET`, so Fastify's generated `HEAD` for it is the first protected `HEAD` this loop has ever
+      // seen — `HEAD /v1/health` is public and never reaches here.
+      if (route.method === "HEAD") continue;
       expect(response.json().error.code).toBe("auth.unauthenticated");
       expect(response.json().error.retryable).toBe(false);
     }

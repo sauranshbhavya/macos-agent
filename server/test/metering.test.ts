@@ -23,6 +23,7 @@ import {
 import type { MeteringStore, MeteringWriteOutcome } from "../src/metering/store.js";
 import { parseUsageArguments } from "../src/usage.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { accessTokenFor } from "./support/tokens.js";
 
@@ -190,7 +191,7 @@ function build(overrides: Partial<Config> = {}) {
   return buildApp(
     testConfig({ credentials: CREDENTIALS, ...overrides }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-    { idempotencyStore: keys, meteringStore: metering },
+    { idempotencyStore: keys, meteringStore: metering, entitlementStore: fakeEntitlementStore() },
   );
 }
 
@@ -994,7 +995,7 @@ describe("a caller who goes away mid-call", () => {
     const app = buildApp(
       testConfig({ credentials: CREDENTIALS }),
       { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-      { idempotencyStore: keys, meteringStore: store },
+      { idempotencyStore: keys, meteringStore: store, entitlementStore: fakeEntitlementStore() },
     );
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();

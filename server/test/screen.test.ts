@@ -13,6 +13,7 @@ import {
   screenAnalyzeBodyLimitFrom,
 } from "../src/model/limits.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 
 /**
@@ -76,6 +77,11 @@ function build(overrides: Partial<Config> = {}) {
       ...overrides,
     }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+    // SONNY-135's check runs on every authenticated route and is Postgres-backed, so a suite
+    // with no database injects the fake store `support/entitlement.ts` documents. It answers
+    // "admitted" and records what it was asked; what the cap actually does is proved against a
+    // real Postgres in `entitlement.db.test.ts`.
+    { entitlementStore: fakeEntitlementStore() },
   );
 }
 
