@@ -73,7 +73,7 @@ describe("the server suite's hang backstop", () => {
     const carriesTheDeclaredFragment = message.includes(HANG_BACKSTOP_DECLARED_FRAGMENT);
     expect(carriesTheDeclaredFragment).toBe(true);
     expect(message).toContain("work that never finishes");
-    expect(message).toMatch(/scheduled \d+ times against a nominal \d+/);
+    expect(message).toMatch(/^waited \d+\.\ds for: /);
   });
 
   it("rethrows the work's own failure untouched, so a real kill stays a real kill", async () => {
@@ -93,9 +93,7 @@ describe("the server suite's hang backstop", () => {
   });
 
   it("keeps the declared fragment whole on one line, and opens no line a log reader would misread", () => {
-    const lines = hangBackstopMessage("some work", 60_000, {
-      observations: 5983, nominal: 6000, worstGapMs: 34,
-    }).split("\n");
+    const lines = hangBackstopMessage("some work", 60_000).split("\n");
     const linesCarryingIt = lines.filter((line) => line.includes(HANG_BACKSTOP_DECLARED_FRAGMENT));
     // One line, because `scripts/mutate` matches a signature as a substring of the block it
     // reassembles out of the log, and a fragment split across two lines carries a newline the
@@ -110,6 +108,23 @@ describe("the server suite's hang backstop", () => {
       expect(line.startsWith("Suite ")).toBe(false);
       expect(line.startsWith("⎯")).toBe(false);
     }
+  });
+
+  it("starts no repeating timer of its own, so it cannot perturb what it is guarding", () => {
+    // The whole reason the first version's scheduling probe was taken out (SONNY-241). The two
+    // tests this construct guards measure a race between three database transactions, and a
+    // periodic timer is the one part of a deadline that runs *while* the work does. Measured
+    // through `scripts/mutate` over R1, the per-address advisory lock deleted: with the probe in
+    // place the plus-tag test caught it in 6 of 10 runs, against 8 of 9 on the copy without it.
+    //
+    // A source scan rather than an observation, because "nothing repeating is scheduled" is a
+    // property of the code and any runtime measurement of it would be a bet on the machine — which
+    // is the class of mistake this whole file exists to end.
+    const source = codeOf(join(testTree, "support/backstop.ts"));
+    expect(source).not.toContain("setInterval");
+    // And the scan can find what it is looking for, so its absence means something: the one timer
+    // the construct does own is a non-repeating one.
+    expect(source).toContain("setTimeout");
   });
 
   it("gives vitest a ceiling strictly above its own deadline", () => {

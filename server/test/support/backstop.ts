@@ -24,17 +24,28 @@ import { it } from "vitest";
  * `HangBackstop` (SONNY-302) refuses to call a timeout a deadlock until the wait has evaluated its
  * condition 500 times, because in that test process thirty seconds of wall clock buys two looks —
  * so the count separates "the code never finished" from "this process never got a turn" where the
- * clock cannot. The same instrument was tried here and it separates nothing. Measured on this
- * repository's server suite against a Postgres in Docker, with a 5 ms probe interval, at four load
- * levels: idle-ish (1-minute load average 42), 24 shell spinners (49), 60-client `pgbench` (79),
- * and 40 CPU-bound `node` processes (155, rising to 194) — the probe ticked at **178, 178, 167 and
- * 171 per second** against a nominal 200, with worst single gaps of **12, 12, 14 and 46 ms**. In
- * the run at 171/s the first of the two tests took **2527 ms**, ten times its unloaded cost and
- * half the old budget. So the event loop stays healthy while the work gets ten times slower: an
- * observation floor set anywhere below the healthy population would have classified that run as a
- * deadlock, which is the manufactured kill this construct exists to stop. Node is not the Swift
- * main actor — the wait here is IO, not a poll queued behind hundreds of `@MainActor` jobs — and
- * the two populations the Swift floor separates simply are not two populations here.
+ * clock cannot. The same instrument was tried here and it separates nothing. Measured with a
+ * throwaway 5 ms interval probe against a Postgres in Docker, at four load levels: the machine as
+ * found (1-minute load average 42), 24 shell spinners (49), 60-client `pgbench` (79), and 40
+ * CPU-bound `node` processes (155, rising to 194) — the probe ticked at **178, 178, 167 and 171 per
+ * second** against a nominal 200, with worst single gaps of **12, 12, 14 and 46 ms**. In the run at
+ * 171/s the first of the two tests took **2527 ms**, ten times its unloaded cost and half the old
+ * budget. So the event loop stays healthy while the work gets ten times slower: an observation
+ * floor set anywhere below the healthy population would have classified that run as a deadlock,
+ * which is the manufactured kill this construct exists to stop. Node is not the Swift main actor —
+ * the wait here is IO, not a poll queued behind hundreds of `@MainActor` jobs — and the two
+ * populations the Swift floor separates simply are not two populations here.
+ *
+ * **Nothing runs while the work runs, and that is the second thing this construct owes these two
+ * tests.** The first version kept the probe at run time and printed its count in the message as
+ * evidence for a reader. It was removed, because a periodic timer is the one part of a deadline
+ * that can perturb what the deadline is guarding, and these two tests measure a race between three
+ * database transactions. Measured through `scripts/mutate` over the same mutant — R1, the
+ * per-address advisory lock deleted — the plus-tag test caught it in **6 of 10** runs with the
+ * probe in place against **8 of 9** on the copy without it, which is not a decisive difference at
+ * that sample size and is the wrong side of one to keep for diagnostics whose number was already
+ * measured as unable to support a verdict. What is left in the wait is one `setTimeout` that does
+ * nothing until it fires.
  *
  * **So what is left is time, and the honest use of it is a bound rather than a threshold.** A
  * genuine hang never finishes; a slow machine finishes late. Nothing but waiting longer tells them
@@ -80,15 +91,6 @@ export const HANG_BACKSTOP_MS = 60_000;
 export const VITEST_TIMEOUT_MS = HANG_BACKSTOP_MS + 30_000;
 
 /**
- * How often the scheduling probe looks, in milliseconds.
- *
- * Its count is **evidence for a reader and never a verdict** — see this file's header for the
- * measurement that rules the verdict out. It costs 6000 no-op callbacks across a full sixty-second
- * wait and about 24 across an ordinary one.
- */
-const PROBE_INTERVAL_MS = 10;
-
-/**
  * The literal `scripts/mutate-untrusted-failures` declares, so that a battery reads this failure as
  * the non-evidence it is.
  *
@@ -102,13 +104,6 @@ const PROBE_INTERVAL_MS = 10;
 export const HANG_BACKSTOP_DECLARED_FRAGMENT =
   "This is a server-suite hang backstop, not a timing assertion";
 
-/** What the scheduling probe saw while a wait was outstanding. Evidence, not a verdict. */
-export interface Scheduling {
-  readonly observations: number;
-  readonly nominal: number;
-  readonly worstGapMs: number;
-}
-
 /**
  * The wording, on two rendered lines, with the declared fragment whole on the second.
  *
@@ -117,21 +112,15 @@ export interface Scheduling {
  * does not. No line here opens on `FAIL`, on `Test ` or on `Suite `, each of which is a boundary in
  * one of the two log readers that harness carries.
  */
-export function hangBackstopMessage(
-  description: string,
-  elapsedMs: number,
-  scheduling: Scheduling,
-): string {
+export function hangBackstopMessage(description: string, elapsedMs: number): string {
   const seconds = (elapsedMs / 1000).toFixed(1);
   return [
     `waited ${seconds}s for: ${description}, and it never finished.`,
     `${HANG_BACKSTOP_DECLARED_FRAGMENT} — this deadline is far outside anything this suite has`
       + ` been measured at, so reaching it means the work never finished rather than that it was`
       + ` slow, and on a machine loaded past that margin it means neither. It is not read as a`
-      + ` mutation kill for that reason. While it waited this process was scheduled`
-      + ` ${scheduling.observations} times against a nominal ${scheduling.nominal}, the longest`
-      + ` single gap being ${scheduling.worstGapMs}ms; gaps of seconds there are the machine, and`
-      + ` gaps like these are not.`,
+      + ` mutation kill for that reason. Re-run it alone on a quieter machine; if it happens there`
+      + ` too, look for what is not completing rather than for what is slow.`,
   ].join("\n");
 }
 
@@ -151,19 +140,6 @@ export async function underHangBackstop<T>(
   deadlineMs: number = HANG_BACKSTOP_MS,
 ): Promise<T> {
   const startedAt = Date.now();
-  let observations = 0;
-  let worstGapMs = 0;
-  let lastTickAt = startedAt;
-  const probe = setInterval(() => {
-    const now = Date.now();
-    observations += 1;
-    worstGapMs = Math.max(worstGapMs, now - lastTickAt);
-    lastTickAt = now;
-  }, PROBE_INTERVAL_MS);
-  // Never the reason the process stays alive: a probe that outlived its wait would hold vitest's
-  // worker open after the suite had finished.
-  probe.unref();
-
   let timer: NodeJS.Timeout | undefined;
   try {
     const running = work();
@@ -173,18 +149,14 @@ export async function underHangBackstop<T>(
     running.catch(() => {});
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        const elapsedMs = Date.now() - startedAt;
-        reject(new Error(hangBackstopMessage(description, elapsedMs, {
-          observations,
-          nominal: Math.round(elapsedMs / PROBE_INTERVAL_MS),
-          worstGapMs,
-        })));
+        reject(new Error(hangBackstopMessage(description, Date.now() - startedAt)));
       }, deadlineMs);
+      // Never the reason the process stays alive: a pending deadline that outlived its wait would
+      // hold vitest's worker open after the suite had finished.
       timer.unref();
     });
     return await Promise.race([running, deadline]);
   } finally {
-    clearInterval(probe);
     if (timer !== undefined) clearTimeout(timer);
   }
 }
