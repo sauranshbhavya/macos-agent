@@ -4910,16 +4910,46 @@ final class AgentViewModel: ObservableObject {
                 logStore.append(.observe, "Transcript ready.")
                 deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
             } catch {
-                isTranscribingVoice = false
-                // This is the bug that made the auto-clear timer feel broken: a failed
-                // transcription (e.g. no speech captured) never calls `start()`, so it never
-                // touches `lastCommand` — the old `hasRetryableCommand`-based gate treated that
-                // exactly like a persistent config problem and refused to time it out. It isn't
-                // one: try again and it's just as likely to work fine.
-                setError(error.localizedDescription)
-                logStore.append(.summarize, "Transcription failed: \(error.localizedDescription)")
+                deliverTranscriptionError(error)
             }
         }
+    }
+
+    /// Where a transcription that produced no transcript ends — the one seam, called by the real
+    /// catch above and driven directly by tests, for the same reason `deliverTranscript` below is.
+    ///
+    /// **A stop is not a failure, and this route never asked** (SONNY-327). The catch this replaces
+    /// called `setError(error.localizedDescription)` unconditionally, so it was not one of the call
+    /// sites `SonnyBackendError.isCancellation` reaches — unlike `performStart`'s catch and
+    /// `performApproval`'s, which both consult it. A cancellation arriving here rendered as "Sonny
+    /// couldn't finish this one. Try again.", because `TranscriptionError.backend(.cancelled)`'s
+    /// `errorDescription` is `SonnyBackendCopy.sentence(for: .cancelled)`.
+    ///
+    /// **Nothing can raise one today, and the guard is the point.** `stopVoiceRecordingAndTranscribe`
+    /// runs the transcription in an unstructured `Task { }` that nothing stores, so
+    /// `cancelCurrentRun`'s `currentTask?.cancel()` cannot reach it, and no surface offers a stop
+    /// while it runs — `canCancel` is false throughout a *command* transcription (`isRunning` is
+    /// false and there is no `currentTask`), and the voice control reads "Transcribing" rather than
+    /// "Stop" (`voiceButtonTitle`). Whether a transcription should be stoppable at all is a product
+    /// question and SONNY-332's, not this seam's; what this seam does is make the day it becomes one
+    /// a change to the recording surface rather than a wrong sentence nobody was watching for.
+    ///
+    /// The predicate is consulted here rather than as a `catch let error where …` arm above so that
+    /// the whole non-success exit has one call site and one test seam; a second arm would give the
+    /// scan two regions to pin and the behaviour no more coverage.
+    func deliverTranscriptionError(_ error: Error) {
+        isTranscribingVoice = false
+        guard !isCancellationError(error) else {
+            logStore.append(.summarize, "Transcription canceled by user")
+            return
+        }
+        // This is the bug that made the auto-clear timer feel broken: a failed
+        // transcription (e.g. no speech captured) never calls `start()`, so it never
+        // touches `lastCommand` — the old `hasRetryableCommand`-based gate treated that
+        // exactly like a persistent config problem and refused to time it out. It isn't
+        // one: try again and it's just as likely to work fine.
+        setError(error.localizedDescription)
+        logStore.append(.summarize, "Transcription failed: \(error.localizedDescription)")
     }
 
     /// Where a finished transcript goes — the one router, called by the real completion above and
