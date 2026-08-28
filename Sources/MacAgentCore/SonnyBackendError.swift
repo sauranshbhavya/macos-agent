@@ -272,13 +272,15 @@ public extension SonnyBackendError {
     /// record of what that review found — and SONNY-320's entry carries both corrections.
     ///
     /// **What it still does not reach is a caller that never asks it, not a shape it cannot see**,
-    /// and the two known ones are filed rather than left here. The voice route's `catch` calls
-    /// `setError(error.localizedDescription)` without consulting this at all, and nothing can cancel
-    /// a transcription to begin with — **SONNY-327**, and `TranscriptionError.backendError` says the
-    /// same at its own declaration. The web-research source-fetch loop matches `CancellationError`
-    /// alone while the `URLSession` beneath it raises `URLError(.cancelled)`, so a stop there is
-    /// swallowed as a skipped source before any predicate is consulted — **SONNY-328**. Both are
-    /// call-site defects: no conformance can fix a question nobody asks.
+    /// and the two known ones were filed rather than left here. The voice route's `catch` called
+    /// `setError(error.localizedDescription)` without consulting this at all; its non-success exit
+    /// is now the one seam `AgentViewModel.deliverTranscriptionError(_:)`, which does
+    /// (**SONNY-327**, and `TranscriptionError.backendError` says the same at its own declaration —
+    /// what remains open there is whether anything can *press* stop during a transcription,
+    /// **SONNY-332**). The web-research source-fetch loop matches `CancellationError` alone while
+    /// the `URLSession` beneath it raises `URLError(.cancelled)`, so a stop there is swallowed as a
+    /// skipped source before any predicate is consulted — **SONNY-328**. Both are call-site
+    /// defects: no conformance can fix a question nobody asks.
     static func isCancellation(_ error: any Error) -> Bool {
         if error is CancellationError { return true }
         if (error as? URLError)?.code == .cancelled { return true }
