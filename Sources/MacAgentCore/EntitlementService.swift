@@ -65,6 +65,10 @@ public actor EntitlementService {
     /// unreadable store, a claim signed by a key this build does not hold. A check that could not be
     /// completed is not a check that passed.
     public func decision(for capability: EntitlementCapability) async -> EntitlementDecision {
+        // **A session this Mac cannot read is answered as no session, deliberately.** `try?`
+        // collapses two cases — nothing stored, and stored bytes this build cannot decode — and both
+        // have the same recovery and the same honest answer: there is no session in hand. Reporting
+        // the second differently would need a case whose only advice is still "sign in again".
         guard let session = try? await client.restoredIdentity() else {
             return .refused(.notSignedIn)
         }
