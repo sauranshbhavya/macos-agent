@@ -82,9 +82,21 @@ off while printing a reassuring line (PR #112 review, F1 — it did).
 **What that does not do** — stated because the file reads like more protection than it is — is know
 what it is missing: a timing-sensitive test whose failure matches no signature reads as a kill
 exactly as before. `UntrustedFailureDeclarationTests` holds the direction that is checkable, that a
-declaration's `source` still appears under `Tests/` **at the number of sites it declares** — a count,
-because a presence check alone let a reword of one of six copies of a backstop pass unnoticed (F4);
-the other direction is judgment. **Five seams have been found in the classifier; two stay open and
+declaration's `source` still appears **at the number of sites it declares** — a count, because a
+presence check alone let a reword of one of six copies of a backstop pass unnoticed (F4); the other
+direction is judgment. **It reads both test trees, and a count of zero is refused** (SONNY-334).
+This said "still appears under `Tests/`", and both halves of that were a trap rather than merely
+stale: the scan enumerated the three Swift targets only, so the first record written for a
+*server-half* failure would have counted **zero** and failed the suite with a message saying the
+source appears "under Tests/" and that fewer than declared means a site was reworded or removed —
+blaming a healthy record for a blindness in the scan. And the cheapest of the three fixes that
+message named, lowering the number, **passed**: `found == sites` is satisfied by a scan that finds
+nothing when a record declares nothing, which is the defect the count was added for reached through
+the one door it did not watch. It now enumerates `server/test/` beside the Swift targets, with a
+comment-prefix set per language, and refuses `sites` below 1 on its own terms rather than by
+comparison. This file and the changelog are the only two that name this guard or its declaration
+file (`grep -rlE "UntrustedFailureDeclarationTests|mutate-untrusted-failures" --include="*.md" .`
+→ 2 at `ca82864`), the changelog's mentions are dated records, and this is the live one. **Five seams have been found in the classifier; two stay open and
 are written down where it lives rather than fixed**: tests sharing a function name across suites
 merge, since neither log line names a suite, and a mutant that *traps* the test process names no
 test at all. **The third is closed** (SONNY-305): swift-testing names a failing test on two line
