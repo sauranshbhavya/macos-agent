@@ -22,7 +22,7 @@ Last updated: 2026-07-03
 
 **Workspace restriction scope note, added 2026-08-07 — read before trusting §10.4's "If any layer rejects, the action must not execute" as a statement about workspace scope.** That sentence is correct and unchanged, but it is about **capability scope** — the operating bounds a capability declares for itself (§10.1's "App/folder/domain scope"), which are not user-editable and do hard-block. It is **not** about the workspace restriction scope shipped in `feature/workspace-restriction-scope`, which is a separate, user-declared layer sitting above it. Workspace scope **escalates and prompts; it never blocks** — and it can only ever narrow, never widen, so it can neither grant a capability bounds its declaration lacks nor extend `PathWhitelist`. A future session reading §10.4 alone would implement a hard block, which is the wrong thing. The distinction is now written into §10.4 itself; §6.9 defines the scope semantics (default-on per workspace, four-valued verdict, unconfigured means unconstrained rather than denied); §11.2 makes the verdict an input to the approval rules and records the two hard constraints on any future relaxation; §11.3 adds the out-of-scope reason to approval copy and the rule that escalation reasons are never rendered as errors; §9.2 adds the per-task workspace binding; §9.3 records that scope escalations ride `risk.escalated`. Where this spec's literal text and `docs/sonny-founder-design-decisions.md` conflict, the founder decisions win — this amendment closes the gap for this feature so that precedence no longer has to be relied on.
 
-This version merges a full review pass (spec-vs-code audit plus a product completeness pass) into the v1.1 document. Nothing was removed from v1 scope — the review explicitly preserved full spec scope, including all 8 Power Mode apps. Changes are additive/clarifying and marked inline with the section markers below. Read this changelog first if you already know v1.1.
+This version merges a full review pass (spec-vs-code audit plus a product completeness pass) into the v1.1 document. Nothing was removed from v1 scope — the review explicitly preserved full spec scope, ~~including all 8 Power Mode apps~~. **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. Changes are additive/clarifying and marked inline with the section markers below. Read this changelog first if you already know v1.1.
 
 Resolved and folded in:
 
@@ -34,7 +34,7 @@ Resolved and folded in:
 - Three smaller gaps closed: crash/error telemetry via the trace spine (§6.19/§17.4), unifying permission-revocation with the emergency-stop path (§13.5), and an explicit English-only v1 decision (§6.20/§17.2).
 - Risk engine: dynamic tier escalation on observed side effects, not just static per-capability tiers (§11.1A).
 - Screen intelligence: bounded retry policy for UI element location, fail-closed redaction below a confidence threshold, and a concrete untrusted-content wrapping mechanism for prompt-injection defense (§12.3, §12.4, §12.5).
-- Power Mode: session auto-pause on lock/sleep/idle, unlocked+focused requirement for tier-3 actions, and a quantitative (not vibes-based) app-eval pass bar (§13.1, §13.5, §13.7).
+- Power Mode: session auto-pause on lock/sleep/idle, unlocked+focused requirement for tier-3 actions, and ~~a quantitative (not vibes-based) app-eval pass bar~~ (§13.1, §13.5, §13.7). **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 - Backend/business model: the OpenAI-direct-to-backend-proxy migration is its own explicit milestone; entitlement checks fail closed only for paid features, not free local actions; subscription lapse never interrupts an in-flight atomic action; model provider decision made now (OpenAI + Anthropic behind a provider-agnostic router, BYOK explicitly skipped for v1) instead of left open (§9.1, §16.3, §16.4, §16.5).
 - Workflow library: fixed precedence order for diagnosing media playback blockers, and an explicit no-silent-routine-mutation rule (§18.5, §18.6).
 - Two-surface product model: menu-bar cockpit and Command Center must share one state layer from day one, decided before either surface is built (§4A.1).
@@ -56,7 +56,7 @@ The first major release should target Mac power users with two core promises:
 
 Before the major-release roadmap begins, the existing prototype should go through a small but important pre-major-release implementation pass. That pass should make the current hard-edged demos more general: Hacker News becomes general web-to-Markdown research, media result opening becomes real playback where provider APIs allow it, app opening becomes a more general app/action adapter foundation, and the menu-bar popover gains a companion full Mac app for account, settings, privacy, stats, routines, workspaces, and Power Mode controls. As of v1.2, this pass also builds the capability adapter architecture first (§4A.0) rather than generalizing behavior inside the existing prototype dispatcher, and adds four capabilities a completeness review found missing entirely: instant utility actions, a Shortcuts.app bridge, task-scoped follow-up correction, and usage transparency.
 
-Full v1 scope, as defined in this document, is confirmed as the target — including all 8 initial Power Mode apps, real provider-backed media playback, instant utilities, Shortcuts integration, and the trust/safety systems required to make those features impeccable. This is being built by a solo builder using heavy AI leverage, over a horizon long enough to build it correctly rather than fast enough to cut corners. Section 21.0A gives the concrete build order that makes that combination realistic. Full scope does not lower the quality bar: a capability is not v1-complete merely because it is implemented; it must pass the v1 completeness standard in §5.5.
+Full v1 scope, as defined in this document, is confirmed as the target — ~~including all 8 initial Power Mode apps,~~ real provider-backed media playback, instant utilities, Shortcuts integration, and the trust/safety systems required to make those features impeccable. **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. This is being built by a solo builder using heavy AI leverage, over a horizon long enough to build it correctly rather than fast enough to cut corners. Section 21.0A gives the concrete build order that makes that combination realistic. Full scope does not lower the quality bar: a capability is not v1-complete merely because it is implemented; it must pass the v1 completeness standard in §5.5.
 
 ## 2. Product Thesis
 
@@ -661,7 +661,7 @@ Sonny v1 is successful if:
 
 ### 5.4 Resourcing And Build Philosophy (added v1.2)
 
-Sonny v1 is being built by a solo builder with heavy AI leverage, targeting the full scope in this document — not a reduced scope. This changes sequencing, not ambition: §21.0A lays out an order that lets one person reach full scope correctly, front-loading the architecture decisions that are expensive to redo (capability adapters, risk engine) and sequencing the least AI-acceleratable, highest-liability work (the 8-app Power Mode eval suite, §13.7) last, once the foundation under it is solid.
+Sonny v1 is being built by a solo builder with heavy AI leverage, targeting the full scope in this document — not a reduced scope. This changes sequencing, not ambition: §21.0A lays out an order that lets one person reach full scope correctly, front-loading the architecture decisions that are expensive to redo (capability adapters, risk engine) and sequencing the least AI-acceleratable, highest-liability work (~~the 8-app Power Mode eval suite, §13.7~~ — now screen control's live-interaction QA) last, once the foundation under it is solid. **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 
 ### 5.5 V1 Completeness Standard (added v1.2, finalized by Hermes review)
 
@@ -832,9 +832,9 @@ Data handling:
 - Show "what Sonny saw" before or during execution — see §14.4A for the pre-send vs. post-hoc timing rule.
 - Treat captured screen content as untrusted context.
 
-### 6.5 Paid Power Mode
+### 6.5 Power Mode
 
-Power Mode is paid-only, off by default, and scoped to approved apps.
+~~Power Mode is paid-only~~, off by default, and scoped to approved apps. **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record. **The heading read "Paid Power Mode" until that sweep and was renamed rather than struck**, because a heading is also every cross-reference's label; nothing cited it by title, and every reference in the tracked files is to the bare number. **The check is worth reading as much as its answer**, because the obvious form of it answers the wrong question: at `4824e50` `git grep -n '6\.5 Paid' -- .` exits **0** with exactly one hit, the heading itself, so the evidence is that it printed *that line and nothing else* — not that it printed nothing. After the rename the same command exits 1 with no output, and `git grep -c '§6\.5' -- . | wc -l` answers **5** files on both trees — 18 hits at `4824e50` and 18 again at `92ed989`, after the sweep — which is the positive control that says the search can find things at all. **Read the hit count as of those two commits and not as a standing figure**: it rises as later entries cite this section, and the changelog entry for the sweep itself took it to 20. The *file* count is the stable half. **"Scoped to approved apps" is stale too, and this sweep did not own it**: row J (SONNY-143, 2026-08-20) made Power the one mode that skips the per-app control gate, so it asks about no app at all. That is a third claim, superseded by a third decision, with a population of its own including a §26 Non-Negotiable — 29 lines at `4824e50` from `grep -inE 'approved[- ]app|approved apps|approves each controllable app|unapproved app|app-approved|app approval' docs/sonny-major-release-spec.md | wc -l`, a locator rather than a classification — filed as **SONNY-337** rather than corrected here.
 
 Required capabilities:
 
@@ -850,7 +850,7 @@ Required capabilities:
 - Sonny auto-pauses on screen lock, display sleep, or user idle timeout, and requires explicit resume — never continues an unattended session (§13.1, added v1.2).
 - Any tier-3 action additionally requires the Mac to be unlocked and Sonny's HUD focused/visible at the moment of execution (§13.1, added v1.2).
 
-Initial approved-app candidates (confirmed full scope, v1.2 — all 8 apps stay in v1, sequenced last per §21.0A):
+~~Initial approved-app candidates (confirmed full scope, v1.2 — all 8 apps stay in v1, sequenced last per §21.0A):~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. The roster below is kept as history — it is why the cap existed, not what ships.
 
 - Safari.
 - Chrome.
@@ -861,7 +861,7 @@ Initial approved-app candidates (confirmed full scope, v1.2 — all 8 apps stay 
 - Slack.
 - VS Code.
 
-Do not enable an app for Power Mode until it has app-specific evals passing the quantitative bar in §13.7.
+~~Do not enable an app for Power Mode until it has app-specific evals passing the quantitative bar in §13.7.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 
 Risk-based approvals:
 
@@ -1110,7 +1110,7 @@ This should be a product differentiator. It should make the user feel, "I know e
 V1 business model:
 
 - Hosted subscription only.
-- Power Mode is paid-only.
+- ~~Power Mode is paid-only.~~ **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record.
 - Enterprise plan exists or is at least technically supported.
 
 Required:
@@ -1122,7 +1122,7 @@ Required:
 - Rate limits.
 - Billing portal.
 - Team/enterprise account model foundation.
-- Server-side entitlement checks that **fail closed only for paid features** (Power Mode, anything subscription-gated); free local capabilities keep working even when the entitlement cache is stale or unreachable, so a network blip never breaks basic app-opening/file actions (clarified v1.2, see §16.3).
+- Server-side entitlement checks that **fail closed only for paid features** (~~Power Mode~~ **screen control**, anything subscription-gated); free local capabilities keep working even when the entitlement cache is stale or unreachable, so a network blip never breaks basic app-opening/file actions (clarified v1.2, see §16.3). **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record.
 - Client-side entitlement cache.
 - **Subscription lapse mid-task never interrupts an in-flight atomic action** — finish the current step, block the next one, with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5 (clarified v1.2, see §16.4).
 
@@ -1782,7 +1782,7 @@ Power Mode should feel powerful, but never covert.
 
 Principles:
 
-- Paid-only.
+- ~~Paid-only.~~ **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record.
 - Off by default.
 - App-approved.
 - Session-bound.
@@ -1821,7 +1821,7 @@ Per-app configuration:
 - Denied actions.
 - Allowed domains if browser.
 - Risk override rules.
-- Eval status, measured against the quantitative bar in §13.7.
+- ~~Eval status, measured against the quantitative bar in §13.7.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 
 ### 13.4 Live HUD
 
@@ -1865,6 +1865,8 @@ Each UI action logs:
 
 ### 13.7 Initial App Evals
 
+**What this section is for, decided 2026-08-28 by SONNY-205, because C3 retired its gate and left the rest of it standing.** SONNY-81's collision C3 (2026-08-12) retired the per-app eval bar and the 8-app cap *together*: there is no 95%-suite prerequisite and no roster, and any installed app is control-eligible the moment the user grants it. What C3 removed is the **gating**, not the testing — so the step list below survives as a **non-gating** regression checklist for screen control, and the two things that made it a gate, the quantitative pass bar and the 8-app roster, are struck below and kept as history. **Nothing in the product may be blocked on it**, which is the whole of the change: an app is not "approved" by this list, and a failing step here is a bug to fix rather than a ship gate. Whether the checklist survives into row 20's eval hardening is row 20's call and not this sweep's; §20.4 is the same list from the test plan's side and is struck the same way.
+
 For each app:
 
 - Open app.
@@ -1877,11 +1879,11 @@ For each app:
 - Stop mid-action.
 - Reject risky action.
 
-**Quantitative pass bar (added v1.2):** "evals pass" is not a subjective checkbox. An app is approved only once it reaches at least 95% success across a fixed, scripted regression suite covering the steps above, and that suite is re-run on every macOS point release — an app can lose its approved status if a later OS update regresses its eval results, not just when it first ships. This bar is what the exit criterion "App evals pass for initial apps" in §19.2 actually means.
+~~**Quantitative pass bar (added v1.2):** "evals pass" is not a subjective checkbox. An app is approved only once it reaches at least 95% success across a fixed, scripted regression suite covering the steps above, and that suite is re-run on every macOS point release — an app can lose its approved status if a later OS update regresses its eval results, not just when it first ships. This bar is what the exit criterion "App evals pass for initial apps" in §19.2 actually means.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. **This paragraph is the eval bar itself, and the sweep's own population grep does not reach it** — the pattern needs "quantitative bar", and this heading reads "Quantitative pass bar". A locator grep finds lines, not blocks; the block a matched line heads is read and edited with it.
 
-**Blocker policy (finalized by Hermes review):** all 8 apps remain the v1 target. The team should make a serious attempt to bring every app to production quality before the first major release. If one app remains a launch-blocking outlier after the rest of v1 is complete, that app may ship behind a beta label, be deferred to a v1.x update, or be postponed rather than weakening the v1 completeness standard (§5.5). This is a quality exception path, not a scope-cutting shortcut.
+~~**Blocker policy (finalized by Hermes review):** all 8 apps remain the v1 target. The team should make a serious attempt to bring every app to production quality before the first major release. If one app remains a launch-blocking outlier after the rest of v1 is complete, that app may ship behind a beta label, be deferred to a v1.x update, or be postponed rather than weakening the v1 completeness standard (§5.5). This is a quality exception path, not a scope-cutting shortcut.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 
-Apps (confirmed full scope, v1.2 — sequenced last in the build order per §21.0A, not cut):
+~~Apps (confirmed full scope, v1.2 — sequenced last in the build order per §21.0A, not cut):~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. The roster is kept as history below.
 
 - Safari.
 - Chrome.
@@ -2138,7 +2140,7 @@ Requirements:
 - OAuth or secure email login.
 - Device session token.
 - Refresh token in Keychain.
-- Entitlement cache that **fails closed only for paid/gated features** (clarified v1.2): if the cache is stale or the network is unreachable, Power Mode and other subscription-gated capabilities block; free local capabilities (opening apps, listing files, instant utility actions) continue working regardless, so a network blip never breaks the app's "instant" quality bar (§5.3).
+- Entitlement cache that **fails closed only for paid/gated features** (clarified v1.2): if the cache is stale or the network is unreachable, ~~Power Mode~~ **screen control** and other subscription-gated capabilities block; free local capabilities (opening apps, listing files, instant utility actions) continue working regardless, so a network blip never breaks the app's "instant" quality bar (§5.3). **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record.
 - Token revocation.
 - Logout clears local tokens.
 
@@ -2148,7 +2150,7 @@ Requirements:
 
 - Subscription plan (Pro and Max, see §23 for the resolved structure).
 - **No trial (resolved 2026-07-15, replaces the earlier "trial if chosen"):** a permanent, non-expiring free tier instead — the mid-task-lapse principle below applies to a free user's credits running out the same way it applies to a paid lapse, which a time-boxed trial cannot honor (a countdown that cuts off mid-task is exactly the surprise this section exists to prevent).
-- Power Mode entitlement is gated to the Max tier specifically, not "paid" generally (resolved 2026-07-15) — Pro does not include it.
+- ~~Power Mode entitlement is gated to the Max tier specifically, not "paid" generally (resolved 2026-07-15) — Pro does not include it.~~ **Doubly superseded, and the two halves are different kinds of thing — SONNY-205 corrected one and deliberately left the other alone.** The *claim*, that Power Mode is entitlement-gated at all, is superseded 2026-08-16 by SONNY-17: screen control is the one paid feature line and Power Mode gates no feature of its own. The *framing*, a Pro/Max ladder, is superseded by the same decision — but §23's business-model bullet keeps that ladder deliberately, as history rather than as the plan, and the Pro/Max wording elsewhere in this section (the plan bullet above, auto-top-up below) is that same superseded framing. It is a different population from this sweep's two claims and is not this ticket's to rewrite.
 - Usage metering by task/model/context size, **surfaced to the user in-task** (clarified v1.2, see §4A.9/§6.14) — a visible usage/budget indicator, not just an aggregate backend stat used for billing math the user never sees until they hit a wall. Implemented as a credit pool per tier (§23), weighted by real cost per task type, not a flat per-task count.
 - Billing portal.
 - Grace period handling. **Mid-task lapse behavior (clarified v1.2):** never interrupt a single atomic action in progress (e.g. between a click and its observation) — finish the current step, then block the next one with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5, not a hard yank that could leave an app mid-form or mid-edit. **Auto top-up (resolved 2026-07-15)** is the mechanism that serves this principle for Pro/Max: a user running low mid-task tops up rather than hitting a wall.
@@ -2189,7 +2191,7 @@ Onboarding must explain:
 - What data can be sent.
 - How local protection works.
 - Permission setup.
-- Power Mode setup for paid users.
+- ~~Power Mode setup for paid users.~~ **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record. Onboarding still covers Power Mode setup; what it no longer does is present it as a paid step.
 - How to stop Sonny.
 - That v1 is English-only (§6.20, added v1.2) — stated plainly rather than discovered by a non-English speaker hitting confusing behavior.
 
@@ -2405,7 +2407,7 @@ Exit criteria:
 
 - No critical security issues.
 - Power Mode emergency stop works, including the unified permission-revocation path (§13.5).
-- App evals pass the quantitative bar in §13.7 for initial apps.
+- ~~App evals pass the quantitative bar in §13.7 for initial apps.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 - Users complete real workflows.
 
 ### 19.3 Private Beta
@@ -2450,7 +2452,7 @@ V1 must include:
 - Browser/research workflows.
 - Local file/document workflows.
 - Routines/workspaces.
-- Paid Power Mode for approved apps (all 8, per §13.7, sequenced last in the build per §21.0A but not reduced in scope).
+- ~~Paid Power Mode for approved apps (all 8, per §13.7, sequenced last in the build per §21.0A but not reduced in scope).~~ **This line carries both superseded claims, which is why it is one of the two the sweep's union counts twice.** **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record. **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. What v1 must include is Power Mode itself, still sequenced last per §21.0A.
 - Data sent to AI inspector, with pre-send preview for high-sensitivity context (§14.4A).
 - Permission center.
 - Audit trail.
@@ -2557,7 +2559,7 @@ Per app:
 - Risky action pauses.
 - Unapproved app is rejected.
 
-Measured against the quantitative bar in §13.7 (≥95% success on a fixed regression suite, re-run per macOS point release) — not a subjective pass/fail per app.
+~~Measured against the quantitative bar in §13.7 (≥95% success on a fixed regression suite, re-run per macOS point release) — not a subjective pass/fail per app.~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. The per-app checks above stay as a regression checklist, per §13.7's 2026-08-28 note; they gate nothing.
 
 ### 20.5 Security Tests
 
@@ -2676,7 +2678,7 @@ This section exists because "full v1 scope, solo builder, take the time to do it
 5. **Backend/provider-swap milestone (§16.5, §21.2):** move off direct-to-OpenAI to the backend proxy, provider-agnostic router, entitlements. Treated as its own explicit deliverable, not incidental.
 6. **Billing/subscription (§16.4) and the two-surface Command Center (§4A.1, §21.1)**, now that there's something worth gating behind a paywall and a shared-state layer to build the second surface against.
 7. **Screen intelligence (§12, §21.5):** capture modes, OCR, redaction (with the fail-closed confidence rule), the untrusted-content wrapping mechanism, and the Data Sent To AI Inspector with correct pre-send/post-hoc timing.
-8. **Power Mode (§13, §21.6), sequenced last among major features.** By this point the risk engine, emergency-stop/permission-revocation unification, and Accessibility-adjacent screen intelligence work all already exist and are proven on lower-stakes surfaces. Power Mode's 8-app eval suite (§13.7) is explicitly the least AI-acceleratable, highest-liability piece of the entire spec — real live-interaction QA against version-drifting Accessibility trees, not something that compresses much with AI leverage. Build it last, not in parallel with everything else, and do not approve an app for production until it clears the quantitative eval bar.
+8. **Power Mode (§13, §21.6), sequenced last among major features.** By this point the risk engine, emergency-stop/permission-revocation unification, and Accessibility-adjacent screen intelligence work all already exist and are proven on lower-stakes surfaces. ~~Power Mode's 8-app eval suite (§13.7) is explicitly the least AI-acceleratable, highest-liability piece of the entire spec — real live-interaction QA against version-drifting Accessibility trees, not something that compresses much with AI leverage.~~ Build it last, not in parallel with everything else, ~~and do not approve an app for production until it clears the quantitative eval bar~~. **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record. **The sequencing is unchanged and only the roster and the gate are gone** — screen control's live-interaction QA against version-drifting Accessibility trees is still the least AI-acceleratable work in the plan, which is the reason this step is last.
 9. **Enterprise foundations, telemetry polish, release operations (§21.9, §21.10, §19)** — running alongside step 8 where they don't depend on Power Mode, converging at public v1.
 
 ### 21.0 Workstream 0: Pre-Major-Release Generalization
@@ -2807,7 +2809,7 @@ Deliverables:
 
 Goals:
 
-- Add paid approved-app UI control.
+- ~~Add paid approved-app UI control.~~ **Superseded 2026-08-16 (SONNY-17; swept 2026-08-28 by SONNY-205)** — screen control is the one paid feature line; Power Mode gates no feature of its own. §23's first bullet is the record. What this workstream adds is approved-app UI control; the entitlement gate in its deliverables is row 18's and gates screen control.
 
 Sequencing note (added v1.2): does not start until the risk engine (§11.1A) and the unified emergency-stop/permission-revocation path (§13.5) already exist and are proven on Workstream 0's local capabilities. See §21.0A step 8 for the full rationale — this is deliberately the last major workstream, not a parallel track.
 
@@ -2818,7 +2820,7 @@ Deliverables:
 - Accessibility control engine, with bounded retry/fail-closed element location (§12.4) and dynamic risk escalation (§11.1A).
 - Live HUD.
 - Emergency stop, unified with permission-revocation handling and periodic `AXIsProcessTrusted()` polling (§13.5).
-- App eval suite, measured against the quantitative bar in §13.7, for all 8 initial apps (confirmed full scope, not reduced).
+- ~~App eval suite, measured against the quantitative bar in §13.7, for all 8 initial apps (confirmed full scope, not reduced).~~ **Superseded 2026-08-12 (SONNY-81's collision C3; swept 2026-08-28 by SONNY-205)** — no 8-app cap and no per-app eval bar; any installed app is control-eligible the moment the user grants it. §23's app-list bullet is the record.
 - Risk approvals, including session auto-pause on lock/sleep/idle (§13.1).
 
 ### 21.7 Workstream G: Privacy And Security
@@ -2933,7 +2935,7 @@ Sonny feels public-release ready if:
 
 Resolved:
 
-- ~~Power Mode is paid-only.~~ **Superseded 2026-08-16** by the founder's pricing decision (Sauransh Bhardwaj), recorded on SONNY-17 and set out in full in the business-model bullet below: there is one paid feature line and it is **screen control**; planning, opening apps, routines, workspaces, instant utilities and web research all stay free. Power Mode gates no feature of its own — since row J (SONNY-143, shipped 2026-08-20) it is the one mode that skips the per-app control gate, which is a posture difference rather than a paid one (`Sources/MacAgentCore/AgentInteractionMode.swift:13-15`). Kept rather than deleted, per the same treatment SONNY-138 gave the ladder below. **This bullet is not the whole population, and the first version of this note under-counted it — the same mistake this branch was fixing elsewhere, made here** (PR #94 review, F3). Swept properly: `grep -in 'paid' docs/sonny-major-release-spec.md` returns **24 lines**. Three are this section's own (this bullet and the two paragraphs of the pricing bullet below), six are about Sonny being a paid product at all and are untouched by SONNY-17 (§3.5, §5.1, §5.3, §16.4's no-trial bullet, §19.3, §19.4), and four state the fail-closed-only-for-paid-features *principle* without naming Power Mode, which is still true (§0, §15.1, §20.2, §21.2). That leaves **eleven live sites**: §6.5's own heading ("Paid Power Mode") and its opening line, §6.14's business-model bullet and its entitlement bullet naming Power Mode as *the* paid example, §13.1's "Paid-only." principle, §16.3's entitlement cache, §16.4's "gated to the Max tier specifically" (doubly superseded — that tier is gone too), §17.2's onboarding step, §19.5's release criterion, §21.6's workstream item, and §24.1's starting prompt. SONNY-205 owns the sweep.
+- ~~Power Mode is paid-only.~~ **Superseded 2026-08-16** by the founder's pricing decision (Sauransh Bhardwaj), recorded on SONNY-17 and set out in full in the business-model bullet below: there is one paid feature line and it is **screen control**; planning, opening apps, routines, workspaces, instant utilities and web research all stay free. Power Mode gates no feature of its own — since row J (SONNY-143, shipped 2026-08-20) it is the one mode that skips the per-app control gate, which is a posture difference rather than a paid one (`Sources/MacAgentCore/AgentInteractionMode.swift:13-15`). Kept rather than deleted, per the same treatment SONNY-138 gave the ladder below. **This bullet is not the whole population, and the first version of this note under-counted it — the same mistake this branch was fixing elsewhere, made here** (PR #94 review, F3). Swept properly: `grep -in 'paid' docs/sonny-major-release-spec.md` returns **24 lines**. Three are this section's own (this bullet and the two paragraphs of the pricing bullet below), six are about Sonny being a paid product at all and are untouched by SONNY-17 (§3.5, §5.1, §5.3, §16.4's no-trial bullet, §19.3, §19.4), and four state the fail-closed-only-for-paid-features *principle* without naming Power Mode, which is still true (§0, §15.1, §20.2, §21.2). That leaves **eleven live sites**: §6.5's own heading ("Paid Power Mode") and its opening line, §6.14's business-model bullet and its entitlement bullet naming Power Mode as *the* paid example, §13.1's "Paid-only." principle, §16.3's entitlement cache, §16.4's "gated to the Max tier specifically" (doubly superseded — that tier is gone too), §17.2's onboarding step, §19.5's release criterion, §21.6's workstream item, and §24.1's starting prompt. **Swept 2026-08-28 by SONNY-205, and all eleven are corrected.** Each is struck in place with its supersession dated — the treatment SONNY-138 and SONNY-182 used — except §24.1's starting-prompt block, which is instruction pasted into new chats rather than a record and was rewritten instead. **The 24 above is not comparable to a post-sweep re-run, which is why the method is stated and not just the number**: a corrected line still contains the word "paid", so `grep -in 'paid' docs/sonny-major-release-spec.md` answers **24** at `d6b7f50` rather than fewer. What is checkable is that every site the sweep touched carries the string `SONNY-205`, so `grep -in 'paid' docs/sonny-major-release-spec.md | grep -vc 'SONNY-205'` answers **13** — the six product-is-paid lines and the four fail-closed-principle lines classified above, this section's own two pricing paragraphs, and §24.1's rewritten line, which carries no marker because it was rewritten rather than annotated. **The 24 was itself a working-tree reading, and the commit that wrote it made it 25 in the same move**: `30edb89` added the app-list bullet's residual note below, and `git show 033180d:docs/sonny-major-release-spec.md | grep -ic paid` → 24 against `git show 30edb89:docs/sonny-major-release-spec.md | grep -ic paid` → 25, both ancestors of `main`. It is left as written, because it was an honest reading of the tree it named — the same shape as WORKFLOW.md §8's 500-against-501. **A third claim lives in these same sentences and was filed rather than absorbed**: approved-app scope, superseded by row J (SONNY-143, 2026-08-20) rather than by SONNY-17, with a population of its own including a §26 Non-Negotiable — **SONNY-337**.
 - V1 targets both browser/research and file/document workflows.
 - Privacy headline is hosted AI with local-first protection.
 - Distribution starts as direct notarized app.
@@ -2941,7 +2943,7 @@ Resolved:
 - Capability architecture: protocol-based adapters, built first, not generalized in place (§4A.0, resolved v1.2).
 - Which model providers to support at launch: OpenAI primary, Anthropic second, behind a provider-agnostic router from day one (§16.5, resolved v1.2).
 - Whether to support BYOK: no, skipped for v1 (§7.9, resolved v1.2).
-- ~~Which apps make the first Power Mode app list: all 8 as originally specced — Safari, Chrome, Finder, Notes, Calendar, Mail, Slack, VS Code — sequenced last in the build order but not reduced in scope (§13.7, §21.0A, resolved v1.2).~~ **Superseded 2026-08-12** by the founder's 100% planning directive (SONNY-81, collision C3), which retired §13.7's per-app eval bar and this 8-app cap together as accuracy hedges — recorded in `docs/sonny-v1-implementation-changelog.md`'s 2026-08-12 note and in `docs/sonny-founder-design-decisions.md`:227. The roster is kept as history because it is why the cap existed, not because it is what ships. What ships is the `local.screen.vision-session` capability, whose own planner description is "Act inside any app by looking at its window and clicking and typing in it." (`Sources/MacAgentCore/VisionSessionCapabilityAdapter.swift:50`) and which holds no roster at all. The only app-identity gates left in the product are `ScreenControlPolicy.terminalBundleIdentifiers`' terminal ban (`Sources/MacAgentCore/ScreenControlEligibility.swift:180`) and row J's per-app control consent, which asks who the user has allowed rather than which apps are eligible. **Not the whole population either, and this note under-counted it too** (PR #94 review, F3). `grep -inE '(\*|_)*(8|eight)(\*|_)*[[:space:]]*((initial|Power Mode)[[:space:]]*)*apps?|8-app|eight-app|13\.7|per-app eval|quantitative bar' docs/sonny-major-release-spec.md` returns **16 lines**; one is this bullet, so **fifteen are live**: §0's v1.2 changelog twice, §1's executive summary, §5.4's resourcing paragraph, §6.5's roster heading (with the eight-item list under it) and its "do not enable an app until it passes §13.7" rule, §13.3's eval-status field, §13.7's own heading and its blocker policy, §19.2's alpha criterion, §19.5, §20.4's eval bar, §21.0A's build order, §21.6's eval-suite deliverable, and §24.1. §19.5 and §24.1 each carry this claim *and* the paid-only one above, so the union of live sites across both is **24 distinct lines**. The eval bar and the cap were superseded together by the same C3 ruling, which is why the sweep is not mechanical: §13.7 is a whole section whose purpose has to be decided rather than reworded. SONNY-205 owns it.
+- ~~Which apps make the first Power Mode app list: all 8 as originally specced — Safari, Chrome, Finder, Notes, Calendar, Mail, Slack, VS Code — sequenced last in the build order but not reduced in scope (§13.7, §21.0A, resolved v1.2).~~ **Superseded 2026-08-12** by the founder's 100% planning directive (SONNY-81, collision C3), which retired §13.7's per-app eval bar and this 8-app cap together as accuracy hedges — recorded in `docs/sonny-v1-implementation-changelog.md`'s 2026-08-12 note and in `docs/sonny-founder-design-decisions.md`:227. The roster is kept as history because it is why the cap existed, not because it is what ships. What ships is the `local.screen.vision-session` capability, whose own planner description is "Act inside any app by looking at its window and clicking and typing in it." (`Sources/MacAgentCore/VisionSessionCapabilityAdapter.swift:50`) and which holds no roster at all. The only app-identity gates left in the product are `ScreenControlPolicy.terminalBundleIdentifiers`' terminal ban (`Sources/MacAgentCore/ScreenControlEligibility.swift:180`) and row J's per-app control consent, which asks who the user has allowed rather than which apps are eligible. **Not the whole population either, and this note under-counted it too** (PR #94 review, F3). `grep -inE '(\*|_)*(8|eight)(\*|_)*[[:space:]]*((initial|Power Mode)[[:space:]]*)*apps?|8-app|eight-app|13\.7|per-app eval|quantitative bar' docs/sonny-major-release-spec.md` returns **16 lines**; one is this bullet, so **fifteen are live**: §0's v1.2 changelog twice, §1's executive summary, §5.4's resourcing paragraph, §6.5's roster heading (with the eight-item list under it) and its "do not enable an app until it passes §13.7" rule, §13.3's eval-status field, §13.7's own heading and its blocker policy, §19.2's alpha criterion, §19.5, §20.4's eval bar, §21.0A's build order, §21.6's eval-suite deliverable, and §24.1. §19.5 and §24.1 each carry this claim *and* the paid-only one above, so the union of live sites across both is **24 distinct lines**. The eval bar and the cap were superseded together by the same C3 ruling, which is why the sweep is not mechanical: §13.7 is a whole section whose purpose has to be decided rather than reworded. **Swept 2026-08-28 by SONNY-205, and all fifteen are corrected**, together with three blocks this locator grep never reached: §13.7's own quantitative-pass-bar paragraph, whose heading reads "Quantitative pass bar" where the pattern needs "quantitative bar", and the two eight-item rosters, which are list items under a matched line rather than matched lines themselves. **A grep of this kind finds lines, not blocks**, and the block a matched line heads is read and edited with it. **What §13.7 is for was decided rather than reworded**, as this note said it had to be: C3 retired the *gating* and not the testing, so the step list survives as a non-gating regression checklist, nothing in the product may be blocked on it, and whether it survives into row 20's eval hardening is row 20's call — stated at §13.7 itself. Post-sweep the same command answers **19** at `d6b7f50`, *more* than 16 rather than fewer, because a corrected line still cites §13.7; adding `| grep -vc 'SONNY-205'` answers **2**, which is §13.7's own heading — kept, because per-app evals still exist and only their gating force is gone, unlike §6.5's heading, which named the superseded claim itself and was renamed — and §24.1's rewritten line.
 - Resourcing: solo builder with heavy AI leverage, full spec scope, sequenced to make that realistic rather than reducing scope (§5.4, resolved v1.2).
 - Business model and subscription pricing (§16.4) — **the ladder below was superseded on 2026-08-16 by the founder's decision (Sauransh Bhardwaj), recorded in full on SONNY-17. Read the current shape first; the older ladder is kept underneath it as history, not as the plan.**
 
@@ -2990,7 +2992,7 @@ Current product direction:
 - Hosted AI is the brain; the native Mac app is the trusted actuator.
 - The menu-bar popover is the agent cockpit; the full Sonny app is the Command Center for account, settings, privacy, stats, routines, workspaces, permissions, and Power Mode controls. Both surfaces share one state layer (section 4A.1).
 - Before the full major-release roadmap, preserve and generalize existing prototype features using a protocol-based capability adapter model (section 4A.0) built first — not generalized inside the existing switch-based executor.
-- Power Mode is paid-only, off by default, approved-app scoped, risk-gated, and auto-pauses on lock/sleep/idle (section 13.1). It is sequenced last in the build order (section 21.0A) but keeps its full 8-app scope.
+- Power Mode is off by default, risk-gated, and auto-pauses on lock/sleep/idle (section 13.1), and is sequenced last in the build order (section 21.0A). It is not paid-only: screen control is the one paid feature line (SONNY-17, 2026-08-16). There is no 8-app cap and no per-app eval bar (SONNY-81's collision C3, 2026-08-12). Power asks about no app at all, where Normal starts from a built-in starter list and Safe from nothing (row J, SONNY-143, 2026-08-20).
 - Privacy headline: hosted AI with local-first protection, with honest (not overclaimed) redaction copy.
 - V1 must cover both browser/research workflows and local file/document workflows with polish, plus the instant utility tier, Shortcuts bridge, and follow-up correction added in v1.2 (sections 4A.6-4A.8).
 
