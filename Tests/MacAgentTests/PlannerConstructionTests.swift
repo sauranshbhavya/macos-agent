@@ -20,6 +20,13 @@ import MacAgentCore
 /// the same one. Every command used here is free text the instant resolver has no pattern for, so
 /// each dispatch reaches the planner branch; the stub answers with a clarify plan whose question
 /// names it, so "who planned this" is observable without executing anything.
+///
+/// **And since SONNY-324, what the run does with what that planner *throws*.** Those tests are in
+/// the second section below and live here for the seam rather than for the subject: this is the one
+/// file that can hand `performStart` a planner which raises a chosen error, and the property they
+/// pin — a stop mid-plan reading as a cancel rather than a red failure — belongs to the view
+/// model's catch, which every planner reaches. It used to be held one layer down by
+/// `CerebrasPlannerTests`, deleted with its planner by SONNY-132; each test says what it inherited.
 @Suite
 @MainActor
 struct PlannerConstructionTests {
@@ -160,6 +167,131 @@ struct PlannerConstructionTests {
         #expect(capture.contexts.count == 1)
         #expect(capture.contexts.first?.taskID == viewModel.currentTaskID)
     }
+
+    // MARK: - What a run does with what the planner throws (SONNY-324)
+
+    /// **Cancelling while a task is being planned reads as a cancel, not a failure** (SONNY-324).
+    ///
+    /// **The pin, not the fix.** The symptom is already gone: SONNY-320 made `PlannerError` conform
+    /// to `CarriesBackendError`, so `SonnyBackendError.isCancellation` sees through the wrapper and
+    /// `performStart`'s catch takes its cancel branch. What was missing is anything that would
+    /// notice if it stopped. The obligation used to be held one layer down by
+    /// `CerebrasPlannerTests.cancellationSurfacesAsCancellationNotAsAPlannerFailure` — "Provider
+    /// obligation 2", cancelling mid-request must never surface as the planner's own error type,
+    /// "which would render a deliberate cancel as a red failure" — and SONNY-132 deleted that
+    /// planner and, with it, the only test in the tree holding the property. This is that
+    /// obligation rebuilt where the behaviour now lives, which is the view model rather than any
+    /// one planner: every planner goes through this catch, and a fifth one arriving tomorrow
+    /// inherits the pin for free.
+    ///
+    /// **What the user was getting**, hand-traced on the ticket and re-derived here: steps marked
+    /// failed, *"Sonny couldn't finish this one. Try again."* — because
+    /// `SonnyBackendError.cancelled` maps to `SignInFailure.unexpected` — and a `.failed` row in
+    /// Tasks, for a button they pressed on purpose.
+    ///
+    /// The plan does not exist yet at this point, so `stepStatuses` is empty and "steps not marked
+    /// failed" is true for a reason that has nothing to do with the branch taken. The row and the
+    /// summary are what actually separate the two branches, and they are what this asserts.
+    @Test
+    func cancellingWhileATaskIsBeingPlannedIsRecordedAsACancelAndNotAsAFailure() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let viewModel = try makeViewModel(
+            root: root,
+            // The exact shape the gateway produces: `SonnyBackendClient` maps both
+            // `CancellationError` and `URLError(.cancelled)` to `SonnyBackendError.cancelled`, and
+            // `OpenAIPlanner.plan` rewraps it as its own error before the view model ever sees it.
+            plannerError: PlannerError.backend(.cancelled),
+            taskHistoryStore: taskHistoryStore
+        )
+
+        viewModel.command = "tell me something delightful about penguins"
+        viewModel.start()
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.errorMessage == nil, "a stop is not a failure, and there is nothing to retry")
+        #expect(viewModel.finalSummary == "Canceled.")
+        #expect(!viewModel.stepStatuses.values.contains(.failed))
+        #expect(viewModel.logStore.events.map(\.message).contains("Canceled by user"))
+
+        let rows = try taskHistoryStore.loadAll()
+        #expect(rows.count == 1)
+        #expect(rows.first?.outcomeStatus == .canceled, "the half you would still be living with a week later")
+        #expect(rows.first?.command == "tell me something delightful about penguins")
+    }
+
+    /// **The control, and without it the test above passes over a predicate that answers true to
+    /// everything** (SONNY-324). A planner failure that is not a cancellation still has to read as
+    /// a failure: the red banner, the sentence the error carries, and a `.failed` row. That is the
+    /// direction a too-eager cancel check breaks, and nothing else in this file would catch it.
+    ///
+    /// Uses the same wrapper case with a different payload, so the only difference between this run
+    /// and the one above is the `SonnyBackendError` inside `PlannerError.backend` — which is
+    /// precisely the discrimination `SonnyBackendError.isCancellation` is asked to make.
+    @Test
+    func aPlannerFailureThatIsNotACancellationStillReadsAsAFailure() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let viewModel = try makeViewModel(
+            root: root,
+            plannerError: PlannerError.backend(.timedOut(after: 30)),
+            taskHistoryStore: taskHistoryStore
+        )
+
+        viewModel.command = "tell me something delightful about penguins"
+        viewModel.start()
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.errorMessage != nil)
+        #expect(viewModel.errorMessage == PlannerError.backend(.timedOut(after: 30)).errorDescription)
+        #expect(viewModel.finalSummary != "Canceled.")
+
+        let rows = try taskHistoryStore.loadAll()
+        #expect(rows.count == 1)
+        #expect(rows.first?.outcomeStatus == .failed)
+    }
+
+    /// **The three other shapes a stop can wear on this path, so the pin is about the stop and not
+    /// about one wrapper** (SONNY-324). `SonnyBackendError.isCancellation` knows four, and the
+    /// planning branch can be reached by any of them: a `Task.cancel()` that lands between
+    /// requests raises `CancellationError`, one that lands on a request already in flight raises
+    /// `URLError(.cancelled)`, `SonnyBackendClient` mints `SonnyBackendError.cancelled` for both,
+    /// and `OpenAIPlanner` rewraps that as `PlannerError.backend(.cancelled)` — which is the test
+    /// above.
+    ///
+    /// Asserted through the same catch rather than against the predicate directly, because the
+    /// predicate already has its own tests and what this file is holding is that `performStart`
+    /// *asks* it.
+    @Test
+    func everyShapeAStopCanWearDuringPlanningTakesTheCancelBranch() async throws {
+        let shapes: [any Error] = [
+            CancellationError(),
+            URLError(.cancelled),
+            SonnyBackendError.cancelled
+        ]
+        for shape in shapes {
+            let root = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+            let viewModel = try makeViewModel(root: root, plannerError: shape, taskHistoryStore: taskHistoryStore)
+
+            viewModel.command = "tell me something delightful about penguins"
+            viewModel.start()
+            while viewModel.isRunning {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            #expect(viewModel.errorMessage == nil, "\(type(of: shape))")
+            #expect(viewModel.finalSummary == "Canceled.", "\(type(of: shape))")
+            #expect(try taskHistoryStore.loadAll().first?.outcomeStatus == .canceled, "\(type(of: shape))")
+        }
+    }
 }
 
 /// **Two of this file's four original tests pinned user-facing copy for states that cannot occur,
@@ -190,6 +322,21 @@ private final class ClarifyingStubPlanner: Planning {
                 )
             ]
         )
+    }
+}
+
+/// A planner that throws instead of planning — the shape SONNY-324 needs, because what is under
+/// test is what `performStart`'s catch does with what the planner raised, not what a plan contains.
+@MainActor
+private final class ThrowingStubPlanner: Planning {
+    private let error: any Error
+
+    init(error: any Error) {
+        self.error = error
+    }
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        throw error
     }
 }
 
@@ -240,6 +387,10 @@ private func makeViewModel(
     root: URL,
     usageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
     plannerUsage: AIUsageRecord? = nil,
+    /// What the injected planner throws instead of planning — SONNY-324's seam. Supplying it wins
+    /// over `plannerUsage`, because a planner that throws records nothing.
+    plannerError: (any Error)? = nil,
+    taskHistoryStore: TaskHistoryStore? = nil,
     observe: @escaping @MainActor (BackendTaskContext, any TaskUsageRecording) -> Void = { _, _ in }
 ) throws -> AgentViewModel {
     let suiteName = "PlannerSelectionTests-\(UUID().uuidString)"
@@ -274,7 +425,7 @@ private func makeViewModel(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption
         ),
-        taskHistoryStore: TaskHistoryStore(
+        taskHistoryStore: taskHistoryStore ?? TaskHistoryStore(
             fileURL: root.appendingPathComponent("task-history.json"),
             encryption: encryption
         ),
@@ -322,6 +473,9 @@ private func makeViewModel(
         taskUsageRecorder: usageRecorder,
         makePlanner: { context, recorder in
             observe(context, recorder)
+            if let plannerError {
+                return ThrowingStubPlanner(error: plannerError)
+            }
             guard let plannerUsage else {
                 return ClarifyingStubPlanner()
             }
