@@ -1754,6 +1754,32 @@ already proves.
       the SONNY-226 row above deliberately — that one asks about paragraph structure after the
       prompt fold, this one about the source-and-timestamp contract §4A.2 sets.)
 
+### `fix/three-small-client-defects` owes no rows, and here is why (2026-08-28, SONNY-264 / SONNY-218 / SONNY-259)
+
+**No rows, stated rather than left as an absence** — and this section replaces one that was written
+and then withdrawn, which is the more useful record (PR #157's review, F1). All three tickets on that
+branch are internal-contract fixes with no surface a founder can read.
+
+- **SONNY-264** refuses an output path that leads out of `~/Desktop`/`~/Documents` using the same
+  sentence that has always been shown for a path the user named, and reaching it at all needs a
+  symbolic link planted by hand. Nothing rendered changes.
+- **SONNY-259** is test-only. `Sources/` is untouched.
+- **SONNY-218** shipped with a row asking the founder to read the approval panel's "Will include:"
+  lines before approving. **That row could not have detected anything, in either half, and it is
+  withdrawn rather than reworded.** "Will include:" is written at one site, in
+  `SaveRoutineCapabilityAdapter`, it interpolates a preview's *title* rather than a path, and the
+  row's own scenario contains no `save_routine` step, so nothing produces the line. More
+  fundamentally, no surface renders `ActionPreview` at all — `git grep -c "ActionPreview" --
+  Sources/MacAgent` exits 1 — and what the approval panel does render, `RiskApprovalCopy`, builds
+  its file line by walking the *outer* plan's steps, where a nested routine's destination can never
+  appear. The half that is checkable, "both files exist afterwards", passes on `main` too: the
+  on-disk behaviour was fixed by SONNY-190 and SONNY-220 and is held by tests at the cut point.
+
+**An unrunnable row is worse than no row**, because a founder either files a false failure or ticks
+something that checked nothing, and a ticked row suppresses re-checks. What SONNY-218 actually fixed
+is that `previewChain` seeds each segment's nested preview from the paths the previous one reported,
+so a wrong nested preview mis-seeds the next — held by tests, not by a human at the app.
+
 ## 8. How to report back
 
 For each real finding, give me:

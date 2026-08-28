@@ -54,6 +54,33 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         return [preview(for: records, context: context)]
     }
 
+    /// **Every destination that will be written is validated here, not in `FileInventory`**
+    /// (SONNY-264). `docxFiles` composes a PDF name onto a destination folder — the validated
+    /// `outputFolder`, or the source document's own parent — and appends the `-2`, `-3`, … suffix
+    /// when two documents of one scan would collide. The folder was checked; the composed leaf was
+    /// not, and a leaf can be a dangling symbolic link, which is the one shape nothing upstream
+    /// resolves because `fileExists` follows it to a target that is not there. Validating the
+    /// composed path is what makes the destination this adapter hands the converter the same path
+    /// the whitelist agreed to.
+    ///
+    /// It sits in the adapter rather than in `FileInventory` because the whitelist is this layer's:
+    /// an inventory that took a `PathWhitelist` to compose a filename would be a boundary in a type
+    /// whose job is enumeration. Doing it after the fact also covers both composition sites — the
+    /// preferred name and the renamed candidate — with one call.
+    ///
+    /// **Only the records that will be written.** A skipped record's PDF already exists and neither
+    /// converter touches it (both filter on `skippedBecausePDFExists`), so validating it could only
+    /// refuse a whole scan over a file nothing is going to write.
+    ///
+    /// **What the exposure actually was, measured rather than inherited.** Against a dangling leaf
+    /// link pointing outside the root on Darwin 25.5.0, `MicrosoftWordDocumentConverter` refuses:
+    /// Word saves to a fresh path under `/private/tmp` and the destination is reached by
+    /// `FileManager.moveItem(at:to:)`, which throws `NSCocoaErrorDomain` 516 rather than following
+    /// the link, and `MockDocumentConverter` writes `.atomic`, which replaces the link. So this path
+    /// was latent where SONNY-264's ticket recorded it as live — the finding read
+    /// `DocumentConverter.swift` as handing the destination to Word, and Word is handed a temporary
+    /// file. It is validated anyway: "latent" is a property of the two writers this adapter happens
+    /// to have today, and a third one that opens the destination directly would inherit the hole.
     private func records(for spec: DocxSpec, context: CapabilityExecutionContext) throws -> [DocxRecord] {
         let records = try context.inventory.docxFiles(
             in: spec.folder,
@@ -64,7 +91,14 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         guard !records.isEmpty else {
             throw AgentExecutionError.noMatchingFiles("No .docx files were found in \(spec.folder.path).")
         }
-        return records
+        return try records.map { record in
+            guard !record.skippedBecausePDFExists else {
+                return record
+            }
+            var validated = record
+            validated.destinationURL = try context.whitelist.validateOutputPath(record.destinationURL.path)
+            return validated
+        }
     }
 
     @MainActor

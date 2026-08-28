@@ -71,7 +71,10 @@ struct AgentActionExecutorTests {
     /// the signal would still throw `CancellationError` here — after the child's own 300 s ran out,
     /// which is why that number is a bound on the pathological case and not just a large one. The old
     /// `/bin/sleep 5` had the same hole and closed it in five seconds instead of five minutes.
-    /// Filed as SONNY-259 rather than smuggled in here.
+    /// Filed as SONNY-259 rather than smuggled in here — and **closed by
+    /// `asyncProcessRunnerCancellationTerminatesTheChild` below**, which is a separate test with a
+    /// child of its own rather than an assertion added here, because the property needs a child that
+    /// survives its own signal long enough to report it and this one is `exec`ed away by design.
     @Test
     func asyncProcessRunnerCancelsRunningProcess() async throws {
         let root = try makeDirectory()
@@ -94,6 +97,145 @@ struct AgentActionExecutorTests {
 
         try await waitForLaunchSignal(at: launched)
         task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected process cancellation to throw CancellationError.")
+        } catch is CancellationError {
+            return
+        } catch {
+            Issue.record("Expected CancellationError, got \(error).")
+        }
+    }
+
+    /// **The assertion the test above deliberately does not make: cancelling *killed the child*
+    /// (SONNY-259).**
+    ///
+    /// Both existing cancellation tests assert the error, and `AsyncProcessRunner.run` throws
+    /// `CancellationError` from a check on `box.isCancelled` that sits *after*
+    /// `ProcessOutputCapture.drainThenWait` returns — so it is reached whether the child was
+    /// terminated or simply finished on its own. A runner that set the flag and never sent the
+    /// signal satisfies both of them.
+    ///
+    /// **The child says so itself.** It traps `TERM`, and the trap writes a sentinel before the
+    /// shell exits. Nothing else in the run writes that file, and only `ProcessBox.cancel` sends
+    /// that signal, so the file's contents are a direct report that the runner terminated a process
+    /// that was running.
+    ///
+    /// **No wall clock is party to it, and the ordering is what makes that true.** The trap's write
+    /// completes before the shell exits; the shell's exit is what closes the pipe; closing the pipe
+    /// is what lets `readDataToEndOfFile` return, and only then does the runner reach `waitUntilExit`
+    /// and the throw. So by the time `task.value` rethrows, the sentinel is already on disk — and
+    /// `waitUntilExit` having returned is itself the proof that the child is not merely signalled but
+    /// gone. The poll below is a bound on the failure case rather than a race: under a runner that
+    /// never signals, the sentinel never appears and the child sits in its own sleep, so waiting on
+    /// the file instead of on `task.value` turns a five-minute hang into a backstop failure that says
+    /// what happened.
+    ///
+    /// **Why `exec` is not used here, when the test above needs it.** The ticket weighs this shape
+    /// and rejects it, because a shell that parents the sleep leaves that sleep holding the pipe's
+    /// write end after the shell is signalled, which puts a real wait back into the runner's own
+    /// drain. That cost is real and is removed by one redirect: the background sleep's output goes to
+    /// `/dev/null`, so the shell is the only process holding the pipe. Measured with a standalone
+    /// probe of this exact script — the launch signal arrived in 6 ms, the drain returned **1 ms**
+    /// after `terminate()`, the sentinel read `terminated`, and no `sleep` was left behind, because
+    /// the trap kills it before exiting. A trap cannot survive `exec`, which is the whole reason the
+    /// two tests use different children rather than one.
+    ///
+    /// The shell's exit status is the trap's `exit 0` and not the signal, deliberately: nothing here
+    /// reads a status, and re-raising `TERM` to make one meaningful would buy nothing the sentinel
+    /// does not already say.
+    @Test
+    func asyncProcessRunnerCancellationTerminatesTheChild() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launched = root.appendingPathComponent("launched")
+        let terminated = root.appendingPathComponent("terminated")
+
+        let pidFile = root.appendingPathComponent("pid")
+
+        // Paths arrive as `$1`…`$3` rather than interpolated, so a temp directory with a space in it
+        // stays one argument. `sleep 300` for the same reason the test above uses it: the child must
+        // not be able to end on its own inside any plausible run, or its silence would read as
+        // "never signalled" when it simply finished. The pid is written *before* the launch signal,
+        // so a reader that has seen the signal is reading a complete pid file rather than racing the
+        // redirection that creates it.
+        let script = """
+        trap 'kill "$SLEEP_PID" 2>/dev/null; printf terminated > "$2"; exit 0' TERM
+        printf %d "$$" > "$3"
+        printf running > "$1"
+        sleep 300 >/dev/null 2>&1 &
+        SLEEP_PID=$!
+        wait "$SLEEP_PID"
+        """
+        let task = Task {
+            try await AsyncProcessRunner.run(
+                executablePath: "/bin/sh",
+                arguments: [
+                    "-c", script, "sonny-terminate-test",
+                    launched.path, terminated.path, pidFile.path
+                ]
+            )
+        }
+
+        try await waitForLaunchSignal(at: launched)
+        // **The launch wait's own backstop is the cascade this test must not build on.** If the
+        // child never signalled, `waitForLaunchSignal` has recorded its issue and returned, and
+        // everything below would then be asserting about a process that never existed — which is
+        // how a starved wait turns into a confident-looking failure one step removed (SONNY-302,
+        // and the reason `scripts/mutate-untrusted-failures` distrusts that wording).
+        guard FileManager.default.fileExists(atPath: launched.path) else {
+            task.cancel()
+            return
+        }
+        task.cancel()
+
+        func sentinel() -> String? {
+            try? String(contentsOf: terminated, encoding: .utf8)
+        }
+        // On its contents, not its existence: `>` creates the file when the redirection is set up,
+        // so an existence check could pass on an empty file the trap had not finished writing.
+        let observations = try await HangBackstop.wait(for: "the cancelled child to report that it was signalled") {
+            sentinel() == "terminated"
+        }
+        guard sentinel() == "terminated" else {
+            // Awaiting the task here would block for the child's whole 300 s, and returning without
+            // doing anything would leave the shell and its sleep running for the same 300 s. So the
+            // child is sent the signal the runner did not send, which its own trap turns into an
+            // orderly exit that also kills the sleep. Measured on the mutant that deletes
+            // `terminate()` from `ProcessBox.cancel`: without this, one `/bin/sh` and one `sleep`
+            // outlive the run, which under a mutation battery is per mutant.
+            if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap(pid_t.init) {
+                kill(pid, SIGTERM)
+            }
+            // **And a second issue, in wording no declaration excuses, because the one `HangBackstop`
+            // recorded cannot be read as evidence and this failure is.** Every signature that type
+            // emits is declared in `scripts/mutate-untrusted-failures`, correctly — a wait that
+            // times out may only be reporting the state of the shared main actor. So a test whose
+            // *only* failure is a backstop can never count as a mutation kill: measured, the mutant
+            // that deletes `terminate()` from `ProcessBox.cancel` came back **UNATTRIBUTED** rather
+            // than killed at `ba6a3e4`, on a run where this test had failed for exactly the right
+            // reason. Understating coverage is the safe direction and it is still a loss, since
+            // holding this property is the whole of SONNY-259.
+            //
+            // The condition is `HangBackstop`'s own rule rather than a second one invented here: a
+            // wait that ends without its condition holding ended either `.stuck` — past the deadline
+            // *and* past `observationFloor` — or `.starved`, and `.stuck` is checked first, so
+            // reaching the floor is exactly the case that type calls a real failure. Below it,
+            // nothing is recorded here and the declared starvation issue stands alone. Above it, the
+            // child had already signalled its own launch, so the process provably existed and 500+
+            // looks over 30+ seconds found it never reporting a signal — which is a statement about
+            // `AsyncProcessRunner` and not about the queue.
+            if observations >= HangBackstop.observationFloor {
+                Issue.record("""
+                    the runner did not terminate the child. It was cancelled after signalling its \
+                    own launch, and the SIGTERM handler that would have written its sentinel never \
+                    ran, checked \(observations) times. Only ProcessBox sends that signal, so this \
+                    is an assertion about AsyncProcessRunner rather than a report about the machine.
+                    """)
+            }
+            return
+        }
 
         do {
             _ = try await task.value
@@ -2062,6 +2204,217 @@ struct AgentActionExecutorTests {
         #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
     }
 
+    // MARK: - SONNY-218: the approval preview names the file the run will write
+
+    /// **The user approves a panel naming `draft-<title>-<stamp>.md`, and the run writes
+    /// `draft-<title>-<stamp>-2.md`.** The consent given and the thing done are about different
+    /// files.
+    ///
+    /// SONNY-190 seeded a nested routine's `resolveDefaultOutputs` from the run's claims so the
+    /// nested draft is bumped instead of destroying the outer plan's document, and SONNY-220 added
+    /// the other half — what the enclosing plan already *names* — so the reverse ordering works too.
+    /// Neither reached the preview: `previewNestedPlan` re-entered `preview`, which resolves
+    /// nothing, so the nested draft's name was derived from `context.now()` with no disambiguation
+    /// at all. Since `Timestamp.fileSafe` is whole-second and two writes inside one run are
+    /// milliseconds apart, the bump is the ordinary case rather than a race, and so was the
+    /// disagreement.
+    ///
+    /// **Both orderings, in one test, for the reason SONNY-220 records:** the claims half fixes only
+    /// the ordering where the outer step runs first, and a test per ordering did not catch that the
+    /// first time. `[create_local_draft, run_routine]` exercises the claims seed;
+    /// `[run_routine, create_local_draft]` exercises the plan-intent seed, which the preview path
+    /// had no equivalent of at all until this ticket threaded `namedByEnclosingPlan` through it.
+    ///
+    /// Asserted as set equality between what `prepare` promised and what is on disk afterwards,
+    /// rather than on either alone: naming two paths and writing two files satisfies a count while
+    /// still naming the wrong ones.
+    @Test
+    func theApprovalPreviewNamesEveryFileANestedRoutineWritesInEitherOrdering() async throws {
+        let orderings: [(String, [AgentStep])] = [
+            ("outer draft then routine", [outerDraftStep(), runNotesRoutineStep]),
+            ("routine then outer draft", [runNotesRoutineStep, outerDraftStep()])
+        ]
+        // One second for the whole run, so both defaults resolve to the same name unbumped and the
+        // collision is forced rather than probable.
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let suffix = Timestamp.fileSafe(stamp)
+
+        for (label, steps) in orderings {
+            let root = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let executor = makeExecutor(
+                root: root,
+                routineStore: try collidingDraftRoutineFixture(root: root),
+                now: { stamp }
+            )
+
+            let prepared = try executor.prepare(
+                plan: AgentPlan(summary: "Draft a note and run the Notes routine.", requiresConfirmation: true, steps: steps)
+            )
+            let promised = prepared.previews.flatMap(\.writes)
+            _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+            let written = try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("draft-") }
+                .map { root.appendingPathComponent($0).path }
+            #expect(
+                Set(promised) == Set(written),
+                "\(label): approved \(promised.sorted()), wrote \(written.sorted())"
+            )
+            #expect(Set(promised).count == 2, "\(label): the preview named \(promised.count) path(s), \(Set(promised).count) distinct")
+            #expect(
+                Set(written.map { ($0 as NSString).lastPathComponent })
+                    == ["draft-note-\(suffix).md", "draft-note-\(suffix)-2.md"],
+                "\(label): \(written.sorted())"
+            )
+        }
+    }
+
+    /// **The preview-side twin of `twoSiblingRoutinesThatEachDraftKeepBothDocuments`, and the shape
+    /// that makes the *claims* half of the nested preview's seed load-bearing.**
+    ///
+    /// The nested preview resolves from the same two seeds the nested execute does, and this branch's
+    /// own mutation battery found only one of them held: dropping `claimedEarlierInThisRun` from the
+    /// resolve left the whole suite green (`scripts/mutate`, mutant R4, at `a0a0462`). The reason is
+    /// that the two orderings above are both covered by the *plan-intent* half — an outer
+    /// `create_local_draft` carries an `outputPath` after `prepare`, so `PlannedDestinations` holds
+    /// it either way round.
+    ///
+    /// Two sibling `run_routine` steps are the shape where that half is structurally empty: a
+    /// `run_routine` step carries no `outputPath` at all, so nothing the routines will generate is in
+    /// the plan's own set, and the only thing between the second routine's previewed draft and the
+    /// first routine's is `previewChain`'s `claimed.recordWrite(written)` — the preview's own
+    /// accumulation, filled in from what the first segment's preview said it would do. Same third
+    /// door the review found for the execution side, one layer up.
+    @Test
+    func twoSiblingRoutinesArePreviewedAsTheTwoDistinctFilesTheyWrite() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        for (name, body) in [("Morning", "From the first routine."), ("Evening", "From the second routine.")] {
+            try routineStore.save(
+                StoredRoutine(
+                    name: name,
+                    steps: [
+                        AgentStep(
+                            id: "nested-draft",
+                            operation: .createLocalDraft,
+                            description: "Create note",
+                            // The same title in both, so both generate the identical default name.
+                            draftTitle: "Note",
+                            draftContent: body
+                        )
+                    ]
+                )
+            )
+        }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: { stamp })
+
+        let prepared = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Run the Morning routine and then the Evening routine.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(id: "run-first", operation: .runRoutine, description: "Run routine", routineName: "Morning"),
+                    AgentStep(id: "run-second", operation: .runRoutine, description: "Run routine", routineName: "Evening")
+                ]
+            )
+        )
+        let promised = prepared.previews.flatMap(\.writes)
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let written = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("draft-") }
+            .map { root.appendingPathComponent($0).path }
+        #expect(Set(promised) == Set(written), "approved \(promised.sorted()), wrote \(written.sorted())")
+        #expect(Set(promised).count == 2, "the preview named \(promised.count) path(s), \(Set(promised).count) distinct")
+        #expect(
+            Set(written.map { ($0 as NSString).lastPathComponent })
+                == ["draft-note-\(Timestamp.fileSafe(stamp)).md", "draft-note-\(Timestamp.fileSafe(stamp))-2.md"]
+        )
+    }
+
+    /// The over-correction guard, and the mirror of `aNestedRoutinesDraftKeepsItsOwnNameWhenNothingElseNamesIt`
+    /// one layer up: resolving the nested plan before previewing it must not *invent* a bump. A
+    /// routine run as the only step of a plan competes with nothing, so the panel names the routine's
+    /// own unbumped filename — and a fix that resolved against too wide a set would show the user a
+    /// `-2` for a document nothing was competing with, which reads as "Sonny is about to write a
+    /// duplicate" and is a claim about the run that is not true.
+    @Test
+    func aRoutinePreviewedAloneNamesItsOwnUnbumpedFilename() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(
+            root: root,
+            routineStore: try collidingDraftRoutineFixture(root: root),
+            now: { stamp }
+        )
+
+        let prepared = try executor.prepare(
+            plan: AgentPlan(summary: "Run the Notes routine.", requiresConfirmation: true, steps: [runNotesRoutineStep])
+        )
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(
+            prepared.previews.flatMap(\.writes)
+                == [root.appendingPathComponent("draft-note-\(Timestamp.fileSafe(stamp)).md").path]
+        )
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("draft-") }
+            == ["draft-note-\(Timestamp.fileSafe(stamp)).md"])
+    }
+
+    /// **A resolution that answers with a clarification is not a resolution**, and the nested preview
+    /// falls back to the plan as stored when it gets one.
+    ///
+    /// `InvokeShortcutCapabilityAdapter.resolveDefaultOutputs` replaces the whole plan with a
+    /// `clarify` step for a Shortcut name it cannot find, and `.invokeShortcut` is not on
+    /// `StoredRoutine.forbiddenStepOperations`, so a saved routine can carry one. Previewing that
+    /// replacement would answer "Clarification needed" where the run throws — and it would let
+    /// `SaveRoutineCapabilityAdapter` accept a routine it refuses today, because that adapter's
+    /// validation gate *is* a `previewNestedPlan` call whose throwing is the check. This is the
+    /// assertion that tells the fallback from its absence: without it the save succeeds.
+    @Test
+    func savingARoutineThatNamesAnUnknownShortcutIsStillRefused() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, shortcutCatalog: FakeShortcutCatalog(names: ["Morning Setup"]))
+        let plan = AgentPlan(
+            summary: "Teach Sonny a routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save",
+                    operation: .saveRoutine,
+                    description: "Save the routine.",
+                    routineName: "Nightly",
+                    routineSteps: [
+                        AgentStep(
+                            id: "nested-shortcut",
+                            operation: .invokeShortcut,
+                            description: "Run the Shortcut.",
+                            shortcutName: "No Such Shortcut"
+                        )
+                    ]
+                )
+            ]
+        )
+
+        var caught: Error?
+        do {
+            _ = try executor.preview(plan: plan)
+        } catch {
+            caught = error
+        }
+
+        guard let bridge = caught as? ShortcutsBridgeError, case .unknownShortcut(let name, _) = bridge else {
+            Issue.record("expected an unknown-Shortcut refusal, got \(String(describing: caught))")
+            return
+        }
+        #expect(name == "No Such Shortcut")
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
@@ -2552,6 +2905,249 @@ struct AgentActionExecutorTests {
 
         #expect(converted.map(\.destinationURL) == [destination])
         #expect(try String(contentsOf: destination).contains("Mock PDF placeholder"))
+    }
+
+    // MARK: - SONNY-264: a generated output name is validated, not the folder it was composed from
+    /// The zip adapter's default destination is `<scanned folder>/largest-files-<timestamp>.zip`,
+    /// composed onto a folder `validateExistingDirectory` had just checked, and it is the one
+    /// destination in this tree whose writer follows a leaf symbolic link: `ProcessZipArchiver`
+    /// hands the path to `/usr/bin/zip`, which opens it. PR #111's review reproduced that with
+    /// bytes — `zip` exits 0 after creating the link's target outside the roots.
+    ///
+    /// **Two routes reach that composition, and only one of them was ever exposed. Measured, because
+    /// the ticket says otherwise.** Against a tree carrying the pre-fix composition — this branch
+    /// with `validateOutputFile` reduced to a bare `appendingPathComponent` — `prepare` and
+    /// `execute` both refused this plan with `outsideWhitelist` and the target was never created.
+    /// `AgentActionExecutor.resolveDefaultOutputs` pins the generated path into the step's
+    /// `outputPath`, so the very next pass through `spec(in:context:)` takes the *user-named*
+    /// branch, which has validated since it was written. The dry-run route is the one with no such
+    /// second pass: `preview(plan:)` does not resolve, and on that same tree it returned the link's
+    /// own path as the archive's destination — a preview naming a path the boundary would refuse.
+    ///
+    /// So the assertions split. The preview is the discriminating one; the run's refusal and the
+    /// target's absence are the end-to-end backstop, and they held before this fix too. What the fix
+    /// removes is the *dependence* on that second pass, which nothing states, nothing tests, and a
+    /// change to the resolution order would take away silently.
+    @Test
+    func theZipDefaultDestinationIsValidatedWhereItIsComposedAndNotOnlyOnASecondPass() async throws {
+        let root = try makeDirectory()
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try write(String(repeating: "a", count: 2048), to: root.appendingPathComponent("big.txt"))
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let generatedName = "largest-files-\(Timestamp.fileSafe(stamp)).zip"
+        let target = outside.appendingPathComponent(generatedName)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(generatedName),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, zipArchiver: ProcessZipArchiver(), now: { stamp })
+
+        var caughtInPreview: Error?
+        do {
+            _ = try executor.preview(plan: defaultNamedZipPlan(root: root))
+        } catch {
+            caughtInPreview = error
+        }
+        var caughtInRun: Error?
+        do {
+            _ = try await executor.execute(plan: defaultNamedZipPlan(root: root)) { _, _ in }
+        } catch {
+            caughtInRun = error
+        }
+
+        #expect(
+            isOutsideWhitelist(caughtInPreview),
+            "the dry run named a path the boundary refuses, got \(String(describing: caughtInPreview))"
+        )
+        #expect(isOutsideWhitelist(caughtInRun), "expected a containment refusal, got \(String(describing: caughtInRun))")
+        #expect(!FileManager.default.fileExists(atPath: target.path), "the archive's target was created outside the roots")
+    }
+
+    /// The other direction, through the real writer and proved on the archive's own bytes: a
+    /// generated name that is a link *staying inside* the roots resolves, the approval preview names
+    /// the resolved path rather than the link, and `/usr/bin/zip` writes a real archive there. This
+    /// is what makes the fix a validation rather than a blanket refusal of links at generated names.
+    @Test
+    func theZipDefaultDestinationFollowsALinkThatStaysInsideAndTheArchiveLandsAtItsTarget() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(String(repeating: "a", count: 2048), to: root.appendingPathComponent("big.txt"))
+        let archives = root.appendingPathComponent("Archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let target = archives.appendingPathComponent("kept.zip")
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("largest-files-\(Timestamp.fileSafe(stamp)).zip"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, zipArchiver: ProcessZipArchiver(), now: { stamp })
+
+        let prepared = try executor.prepare(plan: defaultNamedZipPlan(root: root))
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(prepared.plan.steps[1].outputPath == target.path)
+        #expect(result.previews.flatMap(\.writes) == [target.path])
+        // The bytes, not the path the run reported: a real archive begins `PK`.
+        #expect(try Data(contentsOf: target).prefix(2) == Data("PK".utf8))
+    }
+
+    /// The docx adapter's PDF destinations are composed one layer down, in `FileInventory` — the
+    /// preferred `<stem>.pdf` and the `-2`, `-3`, … candidate a same-run collision renames onto — and
+    /// both were handed to the converter having never met a `validate...` method. Validating them in
+    /// `records(for:context:)` covers both composition sites with one call.
+    ///
+    /// **This is the one of the four sites with no second validating pass**: a PDF destination is
+    /// never pinned into a step's `outputPath`, so nothing revalidates it the way the zip default is
+    /// revalidated. What stopped it instead was the two converters shipped today, measured on Darwin
+    /// 25.5.0: `MicrosoftWordDocumentConverter` reaches the destination through
+    /// `FileManager.moveItem`, which throws `NSCocoaErrorDomain` 516 at a dangling link rather than
+    /// following it, and `MockDocumentConverter` writes `.atomic`, which replaces one. That is a
+    /// property of those two writers, not of the boundary — which is exactly what `FakeDocumentConverter`
+    /// demonstrates here: it writes with a plain `Data.write(to:)`, which *does* follow a dangling
+    /// leaf link, so against the pre-fix composition this test's target really was created outside
+    /// the roots. The double stands in for the third converter nobody has written yet.
+    @Test
+    func aDocxDestinationThatLeadsOutOfTheRootIsRefusedRatherThanConverted() async throws {
+        let fixture = try collidingDocxFixture()
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("report.pdf")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        var caught: Error?
+        do {
+            _ = try await executor.execute(plan: fixture.plan) { _, _ in }
+        } catch {
+            caught = error
+        }
+
+        #expect(isOutsideWhitelist(caught), "expected a containment refusal, got \(String(describing: caught))")
+        #expect(!FileManager.default.fileExists(atPath: target.path), "a PDF was created outside the roots")
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report-2.pdf").path))
+    }
+
+    /// The docx equivalent of the zip test above: a destination that is a link staying inside is
+    /// followed, the PDF lands at its target, and what the run reports as the conversion pair is the
+    /// resolved path rather than the link. Asserted on the file's contents, because a fix that
+    /// refused links outright would leave nothing here to read.
+    @Test
+    func aDocxDestinationThatIsALinkStayingInsideIsFollowedToItsTarget() async throws {
+        let fixture = try collidingDocxFixture(nameA: "report", nameB: "other")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let kept = fixture.root.appendingPathComponent("Kept", isDirectory: true)
+        try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+        let target = kept.appendingPathComponent("report.pdf")
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(try String(contentsOf: target, encoding: .utf8) == "fake pdf")
+        #expect(result.previews.flatMap(\.writes).contains(target.path))
+    }
+
+    /// **The fifth composition site, which SONNY-264's enumeration missed** (PR #157's review, F4).
+    /// `AgentActionExecutor.unclaimedOutputPath` composes `<stem>-<n>.<ext>` onto the folder of a
+    /// destination an adapter validated a moment earlier — the same generated-leaf-onto-a-checked-
+    /// folder shape as the other four — and it now goes through the same door.
+    ///
+    /// **Asserting the refusal here would assert nothing**, and that is worth writing down rather
+    /// than discovering: a dangling link planted at the bumped name is refused by `prepare` and
+    /// `execute` with or without this change, because the bumped path is written into the step's
+    /// `outputPath` and re-read through `validateOutputPath` on the next pass. That second pass is
+    /// what SONNY-264 exists to stop depending on, so the discriminating property is the *other*
+    /// direction: a bumped leaf that is a link staying **inside** the roots is now resolved where it
+    /// is composed, so the path the prepared plan names is the path the bytes reach. Before the
+    /// change the plan named the link and the resolution happened later and elsewhere.
+    @Test
+    func aBumpedDestinationIsResolvedWhereItIsComposedRatherThanOnTheNextPass() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let bumped = "draft-draft-two-notes-\(Timestamp.fileSafe(stamp))-2.md"
+        let target = archive.appendingPathComponent("kept.md")
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(bumped),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: root, now: { stamp })
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil))
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(prepared.plan.steps.last?.outputPath == target.path)
+        #expect(prepared.previews.flatMap(\.writes).contains(target.path))
+        #expect(try String(contentsOf: target, encoding: .utf8).contains("Second note."))
+    }
+
+    /// The other side of "only the records that will be written", and it is a decision rather than an
+    /// optimisation: a skipped record's PDF already exists and neither converter touches it, so
+    /// validating it could only refuse a whole scan over a file nothing is going to write.
+    ///
+    /// A pre-existing PDF that is a symbolic link to somewhere outside the roots is exactly that
+    /// case. `fileExists` follows it to a target that *is* there, so the record is skipped, and the
+    /// document beside it must still convert. Added because SONNY-264's own battery found the guard
+    /// unheld: the mutant that drops it — validating every record rather than the pending ones —
+    /// survived a full suite (`scripts/mutate`, mutant M4, at `79ef4f2`), which means the branch was
+    /// a comment until this test existed.
+    @Test
+    func aSkippedPdfThatIsALinkOutOfTheRootDoesNotRefuseTheWholeScan() async throws {
+        let fixture = try collidingDocxFixture(nameA: "report", nameB: "other")
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let target = outside.appendingPathComponent("somebody-elses.pdf")
+        try write("not ours", to: target)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.outputFolder.appendingPathComponent("report.pdf"),
+            withDestinationURL: target
+        )
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(try String(contentsOf: fixture.outputFolder.appendingPathComponent("other.pdf"), encoding: .utf8) == "fake pdf")
+        #expect(try String(contentsOf: target, encoding: .utf8) == "not ours", "the skipped record's link was written through")
+        #expect(result.summary.contains("Skipped 1 existing PDF outputs"))
+        #expect(result.previews.flatMap(\.writes) == [fixture.outputFolder.appendingPathComponent("other.pdf").path])
+    }
+
+    /// The plan the two zip tests above share: a scan/zip pair with **no** destination, which is
+    /// what sends the adapter down its generated-name branch.
+    private func defaultNamedZipPlan(root: URL) -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan", operation: .scanSelectLargestFiles, description: "Scan files.", inputPath: root.path, count: 3),
+                AgentStep(id: "zip", operation: .createZip, description: "Zip files.", inputPath: root.path, count: 3)
+            ]
+        )
+    }
+
+    private func isOutsideWhitelist(_ error: Error?) -> Bool {
+        guard let validation = error as? PathValidationError, case .outsideWhitelist = validation else {
+            return false
+        }
+        return true
     }
 
     // MARK: - SONNY-30: an unreadable store cannot pass for an empty one
@@ -6757,6 +7353,15 @@ private struct RecordingZipArchiver: ZipArchiving {
 /// the shipped mock did not extend to the double the docx tests actually run against, and a
 /// reintroduced shared destination would have been caught only by an output assertion rather than at
 /// the write. (PR #41 review, SONNY-28 "one note, not a finding".)
+///
+/// **It diverges from both of them on one shape, deliberately kept (SONNY-264): a *dangling* leaf
+/// symbolic link.** `fileExists` follows such a link to a target that is not there, so the guard
+/// above reads the destination as free, and the plain `Data.write(to:)` below then follows the link
+/// and creates its target — where `moveItem` throws and an `.atomic` write replaces the link. That
+/// makes this double the one writer in the process that behaves the way `/usr/bin/zip` does, which
+/// is what lets `aDocxDestinationThatLeadsOutOfTheRootIsRefusedRatherThanConverted` prove its
+/// refusal with bytes rather than with an error type alone. Making it faithful here would make that
+/// test assert nothing.
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
