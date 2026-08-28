@@ -341,6 +341,47 @@ struct OpenAITranscriberTests {
         }
     }
 
+    /// **A stop is not a failure** (SONNY-320), asserted on the type rather than on the route.
+    ///
+    /// The other three routes' versions of this test double as evidence that a user pressing stop
+    /// sees the right thing. This one cannot, and saying so is the point: nothing can cancel a
+    /// transcription today — `AgentViewModel.stopVoiceRecordingAndTranscribe` runs it in an
+    /// unstructured `Task` that nothing stores — and the `catch` that would receive one calls
+    /// `setError` without consulting `SonnyBackendError.isCancellation`. Both are SONNY-327's.
+    /// What this pins is the half that lives here: the wrapper does not hide a cancellation from the
+    /// caller that eventually asks, so the day the route becomes stoppable it has one less bug.
+    @Test
+    @MainActor
+    func aStopWhileATranscriptionIsInFlightIsACancellationRatherThanAFailure() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            // What `URLSession` raises when its task is cancelled underneath, which
+            // `SonnyBackendClient.transportError` maps to `SonnyBackendError.cancelled`.
+            return .failure(URLError(.cancelled))
+        }
+        defer { fixture.unregister() }
+
+        let audioURL = try Self.writeAudio("fake-audio")
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        do {
+            _ = try await Self.transcriber(fixture)
+                .transcribe(audioFileURL: audioURL, recordedDuration: 2)
+            Issue.record("Expected the stopped request to surface as TranscriptionError.backend(.cancelled).")
+        } catch let error as TranscriptionError {
+            #expect(error == .backend(.cancelled))
+            #expect(SonnyBackendError.isCancellation(error), "a stop is not a failure to report")
+            #expect(recorded.all.count == 1)
+        }
+
+        #expect(!SonnyBackendError.isCancellation(TranscriptionError.backend(.offline)))
+        #expect(!SonnyBackendError.isCancellation(TranscriptionError.backend(.notSignedIn)))
+        #expect(!SonnyBackendError.isCancellation(TranscriptionError.missingText))
+        #expect(!SonnyBackendError.isCancellation(TranscriptionError.recordingTooLong(maximumSeconds: 180)))
+    }
+
     // MARK: - Fixtures
 
     @MainActor
