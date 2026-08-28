@@ -115,7 +115,7 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # both halves are that tree's rather than this one's.** Re-measured on the working tree: the schema
 # holds **26** names (`grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort | wc -l` -> 26),
 # `providerDataPolicies` reads a further **10** off the environment that the schema never sees, this
-# credential array holds **10** and the settings array **23**. The historical figure is left as it
+# credential array holds **11** and the settings array **25**. The historical figure is left as it
 # was written, per this repository's rule about dated records, rather than edited to agree with a
 # tree it was not taken on.
 #
@@ -190,6 +190,11 @@ PASSTHROUGH_SETTINGS=(
   ANTHROPIC_MAX_OUTPUT_TOKENS
   CEREBRAS_BASE_URL
   CEREBRAS_TEXT_MODEL
+  # SONNY-131's, on this array's own rule: they change what the gateway does with a request, they are
+  # not credentials, and they have real defaults. The vision route is not part of the provider router,
+  # so it has no MODEL_ROUTE_* entry — only an endpoint and a model.
+  VISION_BASE_URL
+  VISION_MODEL
   MODEL_ROUTE_PLAN
   MODEL_ROUTE_SYNTHESIZE
   MODEL_ROUTE_TRANSCRIPTIONS
@@ -330,7 +335,7 @@ case "$TARGET" in
       echo "    not set here, so not forwarded: ${PASSTHROUGH_ABSENT[*]}"
     fi
     # A count, not names: these are defaulted settings rather than credentials, so "not set" is the
-    # ordinary case and listing twenty-three of them every run would bury the credential line above.
+    # ordinary case and listing twenty-five of them every run would bury the credential line above.
     # What the container actually resolved to is printed by the gateway itself, at startup, on its
     # `"msg":"model routing"` line -- which is the honest place to read routing from, since it
     # reports what the process decided rather than what this script forwarded.
