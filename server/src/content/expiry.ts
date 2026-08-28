@@ -1,6 +1,6 @@
 import type pg from "pg";
 import type { WithConnection } from "../db/connection.js";
-import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
+import { deleteStoredResponsesForAccount, pruneExpiredResponses } from "../idempotency/store.js";
 import { expireContentBatch, expireSnapshots, sweepClosedAccountContent } from "./store.js";
 
 /**
@@ -13,10 +13,14 @@ import { expireContentBatch, expireSnapshots, sweepClosedAccountContent } from "
  * something, a log line for every pass including the ones that took nothing, and a command a
  * founder can run by hand.
  *
- * **This is the difference from `pruneExpiredResponses`**, whose own doc comment says "nothing
- * schedules this". That was right for its ticket — a stored response expires on its own terms and a
- * stale one is merely unusable. It is not right here: the thirty days is a promise about personal
- * data, and the only thing that keeps it is something actually deleting rows.
+ * **`pruneExpiredResponses` runs on this sweep too, and it did not until PR #148's review** (F2).
+ * This paragraph used to draw a distinction — that function's own doc comment says "nothing
+ * schedules this", and that was right for its ticket, since a stale stored response is merely
+ * unusable rather than wrong. What the distinction missed is that a stored response body is
+ * *content*: the reply this gateway served, kept in `sonny.idempotency_key`. Once this branch
+ * claimed a residual was "bounded by that table's own twenty-four hours", something had to enforce
+ * the bound, and the sweeper this file builds was already the right place. `sweepExpiredContent`
+ * carries what stays SONNY-318's.
  */
 
 /**
@@ -44,6 +48,8 @@ export interface SweepResult {
   readonly snapshots: number;
   /** Content taken from one closed account this pass, if there was one waiting. */
   readonly closedAccountRows: number;
+  /** Stored idempotency response bodies cleared past their twenty-four hours. */
+  readonly storedResponses: number;
   /** True when the batch ceiling was reached, so a reader knows more is waiting. */
   readonly more: boolean;
 }
@@ -65,6 +71,28 @@ export async function sweepExpiredContent(client: pg.Client): Promise<SweepResul
     if (removed < EXPIRY_BATCH_ROWS) break;
   }
   const snapshots = await expireSnapshots(client);
+
+  /**
+   * **The idempotency store's own twenty-four hours, actually running** (PR #148's review, F2).
+   *
+   * `pruneExpiredResponses` was written by SONNY-300 and proved by a test, and had **no production
+   * call site** — every reference to it outside its own definition was a test or a comment, this
+   * file's header among them. So three sentences on this branch described a residual as "bounded by
+   * that table's own twenty-four hours" when nothing enforced the bound: measured, a response body
+   * back-dated thirty days past `response_expires_at` survived a full sweep. The twenty-four hours
+   * bounded *replayability* — an expired response is already treated as absent at read time — and
+   * never bounded retention.
+   *
+   * **It belongs on this sweep rather than on a timer of its own**, which is the whole argument for
+   * doing it here: this branch built the one thing in the gateway that deletes on a clock, and a
+   * second scheduler for a second clock is two things to know about and two to notice have stopped.
+   * SONNY-318 filed the gap and its *policy* half stays there — whether the rows themselves should
+   * ever be removed, and what unbounded row growth costs on a real deployment — because the rows
+   * carry `metering_claimed_at` and removing one would hand its key a second metering event. This
+   * clears payloads and keeps rows, which is what that function has always done.
+   */
+  const storedResponses = await pruneExpiredResponses(client, EXPIRY_BATCH_ROWS);
+
   // **The recovery half of `DELETE /v1/account`, and the only thing that reaches accounts closed
   // before this branch existed.** `store.ts` carries the reasoning; what matters here is that it
   // runs on the same timer as the clock, so a wipe that could not finish inside its own request is
@@ -74,7 +102,12 @@ export async function sweepExpiredContent(client: pg.Client): Promise<SweepResul
     contentRows,
     snapshots,
     closedAccountRows: closed?.contentRows ?? 0,
-    more: batches >= EXPIRY_MAX_BATCHES || closed !== undefined,
+    storedResponses,
+    // A full prune batch means more is waiting, the same reading as a full content batch.
+    more:
+      batches >= EXPIRY_MAX_BATCHES ||
+      closed !== undefined ||
+      storedResponses >= EXPIRY_BATCH_ROWS,
   };
 }
 
@@ -162,6 +195,7 @@ export function startContentExpirySweeper(options: SweeperOptions): () => void {
             contentRows: result.contentRows,
             snapshots: result.snapshots,
             closedAccountRows: result.closedAccountRows,
+            storedResponses: result.storedResponses,
             more: result.more,
           },
           "content expiry sweep",

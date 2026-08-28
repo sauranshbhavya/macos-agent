@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { retentionOf } from "../content/hook.js";
 import { errorBody } from "../errors.js";
 import { fingerprintOf } from "./fingerprint.js";
 import { UNAUTHENTICATED_SCOPE, type KeyStore, type StoredResponse } from "./store.js";
@@ -27,17 +28,35 @@ import { UNAUTHENTICATED_SCOPE, type KeyStore, type StoredResponse } from "./sto
  * |------------------------------------------|-----------------------------------------------------|
  * | first use of a key                       | claimed, handler runs, response stored for 24 h     |
  * | repeat inside 24 h, same body            | the stored response, byte for byte                  |
+ * | …the same, for `retention: "none"`       | re-runs — no body was stored. See the deviations    |
  * | repeat while the first is still running  | `409 idempotency.conflict`, `retryable: true`       |
  * | same key, different body                 | `409 idempotency.conflict`, `retryable: false`      |
  *
- * ## The one place this departs from §9.2 as written, and why
+ * ## The two places this departs from §9.2 as written, and why
  *
- * A stored response that is a **retryable failure** is released rather than replayed, so a retry
- * with the same key actually re-runs. §9.2 read literally would replay it, which makes every
+ * **One: a stored response that is a retryable failure is released rather than replayed**, so a
+ * retry with the same key actually re-runs. §9.2 read literally would replay it, which makes every
  * retryable row in §9.3's table safe but useless: a `429 limit.rate` would become a twenty-four-hour
  * ban on that operation, and a `503` during a deploy would freeze every operation in flight for a
- * day. Founder decision, 2026-08-28, taken on this ticket with the alternatives written out.
+ * day. Founder decision, 2026-08-28, taken on SONNY-300 with the alternatives written out.
  * `releaseClaim` carries what keeps the money guarantee intact across the re-attempt.
+ *
+ * **Two: an incognito response body is not stored, so a repeat of an incognito call re-runs**
+ * (SONNY-134, 2026-08-28, PR #148's review, F1). §10.1 promises that a run marked "Don't save this
+ * task" is not stored, and a response body kept here for twenty-four hours is stored — the model's
+ * reply, one of the four named content types, outside the content clock and outside what a per-task
+ * delete can reach. Between that promise and §9.2's replay, the promise wins: it is the one the user
+ * was given.
+ *
+ * **What the deviation costs, stated rather than implied.** Only §9.2's *second* row changes, and
+ * only for `retention: "none"` — the claim, the lease, the fencing token and the fingerprint are all
+ * written exactly as for any other request, so the other three rows are untouched: a concurrent
+ * repeat still gets `409`, a key reused with a different body still conflicts, and
+ * `metering_claimed_at` still makes the metering event at-most-once. What a client loses is that a
+ * repeat inside the window re-executes rather than replaying, which means the provider is called a
+ * second time and — because the metering claim survives, exactly as it does for the released
+ * retryable above — **that second call is unbilled and the gateway pays for it.** That is the same
+ * trade the first deviation already makes, bounded here to incognito retries.
  *
  * ## What a `POST` carrying no key gets
  *
@@ -311,8 +330,30 @@ export function registerIdempotency(app: FastifyInstance, deps?: IdempotencyDeps
     // route a later ticket adds. Released rather than stored, so a repeat re-runs instead of meeting
     // a `completed` row with nothing in it.
     const code = body === undefined ? undefined : errorCodeOf(status, body);
+
+    /**
+     * **An incognito run's response body is never stored here** (SONNY-134, PR #148's review, F1).
+     *
+     * This table keeps the served response for twenty-four hours, which makes it the one place in
+     * the gateway holding response content outside the route that produced it — and until this line
+     * it had no notion of `retention` at all. Measured against a real Postgres: `POST /v1/plan` with
+     * `retention: "none"` and an `Idempotency-Key` left `sonny.retained_content` empty, correctly,
+     * and left **the model's reply verbatim** in this table, outside the content clock, outside
+     * consent, and outside what a per-task delete can reach. §10.1's rule is "enforced where the
+     * storing happens, not at the call site", and this is a place where storing happens; the three
+     * layers in `content/hook.ts` all guard a different table.
+     *
+     * **Explicit `"none"` and nothing else.** A request that declared no retention at all — every
+     * auth route, and a content route refused before its body could be read — keeps §9.2's replay
+     * exactly as before. Widening this to "anything that is not `standard`" would silently strip the
+     * guarantee from the four auth routes, which carry no content and never had a retention field
+     * to declare.
+     */
+    const incognito = retentionOf(request) === "none";
+
     const storable =
       body !== undefined &&
+      !incognito &&
       body.byteLength <= MAXIMUM_STORED_RESPONSE_BYTES &&
       (code === undefined || !RELEASE_ON_CODES.has(code));
 

@@ -228,6 +228,7 @@ async function main(): Promise<void> {
       process.stdout.write(
         `swept: ${result.contentRows} expired content row(s), ` +
           `${result.closedAccountRows} row(s) from a closed account, ` +
+          `${result.storedResponses} stored response body/bodies, ` +
           `${result.snapshots} snapshot(s)\n`,
       );
     }

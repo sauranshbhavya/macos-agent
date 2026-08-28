@@ -169,6 +169,31 @@ function declaredRetention(body: unknown): DeclaredRetention {
   return value === "standard" || value === "none" ? value : undefined;
 }
 
+/**
+ * What this request declared, as **every** part of the gateway that stores anything must read it.
+ *
+ * **Exported because a second storing place exists and did not know about retention at all** (PR
+ * #148's review, F1). `sonny.idempotency_key` keeps the served response body for twenty-four hours,
+ * which makes it the one place outside `sonny.retained_content` holding response content — and
+ * `idempotency/hook.ts` had no notion of the field, so an incognito POST carrying an
+ * `Idempotency-Key` stored the model's reply verbatim, outside the content clock, outside consent,
+ * and outside what a per-task delete could reach. Requirement 6's own words are "enforced where the
+ * storing happens", and that is a storing place.
+ *
+ * **One function rather than two readings of the same field**, because the failure mode of two is
+ * the worst available: the two stores would disagree about what the user asked for, and the one that
+ * got it wrong would be the one nobody was looking at. The deposited value wins over the body's for
+ * `/v1/transcriptions`, whose body the hook cannot read — `ContentFacts.retention` carries that
+ * reasoning.
+ *
+ * `undefined` for a route that carries no content draft at all, which is every non-content POST —
+ * the auth routes — and is why the idempotency hook withholds a body only on an explicit `"none"`
+ * rather than on anything that is not `"standard"`.
+ */
+export function retentionOf(request: FastifyRequest): DeclaredRetention {
+  return request.content?.facts.retention ?? declaredRetention(request.body);
+}
+
 function boundedIdentifier(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -311,7 +336,8 @@ export function registerContent(app: FastifyInstance, config: Config, deps?: Con
     // The deposited value is consulted before the body's, for `/v1/transcriptions`, whose body the
     // hook cannot read at all — `ContentFacts.retention` carries the reasoning and the failure it
     // prevents.
-    if (!isStorable(draft.facts.retention ?? declaredRetention(request.body))) return;
+    const declared = retentionOf(request);
+    if (!isStorable(declared)) return;
 
     if (!deps) {
       // Unreachable on every deployment this repository builds, and said plainly rather than dressed
@@ -343,6 +369,11 @@ export function registerContent(app: FastifyInstance, config: Config, deps?: Con
     const requestContent = requestContentOf(draft.route, request.body);
     const occurredAt = new Date();
     const content: RetainedContent = {
+      // **The declared value, not a literal and not a narrowed one** (PR #148's review, F3). The
+      // guard above has already refused everything but `"standard"`; binding what was *checked*
+      // rather than what it must have been is what turns the table's CHECK from decoration into the
+      // backstop this hook's own header claims it is. `record.ts` carries the full reasoning.
+      retention: declared,
       requestId: request.id,
       accountId: account,
       taskId: keys.taskId,
