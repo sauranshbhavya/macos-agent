@@ -71,7 +71,10 @@ struct AgentActionExecutorTests {
     /// the signal would still throw `CancellationError` here — after the child's own 300 s ran out,
     /// which is why that number is a bound on the pathological case and not just a large one. The old
     /// `/bin/sleep 5` had the same hole and closed it in five seconds instead of five minutes.
-    /// Filed as SONNY-259 rather than smuggled in here.
+    /// Filed as SONNY-259 rather than smuggled in here — and **closed by
+    /// `asyncProcessRunnerCancellationTerminatesTheChild` below**, which is a separate test with a
+    /// child of its own rather than an assertion added here, because the property needs a child that
+    /// survives its own signal long enough to report it and this one is `exec`ed away by design.
     @Test
     func asyncProcessRunnerCancelsRunningProcess() async throws {
         let root = try makeDirectory()
@@ -94,6 +97,111 @@ struct AgentActionExecutorTests {
 
         try await waitForLaunchSignal(at: launched)
         task.cancel()
+
+        do {
+            _ = try await task.value
+            Issue.record("Expected process cancellation to throw CancellationError.")
+        } catch is CancellationError {
+            return
+        } catch {
+            Issue.record("Expected CancellationError, got \(error).")
+        }
+    }
+
+    /// **The assertion the test above deliberately does not make: cancelling *killed the child*
+    /// (SONNY-259).**
+    ///
+    /// Both existing cancellation tests assert the error, and `AsyncProcessRunner.run` throws
+    /// `CancellationError` from a check on `box.isCancelled` that sits *after*
+    /// `ProcessOutputCapture.drainThenWait` returns — so it is reached whether the child was
+    /// terminated or simply finished on its own. A runner that set the flag and never sent the
+    /// signal satisfies both of them.
+    ///
+    /// **The child says so itself.** It traps `TERM`, and the trap writes a sentinel before the
+    /// shell exits. Nothing else in the run writes that file, and only `ProcessBox.cancel` sends
+    /// that signal, so the file's contents are a direct report that the runner terminated a process
+    /// that was running.
+    ///
+    /// **No wall clock is party to it, and the ordering is what makes that true.** The trap's write
+    /// completes before the shell exits; the shell's exit is what closes the pipe; closing the pipe
+    /// is what lets `readDataToEndOfFile` return, and only then does the runner reach `waitUntilExit`
+    /// and the throw. So by the time `task.value` rethrows, the sentinel is already on disk — and
+    /// `waitUntilExit` having returned is itself the proof that the child is not merely signalled but
+    /// gone. The poll below is a bound on the failure case rather than a race: under a runner that
+    /// never signals, the sentinel never appears and the child sits in its own sleep, so waiting on
+    /// the file instead of on `task.value` turns a five-minute hang into a backstop failure that says
+    /// what happened.
+    ///
+    /// **Why `exec` is not used here, when the test above needs it.** The ticket weighs this shape
+    /// and rejects it, because a shell that parents the sleep leaves that sleep holding the pipe's
+    /// write end after the shell is signalled, which puts a real wait back into the runner's own
+    /// drain. That cost is real and is removed by one redirect: the background sleep's output goes to
+    /// `/dev/null`, so the shell is the only process holding the pipe. Measured with a standalone
+    /// probe of this exact script — the launch signal arrived in 6 ms, the drain returned **1 ms**
+    /// after `terminate()`, the sentinel read `terminated`, and no `sleep` was left behind, because
+    /// the trap kills it before exiting. A trap cannot survive `exec`, which is the whole reason the
+    /// two tests use different children rather than one.
+    ///
+    /// The shell's exit status is the trap's `exit 0` and not the signal, deliberately: nothing here
+    /// reads a status, and re-raising `TERM` to make one meaningful would buy nothing the sentinel
+    /// does not already say.
+    @Test
+    func asyncProcessRunnerCancellationTerminatesTheChild() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launched = root.appendingPathComponent("launched")
+        let terminated = root.appendingPathComponent("terminated")
+
+        let pidFile = root.appendingPathComponent("pid")
+
+        // Paths arrive as `$1`…`$3` rather than interpolated, so a temp directory with a space in it
+        // stays one argument. `sleep 300` for the same reason the test above uses it: the child must
+        // not be able to end on its own inside any plausible run, or its silence would read as
+        // "never signalled" when it simply finished. The pid is written *before* the launch signal,
+        // so a reader that has seen the signal is reading a complete pid file rather than racing the
+        // redirection that creates it.
+        let script = """
+        trap 'kill "$SLEEP_PID" 2>/dev/null; printf terminated > "$2"; exit 0' TERM
+        printf %d "$$" > "$3"
+        printf running > "$1"
+        sleep 300 >/dev/null 2>&1 &
+        SLEEP_PID=$!
+        wait "$SLEEP_PID"
+        """
+        let task = Task {
+            try await AsyncProcessRunner.run(
+                executablePath: "/bin/sh",
+                arguments: [
+                    "-c", script, "sonny-terminate-test",
+                    launched.path, terminated.path, pidFile.path
+                ]
+            )
+        }
+
+        try await waitForLaunchSignal(at: launched)
+        task.cancel()
+
+        func sentinel() -> String? {
+            try? String(contentsOf: terminated, encoding: .utf8)
+        }
+        // On its contents, not its existence: `>` creates the file when the redirection is set up,
+        // so an existence check could pass on an empty file the trap had not finished writing.
+        try await HangBackstop.wait(for: "the cancelled child to report that it was signalled") {
+            sentinel() == "terminated"
+        }
+        guard sentinel() == "terminated" else {
+            // `HangBackstop` has already recorded the issue, so this branch adds no assertion — it
+            // cleans up. Awaiting the task here would block for the child's whole 300 s, and
+            // returning without doing anything would leave the shell and its sleep running for the
+            // same 300 s. So the child is sent the signal the runner did not send, which its own
+            // trap turns into an orderly exit that also kills the sleep. Measured on the mutant that
+            // deletes `terminate()` from `ProcessBox.cancel`: without this, one `/bin/sh` and one
+            // `sleep` outlive the run, which under a mutation battery is per mutant.
+            if let pid = (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap(pid_t.init) {
+                kill(pid, SIGTERM)
+            }
+            return
+        }
 
         do {
             _ = try await task.value
