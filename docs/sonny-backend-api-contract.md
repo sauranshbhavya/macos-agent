@@ -714,8 +714,15 @@ Delete means deleted everywhere — the local record and the backend's retained 
 
 - It must reach training snapshots, not only the live content store. That is what the recorded
   snapshot lineage exists for, and it is why lineage cannot be retrofitted after anything has been
-  trained on. SONNY-134 implements; this contract fixes that the path exists and is reachable from
-  the app rather than being an internal admin operation.
+  trained on. **Built by SONNY-134 on 2026-08-28**: the delete removes the live content and every
+  `sonny.training_snapshot_member` copied from it in one transaction, and records which snapshots
+  lost rows in `sonny.content_deletion`. This contract fixes that the path exists and is reachable
+  from the app rather than being an internal admin operation — which it is, as an ordinary
+  authenticated route on the same gate as every other. **What is not built is the app's own call to
+  it**: `AgentViewModel.deleteTask` still deletes only the Mac's copy, because SONNY-134 was
+  recorded as server-only for parallel-lane disjointness (`docs/sonny-row-12-plan.md` §8.2). Until
+  that is wired, "delete means deleted everywhere" is true of the endpoint and not yet of the
+  button.
 - **A task with nothing stored returns success, not 404**, with `requests_deleted: 0`. An incognito
   run, or a task that ran before the user signed in, has no server-side content — and a delete that
   is already true must not surface as an error the user has to interpret.
@@ -1258,12 +1265,22 @@ notes, both deliberate:
 - The value is `"none"` rather than a boolean because it names what happens at the storage layer,
   which is where the guarantee is enforced.
 
-Two rules the contract fixes and SONNY-134 implements:
+Two rules the contract fixes, **both built by SONNY-134 on 2026-08-28**:
 
 1. **Enforced where the storing happens, not at the call site.** A flag the client sets and the
-   server is trusted to remember to check is a request, not a guarantee.
+   server is trusted to remember to check is a request, not a guarantee. Built as three layers:
+   `server/src/content/hook.ts` refuses before it reads a body, decodes a capture or opens a
+   connection; `sonny.retained_content` carries a `CHECK` admitting exactly one value of
+   `retention`, so the insert is refused even when something above it is wrong; and a request that
+   declared *no* `retention` stores nothing either, which is 2.4.2's rule arriving at the storage
+   layer rather than a second one.
 2. **Structurally excluded from training snapshots, not filtered by a query.** If an incognito run
-   can reach a snapshot because someone dropped a `WHERE` clause, the guarantee is not one.
+   can reach a snapshot because someone dropped a `WHERE` clause, the guarantee is not one. The
+   snapshot builder's `FROM` names `sonny.retained_content` and nothing else, so **there is no
+   `retention` filter in it to drop**: deleting every predicate in the build statement widens the
+   snapshot to every consenting account's content and still cannot reach one incognito run.
+   `server/test/content.db.test.ts` runs exactly that unfiltered statement and asserts it, which is
+   what "pin it with a test" asked for.
 
 **Metering runs either way.** Incognito changes what is stored, never what is billed. A metering
 design that dropped these events would silently make those runs free, and it is the case most likely
@@ -1279,7 +1296,13 @@ defaulting to `"not_granted"` — so a user whose consent was never written is e
 built the field and deliberately did not build the write path** (updated 2026-08-26, SONNY-288 — this
 line assigned it both). Consent is captured on the website, so the write path is an authenticated
 endpoint the website calls, and what was owed was the gate rather than an in-app toggle; that gate is
-SONNY-203's and closed on 2026-08-22. SONNY-134 still makes the snapshot builder honour it.
+SONNY-203's and closed on 2026-08-22. **SONNY-134 made the snapshot builder honour it on 2026-08-28**, twice over: the builder joins
+`sonny.account` and requires `training_consent`, and a trigger on `sonny.training_snapshot_member`
+refuses a row for a non-consenting or closed account anyway — because training on the content of a
+user who did not consent is not a defect that can be repaired afterwards, and one predicate in one
+statement is a thin thing to rest that on. The `DEFAULT false` below is what excludes a user whose
+consent was never written, and it is asserted as its own case rather than folded in with one who
+declined.
 
 **Known divergence: the two values above name no column, because the tree stores this as a boolean**
 (recorded 2026-08-27, SONNY-297 — recorded, not reconciled). The column is `training_consent boolean
@@ -1291,26 +1314,40 @@ NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.
 for consent, and the migration's own comment states it in this section's terms rather than the
 database's (`:25-27`). What differs is the spelling, and the spelling has no wire encoding to
 protect, because the field does not cross the boundary — which the paragraph headed *It never
-appears on a request* states, and which is checkable rather than asserted, at `f8f5c75`:
+appears on a request* states, and which is checkable rather than asserted.
 
-- `training_consent` appears in **exactly one** file under `server/src`, the migration that creates
-  it (`grep -rl training_consent server/src | wc -l` → 1), so no route handler reads or writes it;
+**Re-measured on 2026-08-28 (SONNY-134), and two of the three figures moved**, because that ticket
+is the first thing that ever reads this column for its intended purpose. What the old wording rested
+on — one file, one reader, both incidental — was a property of nothing having used it yet, so it was
+never going to survive the ticket the column was created for. What actually protects the field is the
+third figure, and it is unchanged:
+
+- `training_consent` now appears in **four** files under `server/src`
+  (`grep -rl training_consent server/src | wc -l` → 4 at `d04c462`): migrations `0002` and `0013`,
+  and `content/snapshot.ts` and `content/query.ts`. **This was one.** None of the four is a route
+  handler, which is the property that mattered and which the count of one was standing in for; the
+  two new readers are the snapshot builder's `WHERE` clause and the support lookup, and neither puts
+  the value on a wire.
 - in **no** file under `Sources/` or `Tests/` (`grep -rl 'training_consent\|trainingConsent' Sources
-  Tests | wc -l` → 0), so no client type has a field for it to decode into;
-- and no query can return it implicitly. There is no `SELECT *` anywhere in the server
+  Tests | wc -l` → 0 at `d04c462`), so no client type has a field for it to decode into. **This is
+  unchanged, and it is the one that binds**: whatever the server reads it for, the app has nothing to
+  decode it into.
+- and no query can return it implicitly. There is still **no star-select anywhere in the server**
   (`grep -rniE 'select +\*' server/src` exits **1** and prints nothing, read with nothing between the
-  command and `$?`), and the **seven** non-migration files that contain the word were enumerated
-  rather than sampled (`grep -rciE 'select' server/src --exclude-dir=migrations | grep -v ':0$'`).
-  Six hold SQL and every statement in them names its columns: `revocations.ts`, `auth/identity.ts`,
-  `auth/revocation.ts`, `auth/codes.ts`, `auth/attribution.ts` and `db/migrate.ts`. The seventh,
-  `auth/supabase.ts`, holds **no SQL at all** — its two hits are the English verb in comments about
-  which error body a request header selects (`:182`, `:474`). **This figure was six until
-  2026-08-27**, when PR #137 added that file beneath this branch; it is re-measured here rather than
-  carried across the rebase, which is how the seventh was noticed at all.
+  command and `$?`, at `d04c462`). The enumeration of files holding `select` is dropped rather than
+  restated: it stood at six, then seven, and is fourteen now, and a list that has to be rewritten by
+  every ticket that adds a query is a list that will eventually be wrong quietly. The star-select
+  check is the one that does the work and does not grow.
 
-Its only reader is a database test asserting the default and the NOT NULL
-(`server/test/linking.db.test.ts:773-783`), which reaches the column through Postgres rather than
-through this contract.
+**One thing that check nearly caught was itself.** The first draft of `content/query.ts`' header
+spelled the literal form out while explaining why there must not be one, and the grep answered with
+that sentence — a violation report that was a description of the report. It is written as
+"star-select" there now, which is the same trap `CLAUDE.md` records for a slash-star inside a line
+comment and for a citation that escapes its own parentheses.
+
+Its readers are the snapshot builder above, the support lookup, and a database test asserting the
+default and the NOT NULL (`server/test/linking.db.test.ts:773-783`), which reaches the column through
+Postgres rather than through this contract.
 
 **Which side moves is not settled here, and nothing waits on it.** Restating this section as a
 boolean and leaving the tree alone are both available, and changing either side's code was out of
@@ -1552,6 +1589,12 @@ against the tree at `d3598a7` on 2026-08-26, and it goes stale the way any board
 question this contract left open has an answer, recorded where the row says. **Open** means it has
 none.
 
+**Two rows were resolved again on 2026-08-28 and carry their own date**, which is what a column
+resolved at one instant has to do once it is amended at another: SONNY-134's retention window and its
+snapshot-lineage row both moved from Open to Decided and built. Every other row is still the
+2026-08-26 reading and has not been re-checked; a reader comparing two rows should read the date on
+each rather than the heading above both.
+
 | Open | Owner | Status, resolved 2026-08-26 at `d3598a7` |
 |---|---|---|
 | The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `113:`). The first real remote deploy is recorded as owed on SONNY-126 |
@@ -1566,8 +1609,8 @@ none.
 | Vision mid-loop failure behaviour: retry, abort, or a new typed error | SONNY-131 | **Decided and built** (2026-08-28). **Abort at the failing iteration, keeping what the session already did, reported as a new typed error** — `VisionSessionInterrupted`, whose declaration in `VisionSessionRunner.swift` carries the reasoning. No retry at this level, because `SonnyBackendClient` has already spent §9.3's whole per-code attempt budget before the failure reaches the loop and a second loop would multiply those ceilings while minting a fresh idempotency key per attempt, which §9.1 forbids. The token-expiry case §12 names is invisible: the shared client refreshes once and replays |
 | Failover trigger, fallback order, and whether the user is told | SONNY-132 | **Open.** Backlog |
 | Per-provider retention and training configuration values | SONNY-132, with SONNY-110's answer landing in it | **Open.** Both in Backlog |
-| The exact retention window inside 30–90 days | SONNY-134 | **Open.** Backlog |
-| Snapshot lineage's concrete shape, and what the support lookup may see | SONNY-134 | **Open.** Backlog |
+| The exact retention window inside 30–90 days | SONNY-134 | **Decided and built** (2026-08-28). **Thirty days**, the short end of the founder's own range, confirmed by him at the start of SONNY-134's implementation because the ticket recorded it as a recommendation and nothing had settled it. It is `CONTENT_RETENTION_DAYS` in `server/src/config.ts`, defaulted to 30 and bounded 1–365, and `sonny.retained_content.expires_at` is written from it **at insert** — so a row carries the window it was stored under and raising the setting cannot extend the life of content already held |
+| Snapshot lineage's concrete shape, and what the support lookup may see | SONNY-134 | **Decided and built** (2026-08-28). **Lineage:** `sonny.training_snapshot` (label, window, routes, builder version, its own nullable `expires_at`) and `sonny.training_snapshot_member`, which holds a **copy** of the content plus the `content_id` it came from — a copy because the live store is on the 30-day clock and a snapshot is not, and `content_id` deliberately **not** a foreign key, because `ON DELETE CASCADE` would let ordinary expiry empty a sealed snapshot. Every deletion path reaches members and records which snapshots it touched in `sonny.content_deletion`. **Support lookup:** account state and usage read freely; content only through a command that refuses without an operator and a reason and writes a `sonny.content_access` row — stated in the code as a discipline and a trace rather than a boundary, since anyone who can run it holds `DATABASE_URL` |
 | `grace_seconds` and `skew_tolerance_seconds` **as carried in the entitlement claim (5.3)** | SONNY-135 | **Open.** Backlog. **Not the token-expiry clock skew of 3.5**, which is a different value, was SONNY-127's, and is set at 30 s — the two share a name and this row used to be read as covering both |
 | Which capability keys are gated | SONNY-23 (row 18) | **Open.** Backlog |
 | Plans, prices, allowances, credit weights | SONNY-17 planned it; **SONNY-212** implements | **Split: the shape is decided, the numbers are not.** Free plus exactly one paid tier, screen control as the only paid line, auto-top-up opt-in and off by default — founder, 2026-08-16, ratified 2026-08-21, and SONNY-17 closed that day as a planning ticket. The numbers are deliberately unset: they wait on a measured per-session screen-control cost that nothing records today (SONNY-133, Backlog) and on SONNY-162's web-research cost. They land on SONNY-212, Backlog, and the dollar amounts are the founders' own |
@@ -1665,3 +1708,4 @@ record rather than a tidy list.
 | 2026-08-28 | **11 — the metering event is built, and the section now describes a table rather than a plan.** `sonny.metering_event` exists (`server/src/db/migrations/0012_metering_records_what_every_call_cost.sql`), every one of the five model routes writes to it, and the vision route — which recorded usage nowhere at all — is the reason the section exists. Six rows of 11's table moved: `user_id` is **renamed `account_id`**, because section 5 makes the account the billable identity and one person can hold two Supabase users on one account; `failed_over` and `image_media_type` are **added**, the first because a failover spends a second upstream call nothing else records and the second because half of real captures are each format and the byte figure cannot be read without knowing which; and `idempotency_key`, `provider`, `model`, `token_source`, `request_bytes`, `response_bytes`, `upstream_duration_ms`, `retention` and `client_version` become **nullable**, each with the null's meaning stated in its own row — the alternative in every case was a zero or an invented value that reads as a measurement. Three things are stated that 11 left open and building it settled: which requests produce an event at all (a table of six cases, of which the `409` row is the one that is not merely "free"), that SONNY-131's four proposed outcome values map onto 11's five without loss, and that the founder query path is a **command** (`npm run usage`) rather than a surface — the usage UI is SONNY-214's. 11's "a live UI surface" is corrected: no view reads `taskUsageSummary`, which PR #144's F1 measured; the rule it protects is unchanged and is now pinned end to end by a test. **No shape changed on the wire**: 11 is what the *server records*, not a request or a response — no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 2.4, 4.5 and 12's tables are byte-identical. | SONNY-133 |
 | 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `f8f5c75`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `f8f5c75` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `f8f5c75` as at `5ad846f`. | SONNY-297 |
 | 2026-08-28 | **9.2 — two founder decisions recorded, and one implementation limit stated.** The gateway implemented no `Idempotency-Key` handling at all until this ticket, so 9.2 had never been built against; building it surfaced a conflict between 9.2's first sentence and 9.3's retryable list that cannot be resolved by reading either more carefully. A stored *retryable* failure is now released rather than replayed, so a same-key retry re-runs — without which a `429` is a twenty-four-hour ban on that operation and a `503` during a deploy freezes every request in flight. The at-most-once metering guarantee is untouched and is what makes the release safe: the claim survives it, so the re-attempt cannot bill again. A `POST` with no key is served rather than refused, because 9.1 is the client's obligation and the only client meets it. And conflict detection on `POST /v1/transcriptions` is by declared body length rather than by body, because a multipart body is consumed inside the handler and buffering it would take 6.1's audio ceiling away from the guard that fires while the part is still streaming. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved. **9.3's `email/verify` row gains one clause and is the only table cell edited** — it read "the idempotency record returns the original *result*, including the original failure", which the carve-out above makes untrue for the retryable subset, and a reader arriving at 9.3 alone would have taken the pre-decision behaviour. This row claimed 9.3 was byte-identical until PR #142's review found the contradiction that claim was concealing (F3). Two further limits are now stated in 9.2 rather than left to a code comment: a streaming response gets none of these guarantees, and a claim's lease can be outlived on the one route whose body read is unbounded. | SONNY-300 |
+| 2026-08-28 | **10 — retention is built, and the two questions 13 left open under it are answered.** The content store exists (`server/src/db/migrations/0013_content_is_kept_on_its_own_clock.sql`) and holds request text, voice audio, redacted screenshots, the served response and provider error bodies. **The content clock is 30 days**, confirmed by the founder on 2026-08-28 from the 30–90 range his 2026-08-16 decision names — 10.3 and 11's own header had both been assuming it in prose while nothing had settled it, so 13's row moves from Open to Decided and built. **Snapshot lineage's shape and the support lookup's reach**, 13's other SONNY-134 row, are answered in that row and in `server/README.md`. Two sentences elsewhere in this document stopped being true and are corrected where they live rather than only here: 4.6 and 10.1 described SONNY-134's rules in the future tense, and `routes/auth.ts`' own comment said `DELETE /v1/account` "does not reach retained content", which it now does — content, training-snapshot membership, and the account's stored idempotency response bodies (SONNY-319, filed by SONNY-300 and closed here). **Two things this row does not claim.** 10.2's boolean-versus-strings divergence is unchanged and still recorded rather than reconciled; honouring the field was SONNY-134's and the spelling was not. And 10.1's `retention` field, 2.4's table and 2.4.2's no-default rule are untouched — the client's half shipped with SONNY-130 and SONNY-131 and this ticket is the server keeping the promise it already made. **No shape changed on the wire**: no request body, response body, header, error `code`, size limit or timeout moved, and 4.6's response shape is served exactly as written — the one new route, `DELETE /v1/tasks/{task_id}`, was already in 4.1's table and in 4.6 with SONNY-134 named as its owner. | SONNY-134 |
