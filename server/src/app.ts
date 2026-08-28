@@ -434,7 +434,7 @@ export function buildApp(
    * **What the window between them costs, traced rather than asserted**, since PR #147's F6 left
    * exactly this weighing to "the ticket that owns the spend cap". A process killed between the
    * metering write and the settle leaves an event and an **unsettled hold**. The hold is not lost:
-   * `expires_at` is 300 seconds out and `sonny.sweep_expired_reservations` reclaims it, so the
+   * `expires_at` is 300 seconds out and `sweepExpiredReservations` reclaims it, so the
    * account is briefly held against its own cap and is never over-charged, and the audit row that
    * says the call happened is already on disk. The reverse order would leave a *charge* with no
    * event — money moved with nothing recording what moved it, which is the direction this whole row
