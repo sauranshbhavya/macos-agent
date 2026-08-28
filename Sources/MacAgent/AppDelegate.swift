@@ -8,9 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let viewModel: AgentViewModel
     private let accountModel: SonnyAccountModel
+    private let screenAccessModel: ScreenAccessOnboardingModel
+    private let firstRunCoordinator: FirstRunCoordinator
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
-        accountModel: accountModel
+        accountModel: accountModel,
+        screenAccessModel: screenAccessModel,
+        firstRunCoordinator: firstRunCoordinator
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -75,9 +79,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `accountModel` follows the same rule for the same reason, one store further out: its default
     /// would be the Keychain every packaged build on this Mac shares, and a test writing
     /// `AppDelegate(viewModel:)` would have read and deleted the founder's own session (SONNY-128).
-    init(viewModel: AgentViewModel, accountModel: SonnyAccountModel) {
+    /// `screenAccessModel` and `firstRunCoordinator` follow it (SONNY-137): the first reads this
+    /// machine's real TCC grants, the second writes two flags into the `UserDefaults` domain every
+    /// packaged build here shares — including "first run is over", which a fixture flipping it would
+    /// take away from the founder silently.
+    init(
+        viewModel: AgentViewModel,
+        accountModel: SonnyAccountModel,
+        screenAccessModel: ScreenAccessOnboardingModel,
+        firstRunCoordinator: FirstRunCoordinator
+    ) {
         self.viewModel = viewModel
         self.accountModel = accountModel
+        self.screenAccessModel = screenAccessModel
+        self.firstRunCoordinator = firstRunCoordinator
         super.init()
     }
 
@@ -121,7 +136,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Reads the Keychain and touches no network, so the app comes back signed in on a relaunch
         // with no connection — including the relaunch macOS forces after a Screen Recording grant,
         // which is the case SONNY-128 exists for.
-        Task { await accountModel.restore() }
+        //
+        // **First run is decided inside this task, after that read, and nowhere else** (SONNY-137).
+        // `restore()` is asynchronous and everything below runs before it finishes, so a decision
+        // taken outside this closure would be taken against `isSignedIn == false` for every launch —
+        // including the one right after the Screen Recording grant, where the user would be handed a
+        // sign-in step for the account they had just signed into. That is the exact failure the
+        // sequence exists to prevent, arriving through the front door.
+        // `FirstRunCoordinator.begin` decides once; every later change of state goes through
+        // `refresh`, which does nothing until it has.
+        Task {
+            await accountModel.restore()
+            firstRunCoordinator.begin(
+                isSignedIn: accountModel.isSignedIn,
+                screenRecordingGranted: screenAccessModel.screenRecordingGranted,
+                accessibilityTrusted: screenAccessModel.accessibilityTrusted
+            )
+        }
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
