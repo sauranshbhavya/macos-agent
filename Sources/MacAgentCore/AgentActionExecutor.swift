@@ -624,6 +624,31 @@ public final class AgentActionExecutor {
         plan: AgentPlan,
         claimedEarlierInThisRun: RunClaims = .none
     ) throws -> [ActionPreview] {
+        // The public door names nothing, exactly as `execute`'s does: a set of intentions arriving
+        // from outside is indistinguishable here from the run's own, and `PlannedDestinations` stays
+        // executor-internal for that reason. A plan's own destinations are added by `previewChain`.
+        try preview(plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: .none)
+    }
+
+    /// The whole of `preview`, plus the destinations the plans enclosing this one already name —
+    /// the mirror of the private `execute` below, parameter for parameter (SONNY-218).
+    ///
+    /// **Why preview needs this at all.** `previewNestedPlan` is the one door into this function
+    /// that is handed an *unresolved* plan: a stored routine's steps, exactly as saved. Everything
+    /// else arrives resolved, because `prepare` resolves before it previews. So the nested preview
+    /// was the one place where the path a user reads in the approval panel was derived by a
+    /// different route from the path the run writes — and after SONNY-190 gave the nested *execute*
+    /// a disambiguation seed the nested *preview* never got, the two disagreed whenever the
+    /// disambiguation fired, which is the ordinary case rather than a race.
+    ///
+    /// `namedByEnclosingPlan` is **not defaulted**, for the reason its twin on `execute` is not:
+    /// every internal call site states what the plan around it has named, and a new one that forgets
+    /// is a compile error rather than a silent `.none`.
+    private func preview(
+        plan: AgentPlan,
+        claimedEarlierInThisRun: RunClaims,
+        namedByEnclosingPlan: PlannedDestinations
+    ) throws -> [ActionPreview] {
         switch try workflow(in: plan) {
         case .clarify:
             guard let question = try clarificationQuestion(in: plan) else {
@@ -636,59 +661,63 @@ public final class AgentActionExecutor {
                 )
             ]
         case .largestFiles:
-            return try previewCapability(for: .scanSelectLargestFiles, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .scanSelectLargestFiles, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .docx:
-            return try previewCapability(for: .scanDocx, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .scanDocx, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .hackerNews:
-            return try previewCapability(for: .openHackerNews, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openHackerNews, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .webResearch:
-            return try previewCapability(for: .webToMarkdown, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .webToMarkdown, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .openApp:
-            return try previewCapability(for: .openApp, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openApp, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .openAppSearchURL:
-            return try previewCapability(for: .openAppSearchURL, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openAppSearchURL, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .openURL:
-            return try previewCapability(for: .openURL, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openURL, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .openGeneratedArtifact:
-            return try previewCapability(for: .openGeneratedArtifact, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openGeneratedArtifact, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .createLocalDraft:
-            return try previewCapability(for: .createLocalDraft, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .createLocalDraft, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .calculator:
-            return try previewCapability(for: .calculateUtility, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .calculateUtility, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .clipboardHistory:
-            return try previewCapability(for: .lookupClipboardHistory, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .lookupClipboardHistory, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .snippetSave:
-            return try previewCapability(for: .saveSnippet, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .saveSnippet, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .snippetExpansion:
-            return try previewCapability(for: .expandSnippet, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .expandSnippet, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .runningAppSwitch:
-            return try previewCapability(for: .switchRunningApp, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .switchRunningApp, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .recentArtifacts:
-            return try previewCapability(for: .lookupRecentArtifacts, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .lookupRecentArtifacts, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .mediaOpen:
-            return try previewCapability(for: .playMedia, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .playMedia, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .finderSelection:
-            return try previewCapability(for: .getFinderSelection, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .getFinderSelection, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .revealInFinder:
-            return try previewCapability(for: .revealInFinder, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .revealInFinder, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .permissionReadiness:
-            return try previewCapability(for: .showPermissionReadiness, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .showPermissionReadiness, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .saveRoutine:
-            return try previewCapability(for: .saveRoutine, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .saveRoutine, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .runRoutine:
-            return try previewCapability(for: .runRoutine, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .runRoutine, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .createWorkspace:
-            return try previewCapability(for: .createWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .createWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .editWorkspace:
-            return try previewCapability(for: .editWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .editWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .openWorkspace:
-            return try previewCapability(for: .openWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .openWorkspace, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .invokeShortcut:
-            return try previewCapability(for: .invokeShortcut, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .invokeShortcut, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .visionSession:
-            return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
-            return try previewChain(plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+            return try previewChain(
+                plan,
+                claimedEarlierInThisRun: claimedEarlierInThisRun,
+                namedByEnclosingPlan: namedByEnclosingPlan
+            )
         }
     }
 
@@ -1300,7 +1329,8 @@ public final class AgentActionExecutor {
     private func previewCapability(
         for operation: AgentOperation,
         plan: AgentPlan,
-        claimedEarlierInThisRun: RunClaims = .none
+        claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations
     ) throws -> [ActionPreview] {
         try capabilityRegistry
             .adapter(for: operation)
@@ -1308,6 +1338,7 @@ public final class AgentActionExecutor {
                 plan: plan,
                 context: capabilityContext(
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    namedByEnclosingPlan: namedByEnclosingPlan,
                     scope: .unscoped
                 )
             )
@@ -1709,11 +1740,42 @@ public final class AgentActionExecutor {
             // which nested previews see the run's claims, and the listing it produces ("Will
             // include: …") describes what those steps would do if run, for which the run's own
             // claims are the accurate context.
+            // **Resolved before it is previewed, because the nested plan is the one plan that arrives
+            // here unresolved** (SONNY-218). `executeNestedPlan` below re-enters `execute`, whose
+            // first act is `resolveDefaultOutputs` — seeded from the run's claims since SONNY-190 and
+            // from what the enclosing plan already names since SONNY-220 — so a nested routine's
+            // generated draft is bumped to `draft-<title>-<stamp>-2.md` when the outer plan owns the
+            // unbumped name. Nothing did that on the preview side: the panel read "Will include:"
+            // from an unresolved plan and named `draft-<title>-<stamp>.md`, a file the run would not
+            // create. Since `Timestamp.fileSafe` is whole-second and two writes in one run are
+            // milliseconds apart, the collision is the ordinary case, so the disagreement was too.
+            // The two closures now resolve from the identical pair of inputs.
+            //
+            // **A resolution that answers with a *clarification* is not a resolution, and the
+            // unresolved plan is previewed in that case.** `InvokeShortcutCapabilityAdapter`
+            // replaces the whole plan with a `clarify` step for a Shortcut name it cannot find, and
+            // `.invokeShortcut` is not on `StoredRoutine.forbiddenStepOperations`, so a saved
+            // routine can carry one. Previewing that replacement would answer "Clarification
+            // needed" where the run throws `missingClarificationQuestion`, and — worse — it would
+            // let `SaveRoutineCapabilityAdapter`'s validation gate accept a routine it refuses
+            // today, since that gate is a `previewNestedPlan` call whose *throwing* is the check.
+            // This closure wants the destinations resolution pins, not its right to replace the
+            // plan, so the fallback keeps the answer about the routine.
             previewNestedPlan: { [weak self] plan in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested preview.")
                 }
-                return try self.preview(plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+                let resolved = try self.resolveDefaultOutputs(
+                    in: plan,
+                    claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    namedByEnclosingPlan: namedByEnclosingPlan
+                )
+                let previewed = resolved.steps.contains { $0.operation == .clarify } ? plan : resolved
+                return try self.preview(
+                    plan: previewed,
+                    claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    namedByEnclosingPlan: namedByEnclosingPlan
+                )
             },
             executeNestedPlan: { [weak self] plan, nestedBrowser, log in
                 guard let self else {
@@ -1742,15 +1804,26 @@ public final class AgentActionExecutor {
 
     /// `claimedEarlierInThisRun` is threaded rather than dropped (PR #65 review, F4).
     ///
-    /// **Unreachable today and fixed anyway.** A chain segment is never itself a chain, so this
-    /// parameter is always `.none` in practice and no behaviour changes — which also means no test
-    /// can distinguish the two versions, and none is added rather than one that would pass either
-    /// way. What it removes is an asymmetry between two *public* entry points: `execute` threaded it
-    /// through its `.chain` case and `preview` did not, so the same plan handed to each would have
-    /// been treated differently the first time a chain could nest.
+    /// **That was written as "unreachable today and fixed anyway", on the premise that a chain
+    /// segment is never itself a chain — the premise is false and the path is live** (PR #96's
+    /// review established it for `executeChain`'s twin; SONNY-220 corrected that one and left this
+    /// one, being pre-existing on `main` and outside its contract; SONNY-218 owns it here). A
+    /// *stored routine* of more than one workflow — say `[open_url, create_local_draft]` —
+    /// classifies as `.chain` too, so `previewNestedPlan` re-enters `preview` and reaches this
+    /// function a second time. What the threading removes is unchanged: an asymmetry between two
+    /// entry points, `execute` threading it through its `.chain` case and `preview` not.
+    ///
+    /// `namedByEnclosingPlan` is the second half, and it is what makes the reverse ordering agree
+    /// (SONNY-218, following SONNY-220's finding one level down). The claims set answers for units
+    /// that have already been previewed; a chain's *own* destinations are pinned at `prepare` and
+    /// exist before any of them, so a `[run_routine, create_local_draft]` plan has nothing in
+    /// `claimed` when the routine is previewed and the outer draft's name is invisible to it. The
+    /// union below is the same one `executeChain` computes, for the same reason and at the same
+    /// altitude: a segment sees only its own steps, and the outer draft lives in a different one.
     private func previewChain(
         _ plan: AgentPlan,
-        claimedEarlierInThisRun: RunClaims = .none
+        claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations
     ) throws -> [ActionPreview] {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
@@ -1760,10 +1833,19 @@ public final class AgentActionExecutor {
         // the run writes `report-2.pdf` — and a plan that promises one file and writes another is the
         // shape `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` exists to forbid.
         var claimed = claimedEarlierInThisRun
+        // And the same union `executeChain` computes, so a nested plan previewed inside one segment
+        // sees the destinations the other segments already name. `plan` is resolved here for the
+        // same reason it is there — `prepare` resolves before previewing — so every generated
+        // default has its final name by now.
+        let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
         for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let segmentPreviews = try preview(plan: resolved, claimedEarlierInThisRun: claimed)
+            let segmentPreviews = try preview(
+                plan: resolved,
+                claimedEarlierInThisRun: claimed,
+                namedByEnclosingPlan: namedByThisRun
+            )
             previews.append(contentsOf: segmentPreviews)
             for written in segmentPreviews.flatMap(\.writes) {
                 claimed.recordWrite(written)

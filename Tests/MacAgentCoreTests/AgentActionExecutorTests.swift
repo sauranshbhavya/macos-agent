@@ -2062,6 +2062,152 @@ struct AgentActionExecutorTests {
         #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
     }
 
+    // MARK: - SONNY-218: the approval preview names the file the run will write
+
+    /// **The user approves a panel naming `draft-<title>-<stamp>.md`, and the run writes
+    /// `draft-<title>-<stamp>-2.md`.** The consent given and the thing done are about different
+    /// files.
+    ///
+    /// SONNY-190 seeded a nested routine's `resolveDefaultOutputs` from the run's claims so the
+    /// nested draft is bumped instead of destroying the outer plan's document, and SONNY-220 added
+    /// the other half — what the enclosing plan already *names* — so the reverse ordering works too.
+    /// Neither reached the preview: `previewNestedPlan` re-entered `preview`, which resolves
+    /// nothing, so the nested draft's name was derived from `context.now()` with no disambiguation
+    /// at all. Since `Timestamp.fileSafe` is whole-second and two writes inside one run are
+    /// milliseconds apart, the bump is the ordinary case rather than a race, and so was the
+    /// disagreement.
+    ///
+    /// **Both orderings, in one test, for the reason SONNY-220 records:** the claims half fixes only
+    /// the ordering where the outer step runs first, and a test per ordering did not catch that the
+    /// first time. `[create_local_draft, run_routine]` exercises the claims seed;
+    /// `[run_routine, create_local_draft]` exercises the plan-intent seed, which the preview path
+    /// had no equivalent of at all until this ticket threaded `namedByEnclosingPlan` through it.
+    ///
+    /// Asserted as set equality between what `prepare` promised and what is on disk afterwards,
+    /// rather than on either alone: naming two paths and writing two files satisfies a count while
+    /// still naming the wrong ones.
+    @Test
+    func theApprovalPreviewNamesEveryFileANestedRoutineWritesInEitherOrdering() async throws {
+        let orderings: [(String, [AgentStep])] = [
+            ("outer draft then routine", [outerDraftStep(), runNotesRoutineStep]),
+            ("routine then outer draft", [runNotesRoutineStep, outerDraftStep()])
+        ]
+        // One second for the whole run, so both defaults resolve to the same name unbumped and the
+        // collision is forced rather than probable.
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let suffix = Timestamp.fileSafe(stamp)
+
+        for (label, steps) in orderings {
+            let root = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let executor = makeExecutor(
+                root: root,
+                routineStore: try collidingDraftRoutineFixture(root: root),
+                now: { stamp }
+            )
+
+            let prepared = try executor.prepare(
+                plan: AgentPlan(summary: "Draft a note and run the Notes routine.", requiresConfirmation: true, steps: steps)
+            )
+            let promised = prepared.previews.flatMap(\.writes)
+            _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+            let written = try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("draft-") }
+                .map { root.appendingPathComponent($0).path }
+            #expect(
+                Set(promised) == Set(written),
+                "\(label): approved \(promised.sorted()), wrote \(written.sorted())"
+            )
+            #expect(Set(promised).count == 2, "\(label): the preview named \(promised.count) path(s), \(Set(promised).count) distinct")
+            #expect(
+                Set(written.map { ($0 as NSString).lastPathComponent })
+                    == ["draft-note-\(suffix).md", "draft-note-\(suffix)-2.md"],
+                "\(label): \(written.sorted())"
+            )
+        }
+    }
+
+    /// The over-correction guard, and the mirror of `aNestedRoutinesDraftKeepsItsOwnNameWhenNothingElseNamesIt`
+    /// one layer up: resolving the nested plan before previewing it must not *invent* a bump. A
+    /// routine run as the only step of a plan competes with nothing, so the panel names the routine's
+    /// own unbumped filename — and a fix that resolved against too wide a set would show the user a
+    /// `-2` for a document nothing was competing with, which reads as "Sonny is about to write a
+    /// duplicate" and is a claim about the run that is not true.
+    @Test
+    func aRoutinePreviewedAloneNamesItsOwnUnbumpedFilename() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(
+            root: root,
+            routineStore: try collidingDraftRoutineFixture(root: root),
+            now: { stamp }
+        )
+
+        let prepared = try executor.prepare(
+            plan: AgentPlan(summary: "Run the Notes routine.", requiresConfirmation: true, steps: [runNotesRoutineStep])
+        )
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(
+            prepared.previews.flatMap(\.writes)
+                == [root.appendingPathComponent("draft-note-\(Timestamp.fileSafe(stamp)).md").path]
+        )
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("draft-") }
+            == ["draft-note-\(Timestamp.fileSafe(stamp)).md"])
+    }
+
+    /// **A resolution that answers with a clarification is not a resolution**, and the nested preview
+    /// falls back to the plan as stored when it gets one.
+    ///
+    /// `InvokeShortcutCapabilityAdapter.resolveDefaultOutputs` replaces the whole plan with a
+    /// `clarify` step for a Shortcut name it cannot find, and `.invokeShortcut` is not on
+    /// `StoredRoutine.forbiddenStepOperations`, so a saved routine can carry one. Previewing that
+    /// replacement would answer "Clarification needed" where the run throws — and it would let
+    /// `SaveRoutineCapabilityAdapter` accept a routine it refuses today, because that adapter's
+    /// validation gate *is* a `previewNestedPlan` call whose throwing is the check. This is the
+    /// assertion that tells the fallback from its absence: without it the save succeeds.
+    @Test
+    func savingARoutineThatNamesAnUnknownShortcutIsStillRefused() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, shortcutCatalog: FakeShortcutCatalog(names: ["Morning Setup"]))
+        let plan = AgentPlan(
+            summary: "Teach Sonny a routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save",
+                    operation: .saveRoutine,
+                    description: "Save the routine.",
+                    routineName: "Nightly",
+                    routineSteps: [
+                        AgentStep(
+                            id: "nested-shortcut",
+                            operation: .invokeShortcut,
+                            description: "Run the Shortcut.",
+                            shortcutName: "No Such Shortcut"
+                        )
+                    ]
+                )
+            ]
+        )
+
+        var caught: Error?
+        do {
+            _ = try executor.preview(plan: plan)
+        } catch {
+            caught = error
+        }
+
+        guard let bridge = caught as? ShortcutsBridgeError, case .unknownShortcut(let name, _) = bridge else {
+            Issue.record("expected an unknown-Shortcut refusal, got \(String(describing: caught))")
+            return
+        }
+        #expect(name == "No Such Shortcut")
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
