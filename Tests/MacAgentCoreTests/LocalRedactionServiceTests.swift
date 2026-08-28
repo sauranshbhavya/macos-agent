@@ -129,6 +129,106 @@ struct LocalRedactionTextTests {
         ])
     }
 
+    // MARK: - The two shapes a developer's screen is made of (SONNY-278)
+
+    /// **A `File.swift:129-131` line-range citation is not a one-time code.**
+    ///
+    /// The lines below are real, copied out of this repository's own tracked Markdown, which is
+    /// where the ticket was filed from: the unlabeled spaced pair painted 98 of them across the
+    /// docs corpus, and every one blanked its whole line for the vision model. The colon binds the
+    /// digits to the file in front of them, and nothing presents a code that way.
+    @Test
+    func aColonBoundLineRangeCitationIsNotAOneTimeCode() {
+        for citation in [
+            "the doc comment at `CerebrasPlanner.swift:129-131` and the table beside it",
+            "`VisionSessionContainment.swift:205`, `:209-210`, with a note",
+            "(`server/test/linking.db.test.ts:773-783`), which is the one that matters",
+            "`AutomationStores.swift:296-300` vs `:161-172`",
+            "AgentRunner.swift:110-119"
+        ] {
+            let payload = textService().redactText(citation)
+            #expect(payload.report.isEmpty, Comment(rawValue: citation))
+            #expect(payload.maskedText == citation, Comment(rawValue: citation))
+        }
+    }
+
+    /// **A thousands-separated number is not a one-time code either** — the other ten of the
+    /// ticket's 105. `146 835` inside `1 146 835` is preceded by a space that is itself preceded by
+    /// a digit, which `precededByDigitOrHyphen` could not see because it looks one character back.
+    @Test
+    func aThousandsSeparatedNumberIsNotAOneTimeCode() {
+        for grouped in [
+            "clipboard-history.json is 1 011 740 bytes on disk",
+            "a genuine 1 207 697 byte response",
+            "task-history rows at 4 343 930 bytes"
+        ] {
+            let payload = textService().redactText(grouped)
+            #expect(payload.report.isEmpty, Comment(rawValue: grouped))
+            #expect(payload.maskedText == grouped, Comment(rawValue: grouped))
+        }
+    }
+
+    /// **The other direction, which is the half a narrowing loses if nobody writes it down.** The
+    /// hyphenated pair stays, because dropping it — the obvious fix — would leave `Your code is
+    /// 483-291` matched by nothing at all: it has no six contiguous digits for the contextual rule
+    /// and no space for the spaced one.
+    @Test
+    func aHyphenatedOneTimeCodeIsStillDetected() {
+        for display in [
+            "Your code is 483-291",
+            "Code: 483-291",
+            "483-291",
+            "Enter 483-291 to continue"
+        ] {
+            let payload = textService().redactText(display)
+            #expect(payload.report.map(\.detectionClass) == [.oneTimeCode], Comment(rawValue: display))
+            #expect(payload.maskedText?.contains("•••••") == true, Comment(rawValue: display))
+            #expect(payload.maskedText?.contains("483") == false, Comment(rawValue: display))
+        }
+    }
+
+    /// **The one shape the colon refusal newly misses, caught by the contextual rule instead.**
+    /// `code:483-291` has its colon immediately against the digits, exactly like a citation — so
+    /// the shape rule refuses it, and the context word carries it at 0.85 rather than 0.55. That is
+    /// why the contextual pattern's value alternation takes a separated pair.
+    @Test
+    func aLabelledCodeWithItsSeparatorAgainstTheColonIsStillDetected() {
+        for labelled in ["code:483-291", "otp:483 291", "verification_code:483-291"] {
+            let payload = textService().redactText(labelled)
+            #expect(
+                payload.report == [
+                    RedactionReportEntry(
+                        detectionClass: .oneTimeCode,
+                        count: 1,
+                        locationCategory: .text,
+                        confidence: 0.85,
+                        belowConfidenceThreshold: false
+                    )
+                ],
+                Comment(rawValue: labelled)
+            )
+            #expect(payload.maskedText?.hasSuffix("•••••") == true, Comment(rawValue: labelled))
+        }
+    }
+
+    /// **What the run guard costs, stated rather than left to be found.**
+    ///
+    /// Two codes printed side by side separated by one space are, as text, a nine-digit grouped
+    /// number — so the second pair is refused and only the first is masked. The check refuses the
+    /// left side only, which is why the first survives; the symmetric right-side check was measured
+    /// over the same corpus, refused **0** additional matches, and would have lost this one too.
+    ///
+    /// **On the capture path it costs nothing**, and that is the reason this is acceptable rather
+    /// than merely small: `redactCapture` paints every observation a match touches, so the line is
+    /// painted whole by the first pair regardless. It is `redactText` — the window title and the
+    /// observed history — where the second pair's digits survive.
+    @Test
+    func twoCodesSideBySideReadAsOneGroupAndOnlyTheFirstIsMasked() {
+        let payload = textService().redactText("483 291 992 118")
+        #expect(payload.maskedText == "••••• 992 118")
+        #expect(payload.report.map(\.detectionClass) == [.oneTimeCode])
+    }
+
     @Test
     func mastercardTwoSeriesLuhnPassingCardMasksAboveThreshold() {
         // Mastercard's 2221–2720 BIN range (issued since 2017) — invisible to the detector's
