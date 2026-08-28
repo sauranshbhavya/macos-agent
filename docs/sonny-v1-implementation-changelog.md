@@ -188,7 +188,7 @@ Files changed, **10** — 5 under `Sources/` (1 new), 3 under `Tests/` (2 new) a
 
 **Nothing under `Sources/MacAgentCore/` changed, and nothing under `server/`.** The sequence is presentation and ordering; the two things it sequences already existed.
 
-**Every figure below is measured at `5fff3f5`**, the last commit that changes a compiled file; this entry's own commit sits directly on it and differs from it in `docs/` only (`git diff --name-only 5fff3f5 HEAD` prints the two records and nothing else).
+**Every figure below is measured at `5fff3f5`**, the last commit that changes a compiled file; this entry's own commit sits directly on it and differs from it in `docs/` only (`git diff --name-only 5fff3f5 HEAD` prints `docs/sonny-v1-implementation-changelog.md` and nothing else — the manual-test section landed one commit earlier, in `025af66`, which is also below `5fff3f5`).
 
 Tests: the flagged command → **2342 in 162 suites**, exit 0, at `5fff3f5`. `swift build` exit 0. `scripts/warnings` **0 warnings**, stamp `5fff3f5 (clean)` — the script's own line, not inferred.
 
