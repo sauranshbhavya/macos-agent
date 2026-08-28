@@ -174,6 +174,78 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/mutate-sees-both-halves
+Status: complete — SONNY-323 and SONNY-315 Done; written 2026-08-28 before the PR opened
+Date: 2026-08-28
+Tickets: **SONNY-323** (the harness read one test framework's log shapes, so every kill a server-half battery found was reported as a mutant that does not build) and **SONNY-315** (a concurrent suite's known-issue line, landing inside another test's window, excused a real kill). Two tickets, one session, one branch, cut from `main` at `55f4c9b` (PR #147's merge), no rebase. **Every figure below is measured at `1e1287c`, the last commit on this branch that touches anything a measurement can see** — this entry's own commit sits above it and changes only this file, which `git diff --name-only 1e1287c HEAD` shows. Spawned one discovery ticket, **SONNY-334**.
+Reviewed by: **not yet — the coordinator verifies this directly per the kickoff**, the diff being confined to `scripts/mutate` and two records; a fresh session takes it if it grows past that. Findings and their resolutions belong here once that verification happens.
+
+Spec sections covered: **none, and that is not a gap**. This is delivery tooling; `docs/sonny-major-release-spec.md` describes the product and has nothing to say about the mutation harness. `CLAUDE.md`'s Commands section and `scripts/mutate --help` are this change's specification, and both are updated.
+
+Files changed, 3: `scripts/mutate`, `CLAUDE.md`, and this file. Nothing under `Sources/`, `Tests/` or `server/` — which is why the verification below needs its own paragraph rather than the usual pair of commands.
+
+Tests, and **why each is owed by a diff that touches neither half's code**:
+
+- **The flagged Swift command from `CLAUDE.md`** → **2305 tests in 160 suites**, exit 0 (read with nothing between the command and `$?`). Owed not because this branch touches `Tests/` — it does not — but because `UntrustedFailureDeclarationTests` reads `scripts/mutate` *at run time*, parsing the `ALWAYS_TRUSTED` literal out of it: an edit to this script can fail that suite without a Swift file changing.
+- **`scripts/warnings`** → **0 warnings, exit 0**, `measured at : 1e1287c (clean)`, 131s — quoted from the run's own header rather than inferred. Recorded for completeness rather than as evidence about the diff: `Package.swift` declares five targets and every one names a path under `Sources/` or `Tests/`, so a Swift compile cannot see a change to `scripts/` or to a Markdown file.
+- **`scripts/mutate selftest`** → **210** checks, 0 failures, exit 0, against 176 checks on `main`'s copy of the script (`grep -c '^    PASS  '` over each run's own log).
+- **The server half's own commands are not owed and were not run**: this branch changes no file under `server/`. vitest was nevertheless exercised throughout, because every shape the new reader knows was copied out of a real run of that suite and the battery below drives it end to end.
+
+**Two real batteries, one per half, because a harness that reads two formats has to be watched reading both.**
+
+- **The server half**, 2 mutants over `server/src/model/limits.ts` with `MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts'`: **2 killed, 0 survived, 0 unattributed, exit 0**. `V1` (the client image ceiling moved by one byte) came back `KILLED by 2 test(s)` naming `test/model.test.ts > the numbers this ticket is held to > carries contract §6.1's body limits` and `test/screen.test.ts > the screen route's numbers > derives §6.1's body limit from the client's image ceiling rather than holding a second literal`; `V2` (the same constant left unparseable) came back `KILLED before any test ran — every test file failed to load`. The same plan through `main`'s copy of the script reported both as `KILLED by the compiler — the suite never ran`, above a baseline line reading `PASSED` with no tally at all.
+- **The app half**, 1 mutant over `Sources/MacAgent/CommandCenterView.swift` (the greeting's morning boundary widened by an hour), run with the default suite command: **1 killed, 0 survived, 0 unattributed, exit 0**, `KILLED by 1 test(s)` naming `greetingUsesTheCorrectTimeOfDayPeriod(hour:expectedPeriod:)` — a parameterized test, so the parameterized issue-line path is exercised on real output too. It matters more than its size suggests: every full run of this suite carries `HangBackstopTests`' two known issues, so the classifier meets SONNY-315's ingredient on real output rather than only in a fixture.
+
+**Three "does the guard bite" runs, because an arm nobody has watched fail is not a guard.** The branch adds 34 selftest checks (210 − 176). Each run below reverts exactly one thing and runs the same selftest, and every one of them exits 1:
+
+- `main`'s script (`git show 55f4c9b:scripts/mutate`) with only this branch's four vitest arms spliced in → **185 PASS, 14 FAIL**: 14 of those 23 checks. The other 9 assert things `main` already did right — both battery exit codes, the `not that it is covered` sentence, the `KILLED (build failure)` summary line, and the absences that were already true.
+- The shipped script with only `boundary_re`'s verb put back to `recorded an issue` → **204 PASS, 6 FAIL**: 6 of SONNY-315's 11 checks, and they are the load-bearing ones — the exit code, the kill count, the outcome, and both "whose signature is it" assertions.
+- The shipped script with only the section gate removed → **208 PASS, 2 FAIL**: the phantom entry is counted as a second killing test and named in the report.
+
+**One more measurement, because "chosen by what the log looks like" is a claim about a population.** Each of the two formats' patterns was run over the other's real logs: the four vitest patterns match **0** lines across three real full-suite swift logs (5447, 5088 and 5096 lines), and swift-testing's three patterns match **0** lines across four real vitest logs (a two-failure run, a transform failure, a green run, and the echoed-stdout probe). The selection cannot mistake one for the other on anything this repository actually produces.
+
+Behavior added:
+
+- **A server-half battery names the tests that killed each mutant.** `classify_failures` opens a block on vitest's error-summary entry the same way it opens one on a swift-testing issue line, so everything built on top of that — per-issue classification, `ALWAYS_TRUSTED`, `UNATTRIBUTED` — reaches the server half without a second mechanism.
+- **A vitest run that loaded no test file is still reported as a build failure**, in words that name no compiler: `KILLED before any test ran — every test file failed to load`.
+- **A vitest baseline prints its own tally** rather than `PASSED` with nothing after it.
+- **A known issue closes the block it interrupts**, so its detail is attributed to nothing and the test it interrupted keeps its own message.
+
+Behavior preserved (required, no blanket claims):
+
+- **Every swift-testing path the classifier already had**: the per-test summary line, the issue lines SONNY-305 taught it, parameterized issue lines, per-issue classification, `ALWAYS_TRUSTED`, the trapped-process case that names no test, and the baseline's two arms (abort on real red, continue on declared-only red). All 176 pre-existing selftest checks still pass, and the app-half battery above attributes a real kill on a real 2305-test log.
+- **Both refusals and the lock machinery**, untouched: dirty tree, untracked file, `status.showUntrackedFiles=no`, `--check`, non-matching and ambiguous mutants, the `scripts/warnings` cross-refusal, stale-lock reclaim, `unlock`, nested-battery refusal, the non-isolated `MUTATE_TEST_CMD` refusal, interrupt and internal-error restore.
+- **`mutate-untrusted-failures` is unchanged**, and so is the Swift suite that guards it.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**One classifier reading two formats, not two classifiers.** vitest's error summary has the same structure swift-testing's issue lines do — a line naming the test, then the failure's own message beneath it — so the second format needed a second way to *open a block* and nothing else. That is deliberate rather than economical: SONNY-305 recorded that teaching `failing_tests` a shape `classify_failures` does not know turns a correctly counted kill into a finding, because the caller gates on one reader and attributes with the other. One reader, one answer, and the two cannot drift.
+
+**The shapes vitest is read on were measured, and the ones the ticket proposed were rejected on measurement.** SONNY-323 suggested the progress section's `❯ <file> (N tests | M failed)` and `× <test name>` lines. They cannot do this job: they carry no message, so nothing there can be matched against a declaration and every vitest failure would be evidence by default — the direction that manufactures a kill — and they name the test without its file or its describe block, which is the same merge that costs the swift path a name when two suites share a function name. The error summary carries both the name and the message, both sections list the same failures, and both the default reporter and `--reporter=dot` print it.
+
+**A line a test PRINTED is not a failing test, and this branch shipped that defect for one commit before measuring it.** vitest echoes a failing test's console output above the error summary, under a `stdout | <file> > <test>` header and then the line verbatim at column 0 — exactly where a real entry sits. The first vitest reader here opened an entry on any line of that shape, so a test that logs one mints a failing test that never existed and the mutant is reported killed by it. Found by writing a throwaway test that prints ` FAIL  test/made-up.test.ts > a suite > a test that does not exist` and then fails, and running it: the pre-gate reader classifies that log as two failing tests, the gated one as the single real test. Entries now count only between vitest's own `Failed Tests` / `Failed Suites` heading and the run summary. **The general lesson is the one this repository keeps paying for**: a pattern was written from three real logs and was still wrong about a fourth shape those logs did not contain, and no amount of reading it would have said so.
+
+**`suite_started` needs two tells for vitest and one for swift, and both vitest tells are load-bearing.** Without the banner check, a command that died before vitest ever started — `npm run build && npx vitest run` with the build red — would read as a suite that ran. Without the `Tests  no tests` check, a mutant that leaves a file the transformer cannot parse would be reported killed by a "test" named `test/x.test.ts [ test/x.test.ts ]`, which is a file that failed to load wearing a test's name. Measured both ways on the real suite.
+
+**SONNY-315 is a manufactured NON-kill, and the fix is one word in a regex with a direction argument behind it.** swift-testing records a known issue on a line reading `Test <name> recorded a known issue at File.swift:174:55: Issue recorded`, which carries none of the four verbs that ended an issue block — so its detail lines, one of which is a declared signature, were read as the message of whatever test was mid-issue when it arrived, and that test's kill was excused. The boundary's verb is `recorded` now rather than `recorded an issue`, which closes the block on every kind of record line swift-testing writes rather than on the one wording seen so far. **The anchor was not touched**, because a boundary that fires too eagerly truncates a declared message and manufactures a kill, which is exactly how PR #112's F3 failed. **What no version of this can do**: a message actually *split* by an interleaved record line loses everything after the split. Nothing in a log distinguishes a split message from a foreign event, so the choice is which of the two to be wrong about — and swift-testing emits an event's lines together, measured on a 2305-test run where both multi-line known-issue events came out contiguous and every interleaving sat between events.
+
+**The pre-fix classifier reached the right verdict for the wrong reason in the neighbouring case, which is what the second arm holds.** With a genuinely declared failure interrupted the same way, the old reader still said `UNATTRIBUTED` — but naming the *known issue's* signature rather than the failing test's own. The verdict matched, the evidence did not, and only an assertion on which signature is shown separates the fix from the defect.
+
+**The declaration file needs no notion of which suite a signature belongs to; the Swift guard beside it does.** `mutate-untrusted-failures` matches a signature against the text a failure recorded and knows nothing about what produced it — a selftest arm proves a vitest failure carrying a declared signature comes back `UNATTRIBUTED` exactly as a swift one does. But `UntrustedFailureDeclarationTests` counts a record's `source` over the Swift test targets only, so the first server-half declaration will be counted zero times and fail with a message that misdiagnoses itself, and the natural way out of that failure — `sites 0` — passes trivially. Recorded as **SONNY-334** rather than built here: no server-half signature exists today, so there is nothing to observe and nothing to break.
+
+**Two process pitfalls from this session's own hands, both the kind that reads as somebody else's bug.** (1) A first attempt to compare the old and new readers printed `suite_started exit=0` for every log, including logs the old reader could not see — because `$?` was read after a `$(basename "$log")` in the same `echo`. That is `CLAUDE.md`'s exit-code rule exactly, arriving inside the work of a session that had just read it; the corrected probe reads the status into a variable first and answers 1, 1, 1. (2) The first app-half battery aborted at its only mutant with `the tree is dirty after S1`, naming `CLAUDE.md` — this session had edited that file while the battery was running. The guard did its job and cost four minutes; the note for the next session is that a battery owns the whole working tree for its duration, documentation included.
+
+Known limitations / deferred scope:
+- **The two seams `CLAUDE.md` records as open stay open**, and neither is this branch's to close: two tests sharing a function name across suites merge, because swift-testing names no suite on either line the classifier reads; and a mutant that *traps* the test process names no test at all, so nothing in the declaration mechanism applies to it.
+- **A message split by an interleaved record line loses everything after the split** (the SONNY-315 paragraph above). Not fixable from a log, and safe only because swift-testing emits an event's lines together.
+- **Only vitest's error summary is read, so a non-default reporter that omits it yields no name.** The default and `--reporter=dot` both print it; anything else is reported as a run that named no test, which names the log to read and is the safe direction. Not refused, deliberately: a harness that refuses an unrecognised suite command would refuse every future test runner too.
+- **The first server-half signature in `mutate-untrusted-failures` will fail `UntrustedFailureDeclarationTests`** and the obvious escape from that failure is a silent hole — **SONNY-334**, Backlog, untriaged. Nothing is broken today; no such signature exists.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: nothing follows from this one. It is delivery tooling, and the roadmap rows are unaffected — what changes is that a row-12 session running a battery over `server/` now gets a report it can read, instead of nineteen lines saying the mutant does not build.
+
+
 ### Branch: docs/the-checklist-stops-blocking-on-ghosts
 Status: complete — SONNY-330, SONNY-321 and SONNY-326 Done; written 2026-08-28 before the PR opened, and not yet merged then
 Date: 2026-08-28
@@ -219,6 +291,7 @@ Known limitations / deferred scope: **the four backend sections' rows still cann
 Open questions (required, write "none" if true): none.
 
 Next branch: the founder's to kick off; nothing in this lane sequences one.
+
 
 ### Branch: feature/row-12-metering
 Status: complete — SONNY-133 Done; written 2026-08-28 before the PR opened

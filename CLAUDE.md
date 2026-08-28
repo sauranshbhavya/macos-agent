@@ -125,13 +125,23 @@ formats are read now, chosen by what the log looks like rather than by a flag, s
 to declare which half it is: what is read of vitest is its error summary (` FAIL  <file> > <suite> >
 <test>` and the message under each) and its `Tests` line, and the progress section's `×` lines are
 deliberately not read, because they carry no message to match a declaration against and name the
-test without its file or describe block. Measured at `60ad95e` by running one two-mutant plan over
-`server/src/model/limits.ts` through both versions of the script, same tree and same suite command
-(`MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts'`): the
-pre-fix script reported `KILLED (build failure)` for both above a baseline line reading `PASSED`
-with no tally at all, and this one reports the covered mutant `KILLED by 2 test(s)` and names both,
-reports the unparseable one `KILLED before any test ran — every test file failed to load`, and
-reads the baseline as `PASSED  63 passed (63)`.
+test without its file or describe block. **An entry also counts only inside that section**, which is
+a measurement rather than caution: vitest echoes a *failing* test's console output above the summary,
+under a `stdout | <file> > <test>` header and then the line verbatim at column 0 — so a test that
+logs an entry-shaped line mints a failing test that never existed, which this branch shipped for one
+commit and found by writing a throwaway test that does exactly that.
+
+Measured by running one two-mutant plan over `server/src/model/limits.ts` through both versions of
+the script with the same suite command
+(`MUTATE_TEST_CMD='cd server && npx vitest run test/screen.test.ts test/model.test.ts'`): this one,
+at `1e1287c`, reports the covered mutant `KILLED by 2 test(s)` and names both, reports the
+unparseable one `KILLED before any test ran — every test file failed to load`, and reads the
+baseline as `PASSED  63 passed (63)`; `main`'s copy, at `60ad95e` and over the same `server/` tree
+(`git diff --name-only 60ad95e 1e1287c -- server` prints nothing), reported `KILLED (build failure)`
+for both above a baseline line reading `PASSED` with no tally at all. The two formats also cannot be
+mistaken for each other on anything this repository produces: each one's patterns match **0** lines
+of the other's real logs — three full-suite swift logs of 5447, 5088 and 5096 lines, and four vitest
+logs covering a failure, a transform error, a green run and that echoed-stdout probe.
 **The fifth is the mirror of SONNY-224's manufactured kill — a manufactured NON-kill** (SONNY-315,
 found in PR #139's cycle-2 battery at `157ef03`). swift-testing records a *known* issue — what
 `withKnownIssue` produces, which is expected and not red at all — on a line reading `Test <name>
