@@ -36,21 +36,34 @@
 # Format, one record per entry, directives at column 0. Comments and blank lines are ignored.
 #
 #   >>> signature   literal text, matched as a substring of the issue a failing test recorded.
-#   >>> source      literal text that must still exist under Tests/. This is what keeps the
-#                   signature honest: `UntrustedFailureDeclarationTests` fails the suite when a
-#                   `source` stops matching, which is what happens the moment someone rewords the
-#                   helper a signature was written for. A signature that silently stops matching is
-#                   the same defect as a listed test name that no longer exists — it stops
+#   >>> source      literal text that must still exist in one of the two test trees. This is what
+#                   keeps the signature honest: `UntrustedFailureDeclarationTests` fails the suite
+#                   when a `source` stops matching, which is what happens the moment someone rewords
+#                   the helper a signature was written for. A signature that silently stops matching
+#                   is the same defect as a listed test name that no longer exists — it stops
 #                   protecting, and nothing says so.
-#   >>> sites       how many times that `source` appears in the test tree, asserted exactly. The
-#                   `source` check alone only asks whether the text survives *somewhere*, and four
-#                   of the six records below have more than one site — so rewording one of six
-#                   copies left the suite green while that copy's failures went back to counting as
-#                   kills, measured by rewording one (PR #112 review, F4). A count is what makes the
-#                   reword visible. When this number changes, the change itself is the question:
-#                   a new test using the same helper is fine and the number goes up; a site that
-#                   stopped matching is a signature that stopped protecting, and needs its own
-#                   record or its own fix.
+#                   **Two trees, `Tests/` and `server/test/`** (SONNY-334). This harness has read
+#                   vitest's log shapes as well as swift-testing's since SONNY-323 and matches a
+#                   signature against the text a failure recorded without knowing what produced it,
+#                   so a record may perfectly well be written for a server-half failure. The guard
+#                   could only see `Tests/`, so the first such record would have been counted zero
+#                   times and failed the suite with a message blaming the record for a blindness in
+#                   the scan.
+#   >>> sites       how many times that `source` appears across those trees, asserted exactly, and
+#                   never zero. The `source` check alone only asks whether the text survives
+#                   *somewhere*, and most records below have more than one site — so rewording one
+#                   of six copies left the suite green while that copy's failures went back to
+#                   counting as kills, measured by rewording one (PR #112 review, F4). A count is
+#                   what makes the reword visible. When this number changes, the change itself is
+#                   the question: a new test using the same helper is fine and the number goes up; a
+#                   site that stopped matching is a signature that stopped protecting, and needs its
+#                   own record or its own fix.
+#                   **Zero is refused on its own terms** (SONNY-334). `found == sites` is satisfied
+#                   by a scan that finds nothing when a record declares nothing, so zeroing the
+#                   count was a way to make any failure of that check go green while leaving a
+#                   record whose source protects nothing — the exact defect the count was added for,
+#                   through the one door it did not watch. A source with no site left has stopped
+#                   protecting anything and belongs deleted, not zeroed.
 #   >>> reason      one line: why a failure like this says nothing about a mutant.
 #
 # What belongs here: a hang backstop, a wall-clock ceiling, anything whose failure is a statement
