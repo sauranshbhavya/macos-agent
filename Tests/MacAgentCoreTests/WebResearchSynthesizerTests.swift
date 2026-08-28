@@ -245,6 +245,13 @@ struct WebResearchSynthesizerTests {
         } catch let error as PlannerError {
             #expect(error == .backend(.cancelled))
             #expect(SonnyBackendError.isCancellation(error), "a stop is not a failure to report")
+            // §9.3 gives `.cancelled` no attempt budget, so a stop costs exactly one request. The
+            // count is asserted rather than left to `recorded.only`, which reads as though it
+            // checked one — its message says "expected exactly one request, saw N" — and is a bare
+            // `try #require(all.first)` that passes for any count at all (PR #146, F3; the helper
+            // itself is SONNY-331). Without this line a mutant giving cancellation a retry budget
+            // failed the three sibling route tests and not this one.
+            #expect(recorded.all.count == 1)
             #expect(try recorded.only.path == "/v1/research/synthesize")
         }
 

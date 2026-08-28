@@ -466,7 +466,7 @@ struct OpenAIPlannerTests {
     /// then wraps. So the stub fails the transport rather than injecting the wrapped error directly:
     /// the mapping from a Foundation error to the typed one is part of what must keep working.
     ///
-    /// **The last two expectations are the ones a mutant dies on.** A `backendError` that returned
+    /// **The last three expectations are the ones a mutant dies on.** A `backendError` that returned
     /// `.cancelled` unconditionally, or ignored the associated value, satisfies everything above
     /// them.
     @Test

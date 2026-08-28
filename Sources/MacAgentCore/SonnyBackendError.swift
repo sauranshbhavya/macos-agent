@@ -246,20 +246,29 @@ public extension SonnyBackendError {
     /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
     /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
     /// (`git grep -cE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 files at
-    /// `1830b9e`; the `public enum` anchor is load-bearing there, because without it the same
-    /// command answers 5 — the protocol's own declaration below is the fifth.)
+    /// `PLACEHOLDER`.)
     ///
-    /// **The `^ *` on the first of those two is a guard, not a fix, and PR #144's F6 was wrong about
-    /// what it guards against** (SONNY-320). F6 wrote that the unanchored form "matches its own
-    /// citation in `SonnyBackendError.swift` and answers five". It does not:
-    /// `git grep -cE 'case backend\(SonnyBackendError\)' -- Sources` answers **4 files at
-    /// `1830b9e`**, the same as the anchored form. A citation has to escape its parentheses —
-    /// a bare `(` opens an ERE group rather than matching a bracket — so the text sitting in this
-    /// file is `\(`, and a pattern looking for a literal `(` never matches it. Five is what a looser
-    /// pattern answers, not what the written one does. Keep the anchor anyway, against a later
-    /// citation written without escapes; what is not worth keeping is a figure nobody re-ran. The
-    /// changelog's SONNY-131 entry repeats F6's five and stays as it is — it is a dated record of
-    /// what that review found — and SONNY-320's entry carries the correction.
+    /// **Neither of those two anchors does anything, and this paragraph said the opposite twice
+    /// before a reviewer measured it** (SONNY-320, PR #146's F1). All four readings, at
+    /// `PLACEHOLDER`: the case-declaration grep answers **4** with `^ *` and **4** without it, and
+    /// the conformance grep answers **4** as written, **4** with the `^` dropped and **4** with
+    /// `public enum` dropped for `^.*,`. Only a genuinely looser pattern moves the number —
+    /// `git grep -cE 'CarriesBackendError \{' -- Sources` → **5** — and the fifth line it admits is
+    /// `public protocol CarriesBackendError {`, which every one of the other forms excludes because
+    /// it contains neither `enum` nor the comma they require. The anchors are decorative here.
+    ///
+    /// **The way that error arrived is worth more than the correction.** PR #144's F6 claimed the
+    /// unanchored case-declaration form "matches its own citation in `SonnyBackendError.swift` and
+    /// answers five"; it answers 4, because a citation escapes its parentheses and an escaped `\(`
+    /// is not the literal `(` a pattern looks for, so the line cannot match itself. That was the
+    /// **fourth** defect this repository has recorded from the write-the-command-beside-the-number
+    /// rule. Correcting it, this comment then asserted that its *other* anchor was load-bearing —
+    /// on the strength of the brace form's 5, a looser pattern, which is precisely the mistake it
+    /// had just diagnosed. That is the **fifth**, and it arrived inside the correction of the
+    /// fourth. The rule makes a figure checkable; it does not check it, and a parenthesis written
+    /// while correcting someone else's parenthesis gets no less attention than the number beside
+    /// it. The changelog's SONNY-131 entry repeats F6's five and stays as it is — it is a dated
+    /// record of what that review found — and SONNY-320's entry carries both corrections.
     ///
     /// **What it still does not reach is a caller that never asks it, not a shape it cannot see**,
     /// and the two known ones are filed rather than left here. The voice route's `catch` calls
