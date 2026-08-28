@@ -77,6 +77,16 @@ check "a real RATE_LIMIT_SALT is refused"     1 "RATE_LIMIT_SALT=${salt_value}"
 check "a placeholder RATE_LIMIT_SALT passes"  0 'RATE_LIMIT_SALT=replace-me'
 check "a service-role key assignment is refused" 1 "SUPABASE_SERVICE_ROLE_KEY=${salt_value}"
 check "a Resend key assignment is refused"    1 "RESEND_API_KEY=${salt_value}"
+# SONNY-135: the entitlement claim's Ed25519 signing key, which is base64 of a DER key and so has
+# no vendor prefix either. It is the only name on that list whose leak lets the holder MINT rather
+# than merely read -- a claim granting any capability to any account -- so the two directions are
+# both checked: the key itself is refused, and the `_ID` beside it, which is not a secret and whose
+# values are long enough to have been caught by a looser pattern, is not.
+entitlement_key="$(openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null | base64 | tr -d '\n')"
+[[ -n "$entitlement_key" ]] || entitlement_key="$(printf 'M%.0s' {1..64})"
+check "an entitlement signing key is refused" 1 "ENTITLEMENT_SIGNING_KEY=${entitlement_key}"
+check "its lowercase YAML spelling is refused" 1 "  entitlement_signing_key: \"${entitlement_key}\""
+check "the key ID beside it is not a secret"  0 "ENTITLEMENT_SIGNING_KEY_ID=entitlement-2026-08-28-a"
 # A lockfile-style hash must NOT be caught: a generic entropy rule would flag every one of them,
 # and this pattern is name-anchored precisely so it does not.
 check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"

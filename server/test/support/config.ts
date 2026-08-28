@@ -1,6 +1,20 @@
+import { generateKeyPairSync } from "node:crypto";
 import { providers, type Config } from "../../src/config.js";
 import { DEFAULT_ROUTE_CHAINS, UNVERIFIED_DATA_POLICY } from "../../src/model/provider-router.js";
 import { TEST_SUPABASE_CONFIG } from "./tokens.js";
+
+/**
+ * One Ed25519 key per test process, in the encoded form `Config` carries.
+ *
+ * **Bound to a name that does not spell the variable it fills**, exactly as `authdeps.test.ts` and
+ * `config.test.ts` do and for their stated reason: a line spelling a known-secret variable followed
+ * by a long literal is the shape `npm run check:secrets` refuses, correctly, wherever it appears —
+ * and it refuses a *generated* value the same way it would refuse a real one, because the scanner
+ * reads the source and not the runtime. The first spelling of this line was a finding.
+ */
+const TEST_SIGNING_KEY = generateKeyPairSync("ed25519")
+  .privateKey.export({ type: "pkcs8", format: "der" })
+  .toString("base64");
 
 /**
  * One `Config` for every test that builds an app, replacing five hand-written copies (SONNY-130).
@@ -43,6 +57,16 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     // deployment that says nothing about it gets. A test that cares about the clock overrides them.
     contentRetentionDays: 30,
     contentExpirySweepSeconds: 3600,
+    // SONNY-135. A key per process rather than a literal — `support/entitlement.ts` says why a
+    // signing key is the one fixture this suite generates instead of writing down. The `Config`
+    // carries the encoded form; `requireEntitlementSigningKey` is what turns it into a key object,
+    // so a test that builds an app exercises that parse rather than stepping around it.
+    entitlementSigningKey: TEST_SIGNING_KEY,
+    entitlementSigningKeyId: "test-key-1",
+    // A cap high enough that no test meets it by accident; the tests that are *about* the cap set
+    // their own. A number here is a test fixture and not an allowance — `config.ts` carries the
+    // distinction, and SONNY-212 owns the real ones.
+    spendCapUnits: 1_000_000,
     ...TEST_SUPABASE_CONFIG,
     openAIBaseUrl: "https://openai.invalid/v1",
     openAITextModel: "test-text-model",

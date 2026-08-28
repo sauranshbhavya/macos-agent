@@ -28,6 +28,7 @@ Run from `server/`.
 | `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
 | `npm run snapshots -- build\|list\|trace\|sweep` | Build the documented corpus training reads from, see which snapshots hold a task's content, or run the content-expiry sweep by hand. |
+| `npm run entitlements -- show\|grant\|revoke\|restore\|sweep\|public-key` | What an account is allowed and what it has spent, plus the operator writes that set it. Needs `DATABASE_URL` and a prior `npm run build`. See "What an account is allowed" below. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
@@ -261,6 +262,107 @@ direction is deliberate: "unable to double-bill a user" errs toward the user.
 
 **An incognito run is metered identically.** §10.1: incognito changes what is stored, never what is
 billed. Its event carries `retention: none` and every cost field a standard run's carries.
+
+## What an account is allowed, and what stops it spending forever (SONNY-135)
+
+Two questions, answered separately because they fail differently.
+
+**"Is this user allowed to do this?"** is answered on the Mac, from a signed claim, **with no network
+call** — contract §5.3. `GET /v1/account/entitlements` returns a JWS the client verifies against a
+public key it ships with, carrying the account's plan, its capability list, an expiry, a grace window
+and a skew tolerance. That is what makes §16.3's guarantee possible at all: a client that has to ask
+the server "may I" is a client that cannot answer offline.
+
+**"Have they used more than they are allowed?"** is answered here, in Postgres, before any provider
+is called.
+
+### The claim, and the four durations
+
+| value | seconds | what it buys |
+|---|---|---|
+| lifetime | 86,400 (24 h) | how long a minted claim is valid |
+| refresh after | 28,800 (8 h) | when a client should fetch a new one — a third of the lifetime, so one missed refresh does not spend the grace window |
+| grace | 259,200 (72 h) | how far past expiry a cached claim may still be honoured |
+| skew tolerance | 300 (5 min) | how much clock disagreement the client absorbs, in both directions |
+
+**The revocation bound is those numbers and is stated in both directions, because they differ.**
+Online, a cancelled subscription stops working within **8 hours** — the next refresh carries a fresh,
+signed, capability-less claim, and nothing has to expire for it to take effect. Offline, nothing can
+be delivered, so the bound is the claim's own life plus the grace window: **96 hours** on a Mac that
+never reaches the network in that time, and immediate the moment it does. §5.3 says "revocation
+reaches a live client within the claim's lifetime"; that is true of an online client and understates
+the offline case, which is why both are written here.
+
+**Signed with Ed25519 and never with a shared secret.** The access tokens this gateway verifies use
+HS256, which is right there — the same process that verifies also has to call the project. It is
+exactly wrong here: this claim is verified on every user's Mac, and a symmetric algorithm would mean
+every copy of the app shipping a key that can *mint* a claim for any user with any capability list.
+`ENTITLEMENT_SIGNING_KEY` is therefore the one credential on this page whose leak is a **write**.
+
+### The spend cap, and what happens when two requests race it
+
+The counter is a row per account per period in Postgres — `sonny.usage_period(account_id,
+period_start, cap_units, spent, reserved)` — and the whole mechanism is **one statement**:
+
+```sql
+UPDATE sonny.usage_period
+   SET reserved = reserved + $amount
+ WHERE account_id = $account AND period_start = $period
+   AND spent + reserved + $amount <= cap_units
+RETURNING reserved;
+```
+
+No rows returned means the cap is reached, and the request is refused with `429 limit.spend` **before
+any provider is called**. Under READ COMMITTED — Postgres's default and Supabase's — an `UPDATE` that
+meets a row a concurrent transaction has just updated does not use the snapshot it began with: it
+waits, then re-evaluates its own `WHERE` against the new row version. So the second racer tests the
+cap against a row already carrying the first one's reservation and is skipped. No advisory lock, no
+`SELECT … FOR UPDATE`, no retry loop, and no read-then-write window.
+
+`docs/sonny-row-12-host-decision.md` §9 is where that mechanism was measured and named;
+`test/entitlement.db.test.ts` is where this implementation is held to it, against a real Postgres,
+under a forced interleaving and a fifty-way race — **with the naive read-then-write committed beside
+it as a control**, because a race test with no control passes whether or not the property holds.
+
+**Reserve, then settle.** The hold is taken before the upstream call and closed after it: charged if
+a provider was reached, released if none was. A request the host kills between the two leaks its hold
+until `npm run entitlements -- sweep` reclaims it — the reservation's `expires_at` is 300 seconds,
+which clears §12's longest route deadline (105 s) by enough that a running request can never have its
+own hold swept out from under it.
+
+**One metered call is one unit, and that is a consequence rather than a price.** A cost-weighted cap
+needs a credit weight, and credit weights are SONNY-212's. So the cap counts calls: it bounds a
+leaked token to `SPEND_CAP_UNITS` calls in a period, each of them bounded in turn by §6.1's body
+limits and §12's deadlines. It does **not** bound the money, because a `/v1/search` and a
+twelve-iteration screen-control session are the same number of units and nowhere near the same number
+of dollars. `unitsForMeteredCall` in `src/entitlement/store.ts` is the seam a real weight lands in.
+
+### What an account is allowed, from a terminal
+
+```
+npm run entitlements -- show <account-id>
+npm run entitlements -- grant <account-id> --plan <key> [--capability <key>]... [--cap <units>]
+npm run entitlements -- revoke <account-id>      # next claim carries no capabilities
+npm run entitlements -- restore <account-id>
+npm run entitlements -- sweep                    # reclaim holds whose request never came back
+npm run entitlements -- public-key               # the public half, for a client's shipped key set
+```
+
+**Nothing else writes `sonny.entitlement` yet**, which is why this command exists: row 13 owns the
+account and plan UI, and until it lands this is the only way to put an account into a state. `grant`
+refuses without `--plan` rather than choosing one, because a plan key this command picked would be a
+tier this repository invented.
+
+**An account with no row is entitled to nothing and capped at the deployment's `SPEND_CAP_UNITS`.**
+Both halves are fail-closed and they fail closed differently: no capabilities means every gated
+capability is refused, and a `NULL` cap means the deployment's rather than none.
+
+### Which routes are gated
+
+**None, and that is this ticket's answer rather than an omission.** `CAPABILITY_REQUIRED` in
+`src/entitlement/hook.ts` is empty: row 18 (SONNY-23) owns which capability keys gate which features,
+and row 12 owns making that gating possible. Every metered route spends against the cap; nothing
+requires a capability. An entry in that map is a product decision.
 
 ## Authenticating a request
 
@@ -601,8 +703,12 @@ decision 2026-08-27), so a credentialed local container is this one command rath
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
 `SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added at the extension point
 SONNY-306 left, by SONNY-130 then SONNY-131 — `OPENAI_API_KEY`, `TAVILY_API_KEY` and
-`VISION_API_KEY`, the three credentials the five model routes need. Nine names
-(`awk '/^PASSTHROUGH=\(/,/^\)/' server/scripts/deploy.sh | grep -cE '^  [A-Z]'` → 9). `SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
+`VISION_API_KEY`, the three credentials the five model routes need, and — by SONNY-135 —
+`ENTITLEMENT_SIGNING_KEY`, `ENTITLEMENT_SIGNING_KEY_ID` and `SPEND_CAP_UNITS`, which are required
+wherever auth is mounted. **The count is deliberately not written here**: it is
+`awk '/^PASSTHROUGH=\(/,/^\)/' server/scripts/deploy.sh | grep -cE '^  [A-Z]'`, run against the
+tree in front of you, because this sentence has already been a number that a later ticket made stale.
+`SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
 `SUPABASE_SERVICE_ROLE_KEY` is **not** forwarded, above. It tracks `src/config.ts`, which is the
 only thing that decides what the gateway reads, and the script's own comment carries the command
 that re-derives it. Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the
@@ -612,7 +718,7 @@ one is missing: the absent ones are named, by name only, and the container start
 **What that container serves depends on what you set, and the script probes it rather than asserting
 it**: after the health check it asks `POST /v1/auth/email/start` what it answers and prints the
 result. Set none of the three `SUPABASE_` names and it is `404 resource.not_found` — health-only,
-which is a supported deployment. Set all six and it answers `400`, which is `startBody` refusing
+which is a supported deployment. Set the whole auth set and it answers `400`, which is `startBody` refusing
 the probe's empty body: the route exists. **Until SONNY-307 it was 404 whatever you set**, because
 `src/server.ts` called `buildApp(config)` with no `auth` argument and no concrete `AuthProvider`
 existed; that ticket built both and the probe flipped with no edit to it, which is what probing was

@@ -12,6 +12,7 @@ import {
   type KeyStore,
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
+import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 
 /**
@@ -134,7 +135,7 @@ function build() {
   return buildApp(
     testConfig({ credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }] }),
     { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
-    { idempotencyStore: store },
+    { idempotencyStore: store, entitlementStore: fakeEntitlementStore() },
   );
 }
 

@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import { requireRateLimitSalt, requireSupabaseJwtPolicy, type Config } from "./config.js";
+import {
+  requireEntitlementSigningKey,
+  requireRateLimitSalt,
+  requireSpendCapUnits,
+  requireSupabaseJwtPolicy,
+  type Config,
+} from "./config.js";
+import { registerEntitlement } from "./entitlement/hook.js";
+import { postgresEntitlementStore, type EntitlementStore } from "./entitlement/store.js";
+import { registerEntitlementRoutes } from "./routes/entitlements.js";
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
@@ -97,6 +106,16 @@ export interface AppOverrides {
    * SQL, the clock and the structural exclusions underneath.
    */
   readonly contentStore?: ContentStore;
+  /**
+   * **`entitlementStore` exists for the fourth time and the fourth identical reason** (SONNY-135).
+   * The cap's counter is Postgres, so without a seam every behaviour this ticket is about *except*
+   * the race itself — which refusal each state produces, whether a hold is charged or released,
+   * that a replay takes no hold, that a free capability never asks — would be verified only in
+   * `npm run test:db`, and the run this repository gates on would be silent about the check that
+   * decides whether a user can do anything at all. `entitlement.db.test.ts` proves the SQL and the
+   * race underneath, against a real Postgres, because a race against a fake proves nothing.
+   */
+  readonly entitlementStore?: EntitlementStore;
 }
 
 export function buildApp(
@@ -394,9 +413,66 @@ export function buildApp(
   // above is not among them, for the reason its own comment gives.
   app.log.info(describeRouting(config), "model routing");
 
+  /**
+   * Contract §5.3's entitlement check and §7.2's `limit.*` and `entitlement.*` refusals, on THIS
+   * instance for the fourth time and the same reason (SONNY-135).
+   *
+   * **Registered after the metering hook, and both of its positions are load-bearing.** Fastify runs
+   * hooks of one kind in registration order, and this module has a `preHandler` and an `onSend`:
+   *
+   * - Its **`preHandler` runs after the idempotency hook's**, which is what stops a repeat spending
+   *   the cap twice. A replay and both `409`s are answered from inside that hook with `reply.send`,
+   *   which ends the `preHandler` chain — so this hook does not run for them at all, and the request
+   *   that really does the work is the only one that takes a hold.
+   * - Its **`onSend` runs after the metering hook's**, so §11's event is written before the charge
+   *   that cites it. That is the property the host decision's "same transaction as the metering
+   *   event" was after — *a charge cannot exist without its audit row* — reached by ordering rather
+   *   than by coupling, because `MeteringStore` and `EntitlementStore` lease their own connections
+   *   by construction and merging their transactions is the coupling SONNY-300's seam exists to
+   *   avoid.
+   *
+   * **What the window between them costs, traced rather than asserted**, since PR #147's F6 left
+   * exactly this weighing to "the ticket that owns the spend cap". A process killed between the
+   * metering write and the settle leaves an event and an **unsettled hold**. The hold is not lost:
+   * `expires_at` is 300 seconds out and `sonny.sweep_expired_reservations` reclaims it, so the
+   * account is briefly held against its own cap and is never over-charged, and the audit row that
+   * says the call happened is already on disk. The reverse order would leave a *charge* with no
+   * event — money moved with nothing recording what moved it, which is the direction this whole row
+   * exists to close.
+   */
+  const entitlementStore =
+    overrides.entitlementStore ?? (auth ? postgresEntitlementStore(auth.withConnection) : undefined);
+  registerEntitlement(
+    app,
+    auth && entitlementStore
+      ? {
+          store: entitlementStore,
+          defaultCapUnits: requireSpendCapUnits(config),
+          rateLimitSalt: requireRateLimitSalt(config),
+          now: auth.now,
+        }
+      : undefined,
+  );
+
   if (auth) {
     requireRateLimitSalt(config);
     registerAuth(app, config, auth);
+    /**
+     * `GET /v1/account/entitlements`, mounted with the auth routes because it is the one route that
+     * needs a signing key, and `requireEntitlementSigningKey` refuses at startup rather than letting
+     * it answer an error on the first real request.
+     *
+     * **`entitlementStore` is non-null in this branch by construction** — it is built from `auth`
+     * three lines above — and the `if` is what tells the compiler so rather than a non-null
+     * assertion, which would be a claim instead of a check.
+     */
+    if (entitlementStore) {
+      registerEntitlementRoutes(app, {
+        store: entitlementStore,
+        signingKey: requireEntitlementSigningKey(config),
+        now: auth.now,
+      });
+    }
   }
   return app;
 }

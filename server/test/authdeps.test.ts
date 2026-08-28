@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { authWiringFrom, intendsAuth } from "../src/auth/deps.js";
@@ -36,6 +37,9 @@ const serviceRole = "a-service-role-key";
 const anon = "an-anon-key";
 const issuer = "https://project-ref.supabase.co/auth/v1";
 const database = "postgres://postgres:postgres@localhost:55433/postgres";
+const signingKey = generateKeyPairSync("ed25519")
+  .privateKey.export({ type: "pkcs8", format: "der" })
+  .toString("base64");
 
 /**
  * A complete sign-in environment — **and it deliberately carries no `SUPABASE_SERVICE_ROLE_KEY`**,
@@ -48,6 +52,14 @@ const AUTH_ENV = {
   SUPABASE_JWT_SECRET: secret,
   SUPABASE_JWT_ISSUER: issuer,
   SUPABASE_ANON_KEY: anon,
+  // SONNY-135's three. The key is generated rather than written down for the reason
+  // `support/entitlement.ts` gives — it is the private half of the thing that grants capabilities,
+  // and a literal one in the repository is a working minting key — and it is a *real* key rather
+  // than a placeholder because `requireEntitlementSigningKey` parses it, so a stand-in would make
+  // every test here fail on the parse instead of on the shape they are about.
+  ENTITLEMENT_SIGNING_KEY: signingKey,
+  ENTITLEMENT_SIGNING_KEY_ID: "test-key-1",
+  SPEND_CAP_UNITS: "1000",
 } as NodeJS.ProcessEnv;
 
 /**
@@ -168,12 +180,16 @@ describe("a half-configured sign-in refuses at startup", () => {
       "SUPABASE_JWT_ISSUER",
       "DATABASE_URL",
       "RATE_LIMIT_SALT",
+      // SONNY-135's three, listed in the same message rather than discovered one restart at a time.
+      "ENTITLEMENT_SIGNING_KEY",
+      "ENTITLEMENT_SIGNING_KEY_ID",
+      "SPEND_CAP_UNITS",
     ]) {
       expect(error!.message).toContain(name);
     }
-    // The count is asserted, not just the names: a message that listed a fifth would still contain
-    // all four of the above.
-    expect(error!.message).toContain("4 variables are missing");
+    // The count is asserted, not just the names: a message that listed an eighth would still
+    // contain all seven of the above.
+    expect(error!.message).toContain("7 variables are missing");
     // The one that IS set is not listed as missing.
     expect(error!.message).not.toContain("SUPABASE_ANON_KEY,");
     // **And the one that is no longer required is not listed either** (founder decision 2026-08-27,
