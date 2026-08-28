@@ -72,14 +72,26 @@ public enum UntrustedContentBoundary {
     /// — cryptographically secure on Apple platforms. Nothing here *needs* that, by the paragraph
     /// above; it costs nothing and removes the argument.
     ///
-    /// **`A`–`Z` rather than a wider alphabet, and that is load-bearing rather than cosmetic.** Three
-    /// separate arguments in this file depend on every delimiter character being drawn from `[A-Z_]`:
-    /// ``escapeAttribute(_:)``'s fold-escape-fold ordering, which is safe only because the `_` it emits
-    /// is the *only* delimiter character a fold can supply; ``foldingLineBreaks(in:)``'s marker being
-    /// safe because neither `\` nor lowercase `n` appears in a delimiter; and ``canonicalBase(of:)``'s
-    /// `uppercaseLetter` guard, whose 244-scalar census is over scalars decomposing to an ASCII
-    /// `[A-Z_]` base. A tag containing a digit or a lowercase letter would falsify all three, for
-    /// about half a bit per character.
+    /// **`A`–`Z` rather than a wider alphabet, and it is load-bearing — but by one argument, not
+    /// three** (PR #158 review, F3; this paragraph claimed three and was over-claimed). Re-derived
+    /// over the **whole** scalar range rather than the U+0080–U+212B window the in-tree test scans —
+    /// canonical decomposition, ASCII base, all-mark tail — the census is: **244** scalars decompose
+    /// to an ASCII `[A-Z_]` base, **0** to an ASCII digit, and **246** to an ASCII `[a-z]` base, of
+    /// which all 246 are *not* category `uppercaseLetter`. Taking the three arguments one at a time
+    /// against that:
+    ///
+    /// - ``canonicalBase(of:)``'s `uppercaseLetter` guard **is** falsified, and only by lowercase:
+    ///   246 scalars would decompose to a base the guard never computes. A digit costs it nothing,
+    ///   because zero scalars canonically decompose to one.
+    /// - ``escapeAttribute(_:)``'s fold-escape-fold ordering is **not** affected either way.
+    ///   ``foldingSeparators(in:)`` emits `_` and nothing else, whatever the tag alphabet is.
+    /// - ``foldingLineBreaks(in:)``'s marker is **not** affected either. Completing a delimiter from
+    ///   that fold would need a literal `\`, which no alphabet made of letters or digits contains;
+    ///   the lowercase `n` alone completes nothing.
+    ///
+    /// So the alphabet is worth keeping and a lowercase tag really would break something — but this
+    /// is the paragraph a future session reads when asked to widen the tag, and it should say which
+    /// one.
     ///
     /// **One tag for both pairs, not one each.** The trusted-instruction pair gets the same treatment
     /// as the observed pair — the ticket asked, and the answer is yes, since PR #100 found that pair
@@ -140,9 +152,22 @@ public enum UntrustedContentBoundary {
         ///
         /// Failable rather than sanitising, because a tag quietly rewritten into something the caller
         /// did not ask for is the shape where a test asserts against a delimiter the code never wrote.
-        /// Production has exactly one construction site and it is ``forOnePrompt()``; this exists so a
-        /// test can name the delimiter text it is asserting on.
-        public init?(tag: String) {
+        ///
+        /// **`internal`, not `public`, and that is the compiler doing what a sentence was doing**
+        /// (PR #158 review, F6.1). This was `public`, and the paragraph above it said "production has
+        /// exactly one construction site and it is `forOnePrompt()`" — a claim backed by a `git grep`
+        /// that exits 1 today and by nothing that would keep it exiting 1. `Delimiters(tag: "A")` is
+        /// a valid, production-reachable boundary whose tag is *chosen* rather than drawn: zero
+        /// entropy against anyone who can read the source, 26 guesses against anyone who cannot, and
+        /// the type still says `Delimiters`. Narrowing it to `internal` puts that out of
+        /// `Sources/MacAgent`'s reach entirely — the executable target imports the module and cannot
+        /// call it at all — and the half the compiler cannot reach, a caller inside `MacAgentCore`
+        /// itself, is held by
+        /// `UntrustedContentBoundaryTagTests.noProductionSourceMintsABoundaryOfItsOwn`.
+        ///
+        /// It exists so a test can name the delimiter text it is asserting on;
+        /// `BoundaryTestFixtures.swift` reaches it through `@testable import`.
+        init?(tag: String) {
             guard !tag.isEmpty, tag.unicodeScalars.allSatisfy({ (65...90).contains($0.value) }) else {
                 return nil
             }

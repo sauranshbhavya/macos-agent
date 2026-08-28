@@ -131,7 +131,8 @@ struct LocalRedactionTextTests {
 
     // MARK: - The two shapes a developer's screen is made of (SONNY-278)
 
-    /// **A `File.swift:129-131` line-range citation is not a one-time code.**
+    /// **A `File.swift:129-131` line-range citation is not a one-time code, and neither is the bare
+    /// continuation form.**
     ///
     /// The lines below are real, copied out of this repository's own tracked Markdown, which is
     /// where the ticket was filed from: the unlabeled spaced pair painted 98 of them across the
@@ -144,7 +145,11 @@ struct LocalRedactionTextTests {
             "`VisionSessionContainment.swift:205`, `:209-210`, with a note",
             "(`server/test/linking.db.test.ts:773-783`), which is the one that matters",
             "`AutomationStores.swift:296-300` vs `:161-172`",
-            "AgentRunner.swift:110-119"
+            "AgentRunner.swift:110-119",
+            // The bare continuation form, which carries no token in front of its colon at all — 23
+            // of the 106 colon-bound pairs in the measured corpus (PR #158 review, F2).
+            "and `:778-779` beside it",
+            "server/test/linking.db.test.ts:773-783"
         ] {
             let payload = textService().redactText(citation)
             #expect(payload.report.isEmpty, Comment(rawValue: citation))
@@ -208,6 +213,58 @@ struct LocalRedactionTextTests {
                 Comment(rawValue: labelled)
             )
             #expect(payload.maskedText?.hasSuffix("•••••") == true, Comment(rawValue: labelled))
+        }
+    }
+
+    /// **A label pressed against its colon keeps its match — the shape a colon-only refusal lost**
+    /// (PR #158 review, F2; founder ruling on the fix).
+    ///
+    /// Every one of these was masked before this branch, and the first version of the refusal
+    /// stopped masking them: it fired on any hyphenated pair against a colon, and the contextual
+    /// rule recovers only the seven context words it knows — so `2FA:483-291` survived by accident
+    /// while `MFA:483-291` and `PIN:483-291` did not. **On both paths**, because `redactCapture`
+    /// paints from the same `matches(in:)` and no match means no paint. Newly un-painting a labelled
+    /// secret is the wrong direction on a redaction path whatever it buys in false positives.
+    @Test
+    func aLabelPressedAgainstItsColonIsStillMasked() {
+        for labelled in [
+            "PIN:483-291",
+            "token:483-291",
+            "MFA:483-291",
+            "Auth:483-291",
+            "2FA:483-291",
+            "Ref:129-131",
+            "OTP:483-291"
+        ] {
+            let payload = textService().redactText(labelled)
+            #expect(payload.maskedText?.contains("•••••") == true, Comment(rawValue: labelled))
+            #expect(payload.maskedText?.contains("483") == false, Comment(rawValue: labelled))
+            #expect(
+                payload.report.map(\.detectionClass) == [.oneTimeCode],
+                Comment(rawValue: "\(labelled) -> \(payload.report.map(\.detectionClass))")
+            )
+        }
+    }
+
+    /// **What the discriminator costs, measured rather than estimated.**
+    ///
+    /// A Swift type name cited without its `.swift` extension reads as a label under any rule that
+    /// does not know Swift, so it is painted. Over the corpus materialised at `4824e50` that is
+    /// **one** occurrence of **106** colon-bound hyphenated pairs — this exact one, from the
+    /// changelog — against the whole labelled class recovered. A length cap would refuse it and is
+    /// deliberately not added: a threshold chosen to exclude a 22-character type name would have to
+    /// be argued against `verification_code:` at 17.
+    @Test
+    func aTypeNameCitedWithoutAnExtensionIsPaintedAndThatIsTheMeasuredCost() {
+        let payload = textService().redactText("`InstantCommandResolver:275-276` really does keep both")
+        #expect(payload.report.map(\.detectionClass) == [.oneTimeCode])
+        #expect(payload.maskedText?.contains("275") == false)
+
+        // And the two forms it is being told apart from, on the same line shape.
+        for locator in ["`AgentRunner.swift:110-119` really does keep both", "`:275-276` really does keep both"] {
+            let refused = textService().redactText(locator)
+            #expect(refused.report.isEmpty, Comment(rawValue: locator))
+            #expect(refused.maskedText == locator, Comment(rawValue: locator))
         }
     }
 
