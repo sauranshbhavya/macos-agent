@@ -11,6 +11,7 @@ import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocatio
 import { normalizeEmail } from "../src/auth/identity.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 import { up } from "../src/db/migrate.js";
 
 const url = process.env["DATABASE_URL"];
@@ -208,7 +209,13 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("leaves ONE live code behind when three requests arrive together", async () => {
+    // **Declared under the hang backstop rather than with vitest's default five seconds**
+    // (SONNY-335, SONNY-241). This test and the one below it met that default three times under
+    // mutation-battery load and were counted as kills for mutants their request path cannot reach.
+    // Nothing about what they assert changes; what changes is the bound they wait under and the
+    // wording that bound fails with. `support/backstop.ts` carries the measurements and the reason
+    // the Swift half's observation floor does not transfer.
+    itUnderHangBackstop("leaves ONE live code behind when three requests arrive together", async () => {
       // PR #87 second round, F11. Invalidate-then-record as two statements is fine one request at a
       // time and wrong under concurrency: three simultaneous starts each invalidated what they could
       // see and each inserted afterwards, and none could see the other two's uncommitted inserts —
@@ -244,7 +251,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("leaves ONE live code when the three requests are PLUS-TAG VARIANTS of one mailbox", async () => {
+    itUnderHangBackstop("leaves ONE live code when the three requests are PLUS-TAG VARIANTS of one mailbox", async () => {
       // **The test above raced one literal address, and could not fail** (PR #87 third round, F4).
       // It was written as the regression guard for the single-live-code guarantee and it was
       // structurally incapable of seeing the way that guarantee was actually broken: the code

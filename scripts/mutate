@@ -947,7 +947,9 @@ log_path, decl_path = sys.argv[1], sys.argv[2]
 # emptying the list.
 ALWAYS_TRUSTED = frozenset({
     "theDeclarationFileParsesAndEveryRecordIsComplete",
+    "everyTestTreeThisScanReadsIsReadToSomething",
     "everyDeclaredSourceStillAppearsAtTheSiteCountItDeclares",
+    "theSiteCountCheckRefusesARecordThatDeclaresNoSites",
     "theHarnessAlwaysTrustsExactlyTheTestsInThisSuite",
     "noDeclaredSignatureAppearsInThisSuitesOwnSource",
 })
@@ -2192,6 +2194,59 @@ printf "      Tests  26 passed (26)\n"'
               "0 killed, 0 survived, 1 unattributed"
   st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
 
+  # The first record whose source lives in the server half, and the two directions that matter
+  # (SONNY-335, SONNY-241). The arm above proves a vitest failure can be excused at all, using one
+  # of the swift half's signatures; these two prove that the record written FOR the server half
+  # excuses exactly its own construct and nothing else. The declaration this fixture carries is the
+  # real one, so rewording it in mutate-untrusted-failures fails here as well as in the Swift guard.
+  local vitest_server_backstop='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/auth.db.test.ts > the auth endpoints > leaves ONE live code behind when three requests arrive together\n"
+  printf "Error: waited 60.0s for: leaves ONE live code behind when three requests arrive together, and it never finished.\n"
+  printf "This is a server-suite hang backstop, not a timing assertion — this deadline is far outside anything this suite has been measured at.\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 38 passed (39)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  39 passed (39)\n"'
+
+  printf '\n==> The server half has a declaration of its own, and its hang backstop is not a kill\n'
+  st_run "$vitest_server_backstop" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is still named" "$ST_OUT" "leaves ONE live code behind"
+  st_contains "and the server-half signature that disqualified it is shown" "$ST_OUT" \
+              "This is a server-suite hang backstop"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
+
+  # And the direction that keeps that record narrow. vitest's own timeout message is shared by every
+  # test in this repository, so a declaration matching it would excuse every timeout everywhere —
+  # genuine mutation kills included, which is the mirror of the manufactured kill this whole
+  # mechanism exists to stop (SONNY-315). Nothing declares it, and this arm is what says so.
+  local vitest_generic_timeout='printf " RUN  v4.1.11 /repo/server\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n"
+  printf " FAIL  test/auth.db.test.ts > the auth endpoints > leaves ONE live code behind when three requests arrive together\n"
+  printf "Error: Test timed out in 5000ms.\n"
+  printf "If this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n"
+  printf "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+  printf " Test Files  1 failed (1)\n"
+  printf "      Tests  1 failed | 38 passed (39)\n"
+  exit 1
+fi
+printf " Test Files  1 passed (1)\n"
+printf "      Tests  39 passed (39)\n"'
+
+  printf '\n==> vitest own timeout message is declared by nothing, so it still counts as evidence\n'
+  st_run "$vitest_generic_timeout" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the kill is counted and attributed" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test is named" "$ST_OUT" "leaves ONE live code behind"
+  st_absent "nothing excused it" "$ST_OUT" "UNATTRIBUTED"
+
   printf '\n==> A baseline red only on declared failures continues instead of costing the whole run\n'
   st_run "$untrusted_baseline" "$root/kill.plan"
   st_eq "the battery still exits 0" "$ST_EXIT" "0"
@@ -2405,6 +2460,20 @@ exit 1'
   st_eq "every signature carries the site count that makes the source check bite" \
         "$sites_count" "$signature_count"
   st_eq "every signature carries a reason" "$reason_count" "$signature_count"
+
+  # And none of those counts is zero (SONNY-334). `found == sites` in the Swift guard is satisfied
+  # by a scan that finds nothing when a record declares nothing, so a record can be zeroed into
+  # protecting nothing while the file still reads as protection — which is the shape the count was
+  # added to prevent, through the one door it did not watch. Checked here as well as there for the
+  # reason the empty-signature guard above is: this harness must not depend on the Swift suite
+  # having been run, and a battery over a server-half diff never runs it at all.
+  # A positive count rather than a search for zeros, so that a blank, a negative and a non-numeric
+  # value are all refused by the same check instead of one shape at a time.
+  local positive_sites
+  positive_sites="$(grep -c '^>>> sites [1-9][0-9]*[[:space:]]*$' "$UNTRUSTED_FILE" || true)"
+  positive_sites="${positive_sites//[^0-9]/}"
+  st_eq "every site count is a positive number, so none of them declares nothing" \
+        "$positive_sites" "$signature_count"
 
   printf '\n==> The default suite command — the one every real battery uses — is isolated\n'
   # Nothing else here can reach this line. Every check in this selftest replaces the suite
