@@ -132,8 +132,10 @@ SELECT id, supabase_user_id, linked_at, linked_at,
  WHERE supabase_user_id IS NOT NULL;
 
 -- The trigger. Fires on INSERT, and on any UPDATE whose SET list names `supabase_user_id` — which
--- rule 1's refresh always does, so a sign-in that does not change the id still bumps `last_seen_at`
--- and one that does change it supersedes the old id in the same statement.
+-- rule 1's refresh always does, so a sign-in **through `resolve()`** that does not change the id
+-- still bumps `last_seen_at` and one that does change it supersedes the old id in the same
+-- statement. That qualifier is load-bearing rather than pedantic: `POST /v1/auth/refresh` reaches a
+-- signed-in state without `resolve()` and so fires nothing here (SONNY-358).
 --
 -- **`IS DISTINCT FROM`, not `<>`, and the case it buys is NEW being NULL rather than OLD.** The
 -- `OLD.supabase_user_id IS NOT NULL` line above already settles the old side, so the two spellings
@@ -170,8 +172,22 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- identities for) → the user signs in again as the same id → they close again → nothing is owed.
 -- That route needs no supersession at all, and the reviewer measured it against `main` at `def8c3a`
 -- (`owed = 1` after the first close, `owed = 0` after the reopen and the second). It is the same
--- root cause reached without this table, and it is closed here because rule 1's refresh names
--- `supabase_user_id` on **every** sign-in, so the reopened user's next sign-in lands in this arm.
+-- root cause reached without this table, and it is closed here **for a user who returns by signing
+-- in**: rule 1's refresh names `supabase_user_id` unconditionally, so their next sign-in lands in
+-- this arm.
+--
+-- **It is NOT closed for a user who returns by refreshing, and this comment said "every sign-in"**
+-- (PR #164 cycle 2, C-F1). `resolve()` has exactly one production call site,
+-- `POST /v1/auth/email/verify`. **`POST /v1/auth/refresh` mints a full session without calling
+-- `resolve()`**, so nothing names this column and this arm never runs — the stamp survives the
+-- reopen and the second close owes nothing, reproduced over real HTTP. **Deferred by founder
+-- decision of 2026-08-29; SONNY-358 owns the remainder** and is sequenced before SONNY-313.
+--
+-- The residual carries a second premise worth stating, because it is what the refresh path's safety
+-- has been resting on unwritten: **a recorded revocation implies a dead refresh family.** Where that
+-- holds, a refresh after a real revocation 401s and the user must sign in, which reaches this arm
+-- derivatively. It fails wherever `ProviderRejected` records a revocation that did not happen —
+-- `revocation.ts`'s deliberate contract, on a classifier where any 4xx but 429 lands there.
 --
 -- **`revocation_claimed_at` is cleared with it**, which also settles the review's F8 note that a
 -- stale lease survived a come-back: a row superseded → claimed by a drain that then died →
