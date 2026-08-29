@@ -292,24 +292,31 @@ something up.)
   full run is what the closing comment's count and SHA come from; the filtered runs are how
   you get there.
 - **Start a Postgres container only if the diff touches `server/`.** A Swift-only lane starts
-  none. **And a server lane cannot assume the database it starts is its own.** `test:db`
-  honours `DATABASE_URL` (`server/package.json:24`, `${DATABASE_URL:-…}`), but two suites
-  ignore it and hardcode the connection string — `server/test/authdeps.test.ts:39` and
-  `server/test/entitlement.test.ts:849`, all three lines at `def8c3a` from `git grep -n
-  '55433' def8c3a -- server/test/authdeps.test.ts server/test/entitlement.test.ts
-  server/package.json`. So the override that looks like it separates two lanes does not, and
-  both land in one database; it collided live between two server lanes on 2026-08-29. That is
-  a **defect, not a design constraint** — filed as **SONNY-352** and being fixed — so read
-  this as a hazard with a date on it rather than a property to design around: while it
-  stands, a second server lane running the database tests shares state with the first
-  whatever `DATABASE_URL` says, and once SONNY-352 lands, separate ports are simply the
-  right answer.
-- **Past about ninety minutes, stop and report** what is done, what is left, and what the
-  remainder needs. A long lane holds a merge slot and slows every other lane on the machine
-  (step 3's cap), so splitting the remainder onto a follow-up ticket is the right answer
-  rather than pushing through. This is a third stop-and-report trigger beside the two below,
-  and unlike those two it is not a failure — a lane can be going perfectly well and still be
-  the wrong shape.
+  none. **A server lane picks its own container name and port and sets `DATABASE_URL` to
+  match**, because the documented command names one fixed pair — `--name sonny-gw-db` and
+  `-p 55433:5432` — in all four places it is written down (`git grep -l 'docker run -d --name
+  sonny-gw-db' def8c3a | wc -l` → 4: `CLAUDE.md`, `server/README.md`, the manual-test
+  checklist, and the help text `server/test/global-setup.ts` prints). Two lanes that follow
+  the documentation collide on both, and a recreated container re-initialises the database
+  under a run already using it. **The symptom names nothing on its own, which is the reason
+  it is written down here**: a suite-wide connection failure — `Test Files 11 failed | 20
+  passed` with `Connection terminated unexpectedly`, and a fresh `initdb` in the container
+  log inside that run's window — is another lane's container, not a defect in the branch
+  under test. Observed between two lanes on 2026-08-29, and that run was discarded. The test
+  side is already down to one knob (`server/test/support/database.ts`, **SONNY-352**, landing
+  on PR #163, with a guard against a file naming the port directly); **SONNY-355** is what is
+  owed on the documentation.
+- **Past about ninety minutes, stop at the next point where the tree is green and the work is
+  coherent, and hand the rest back from there** — what is done, what is left, and what the
+  remainder needs. **A lane cannot stop and report with a red tree**, so ninety minutes starts
+  the search for a stopping point rather than ending the work where it stands: a session that
+  downs tools mid-refactor leaves an uncompilable tree and a handover nobody can act on. Two
+  lanes hit that on 2026-08-29, one of them with the tree uncompilable when the ninety minutes
+  passed. A long lane holds a merge slot and slows every other lane on the machine (step 3's
+  cap), so splitting the remainder onto a follow-up ticket is the right answer rather than
+  pushing through. This is a third stop-and-report trigger beside the two below, and unlike
+  those two it is not a failure — a lane can be going perfectly well and still be the wrong
+  shape.
 
 - **Fix-in-branch rule:** any bug found during a branch's own testing is fixed in that
   branch before merge. Deferring one requires the user's explicit decision and a named
