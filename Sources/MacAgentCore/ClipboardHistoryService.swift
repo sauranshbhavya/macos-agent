@@ -359,7 +359,13 @@ extension ClipboardHistoryStore {
     /// **What this still does not prevent**, stated rather than left to be found: a call site can
     /// write `RoutineStore(fileURL: RoutineStore.realFileURL())` and reach the real path anyway.
     /// That is the point rather than a gap — the real path stays reachable, in words, and
-    /// `noTestSourceReachesARealStoreLocation` is what holds that no test writes those words.
+    /// `LocalStoreInjectionScanTests.onlyTheShippedConstantsTestsNameAStoresRealLocation` holds the
+    /// population of tests that write them. **That guard matches four spellings, not one** (PR #162
+    /// review F4): `realFileURL` is what this ticket added, but `LocalStore.<case>.fileURL()`,
+    /// `defaultDirectory(…)` and `LocalDataDeletionService.defaultStoreFileURLs()` all compile and
+    /// all resolve the same path, so a needle matching only the new one would read as complete while
+    /// three older doors stood open. Nothing holds the equivalent population in `Sources/`, where
+    /// `realFileURL` is public because `MacAgent` calls it.
     public static func defaultDirectory(fileManager: FileManager) -> URL {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
             fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")

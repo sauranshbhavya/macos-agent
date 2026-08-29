@@ -123,9 +123,28 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     private let fileURLs: [URL]
     private let quarantine: LocalDataQuarantine
 
-    public init(fileManager: FileManager = .default, fileURLs: [URL]? = nil) {
+    /// **`fileURLs` is required, and this is the type where that matters most** (SONNY-350, PR #162
+    /// review F5).
+    ///
+    /// It used to be `[URL]? = nil`, falling back to `defaultStoreFileURLs(fileManager:)` — so
+    /// `LocalDataDeletionService()` compiled and silently resolved the founder's real thirteen
+    /// files, on the one type in this repository whose whole job is to *remove* them. That is the
+    /// same shape SONNY-350 took off the thirteen store initializers and off the four store
+    /// vendors, arrived at through the same method: remove the default and see which call sites
+    /// were relying on it. This one is the fifth level and the worst of them, which the suite's own
+    /// `otherRequiredParameters` doc had already said in as many words — "its default is the real
+    /// file list and the service *deletes*".
+    ///
+    /// It was never a live defect: the only silent site in the tree was the shipping factory, and
+    /// every test already named `fileURLs:`. What it was is a door standing open on the destructive
+    /// type, held shut by nothing but every author so far having happened to walk past it.
+    ///
+    /// The real list is still reachable — `LocalDataDeletionService(fileURLs: defaultStoreFileURLs())`,
+    /// which is what `AgentViewModel.atItsRealStoreLocations()` now writes. In words, like every
+    /// other real location this ticket touched.
+    public init(fileManager: FileManager = .default, fileURLs: [URL]) {
         self.fileManager = fileManager
-        self.fileURLs = fileURLs ?? Self.defaultStoreFileURLs(fileManager: fileManager)
+        self.fileURLs = fileURLs
         self.quarantine = LocalDataQuarantine(fileManager: fileManager)
     }
 
