@@ -2083,6 +2083,45 @@ branch are internal-contract fixes with no surface a founder can read.
 something that checked nothing, and a ticked row suppresses re-checks. What SONNY-218 actually fixed
 is that `previewChain` seeds each segment's nested preview from the paths the previous one reported,
 so a wrong nested preview mis-seeds the next — held by tests, not by a human at the app.
+### Tagged segment markers — screen control and web research (new 2026-08-28, SONNY-234)
+
+The delimiters that separate what you told Sonny from what it merely observed now carry a random
+tag, generated per prompt. Nothing about this is visible in the product, so what these two rows are
+really asking is whether a longer, per-request marker changed how the models behave — which no test
+here can answer, because no test calls a model.
+
+- [ ] **(SONNY-234)** Run one ordinary screen-control task on any app — the same shape as the
+      SONNY-231 row above. What should happen is exactly what happened before: the model clicks,
+      types and finishes the goal. **The finding would be a model that has stopped following the
+      goal**, that starts describing the prompt's own markers back at you in a rationale, or that
+      asks about a "tag". Try one where a window on screen contains text pretending to be an
+      instruction, if you can arrange it, and confirm Sonny still ignores it.
+- [ ] **(SONNY-234)** Run one web-research task that fetches a real page ("summarize <url> and save
+      it as Markdown"). The note should still be grounded in that page, name it as a source, and
+      contain no marker text. **The finding would be a note that quotes a
+      `UNTRUSTED_OBSERVED_CONTENT_...` line back at you**, or one that has stopped summarizing the
+      page at all.
+
+### Redaction stops blacking out line-range citations (new 2026-08-28, SONNY-278)
+
+The one-time-code shape used to fire on every `File.swift:129-131` you had on screen, and a match
+blacks out **the whole line** for the vision model. This is visible in the pre-send review panel, so
+it is checkable rather than a claim.
+
+- [ ] **(SONNY-278)** Put a window in front that is full of line-range citations — this repository's
+      changelog, a GitHub diff, a review comment, an editor with a stack trace — and start a
+      screen-control session on it in **Safe** mode so the pre-send review panel appears. Look at the
+      thumbnail and at the "N possible secrets were blacked out" line. **The finding is a black bar
+      over a line whose only digits are a `something:129-131` citation, or a thousands-separated
+      number like `1 011 740`.** Before this change those painted; now they should not.
+- [ ] **(SONNY-278, the other direction)** With a real six-digit code visible on screen — a
+      verification code in a mail or messages window, however it is spelled: `483291`, `483 291`,
+      `483-291`, **and a label pressed straight against its colon with no space, `PIN:483-291` or
+      `token:483-291`** — start the same session. **The code must still be blacked out.** A code that
+      reaches the thumbnail unpainted is the more serious finding of the two. (The fourth spelling is
+      here because PR #158's review found the first version of this change had stopped painting it,
+      and the three spellings originally listed all put a space or a context word beside the digits,
+      so none of them could have caught that.)
 
 ## 8. How to report back
 
