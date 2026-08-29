@@ -49,9 +49,30 @@ than an answer — this line said exactly that until PR #164's review found it.
 **A closed account is no longer the only way to owe one.** `sonny.identity_provider_user` keeps every
 Supabase user id an identity has ever named, and a **superseded** one — an id the identity used to
 name and no longer does, which is what Supabase re-keying a subject looks like from here — is owed a
-revocation from the moment it is superseded, on a live account. `provider_session_revoked_at` means
-"the revocation owed for that id's **current episode** has been performed", not "this id has been
-revoked at least once": observing the id again starts a new episode and clears the stamp.
+revocation from the moment it is superseded, on a live account.
+
+**What `provider_session_revoked_at` means, and what it is not allowed to mean** (migration 0015,
+SONNY-358). It means **"no revocation is outstanding for this id"** — the provider was already
+asked, and nothing has happened since that would make the answer stale. It does **not** mean "this
+id has been revoked at least once", and it does **not** mean the provider actually ended the
+sessions: `ProviderRejected` is recorded as done and any 4xx but 429 is `ProviderRejected`, so a
+mechanism answering 401 with every session alive writes the same stamp a real revocation writes.
+Nothing may rest on the stronger reading.
+
+Three things clear the stamp, and the first two are the ones that make the meaning hold: **the
+account closing**, **the id being superseded** — the two conditions that make a revocation owed in
+the first place — and, from 0014, the identity **observing the id again**. 0014 had only the third,
+which is safe only while a revoked user can come back no way but signing in. Three routes falsify
+that and each ended with a reopened-then-closed account owing nothing: the user comes back through
+`POST /v1/auth/refresh`, which never calls `resolve()`; the account is reopened and re-closed with
+nobody coming back at all; or the user comes back as a *different* provider-side user, so the
+stamped id is superseded rather than observed.
+
+**Operationally that means a reopened account re-owes a revocation it has already had.** An account
+closed, drained, reopened and closed again asks the provider about the same id a second time, and
+`npm run revocations` reports it as owed until it does. That is intended: a redundant idempotent
+call is the price of never missing a real one, and the provider answering "no such session" is
+recorded as done.
 
 This matters because a closed account can no longer be attributed to its caller, by design, so the
 user cannot retry it themselves. Before the debt was recorded (PR #87 third round, F1) one transient
