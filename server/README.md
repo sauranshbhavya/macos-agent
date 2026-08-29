@@ -502,6 +502,18 @@ Staging exists precisely for this, so the rule is stated rather than implied:
 3. Apply on staging **again**, so what production receives is a path that has been walked twice.
 4. Only then apply on production.
 
+**No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Several
+migrations take `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0006 and 0008 each carry an
+`ALTER TABLE`, 0014 carries two `DROP COLUMN`s, and 0005's `CREATE TRIGGER` takes
+`SHARE ROW EXCLUSIVE`. That table is what `accountForSupabaseUser` reads on **every authenticated
+request**. The statements themselves are metadata-only and each migration runs in one transaction,
+so the lock is held for microseconds; the risk is the **wait** for it, because a lock request queues
+every reader behind it. Against an idle database this is invisible, which is why it has never
+mattered: no migration has met real traffic yet. Before **SONNY-126**'s first remote deploy, decide
+whether the runner should set one — a `lock_timeout` turns "every request stalls behind a long
+transaction" into "the migration fails and is retried", which is the better failure. It is a
+deployment decision rather than any one migration's, which is why it is recorded here.
+
 The runner supports this by construction: every migration file must carry a `-- @rollback` section
 or it is refused at load, each migration runs in its own transaction, and the suites pin the whole
 lot. They are split on purpose — `test/migrate.load.test.ts` needs no database and so runs on every
