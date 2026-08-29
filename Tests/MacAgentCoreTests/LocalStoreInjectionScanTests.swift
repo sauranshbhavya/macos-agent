@@ -326,16 +326,37 @@ struct LocalStoreInjectionScanTests {
     /// store reaches the view model at all. Blanket-flagging those would flag the plumbing this rule
     /// depends on.
     ///
-    /// **The residual, so a clean run is not read as a wider claim than it is:** a wrapper written
-    /// inside `Sources/MacAgentCore/` is outside this sweep, and a wrapper anywhere that obtained its
-    /// stores from somewhere else — passed in, or read off an existing view model — names no store
-    /// type and is outside it too. What is closed is the door that was actually open: building them.
+    /// **The residual, restated because the first version of this sentence was false** (cycle 2, G1).
+    /// It said the uncovered case was "a wrapper that obtained its stores from somewhere else —
+    /// passed in, or read off an existing view model". The real one **builds** them:
+    ///
+    ///     enum StoreVendor {
+    ///         static func stores() -> (RoutineStore, TaskHistoryStore) { (.init(), .init()) }
+    ///     }
+    ///
+    /// A store *vendor* that never constructs an `AgentViewModel` writes no parameter label, because
+    /// there is no call to label, and no store type beside a parenthesis, because `.init()` names
+    /// nothing. **Neither arm of this suite reaches it, and no scan keyed on what a caller writes
+    /// can** — the label would be written by its *caller*, and its caller may legitimately be a test
+    /// fixture. `Sources/MacAgentCore/` is outside the sweep as well, for the reasons argued above.
     ///
     /// **A count, not just a file set**, for the reason PR #109's re-check gives about the factory:
     /// a second convenience written *inside* `AgentViewModel.swift` would keep the file set identical.
     /// The expected count is derived from `LocalStore.allCases` rather than written down — every
     /// store that is a parameter of its own, which is all thirteen except the clipboard history the
     /// monitor carries.
+    ///
+    /// **This suite is a tripwire, not a boundary, and it says so here because that is where a
+    /// reader meets it** (founder conclusion, PR #158 cycle 2). Five doors have now been closed on
+    /// this one hazard across four different keys — the view model's name, every spelling of that
+    /// name, the thirteen store type names, and finally a parameter label — and the vendor shape in
+    /// the residual above is reachable by none of them, because a *scan* can only see what a caller
+    /// happens to write and Swift lets a caller write almost nothing. What closes it is the
+    /// compiler: **SONNY-350** requires a location parameter on all thirteen stores, so
+    /// `RoutineStore()` and `.init()` stop compiling and the legitimate sites become named
+    /// factories. Until that lands, read a green run here as *nobody did the obvious thing*, not as
+    /// *nobody can*. **Do not spend another round widening this scan to reach the vendor shape** —
+    /// that is the fourth key failing the way the first three did.
     @Test
     func noAppSourceBuildsALocalStoreWithoutNamingItsFileURL() throws {
         let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
@@ -605,11 +626,42 @@ struct LocalStoreInjectionScanTests {
             )
         }
 
-        // The whitespace Swift allows between a label and its colon, and the identifier boundary that
-        // keeps `myRoutineStore:` from counting as `routineStore:`.
-        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(routineStore : .init())").count == 1)
-        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(routineStore\n    : .init())").count == 1)
-        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(myRoutineStore: .init())").isEmpty)
+        // **Every kind of trivia Swift permits between a label and its colon**, which is the whole
+        // reason this key closes rather than moving. The first version skipped whitespace only, and
+        // the two below compiled straight past it (cycle 2, G1). The comment openers are assembled
+        // from characters rather than written out, for the reason `skippingTrivia` gives.
+        let slash = "/"
+        let star = "*"
+        let block = slash + star + " c " + star + slash
+        let line = slash + slash + " c"
+        for (label, text) in [
+            ("plain", "f(routineStore: .init())"),
+            ("space", "f(routineStore : .init())"),
+            ("newline", "f(routineStore\n    : .init())"),
+            ("backticks", "f(`routineStore`: .init())"),
+            ("backticks and space", "f(`routineStore` : .init())"),
+            ("block comment", "f(routineStore \(block) : .init())"),
+            ("nested block comment", "f(routineStore \(slash + star + " a " + block + " b " + star + slash) : .init())"),
+            ("line comment", "f(routineStore \(line)\n    : .init())")
+        ] {
+            #expect(
+                Self.argumentLabelUses(of: "routineStore", in: text).count == 1,
+                Comment(rawValue: "\(label): \(text.debugDescription)")
+            )
+        }
+
+        // **The identifier boundary, on an input that actually reaches it.** This assertion read
+        // `myRoutineStore:` for one round and was vacuous: `myRoutineStore` does not contain
+        // `routineStore` — the `R` is capital — so the search never found the label and the boundary
+        // check never ran (cycle 2, G3). One lowercase character is the difference between a test
+        // and a sentence.
+        #expect("myRoutineStore".contains("routineStore") == false, "the old input never reached the boundary check")
+        #expect("myroutineStore".contains("routineStore"), "the new input does reach it")
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(myroutineStore: .init())").isEmpty)
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(theroutineStore: .init())").isEmpty)
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(_routineStore: .init())").isEmpty)
+
+        // And a use that is not a label at all.
         #expect(Self.argumentLabelUses(of: "routineStore", in: "let x = routineStore.load()").isEmpty)
     }
 
@@ -1328,14 +1380,24 @@ struct LocalStoreInjectionScanTests {
     /// the prefix is one of this repository's own module names, which is the same type wearing its
     /// module.
     /// Every use of `label` as an **argument label or a type-annotated binding** — the identifier,
-    /// any whitespace Swift allows, then `:` — with the preceding character not part of a longer
-    /// identifier (SONNY-269, PR #158 review F1).
+    /// any trivia Swift allows, then `:` — with the preceding character not part of a longer
+    /// identifier (SONNY-269, PR #158 review F1, and its cycle-2 G1).
     ///
     /// **Both shapes on purpose.** `f(routineStore: .init())` is the argument label, which is what
     /// makes this spelling-proof. `let settings: ClipboardHistorySettingsStore = .init()` is a type
     /// annotation and reads as the same text — and it is the shape the reviewer's wrapper used for
     /// the one store the monitor has to share, so a matcher that saw only argument positions would
     /// have missed half of the door it was written to close.
+    ///
+    /// **What may sit between the identifier and the colon is trivia, and trivia is a finite set** —
+    /// which is the whole reason this key is worth having. The first version skipped spaces, tabs
+    /// and newlines and nothing else, so `` `routineStore`: .init() `` and
+    /// `routineStore /* c */ : .init()` both compiled and both walked past it (cycle 2, G1). Swift
+    /// permits exactly: whitespace, a `//` line comment to the end of its line, and a `/* */` block
+    /// comment, which nests. All three are skipped now, and the backtick-escaped spelling of the
+    /// identifier is matched on both sides. **There is no fourth thing** — a label and its colon
+    /// cannot be separated by anything that is not trivia — so unlike the four name-keyed doors
+    /// before it, this one closes rather than moving.
     ///
     /// It deliberately does **not** try to tell a call from a declaration: the initializer's own
     /// `routineStore: RoutineStore,` counts, which is what the floor of two above is counting.
@@ -1352,13 +1414,64 @@ struct LocalStoreInjectionScanTests {
                 }
             }
             var cursor = found.upperBound
-            while cursor < source.endIndex, source[cursor] == " " || source[cursor] == "\t" || source[cursor] == "\n" {
+            // The closing half of a backtick-escaped identifier, which Swift requires on both sides
+            // and which is not trivia.
+            if cursor < source.endIndex, source[cursor] == "`" {
                 cursor = source.index(after: cursor)
             }
+            cursor = skippingTrivia(from: cursor, in: source)
             guard cursor < source.endIndex, source[cursor] == ":" else { continue }
             uses.append(String(source[found.lowerBound...cursor]))
         }
         return uses
+    }
+
+    /// The first index at or after `start` that is not whitespace or a comment.
+    ///
+    /// Block comments nest in Swift, so the depth is counted rather than stopped at the first close.
+    /// The two comment openers are assembled from single characters rather than written out, because
+    /// this file is read by scans that strip comments and a literal opener inside one is the trap
+    /// `CLAUDE.md` records under the slash-star gotcha.
+    private static func skippingTrivia(from start: String.Index, in source: String) -> String.Index {
+        let slash: Character = "/"
+        let star: Character = "*"
+        var cursor = start
+        while cursor < source.endIndex {
+            let character = source[cursor]
+            if character.isWhitespace {
+                cursor = source.index(after: cursor)
+                continue
+            }
+            guard character == slash, source.index(after: cursor) < source.endIndex else {
+                return cursor
+            }
+            let second = source[source.index(after: cursor)]
+            if second == slash {
+                while cursor < source.endIndex, !source[cursor].isNewline {
+                    cursor = source.index(after: cursor)
+                }
+                continue
+            }
+            if second == star {
+                var depth = 1
+                cursor = source.index(cursor, offsetBy: 2)
+                while cursor < source.endIndex, depth > 0 {
+                    let next = source.index(after: cursor)
+                    if source[cursor] == slash, next < source.endIndex, source[next] == star {
+                        depth += 1
+                        cursor = source.index(cursor, offsetBy: 2)
+                    } else if source[cursor] == star, next < source.endIndex, source[next] == slash {
+                        depth -= 1
+                        cursor = source.index(cursor, offsetBy: 2)
+                    } else {
+                        cursor = next
+                    }
+                }
+                continue
+            }
+            return cursor
+        }
+        return cursor
     }
 
     static func constructions(of name: String, in source: String) -> [String] {

@@ -135,9 +135,16 @@ struct LocalRedactionTextTests {
     /// continuation form.**
     ///
     /// The lines below are real, copied out of this repository's own tracked Markdown, which is
-    /// where the ticket was filed from: the unlabeled spaced pair painted 98 of them across the
-    /// docs corpus, and every one blanked its whole line for the vision model. The colon binds the
-    /// digits to the file in front of them, and nothing presents a code that way.
+    /// where the ticket was filed from: the unlabeled spaced pair fired on **98** colon-bound pairs
+    /// across the docs class of the corpus materialised at `4824e50` (and one more in the source
+    /// class, 99 in all), and every one blanked its whole line for the vision model.
+    ///
+    /// **What refuses them is the token in front of the colon, not the colon** — and this sentence
+    /// said the colon for one round, after the fix that made it false (cycle 2, G3). A colon-only
+    /// rule refuses every input below *and* refuses `PIN:483-291`, which is the false negative PR
+    /// #158's F2 was filed for. These inputs cannot tell the two rules apart, which is why they are
+    /// not the test that holds the discriminator; `aLabelPressedAgainstItsColonIsStillMasked` and
+    /// `aSpacedPairAgainstAColonIsStillDetected` are.
     @Test
     func aColonBoundLineRangeCitationIsNotAOneTimeCode() {
         for citation in [
@@ -147,9 +154,16 @@ struct LocalRedactionTextTests {
             "`AutomationStores.swift:296-300` vs `:161-172`",
             "AgentRunner.swift:110-119",
             // The bare continuation form, which carries no token in front of its colon at all — 23
-            // of the 106 colon-bound pairs in the measured corpus (PR #158 review, F2).
+            // of the 99 colon-bound pairs in the measured corpus (PR #158 review, F2).
             "and `:778-779` beside it",
-            "server/test/linking.db.test.ts:773-783"
+            "server/test/linking.db.test.ts:773-783",
+            // **A path with no extension, which is the only input that exercises the `/` half of the
+            // locator test** (cycle 2, G3). Every other locator here carries a `.` as well, and the
+            // corpus carries **0** tokens with a `/` and no `.` — so until this line the `/` clause
+            // was held by nothing at all, in the corpus or in this suite, and deleting it changed
+            // no result.
+            "see src/main:129-131 for the loop",
+            "the runner at scripts/mutate:44-46"
         ] {
             let payload = textService().redactText(citation)
             #expect(payload.report.isEmpty, Comment(rawValue: citation))
@@ -250,7 +264,7 @@ struct LocalRedactionTextTests {
     ///
     /// A Swift type name cited without its `.swift` extension reads as a label under any rule that
     /// does not know Swift, so it is painted. Over the corpus materialised at `4824e50` that is
-    /// **one** occurrence of **106** colon-bound hyphenated pairs — this exact one, from the
+    /// **one** occurrence of **99** colon-bound hyphenated pairs — this exact one, from the
     /// changelog — against the whole labelled class recovered. A length cap would refuse it and is
     /// deliberately not added: a threshold chosen to exclude a 22-character type name would have to
     /// be argued against `verification_code:` at 17.
@@ -288,7 +302,7 @@ struct LocalRedactionTextTests {
     /// still a live regression test for the F2 fix even though it no longer separates these two.
     ///
     /// **Why narrow rather than wide.** Every colon-bound false positive in the corpus measured at
-    /// `4824e50` was hyphenated — 106 of them, 0 spaced — so widening would refuse a shape no
+    /// `4824e50` was hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no
     /// measurement asked to refuse, in a detector whose whole design is fail-closed.
     @Test
     func aSpacedPairAgainstAColonIsStillDetected() {
