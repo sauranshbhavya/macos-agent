@@ -320,6 +320,23 @@ public struct LocalDataDeletionService: @unchecked Sendable {
         return result
     }
 
+    /// Exactly what this service would delete, in the order it would try.
+    ///
+    /// **A destructive object should be able to say what it reaches** — and the reason this exists
+    /// is narrower than that. Moving the wipe's list into `acrossEveryLocalStore` below stopped the
+    /// shipping factory from assembling one, but the assembly did not vanish: it moved into that
+    /// member's own body, where a mutant dropping one store still passed the whole suite
+    /// (PR #162 review, N1a). That is the same single unguarded line the pre-SONNY-350 default was,
+    /// so it is not a regression — it is the last place the hazard had left to hide, and it is now
+    /// in `MacAgentCore` where a test can reach it, which the factory's copy never was.
+    /// `theEveryStoreWipeReachesExactlyTheClassifiedStores` is that test.
+    ///
+    /// Read-only, and deliberately not a way to *change* the reach: the three delete methods take
+    /// no list, so this cannot become a second door into them.
+    public var reach: [URL] {
+        fileURLs
+    }
+
     /// The wipe over **every** local store, correct by construction (PR #162 review N1/W2).
     ///
     /// `fileURLs` became required so that `LocalDataDeletionService()` could not silently resolve

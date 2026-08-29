@@ -445,6 +445,29 @@ struct LocalStorageSecurityTests {
     /// where the suite is what complains — which is what let the fourth move cost nothing but two
     /// numerals. A fourteenth store raises this number and the one in
     /// `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
+    /// **What the shipping app's wipe actually reaches, as opposed to what the list contains**
+    /// (PR #162 review N1a).
+    ///
+    /// `theWipeReachesEveryLocalStore` pins `defaultStoreFileURLs()` against `LocalStore.allCases`
+    /// by value. That is the *list*. This pins the one member that turns that list into the service
+    /// the app runs — `acrossEveryLocalStore`, which `AgentViewModel.atItsRealStoreLocations()`
+    /// calls and nothing else does. Between the two there used to be an assembled argument at the
+    /// factory, where `Array(defaultStoreFileURLs().dropFirst())` passed the entire suite while the
+    /// wipe left `vision-sessions.json` on disk and the confirmation dialog went on naming it.
+    /// The argument is gone; this is what stops the same drop reappearing inside the member.
+    ///
+    /// Builds the service and reads its reach — it deletes nothing and touches no file.
+    @Test
+    func theEveryStoreWipeReachesExactlyTheClassifiedStores() {
+        let reach = LocalDataDeletionService.acrossEveryLocalStore().reach
+
+        #expect(reach == LocalDataDeletionService.defaultStoreFileURLs())
+        // Against the classification too, so this holds even if both sides of the line above were
+        // narrowed together — which is the mutation the equality alone cannot see.
+        #expect(Set(reach) == Set(LocalStore.allCases.map { $0.fileURL() }))
+        #expect(reach.count == LocalStore.allCases.count)
+    }
+
     @Test
     func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
