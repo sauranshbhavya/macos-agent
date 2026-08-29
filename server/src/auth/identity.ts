@@ -164,10 +164,20 @@ export async function resolve(
       // half-fix is not taken.
       //
       // **This UPDATE also ends any revocation episode for the id it writes** (PR #164 review, F1).
-      // The refresh names `supabase_user_id` on every sign-in, so the trigger's `ON CONFLICT` arm
-      // runs every time and clears `provider_session_revoked_at` — which is what stops a single past
-      // revocation making an id un-owed forever, through a come-back or through an operator
-      // reopening a closed account.
+      // This refresh names `supabase_user_id` unconditionally, so every sign-in **that reaches
+      // `resolve()`** runs the trigger's `ON CONFLICT` arm and clears `provider_session_revoked_at`
+      // — which is what stops a single past revocation making an id un-owed forever, through a
+      // come-back or through an operator reopening a closed account.
+      //
+      // **"Every sign-in" is the wrong scope and this comment used to use it** (PR #164 cycle 2,
+      // C-F1). `resolve()` has exactly one production call site, `POST /v1/auth/email/verify`, and
+      // it is not the only way to reach a signed-in state: **`POST /v1/auth/refresh` mints a full
+      // session, never calls `resolve()`, and therefore never fires the trigger.** So a user who
+      // returns by refreshing rather than by signing in keeps a stale revocation stamp, and
+      // SONNY-358's reopen route stays open for them — reproduced over real HTTP by that review.
+      // **Deferred by founder decision of 2026-08-29 and owned by SONNY-358**, sequenced ahead of
+      // SONNY-313, which is what makes it reachable. Latent until then, because `signOutAllForUser`
+      // throws unconditionally and no row reaches a non-NULL stamp in production today.
       //
       // **And a new id arriving IS the reconciliation** (SONNY-196). Supabase removes unconfirmed
       // identities on its own schedule and tells us nothing; what we see afterwards is this

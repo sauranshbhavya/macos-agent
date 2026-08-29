@@ -43,6 +43,14 @@ class RecordingProvider implements AuthProvider {
   revokedUsers: string[] = [];
   failFor = new Set<string>();
   rejectFor = new Set<string>();
+  /**
+   * Runs **inside** `signOutAllForUser`, before the call is recorded.
+   *
+   * The only way to land another connection's write in the middle of a provider call, which is what
+   * the interleaving test needs: `drainOwedRevocations` deliberately holds no transaction across
+   * that call, so the window is real rather than simulated.
+   */
+  beforeRevoke: undefined | (() => Promise<void>);
   async sendEmailCode(_email: string) { return { providerRequestId: undefined }; }
   async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
     throw new ProviderRejected("not used here");
@@ -52,6 +60,7 @@ class RecordingProvider implements AuthProvider {
   }
   async signOut(_accessToken: string) {}
   async signOutAllForUser(id: string) {
+    if (this.beforeRevoke) await this.beforeRevoke();
     if (this.failFor.has(id)) throw new ProviderUnavailable("admin API timed out");
     if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
     this.revokedUsers.push(id);
@@ -64,16 +73,24 @@ class RecordingProvider implements AuthProvider {
 
 describeDb("a superseded provider-side user is recorded, revocable, and cannot keep working", () => {
   let client: pg.Client;
+  /**
+   * A second connection, for the one test that needs a sign-in to land *during* a drain's provider
+   * call. Everything else runs on `client`; a shared connection could not express the interleaving
+   * at all, because the two writes would serialise on one session.
+   */
+  let other: pg.Client;
   let provider: RecordingProvider;
 
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
+    other = new pg.Client({ connectionString: url });
+    await other.connect();
     await client.query("DROP SCHEMA IF EXISTS sonny CASCADE");
     await client.query("DROP SCHEMA IF EXISTS sonny_meta CASCADE");
     await up(client);
   });
-  afterAll(async () => { await client.end(); });
+  afterAll(async () => { await client.end(); await other.end(); });
   beforeEach(async () => {
     await client.query("TRUNCATE sonny.identity, sonny.account RESTART IDENTITY CASCADE");
     provider = new RecordingProvider();
@@ -472,6 +489,61 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       provider.revokedUsers = [];
       await drainOwedRevocations(client, provider);
       expect(provider.revokedUsers).toEqual([SECOND]);
+    });
+
+    it("leaves a row un-stamped rather than wrongly stamped when a sign-in lands DURING the provider call", async () => {
+      // **The reviewer's test, taken as offered** (PR #164 cycle 2, C-F4). It is what turns the
+      // ordering argument recorded at the `ON CONFLICT` arm from a trace into a property the suite
+      // holds: the fix clears a stamp on re-observation and the drain writes one, so the question
+      // "what if those two interleave?" is the obvious objection to the whole design.
+      //
+      // The window is real rather than simulated. `drainOwedRevocations` deliberately holds no
+      // transaction across `signOutAllForUser` — that is the lease's whole reason — so a sign-in on
+      // another connection can commit while the drain is inside the provider call.
+      //
+      // **The answer is the conservative one, and it is the mark-done's `EXISTS (… OWED_PREDICATE)`
+      // that makes it so**: the row is re-checked at stamping time, finds the id current on a live
+      // account, and is left alone. Not stamped is the safe direction — a wrongly stamped row is a
+      // revocation nobody will ever owe again, which is exactly cycle 1's F1.
+      //
+      // **The assertions follow the reviewer's measured TRACE rather than the assertions in their
+      // probe file, and the difference is worth recording.** That file's copy asserts
+      // `revoked === 1` and `revokedUsers === [FIRST]`; the same review's trace of the same
+      // scenario prints `outcome {"revoked":2} asked: [0001, 0002]`, and its own log for that file
+      // reads `1 passed | 1 skipped` — this test was **skipped** in both directions of the C-F2
+      // proof, so its assertions were never executed. Transcribed literally it fails, which is how
+      // this was found. Two is right and is the better behaviour: the drain re-reads the owed set
+      // each iteration, so the id this interleaving newly superseded is picked up in the **same
+      // run** rather than waiting for another — which is what the review body praises in prose one
+      // line above the number that contradicts it.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      // While the drain is inside `signOutAllForUser(FIRST)`, the provider hands FIRST back and the
+      // user signs in on another connection.
+      provider.beforeRevoke = async () => { await resolve(other, assertion("a@example.com", FIRST)); };
+
+      const outcome = await drainOwedRevocations(client, provider);
+      // Two: FIRST, which was owed when the loop claimed it, and then SECOND, which this
+      // interleaving superseded while that call was in flight.
+      expect(outcome.revoked).toBe(2);
+      expect(provider.revokedUsers).toEqual([FIRST, SECOND]);
+
+      // **FIRST is current again on a live account: not owed, and NOT stamped** — the assertion the
+      // whole test exists for. The provider was asked about it, and the mark-done still declined to
+      // record a revocation against an episode that had already restarted.
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: false, revoked: false },
+        { supabase_user_id: SECOND, superseded: true, revoked: true },
+      ]);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      // And a later close owes FIRST afresh, which is the property the whole round is about: the
+      // un-stamped row is still owed the moment an owed condition arrives.
+      await close(accountId);
+      expect(await owedRevocationCount(client)).toBe(1);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
     it("clears a dead drain's lease when the id comes back", async () => {
