@@ -144,8 +144,23 @@ has documented consequences:
   sequence keeps the same worktree across every ticket in it, switching branches inside it
   as each ticket's branch begins. Never two sessions in one checkout. A worktree is a fresh
   checkout: budget a cold `swift build`, and don't share `.build/` between worktrees.
-- **Cap: 2–3 concurrent sessions.** Review bandwidth is the bottleneck, not execution.
-  More parallel output than the user can genuinely review produces rubber-stamped merges.
+- **Cap: about five concurrent heavy threads, reviewers counted.** The constraint this
+  expresses is the machine's, not a human's. A heavy thread is anything holding a build — an
+  implementing lane, and equally a reviewing session running the full suite,
+  `scripts/warnings`, or a mutation battery. Reviewers are not free, and a wave that counts
+  only implementers is already over the cap. Past roughly five, every lane slows every other
+  one: during the 2026-08-27/28 wave the flagged suite went from about 40s to about 200s and
+  `scripts/warnings` from about 120s to about 460s. **Those four figures are that wave's own
+  observations, carried here from the coordinator's record of it and not re-measured for this
+  line** — they set the cap's order of magnitude, they are not benchmarks, and a session that
+  needs one as evidence measures it again (`CLAUDE.md`, Claims and evidence). **This read
+  "Cap: 2–3 concurrent sessions", justified by review bandwidth being the bottleneck rather
+  than execution, and that premise moved on 2026-08-22**: the founders stopped reading every
+  diff and fresh review sessions took that over (step 7), so the human ceiling the old number
+  expressed stopped being the binding one. The old reasoning is superseded rather than wrong
+  — more parallel output than a *reviewer* can genuinely absorb still produces rubber-stamped
+  merges, and what holds that now is step 7's review-depth rules rather than a lower session
+  count. (Corrected 2026-08-29, SONNY-340.)
 - **Only one session's build runs as the live app at a time.** Worktrees isolate code,
   not the machine: every `MacAgent.app` instance shares the same Keychain entries, local
   encrypted stores, notification identity, and menu bar. Manual testing is serialized
@@ -212,12 +227,104 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
   a reviewer's and a coordinator's as much as an implementer's.
+
+**Verification economy: keep every check, cut the repeated work around it.** Nothing below
+removes a check — the flagged suite, `scripts/warnings`, the mutation battery and the
+fresh-session review all stay, and the battery stays in particular because it is where most
+of the 2026-08-27/28 wave's real findings came from. What these rules remove is work a
+session has already proved unnecessary. (Founder instruction 2026-08-28, widened later the
+same day and again on 2026-08-29. Written here by SONNY-340 on 2026-08-29; until then it
+lived only in the coordinator's kickoff prompts, which is a place no session can look
+something up.)
+
+- **Carry what provably did not move; re-measure everything else.** A figure may be carried
+  across a rebase or a docs-only commit only with a tree-identity proof beside it covering
+  **every path the figure depends on** — a diff restricted to those paths printing nothing,
+  or the equivalent hash check on each of them. **The scope of the proof is the rule; a
+  particular command is only an instance of it**, and the instance is the part that goes
+  wrong. `git rev-parse <old>:Sources <new>:Sources` printing one hash twice proves
+  `Sources/` and nothing else, so it is sufficient only for a figure measured over
+  `Sources/` alone. Name the paths before writing the command:
+  - a **flagged-suite test count** depends on `Tests/` and `Package.swift` as well as
+    `Sources/` — a test the merged range added changes the count without touching a source
+    file, and a target the manifest gained changes what runs at all;
+  - a **`scripts/warnings` count** depends on `Sources/` **and** `Tests/`, because the
+    script builds with `--build-tests` (`git grep -n 'swift build --build-tests' def8c3a --
+    scripts/warnings` → the invocation at `:545` and the line its own report prints at
+    `:604`) and the debug build covers the test targets — which is the reason `--help` gives
+    for the tool being debug-only;
+  - a **mutation verdict** depends on more than a path list, which is the next bullet.
+
+  A session that proves `Sources/` unchanged and carries a suite count across a rebase has
+  done exactly what this rule forbids while believing it complied: the proof was real, and it
+  was about the wrong tree. With a proof of the right scope, carry the figure rather than
+  re-running; without one, re-measure exactly as before. This is not an exception to
+  `CLAUDE.md`'s rule that a number taken before a rebase is re-measured and never
+  re-stamped: that rule's own distinguishing question is "whether the tree moved, not
+  whether the SHA did", and the proof is what answers it. So a carried figure carries the
+  proof, not merely the new SHA. (Several sessions in the 2026-08-27/28 wave held the proof
+  and re-ran anyway. That re-run is the waste this removes — the rule is untouched.)
+- **Mutate the property, not the diff.** A battery covers the behaviour the ticket claims to
+  protect and every test whose name claims a guarantee — not one mutant per changed file. A
+  reviewer runs the shapes its own findings are about, plus any the implementer's plan
+  missed, and reads the implementer's killers by name rather than re-running the whole plan.
+- **After a rebase, a mutant is carried only when four things hold; otherwise it is re-run.**
+  Its target file did not move in the merged range; its killing test's file did not move; the
+  killer does not scan a population the range changed; and the killer does not drive a helper
+  or fixture the range changed. If all four cannot be established cheaply, re-run it.
+  **The fail-safe wording is the rule rather than decoration.** This was first written as file
+  identity alone, and SONNY-137's lane computed both versions against a real merged range the
+  same day: the sole killer of three mutants drove `HermeticBackendClient.swift`, which had
+  changed, and awaited `restore()` through `SonnyBackendClient.swift`, which had also changed,
+  while a fourth killer scanned a `Sources/MacAgentCore/` population that had grown from 130
+  to 137 files. The file-level intersection said carry all seventeen; four verdicts in fact
+  depended on moved code. A killing test can read changed code without its own file changing,
+  which is the whole reason the last two conditions exist. The saving is real on docs-only
+  merges and genuinely disjoint areas and evaporates on a merge touching shared fixtures —
+  that is the rule working, not failing. (Trigger: three tail-end lanes of the 2026-08-27/28
+  wave each re-ran a whole 17-to-19-mutant battery, 45 to 90 minutes under load, because
+  *some* file in the merged range had changed.)
+- **Long runs go to a file in the background and are read once**, when the result is next
+  needed. No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
+  notifications, and twice in the 2026-08-27/28 wave reported results that had already been
+  collected.
+- **Run the whole flagged suite once, before you push, and iterate under `--filter`.** The
+  full run is what the closing comment's count and SHA come from; the filtered runs are how
+  you get there.
+- **Start a Postgres container only if the diff touches `server/`.** A Swift-only lane starts
+  none. **A server lane picks its own container name and port and sets `DATABASE_URL` to
+  match**, because the documented command names one fixed pair — `--name sonny-gw-db` and
+  `-p 55433:5432` — in all four places it is written down (`git grep -l 'docker run -d --name
+  sonny-gw-db' def8c3a | wc -l` → 4: `CLAUDE.md`, `server/README.md`, the manual-test
+  checklist, and the help text `server/test/global-setup.ts` prints). Two lanes that follow
+  the documentation collide on both, and a recreated container re-initialises the database
+  under a run already using it. **The symptom names nothing on its own, which is the reason
+  it is written down here**: a suite-wide connection failure — `Test Files 11 failed | 20
+  passed` with `Connection terminated unexpectedly`, and a fresh `initdb` in the container
+  log inside that run's window — is another lane's container, not a defect in the branch
+  under test. Observed between two lanes on 2026-08-29, and that run was discarded. The test
+  side is already down to one knob (`server/test/support/database.ts`, **SONNY-352**, landing
+  on PR #163, with a guard against a file naming the port directly); **SONNY-355** is what is
+  owed on the documentation.
+- **Past about ninety minutes, stop at the next point where the tree is green and the work is
+  coherent, and hand the rest back from there** — what is done, what is left, and what the
+  remainder needs. **A lane cannot stop and report with a red tree**, so ninety minutes starts
+  the search for a stopping point rather than ending the work where it stands: a session that
+  downs tools mid-refactor leaves an uncompilable tree and a handover nobody can act on. Two
+  lanes hit that on 2026-08-29, one of them with the tree uncompilable when the ninety minutes
+  passed. A long lane holds a merge slot and slows every other lane on the machine (step 3's
+  cap), so splitting the remainder onto a follow-up ticket is the right answer rather than
+  pushing through. This is a third stop-and-report trigger beside the two below, and unlike
+  those two it is not a failure — a lane can be going perfectly well and still be the wrong
+  shape.
+
 - **Fix-in-branch rule:** any bug found during a branch's own testing is fixed in that
   branch before merge. Deferring one requires the user's explicit decision and a named
   landing spot, recorded on a ticket — never a silent backlog.
 - **Stop-and-report triggers:** the same failure across 3 consecutive fix attempts, or a
-  fix that needs files/scope the ticket didn't name. Write findings to the ticket (step 6)
-  instead of guessing onward.
+  fix that needs files/scope the ticket didn't name — and the elapsed-time trigger in the
+  verification-economy block above. Write findings to the ticket (step 6) instead of
+  guessing onward.
 - **Discovered work: file it, don't do it, don't drop it.** Work discovered outside the
   ticket's own scope — an adjacent bug, missing coverage, a wart worth fixing — must
   become a ticket (`scripts/plane create`), not a scope breach and not a chat remark that
@@ -289,9 +396,12 @@ the branch's last ticket — tickets hold per-task history, the changelog holds 
 architectural decisions and pitfalls; both, not either. **Its figures are measured at the
 head that merges.** The entry is written before the head stops moving, so when a fix round
 or a rebase moves it, every figure the entry cites is re-measured at the new head or
-dropped — never carried forward — and once merged, `git merge-base --is-ancestor <sha>
-origin/main` exits 0 for every SHA the entry cites (`CLAUDE.md`, Claims and evidence; the
-mechanism is in §8).
+dropped — never carried forward on the strength of the old head alone — and once merged,
+`git merge-base --is-ancestor <sha> origin/main` exits 0 for every SHA the entry cites
+(`CLAUDE.md`, Claims and evidence; the mechanism is in §8). The one thing that lets a figure
+cross a moved head is step 5's tree-identity proof: `git rev-parse <old>:<path> <new>:<path>`
+printing one hash twice makes the figure a measurement *of* the new head rather than a stale
+one re-stamped at it, and the entry carries the proof beside the figure. No proof, no carry.
 
 **Not every branch owes one, and what decides it is what the branch recorded, not what it
 touched.** An entry is owed whenever a branch records anything of the kind the sentence above
@@ -494,6 +604,51 @@ diff, no logic-branch changes (docs, copy, constants). A trivial ticket keeps th
 contract, the evidence requirement, and the user-merge gate, but the user reviews the
 diff directly instead of launching a fresh-session reviewer. Only the user classifies a
 ticket trivial; sessions never do.
+
+**Right-size the review to the ticket.** Small tickets — records, docs, copy, mechanical
+edits, a one-line fix — do not get the full three-cycle adversarial review. They are verified
+directly by the coordinator against the real diff, at the usual evidence bar, and the lane
+closes; no fresh-session reviewer is launched. Repeating a full review over a small change is
+the waste this removes. (Founder directive 2026-08-21, given by both founders and recorded on
+SONNY-170. Written here 2026-08-29 by SONNY-340; for the eight days between, its only written
+homes were that one ticket comment and a single changelog `Reviewed by:` line, which is to say
+a session could not find it.
+`git grep -n -i 'right-size' def8c3a -- WORKFLOW.md CLAUDE.md` exits 1 with nothing on
+stdout and nothing on stderr, and the positive control proving that pattern and those paths
+can find anything at all is `git grep -c -i 'review' def8c3a -- WORKFLOW.md` →
+`def8c3a:WORKFLOW.md:45`.)
+
+- **What earns the deep multi-cycle treatment is substantive or safety-critical work.** The
+  founder's own three examples on 2026-08-21 were the approval/risk engine, the account and
+  session concurrency system, and anything touching security or user data; the 2026-08-28
+  restatement of the same directive drew that boundary as security, money, data loss and
+  boundary code. Read them together: a diff that can lose a user's data, spend their money,
+  weaken a permission or an approval, or move a trust boundary gets the adversarial pass. A
+  docs, records or copy branch does not — and does not get two review cycles either.
+- **This is the coordinator's judgment at review time; the trivial fast path above is the
+  user's classification at ticket creation.** Two different doors to a similar outcome, and a
+  session should know which one it is standing at. The fast path is decided before any code
+  exists, by the only person allowed to decide it, and it hands the diff to the *user*
+  instead of a reviewer; sessions never classify a ticket trivial. Right-sizing is decided
+  after the diff exists, by the coordinator, off what the diff turned out to be, and it hands
+  the diff to the *coordinator* instead of a reviewer. A ticket the user never tagged trivial
+  can still be right-sized, and a ticket the user did tag trivial needs no right-sizing.
+- **It composes with the depth scaling above rather than replacing it.** The interim-review
+  scaling sets how deep a review reads; this sets whether a fresh-session review is launched
+  at all; the cap above sets how many cycles it may run once it is. All three read the diff,
+  never the implementing session's word for what the diff is.
+- **What is removed is the fresh-session round, not a check.** A right-sized lane still fixes
+  in branch every defect it finds, still carries the evidence bar of step 5, still owes its
+  manual-test rows, and is still merged by a founder and never by a session. The coordinator
+  reads the real diff in full; a right-sized review is a shorter route to the same reading,
+  not a lighter one.
+- **The other half of the same 2026-08-21 comment is already written above.** If the cap is
+  genuinely exceeded because a real defect is still being found, one more cycle is allowed —
+  that is the scoped verification round, written by SONNY-170 on 2026-08-28. The depth half
+  sat unwritten a week longer than the cycle-count half, which is the reason both halves now
+  carry the date and the decision that produced them: a founder decision recorded only in a
+  ticket comment is one forgotten grep away from being lost, and this comment lost its second
+  half exactly that way.
 
 **When something fails after a ticket closed** — the flow above closes tickets before the
 PR opens, so late failures need an explicit path, not improvisation:
