@@ -238,10 +238,27 @@ lived only in the coordinator's kickoff prompts, which is a place no session can
 something up.)
 
 - **Carry what provably did not move; re-measure everything else.** A figure may be carried
-  across a rebase or a docs-only commit only with a tree-identity proof written beside it —
-  `git rev-parse <old>:Sources <new>:Sources` printing one hash twice, or a diff restricted
-  to the measured paths printing nothing. With that proof, carry the figure rather than
-  re-running; without it, re-measure exactly as before. This is not an exception to
+  across a rebase or a docs-only commit only with a tree-identity proof beside it covering
+  **every path the figure depends on** — a diff restricted to those paths printing nothing,
+  or the equivalent hash check on each of them. **The scope of the proof is the rule; a
+  particular command is only an instance of it**, and the instance is the part that goes
+  wrong. `git rev-parse <old>:Sources <new>:Sources` printing one hash twice proves
+  `Sources/` and nothing else, so it is sufficient only for a figure measured over
+  `Sources/` alone. Name the paths before writing the command:
+  - a **flagged-suite test count** depends on `Tests/` and `Package.swift` as well as
+    `Sources/` — a test the merged range added changes the count without touching a source
+    file, and a target the manifest gained changes what runs at all;
+  - a **`scripts/warnings` count** depends on `Sources/` **and** `Tests/`, because the
+    script builds with `--build-tests` (`git grep -n 'swift build --build-tests' def8c3a --
+    scripts/warnings` → the invocation at `:545` and the line its own report prints at
+    `:604`) and the debug build covers the test targets — which is the reason `--help` gives
+    for the tool being debug-only;
+  - a **mutation verdict** depends on more than a path list, which is the next bullet.
+
+  A session that proves `Sources/` unchanged and carries a suite count across a rebase has
+  done exactly what this rule forbids while believing it complied: the proof was real, and it
+  was about the wrong tree. With a proof of the right scope, carry the figure rather than
+  re-running; without one, re-measure exactly as before. This is not an exception to
   `CLAUDE.md`'s rule that a number taken before a rebase is re-measured and never
   re-stamped: that rule's own distinguishing question is "whether the tree moved, not
   whether the SHA did", and the proof is what answers it. So a carried figure carries the
@@ -275,11 +292,18 @@ something up.)
   full run is what the closing comment's count and SHA come from; the filtered runs are how
   you get there.
 - **Start a Postgres container only if the diff touches `server/`.** A Swift-only lane starts
-  none. The server's test configuration pins one port anyway, so two lanes cannot each hold
-  one — `git grep -l '55433' def8c3a -- server/test server/package.json | wc -l` → 4, being
-  the `test:db` default, two suites that hardcode the URL, and the setup's own help text.
-  A session that needs the container and finds the port busy waits or coordinates rather
-  than working around it.
+  none. **And a server lane cannot assume the database it starts is its own.** `test:db`
+  honours `DATABASE_URL` (`server/package.json:24`, `${DATABASE_URL:-…}`), but two suites
+  ignore it and hardcode the connection string — `server/test/authdeps.test.ts:39` and
+  `server/test/entitlement.test.ts:849`, all three lines at `def8c3a` from `git grep -n
+  '55433' def8c3a -- server/test/authdeps.test.ts server/test/entitlement.test.ts
+  server/package.json`. So the override that looks like it separates two lanes does not, and
+  both land in one database; it collided live between two server lanes on 2026-08-29. That is
+  a **defect, not a design constraint** — filed as **SONNY-352** and being fixed — so read
+  this as a hazard with a date on it rather than a property to design around: while it
+  stands, a second server lane running the database tests shares state with the first
+  whatever `DATABASE_URL` says, and once SONNY-352 lands, separate ports are simply the
+  right answer.
 - **Past about ninety minutes, stop and report** what is done, what is left, and what the
   remainder needs. A long lane holds a merge slot and slows every other lane on the machine
   (step 3's cap), so splitting the remainder onto a follow-up ticket is the right answer
