@@ -568,6 +568,167 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     });
   });
 
+  describe("a close owes its own revocation, however the user did or did not come back (SONNY-358)", () => {
+    // **What these tests are about, and why they are not more tests of the block above.**
+    //
+    // 0014 ends a revocation episode when the identity **observes** the id again, which closes every
+    // route where the user comes back through `resolve()`. It rests on a premise nobody had written
+    // down: that a user whose sessions were revoked can only come back by signing in. Three routes
+    // falsify it, and all three were measured against this tree before 0015 was written — the first
+    // is the one SONNY-358 was filed for and lives on its own route, in `auth.db.test.ts`:
+    //
+    //   A. they come back by **refreshing** — `POST /v1/auth/refresh` never calls `resolve()`;
+    //   B. they do not come back **at all** — reopen and re-close with nothing in between;
+    //   C. they come back as **somebody else** — the next sign-in presents a different id, so the
+    //      stamped one is superseded rather than observed.
+    //
+    // 0015's answer is that a recorded revocation implies only that the provider was already asked,
+    // never that it complied — `ProviderRejected` is recorded as done on any 4xx but 429 — so the
+    // stamp is cleared by the two events that CREATE an obligation (`OWED_PREDICATE`'s own two
+    // disjuncts) rather than by the user turning up. The migration's header has the decision in
+    // full.
+
+    it("owes a fresh revocation after a reopen and a second close with NO sign-in and no refresh at all", async () => {
+      // **Route B, and it is the one no route-level fix could have closed**: there is no request to
+      // hang one on. Measured before 0015 on this same sequence, the last assertion read 0.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [accountId]);
+      // Nothing at all happens in between. The stamp survives the reopen — reopening creates no
+      // obligation — and the close is what clears it.
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: true }]);
+
+      await close(accountId);
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: false }]);
+      expect(await owedRevocationCount(client)).toBe(1);
+      await expect(client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]))
+        .rejects.toThrow(/still owes 1 provider-side revocation/);
+
+      provider.revokedUsers = [];
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+    });
+
+    it("owes a fresh revocation for a stamped id that a later sign-in SUPERSEDES", async () => {
+      // **Route C.** The user comes back as a different provider-side user, so the stamped id is
+      // superseded rather than observed and 0014's `ON CONFLICT` arm never touches it. Before 0015
+      // the history here read `{FIRST, superseded: true, revoked: true}` and the account owed 0 — an
+      // id whose sessions may still be live, superseded, on a live account, owed nothing by anybody.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [accountId]);
+      await resolve(client, assertion("a@example.com", SECOND));
+
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: true, revoked: false },
+        { supabase_user_id: SECOND, superseded: false, revoked: false },
+      ]);
+      // Owed on a LIVE account, which is what the supersession disjunct is for.
+      expect(await owedRevocationCount(client)).toBe(1);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+    });
+
+    it("hands a stamped row back to the drain even while a dead lease is on it", async () => {
+      // The lease belongs to the episode too — 0014 settled that for the come-back arm and this is
+      // the same rule on the close. A drain that claimed a row and died leaves
+      // `revocation_claimed_at` set; without clearing it here, the revocation the second close owes
+      // would be invisible to the claim query for a whole `sonny.revocation_lease_seconds()`.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [accountId]);
+      await client.query(
+        "UPDATE sonny.identity_provider_user SET revocation_claimed_at = now() WHERE supabase_user_id = $1",
+        [FIRST]);
+
+      await close(accountId);
+      const { rows } = await client.query<{ claimed: boolean }>(
+        `SELECT (revocation_claimed_at IS NOT NULL) AS claimed
+           FROM sonny.identity_provider_user WHERE supabase_user_id = $1`, [FIRST]);
+      expect(rows[0]!.claimed).toBe(false);
+      provider.revokedUsers = [];
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+    });
+
+    it("does NOT re-owe anything when an already-closed account is closed again", async () => {
+      // The counterweight to route B, and the direction that says the trigger fires on the
+      // TRANSITION rather than on the state. `sonny.mark_identities_closed` (0005) updates only
+      // identities that are `NOT account_closed`, so a repeated close touches no identity row and
+      // this trigger never runs — but a trigger keyed on `NEW.account_closed` alone would fire on
+      // every later write to a closed identity and re-owe an episode that genuinely ended, calling
+      // the provider again on every one.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+
+      await close(accountId);
+      await close(accountId);
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: true }]);
+      expect(await owedRevocationCount(client)).toBe(0);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([]);
+    });
+
+    it("does NOT re-owe a superseded id that was already drained when the account later closes", async () => {
+      // The counterweight to route C, and the reason the close's clear is scoped to
+      // `superseded_at IS NULL`. A close creates an obligation for the id the identity is CURRENTLY
+      // naming; an id it stopped naming had its obligation created once, by the supersession, and
+      // the close says nothing new about it — no session for a superseded id can have been minted
+      // through this gateway since, because `accountForSupabaseUser` refuses to attribute one.
+      //
+      // Without the scoping this passes every other test in this file and re-owes every id in a
+      // closed account's history on every close, for ever.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+
+      await close(accountId);
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: true, revoked: true },
+        { supabase_user_id: SECOND, superseded: false, revoked: false },
+      ]);
+      expect(await owedRevocationCount(client)).toBe(1);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([SECOND]);
+    });
+
+    it("owes a revocation for an identity MOVED onto a closed account, which names no column at all", async () => {
+      // **The `UPDATE OF` trap, from the other side** (0005's third statement, and 0014's F5). The
+      // close trigger compares OLD to NEW rather than keying on a SET list, because
+      // `sonny.derive_identity_closed` is a BEFORE trigger that writes `NEW.account_closed` on an
+      // `UPDATE … SET account_id`, a statement that never mentions the column. An `AFTER UPDATE OF
+      // account_closed` trigger would not fire here at all, and the move would carry a spent stamp
+      // onto a closed account with nothing owed.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [accountId]);
+
+      const dead = await client.query<{ id: string }>(
+        "INSERT INTO sonny.account (deleted_at) VALUES (now()) RETURNING id");
+      await client.query("UPDATE sonny.identity SET account_id = $1 WHERE account_id = $2",
+        [dead.rows[0]!.id, accountId]);
+
+      expect(await historyFor(dead.rows[0]!.id))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: false }]);
+      expect(await owedRevocationCount(client)).toBe(1);
+    });
+  });
+
   describe("the counts are per provider-side user, which is the unit of the work", () => {
     it("counts one provider-side user named by two identities once", async () => {
       // **PR #164 review, F3.** `owedByAccount` counted rows and printed them under the noun

@@ -1152,5 +1152,53 @@ describeDb("the auth endpoints", () => {
       expect(provider.signedOutTokens).toEqual([presented]);
       await app.close();
     });
+
+    it("owes a fresh revocation after a reopened account is closed again, even when the user came back by REFRESHING", async () => {
+      // **SONNY-358, over real HTTP, on the route the ticket was filed for.**
+      //
+      // `POST /v1/auth/refresh` mints a full session and never calls `resolve()`, so it never names
+      // `supabase_user_id` and migration 0014's trigger — which is what ends a revocation episode
+      // when the identity observes the id again — never fires. PR #164 closed this sequence for a
+      // user who returns by signing in and left it open for a user who returns by refreshing:
+      // measured on that tree, this test's last assertion read 0.
+      //
+      // **The fix is not on this route and this test is deliberately still on it** (migration 0015).
+      // A refresh creates no obligation to revoke — the account it serves is live or
+      // `accountForSupabaseUser` refuses it — so the route records nothing; the *close* that follows
+      // is what owes the revocation, and 0015's trigger is what says so. Keeping the reproduction
+      // here rather than moving it down to the trigger is the point: this is the door that was open,
+      // and a fix one layer down has to be shown closing this door rather than a proxy for it.
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "back@example.com" } });
+      const id = (await app.inject({
+        method: "POST", url: "/v1/auth/email/verify", payload: { email: "back@example.com", code: "1" },
+      })).json().user.id;
+
+      // The close drains its own account on the way through, so the revocation is recorded here.
+      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() })).statusCode).toBe(204);
+      expect(provider.revokedUsers).toEqual([SESSION_USER]);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      // An operator reopens it — the only way an account is ever reopened (0005's own header).
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [id]);
+
+      // **The door.** The user's refresh token still works, so they are signed in again without
+      // ever reaching `resolve()`.
+      const refreshed = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" } });
+      expect(refreshed.statusCode).toBe(200);
+      expect(refreshed.json().user.id).toBe(id);
+
+      // And the second close owes the revocation afresh, which is the whole assertion.
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [id]);
+      expect(await owedRevocationCount(client)).toBe(1);
+      // The delete guard counts the same set, so the record cannot be destroyed while it stands.
+      await expect(client.query("DELETE FROM sonny.account WHERE id = $1", [id]))
+        .rejects.toThrow(/still owes 1 provider-side revocation/);
+
+      provider.revokedUsers = [];
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([SESSION_USER]);
+      await app.close();
+    });
   });
 });

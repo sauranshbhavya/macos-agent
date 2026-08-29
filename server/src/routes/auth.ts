@@ -260,7 +260,29 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     });
   });
 
-  /** `POST /v1/auth/refresh` — rotation, overlap and reuse detection are the provider's (§3.3). */
+  /**
+   * `POST /v1/auth/refresh` — rotation, overlap and reuse detection are the provider's (§3.3).
+   *
+   * **This route records NOTHING about provider-side revocation, and that is a decision rather than
+   * an omission** (SONNY-358). It is the one route that reaches a signed-in state without calling
+   * `resolve()`, so migration 0014's trigger — which ended a revocation episode when the identity
+   * observed its provider-side user again — never fires here. That left one door open: close the
+   * account, let the drain record a revocation, have an operator reopen it, and a user who came back
+   * by refreshing rather than by signing in kept the stale stamp, so the second close owed nothing
+   * and the hard delete went through with their sessions live.
+   *
+   * **The fix is not here, deliberately.** Firing the trigger from this handler would close that one
+   * door and leave two more that carry no request at all to hang a fix on — a reopen and re-close
+   * with nobody coming back, and a user coming back as a *different* provider-side user. All three
+   * are the same mistake: tying the end of a revocation episode to the user turning up, when what
+   * creates the obligation is the account closing or the id being superseded. Migration 0015 clears
+   * the record on those two events instead, so this route needs to do nothing — a refresh serves a
+   * live account by construction, and a live account with a current id owes no revocation.
+   *
+   * The test that proves this door is closed is still written against *this* route
+   * (`auth.db.test.ts`, "came back by REFRESHING"), because a fix one layer down has to be shown
+   * closing the door that was open rather than a proxy for it.
+   */
   app.post("/v1/auth/refresh", async (request, reply) => {
     const parsed = z.object({ refresh_token: z.string().min(1) }).safeParse(request.body);
     if (!parsed.success) {

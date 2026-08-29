@@ -172,12 +172,17 @@ export async function resolve(
       // **"Every sign-in" is the wrong scope and this comment used to use it** (PR #164 cycle 2,
       // C-F1). `resolve()` has exactly one production call site, `POST /v1/auth/email/verify`, and
       // it is not the only way to reach a signed-in state: **`POST /v1/auth/refresh` mints a full
-      // session, never calls `resolve()`, and therefore never fires the trigger.** So a user who
-      // returns by refreshing rather than by signing in keeps a stale revocation stamp, and
-      // SONNY-358's reopen route stays open for them — reproduced over real HTTP by that review.
-      // **Deferred by founder decision of 2026-08-29 and owned by SONNY-358**, sequenced ahead of
-      // SONNY-313, which is what makes it reachable. Latent until then, because `signOutAllForUser`
-      // throws unconditionally and no row reaches a non-NULL stamp in production today.
+      // session, never calls `resolve()`, and therefore never fires the trigger.** That is still
+      // true and no longer matters, which is the part worth reading.
+      //
+      // **Nothing about revocation depends on this clear any more** (SONNY-358, migration 0015).
+      // Ending an episode on *observation* is safe only while a user who was revoked can come back
+      // no other way, and three routes falsify that — refreshing, not coming back at all, and coming
+      // back as a different provider-side user. So the stamp is now cleared by the two events that
+      // CREATE an obligation to revoke, which are the two disjuncts of `OWED_PREDICATE` itself: the
+      // account closing, and the id being superseded. This arm is kept because observing an id does
+      // start a new episode and the statement is true on its own terms; it is no longer the thing
+      // standing between a reopened account and unrevoked sessions. 0015's header has the decision.
       //
       // **And a new id arriving IS the reconciliation** (SONNY-196). Supabase removes unconfirmed
       // identities on its own schedule and tells us nothing; what we see afterwards is this
