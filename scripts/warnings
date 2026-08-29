@@ -64,6 +64,21 @@ set -euo pipefail
 
 readonly SCRIPT_NAME="scripts/warnings"
 
+# The shared reading of this checkout's battery state. This script has refused to run beside a LIVE
+# battery since SONNY-184; what it could not see until SONNY-347 is a battery that was killed with
+# its mutant still applied, which leaves the same deliberately broken file on disk with no process
+# holding anything. A count taken over that tree is the same false measurement SONNY-184 closed,
+# reached through a different door — and this script measures the working tree deliberately, so
+# nothing else in it would notice.
+BATTERY_STATE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/battery-state.sh"
+readonly BATTERY_STATE_LIB
+if [[ ! -r "$BATTERY_STATE_LIB" ]]; then
+  printf 'scripts/warnings: required library not found: %s\n' "$BATTERY_STATE_LIB" >&2
+  exit 1
+fi
+# shellcheck source=lib/battery-state.sh
+. "$BATTERY_STATE_LIB"
+
 # The frameworks directory the test targets need. Without `-Xswiftc -F <this>` the test targets do
 # not compile at all — `error: no such module 'Testing'` — which would make this script report a
 # build failure on a perfectly good tree. CLAUDE.md's Commands section is the same flag and the
@@ -335,6 +350,22 @@ acquire_lock() {
   local battery_pid
   if battery_pid="$(foreign_lock_holder "$git_dir/mutate.lock" '*mutate*')"; then
     refuse_mutation_battery "$battery_pid" "$git_dir/mutate.lock"
+  fi
+
+  # And the killed battery's leftovers, which hold no lock anyone is alive to defend (SONNY-347).
+  battery_state
+  if [[ "$BATTERY_STATE" == "abandoned" ]]; then
+    battery_journal "$SCRIPT_NAME" "refused: killed battery left mutant ${BATTERY_ID:-?} in ${BATTERY_FILE:-?}"
+    cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — a killed battery left its mutant in this working tree.
+
+$(battery_state_detail)
+
+This script recompiles every file in the tree and stamps the count with a SHA. Over that file the
+count would describe code that SHA never contained, and this report cannot be told apart from a
+true one — the whole failure this script exists to make impossible.
+EOF
+    finish 1
   fi
 
   for attempt in 1 2 3; do
@@ -897,6 +928,31 @@ selftest() {
   out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
   set -e
   st_absent "a dead battery's leftover lock does not block a run" "$out" "a mutation battery holds"
+
+  printf '\n  but a killed battery that left its MUTANT behind is refused (SONNY-347)\n'
+  # The other direction of the same lock, and the one nothing here could see until the in-flight
+  # record existed. A run killed with -9 leaves no live pid to refuse for — the arm above is right
+  # that a bare leftover lock must block nothing — while the tree still carries the mutated file.
+  # This script recompiles every file in the tree and stamps a SHA on the count, so that is exactly
+  # the false measurement SONNY-184 closed for the live case, arriving through the other door.
+  mkdir -p "$git_dir/mutate.lock/inflight"
+  { printf 'pid %s\n' "$battery_pid"
+    printf 'started 2026-01-01 00:00:00\n'
+    printf 'plan throwaway.plan\n'
+    printf 'head deadbeef\n'; } >"$git_dir/mutate.lock/owner"
+  { printf 'id R4\n'
+    printf 'file Sources/Thing.swift\n'
+    printf 'sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >"$git_dir/mutate.lock/inflight/meta"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 1" "$status" "1"
+  st_contains "and says a killed battery left a mutant" "$out" "left its mutant in this working tree"
+  st_contains "and names the mutant" "$out" "R4"
+  st_contains "and names the file it is in" "$out" "Sources/Thing.swift"
+  st_contains "and hands over the recovery" "$out" "scripts/mutate unlock"
+  st_absent "and does not go on to build anything" "$out" "emptying"
   rm -rf -- "$git_dir/mutate.lock"
 
   printf '\n  an ordinary .build/ survives a run, so this costs no incremental rebuild after it\n'
