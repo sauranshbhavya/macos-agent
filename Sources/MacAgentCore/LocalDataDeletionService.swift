@@ -123,9 +123,28 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     private let fileURLs: [URL]
     private let quarantine: LocalDataQuarantine
 
-    public init(fileManager: FileManager = .default, fileURLs: [URL]? = nil) {
+    /// **`fileURLs` is required, and this is the type where that matters most** (SONNY-350, PR #162
+    /// review F5).
+    ///
+    /// It used to be `[URL]? = nil`, falling back to `defaultStoreFileURLs(fileManager:)` — so
+    /// `LocalDataDeletionService()` compiled and silently resolved the founder's real thirteen
+    /// files, on the one type in this repository whose whole job is to *remove* them. That is the
+    /// same shape SONNY-350 took off the thirteen store initializers and off the four store
+    /// vendors, arrived at through the same method: remove the default and see which call sites
+    /// were relying on it. This one is the fifth level and the worst of them, which the suite's own
+    /// `otherRequiredParameters` doc had already said in as many words — "its default is the real
+    /// file list and the service *deletes*".
+    ///
+    /// It was never a live defect: the only silent site in the tree was the shipping factory, and
+    /// every test already named `fileURLs:`. What it was is a door standing open on the destructive
+    /// type, held shut by nothing but every author so far having happened to walk past it.
+    ///
+    /// The real list is still reachable — `LocalDataDeletionService(fileURLs: defaultStoreFileURLs())`,
+    /// which is what `AgentViewModel.atItsRealStoreLocations()` now writes. In words, like every
+    /// other real location this ticket touched.
+    public init(fileManager: FileManager = .default, fileURLs: [URL]) {
         self.fileManager = fileManager
-        self.fileURLs = fileURLs ?? Self.defaultStoreFileURLs(fileManager: fileManager)
+        self.fileURLs = fileURLs
         self.quarantine = LocalDataQuarantine(fileManager: fileManager)
     }
 
@@ -301,37 +320,82 @@ public struct LocalDataDeletionService: @unchecked Sendable {
         return result
     }
 
+    /// Exactly what this service would delete, in the order it would try.
+    ///
+    /// **A destructive object should be able to say what it reaches** — and the reason this exists
+    /// is narrower than that. Moving the wipe's list into `acrossEveryLocalStore` below stopped the
+    /// shipping factory from assembling one, but the assembly did not vanish: it moved into that
+    /// member's own body, where a mutant dropping one store still passed the whole suite
+    /// (PR #162 review, N1a). That is the same single unguarded line the pre-SONNY-350 default was,
+    /// so it is not a regression — it is the last place the hazard had left to hide, and it is now
+    /// in `MacAgentCore` where a test can reach it, which the factory's copy never was.
+    /// `theEveryStoreWipeReachesExactlyTheClassifiedStores` is that test.
+    ///
+    /// Read-only, and deliberately not a way to *change* the reach: the three delete methods take
+    /// no list, so this cannot become a second door into them.
+    public var reach: [URL] {
+        fileURLs
+    }
+
+    /// The wipe over **every** local store, correct by construction (PR #162 review N1/W2).
+    ///
+    /// `fileURLs` became required so that `LocalDataDeletionService()` could not silently resolve
+    /// the real thirteen files. That closed a silent reach and opened a quieter one: the shipping
+    /// factory then had to *assemble* the argument by hand, at the one site no behavioural test can
+    /// reach, and `theRealStoreFactoryHandsTheWipeTheRealFileList` could only check that
+    /// `defaultStoreFileURLs` was *named* somewhere in that call. A presence check catches wholesale
+    /// replacement — `fileURLs: []` dies — and cannot see a list derived wrongly from the right
+    /// function. `Array(defaultStoreFileURLs().dropFirst())` passed the entire suite while the wipe
+    /// left `vision-sessions.json` on disk and the confirmation dialog went on naming it: the store
+    /// this file's own comment calls the loudest possible failure of a privacy wipe.
+    ///
+    /// So the argument is not assembled any more. This is `realFileURL`'s pattern one level up —
+    /// the reach stays in words, and there is nothing left at the call site to get wrong. A
+    /// fourteenth store joins it without anyone editing the factory, because
+    /// `theWipeReachesEveryLocalStore` pins `defaultStoreFileURLs()` against `LocalStore.allCases`
+    /// by value.
+    ///
+    /// **This does not weaken the door that was closed.** `LocalDataDeletionService()` still does
+    /// not compile; a caller wanting the real thirteen has to write this member's name, and
+    /// `noStoreVendorDefaultsAStoreParameter` still refuses a default on `fileURLs`.
+    public static func acrossEveryLocalStore(fileManager: FileManager = .default) -> LocalDataDeletionService {
+        LocalDataDeletionService(
+            fileManager: fileManager,
+            fileURLs: defaultStoreFileURLs(fileManager: fileManager)
+        )
+    }
+
     public static func defaultStoreFileURLs(fileManager: FileManager = .default) -> [URL] {
         [
             // Row I's action journal. A wipe that left a record of every click Sonny made inside the
             // user's apps would be the loudest possible failure of a privacy wipe.
-            VisionSessionJournalStore(fileManager: fileManager).fileURL,
-            RoutineStore(fileManager: fileManager).fileURL,
-            WorkspaceStore(fileManager: fileManager).fileURL,
-            ClipboardHistoryStore(fileManager: fileManager).fileURL,
-            ClipboardHistorySettingsStore(fileManager: fileManager).fileURL,
-            SnippetStore(fileManager: fileManager).fileURL,
-            RecentArtifactStore(fileManager: fileManager).fileURL,
-            ShortcutRunHistoryStore(fileManager: fileManager).fileURL,
-            TaskHistoryStore(fileManager: fileManager).fileURL,
+            VisionSessionJournalStore.realFileURL(fileManager: fileManager),
+            RoutineStore.realFileURL(fileManager: fileManager),
+            WorkspaceStore.realFileURL(fileManager: fileManager),
+            ClipboardHistoryStore.realFileURL(fileManager: fileManager),
+            ClipboardHistorySettingsStore.realFileURL(fileManager: fileManager),
+            SnippetStore.realFileURL(fileManager: fileManager),
+            RecentArtifactStore.realFileURL(fileManager: fileManager),
+            ShortcutRunHistoryStore.realFileURL(fileManager: fileManager),
+            TaskHistoryStore.realFileURL(fileManager: fileManager),
             // Row E's plan details. Deleted with the same wipe as the rows they hang off — a wipe
             // that left the plan of every task Sonny ran would be the same failure as leaving the
             // rows themselves.
-            TaskPlanDetailStore(fileManager: fileManager).fileURL,
+            TaskPlanDetailStore.realFileURL(fileManager: fileManager),
             // Row J's per-app grants. A durable record of which apps the user let Sonny drive is
             // theirs to erase along with everything else — and leaving it behind would also leave
             // the wipe's own promise half-true.
-            ApprovedAppStore(fileManager: fileManager).fileURL,
+            ApprovedAppStore.realFileURL(fileManager: fileManager),
             // Row 13's common output locations (SONNY-209). A short list of folder paths, which
             // sounds harmless and is not: where somebody's work goes is a map of what they work on,
             // and folder names are theirs. Erased with the rest for the same reason as everything
             // above it.
-            OutputLocationStore(fileManager: fileManager).fileURL,
+            OutputLocationStore.realFileURL(fileManager: fileManager),
             // Row 13's unfinished runs (SONNY-210). It holds a whole plan — the steps, the paths
             // they name, the draft text they carry — for a task the user started and did not
             // finish, which is as much of their content as any row in task history and is left
             // behind by a wipe that forgot it.
-            ResumableTaskStore(fileManager: fileManager).fileURL
+            ResumableTaskStore.realFileURL(fileManager: fileManager)
         ]
     }
 

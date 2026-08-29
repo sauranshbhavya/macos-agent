@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// SONNY-94: unattended vision, never — three independent layers, pinned separately.
@@ -49,7 +49,13 @@ struct UnattendedVisionNeverTests {
     @Test
     func theScheduledPathsTierTwoCeilingCannotCoverAVisionSession() throws {
         let executor = AgentActionExecutor(
-            installedAppResolver: InstalledAppResolver(source: FixedAppSource([Self.safari]))
+            installedAppResolver: InstalledAppResolver(source: FixedAppSource([Self.safari])),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
         let assessment = try executor.assessRisk(plan: Self.visionPlan(), scope: .unscoped)
         #expect(assessment.effectiveTier == .tier3)

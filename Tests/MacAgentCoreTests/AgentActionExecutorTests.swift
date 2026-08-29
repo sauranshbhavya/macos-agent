@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 @Suite
@@ -5957,6 +5957,9 @@ struct AgentActionExecutorTests {
             webPageLoader: webPageLoader,
             webSearchProvider: webSearchProvider,
             webResearchSynthesizer: webResearchSynthesizer,
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutCatalog: shortcutCatalog,
             shortcutRunHistoryStore: shortcutRunHistoryStore
                 ?? ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json")),

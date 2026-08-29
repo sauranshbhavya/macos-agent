@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// `CompletedTaskRecord.id` and the load-time backfill that gives one to every record written

@@ -23,18 +23,71 @@ import Testing
 ///    restore the whole mechanism, and every existing fixture would keep compiling — which is
 ///    exactly how it arrived the first time.
 /// 2. **A store may be passed and still point at the real path.** `taskHistoryStore:
-///    TaskHistoryStore()` satisfies the compiler and writes to `~/Library` regardless. Nothing in
-///    the type system distinguishes it from a store at a temp root.
+///    TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL())` satisfies the compiler and writes
+///    to `~/Library` regardless. Nothing in the type system distinguishes it from a store at a temp
+///    root.
+///
+/// **What SONNY-350 took away from this suite, and why the rest stayed.** This file used to carry a
+/// third arm as well: a source sweep for a store built with **no** `fileURL` at all. Six things
+/// went, and they are named rather than gestured at, because the argument below has to be checkable
+/// against each one:
+///
+/// - `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` and
+///   `noAppSourceBuildsALocalStoreWithoutNamingItsFileURL` — the sweep itself, both sides.
+/// - `theAppSourceSweepFlagsEveryWrapperSpellingTheNameCountCannotSee`,
+///   `theSweepFlagsAStoreBuiltWithNoFileURLAndClearsOneBuiltWithIt` and
+///   `theFileURLSweepSeesTheSameSpellings` — its three self-tests, which exist only to show that
+///   sweep flags what it names.
+/// - `aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory` — its premise, that `RoutineStore()`
+///   really did land under Application Support. Replaced rather than dropped, by
+///   `everyStoresRealLocationIsUnderTheDevelopersApplicationSupport` below, which walks
+///   `LocalStore.allCases` instead of listing thirteen constructions by hand.
+///
+/// All six are subsumed because `fileURL` is now a required parameter of all thirteen store
+/// initializers and `RoutineStore()` does not compile. A scan that re-proves what will not build is
+/// not a second line of defence; it is a second thing to maintain that can only ever agree with the
+/// compiler, and it costs a reader the time to work out which of the two is actually load-bearing.
+///
+/// **A seventh went with them by mistake and is back** (PR #162 review F1).
+/// `theConstructionCountRecognisesEverySpellingThatNamesTheType` reads as part of that arm and is
+/// not: it never mentions `fileURL`, it is the self-test of `constructions(of:in:)`, and that
+/// matcher survives SONNY-350 untouched and still backs three live arms below — including
+/// `theOnlyBackendClientConstructionInSourcesIsTheRealKeychainFactory`, which is about the Keychain
+/// and not about stores at all. **The failure mode it guards is silent and has happened once**:
+/// `Sources/` holds exactly one construction of each type and both in the plain `Name(` spelling, so
+/// a *partial* matcher regression — `Name.init(` quietly stops matching — leaves both live counts at
+/// 1, the suite green, and SONNY-248's documented defect reopened. Retiring a guard is invisible
+/// afterwards: nothing ever fails to say it is gone, which is why the list above is exhaustive and
+/// why this paragraph exists.
+///
+/// The rest stayed because **none of it is subsumed**. A required parameter forces a call site to
+/// pass a location; it says nothing about *which* location, nothing about a defaulted parameter one
+/// level up, and nothing about where the app assembles its stores. So the arms that survive are the
+/// ones the type system cannot express: the undefaulted-parameter check, the argument-label sweep
+/// (which is spelling-proof where a type-name sweep never was), the single-factory rules, and — new
+/// with SONNY-350 — `onlyTheShippedConstantsTestsNameAStoresRealLocation`, which holds the four
+/// tests permitted to write the words `realFileURL`. That last one is the residue the compiler
+/// leaves behind by design: the real path stays reachable in words, because the shipping app needs
+/// it, so what is held is the population rather than the spelling.
+///
+/// **The evasions that ended the sweep, on the record** (SONNY-350, from PR #158's cycle-2 review).
+/// The sweep was defeated five times by reviewers looking for one afternoon each: a typealias
+/// wrapper, `routineStore: .init()`, a backticked label, a block comment between label and colon,
+/// and a store vendor that never constructs an `AgentViewModel` at all. Two of those are not
+/// fixable by a better pattern — contextual member lookup means `.init()` has no type name to
+/// match, and a vendor with no `AgentViewModel` call has no argument label to name. That is the
+/// argument for moving the guarantee into the type system rather than sharpening the matcher again.
 ///
 /// **The population is `LocalStore.allCases`**, which already refuses a new store file without a
 /// case, so a fourteenth store cannot reach the tree without being mapped here — and being mapped
 /// here is what puts it on the initializer without a default.
 ///
-/// **This replaces `OutputLocationFixtureWiringScanTests`**, which checked the same two things for
+/// **This replaced `OutputLocationFixtureWiringScanTests`**, which checked the same two things for
 /// two named stores and said in its own comment that SONNY-240 was the ticket that generalises it.
-/// Its fixture-omission check is gone rather than generalised, because the compiler now does that
-/// job better than a scan can: the scan could only fail after the damage was already written, and
-/// only for a store somebody had remembered to name in it.
+/// Its fixture-omission check went rather than being generalised, because the compiler did that job
+/// better than a scan can: the scan could only fail after the damage was already written, and only
+/// for a store somebody had remembered to name in it. SONNY-350 then applied the identical argument
+/// to this file's own store-type sweep, which is the paragraph above.
 ///
 /// **In the core target because `TestSourceTree` is**, and a second copy of this repository's
 /// comment-stripping discipline is exactly what its own doc warns against.
@@ -178,301 +231,152 @@ struct LocalStoreInjectionScanTests {
         )
     }
 
-    /// The premise the rule above rests on: a store built with no `fileURL` really does land in the
-    /// developer's own home directory. Asserted rather than assumed — if a default ever became
-    /// temp-aware, this whole suite would be guarding nothing and should be re-argued rather than
-    /// left standing. (That change is also explicitly rejected on SONNY-240: it would hide the
-    /// wiring gap instead of closing it.)
+    /// The same rule one level down: **no store vendor may default a store parameter either**
+    /// (SONNY-350).
+    ///
+    /// `AgentViewModel.init` was cleaned of defaulted stores by SONNY-240, and the hazard simply
+    /// moved. `AgentActionExecutor`, `InstantCommandResolver` and `ClipboardHistoryMonitor` each
+    /// defaulted their store parameters to a real-path store, and `AgentRunner` defaulted its whole
+    /// `executor:` to one of those — so `AgentActionExecutor(runningAppSwitcher: switcher)`, in a
+    /// fixture about switching apps, held six stores pointed at the developer's own data, and
+    /// `AgentRunner(planner: …)` held them two levels down. That is SONNY-209's failure with the
+    /// name changed, and it is the fifth of the evasions in this file's header: a store vendor that
+    /// never constructs an `AgentViewModel` has no argument label for the sweep above to see.
+    ///
+    /// **The compiler holds it now and this test holds the compiler's input.** The defaults are
+    /// gone, so a fixture that omits a store does not build — but a default put back for
+    /// convenience would compile every one of those fixtures unchanged, which is exactly how the
+    /// view model's arrived the first time.
+    ///
+    /// `executor:` is on the list for the same reason `clipboardHistoryMonitor:` is on
+    /// `otherRequiredParameters`: it is not a store, it *carries* six.
     @Test
-    func aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory() {
+    func noStoreVendorDefaultsAStoreParameter() throws {
+        struct Vendor {
+            let file: String
+            let marker: String
+            let labels: [String]
+        }
+
+        let vendors = [
+            Vendor(
+                file: "Sources/MacAgentCore/AgentActionExecutor.swift",
+                // The first parameter is part of the marker: this file declares three `public
+                // init(`s and the earliest is `PreparedRun`'s, which the bare marker found.
+                marker: "\n    public init(\n        recordingPolicy:",
+                labels: [
+                    "routineStore", "workspaceStore", "clipboardHistoryStore",
+                    "snippetStore", "recentArtifactStore", "shortcutRunHistoryStore"
+                ]
+            ),
+            Vendor(
+                file: "Sources/MacAgentCore/InstantCommandResolver.swift",
+                marker: "\n    public init(\n        snippetStore:",
+                labels: ["snippetStore", "recentArtifactStore", "routineStore", "workspaceStore"]
+            ),
+            Vendor(
+                file: "Sources/MacAgentCore/ClipboardHistoryService.swift",
+                marker: "\n    public init(\n        reader:",
+                labels: ["store", "settingsStore"]
+            ),
+            // **The fifth level, and the one that deletes** (PR #162 review F5). `fileURLs` is not a
+            // store — it is the *list* of every store's real file, on the type whose three public
+            // methods remove them — which is why it belongs in this test rather than beside the
+            // stores above: the rule is about a shape, not about a type, exactly as
+            // `otherRequiredParameters` says of `clipboardHistoryMonitor` and `finderRevealer`.
+            // It defaulted to `nil` and fell through to `defaultStoreFileURLs()`, so
+            // `LocalDataDeletionService()` compiled and silently pointed at the founder's real
+            // thirteen files.
+            Vendor(
+                file: "Sources/MacAgentCore/LocalDataDeletionService.swift",
+                // Named to the first parameter, like the two above: this file declares four
+                // `public init(`s and the earliest three are other types'.
+                marker: "\n    public init(fileManager: FileManager = .default, fileURLs:",
+                labels: ["fileURLs"]
+            )
+        ]
+
+        var checked = 0
+        for vendor in vendors {
+            let url = Self.repositoryRoot.appendingPathComponent(vendor.file)
+            let parameters = try Self.parameters(ofInitializerAt: vendor.marker, in: url)
+            #expect(
+                parameters.count > 1,
+                "parsed \(parameters.count) parameters of \(vendor.file) — too few to be the real signature"
+            )
+            for label in vendor.labels {
+                guard let parameter = parameters.first(where: { $0.label == label }) else {
+                    Issue.record("\(vendor.file) has no `\(label):` parameter any more")
+                    continue
+                }
+                checked += 1
+                #expect(
+                    !parameter.hasDefault,
+                    """
+                    \(vendor.file)'s `\(label):` has a default again. A vendor that defaults a store \
+                    hands the real ~/Library store to every fixture that never mentioned it — the \
+                    same failure SONNY-240 removed from AgentViewModel.init, one level down. On \
+                    LocalDataDeletionService that store list is what the service deletes.
+                    """
+                )
+            }
+        }
+
+        // `AgentRunner` is the fourth, and its parameter is an executor rather than a store, so it
+        // is read separately rather than bent into the shape above. **Both** initializers: a store
+        // threaded through one door and defaulted away in the other is a seam honoured on whichever
+        // path somebody happened to look at, which is the argument the second one already carries.
+        let runner = Self.repositoryRoot
+            .appendingPathComponent("Sources/MacAgentCore/AgentRunner.swift")
+        for marker in ["\n    public init(\n        planner:", "\n    public init(\n        plannerProvider:"] {
+            let parameters = try Self.parameters(ofInitializerAt: marker, in: runner)
+            guard let executor = parameters.first(where: { $0.label == "executor" }) else {
+                Issue.record("AgentRunner.init has no `executor:` parameter any more")
+                continue
+            }
+            checked += 1
+            #expect(
+                !executor.hasDefault,
+                """
+                AgentRunner.init's `executor:` has a default again, and an AgentActionExecutor \
+                carries six local stores — so every fixture that names only a planner gets them at \
+                the developer's real path.
+                """
+            )
+        }
+
+        // The loop's own input can be emptied, exactly as `otherRequiredParameters` could be
+        // (PR #109 review F6): a `vendors` list trimmed to nothing passes every expectation above.
+        #expect(checked == 15, "checked \(checked) vendor parameters, expected 6 + 4 + 2 + 1 + 2")
+    }
+
+    /// The premise everything below rests on: `realFileURL()` really does name the developer's own
+    /// home directory.
+    ///
+    /// **This replaces `aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory`**, which asserted
+    /// the same thing about a store built with no `fileURL` at all. That construction stopped
+    /// compiling at SONNY-350, so the test could not be kept; the premise it was protecting did not
+    /// go away, it moved to a named member. If a `realFileURL` ever became temp-aware, this suite
+    /// and the compile-time rule above it would both be guarding nothing, and that change should be
+    /// re-argued rather than made quietly — it is explicitly rejected on SONNY-240, because it hides
+    /// the wiring gap instead of closing it.
+    ///
+    /// Reads a URL and touches no file: `realFileURL` resolves a path and creates nothing.
+    @Test
+    func everyStoresRealLocationIsUnderTheDevelopersApplicationSupport() {
         let applicationSupport = ClipboardHistoryStore.defaultDirectory(fileManager: .default).path
 
-        for path in [
-            RoutineStore().fileURL.path,
-            WorkspaceStore().fileURL.path,
-            ClipboardHistoryStore().fileURL.path,
-            ClipboardHistorySettingsStore().fileURL.path,
-            SnippetStore().fileURL.path,
-            RecentArtifactStore().fileURL.path,
-            ShortcutRunHistoryStore().fileURL.path,
-            TaskHistoryStore().fileURL.path,
-            TaskPlanDetailStore().fileURL.path,
-            VisionSessionJournalStore().fileURL.path,
-            ApprovedAppStore().fileURL.path,
-            OutputLocationStore().fileURL.path,
-            ResumableTaskStore().fileURL.path
-        ] {
+        // `LocalStore.fileURL()` resolves through each store's own `realFileURL`, so this is the
+        // whole population by construction rather than by a list that can go one store stale.
+        #expect(LocalStore.allCases.count == 13)
+        for store in LocalStore.allCases {
+            let path = store.fileURL().path
             #expect(path.hasPrefix(applicationSupport + "/"), "\(path) is not under Application Support")
             #expect(!path.contains("/var/folders/"), "\(path) is already a temp path")
         }
     }
 
     // MARK: - 2. A store may be passed and still point at the real path
-
-    @Test
-    func noTestSourceBuildsALocalStoreWithoutNamingItsFileURL() throws {
-        let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
-        #expect(Set(typeNames).count == LocalStore.allCases.count, "two stores share a type name")
-
-        // **Every test target except one, and the exception is named rather than implied** (PR #109
-        // review F5, which found `MacAgentTestSupport` excluded by an omission this comment did not
-        // even mention).
-        //
-        // `MacAgentTests` is where a store reaches an `AgentViewModel`, which is where the damage
-        // this suite exists for was done. `MacAgentTestSupport` is linked into both test targets and
-        // has none of the defence below, so it is swept too — a helper there would be the least
-        // visible place for a default-path store to sit.
-        //
-        // **`MacAgentCoreTests` is the one excluded target.** It is the stores' own, and it
-        // constructs seven default-path stores on purpose — to assert what `ApprovedAppStore()`'s
-        // file name is, what `ResumableTaskStore()`'s idle period is, what `TaskHistoryStore()`'s cap
-        // is — and never writes through one. Blanket-flagging those would be a false positive on the
-        // tests that pin the very defaults this rule depends on, including
-        // `aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory` in this file.
-        //
-        // **The residual, so nobody reads a clean run as a wider claim than it is:** a *write*
-        // through a default-path store inside `MacAgentCoreTests` would not be caught here. Those
-        // suites use a temp root for every write today, and their subject is the store rather than
-        // the view model.
-        let sweptTargets = TestSourceTree.targets.filter { $0 != "MacAgentCoreTests" }
-        #expect(
-            sweptTargets.sorted() == ["MacAgentTestSupport", "MacAgentTests"],
-            "a test target was added to TestSourceTree.targets and this sweep has not been re-argued for it"
-        )
-        var files: [TestSourceTree.SourceFile] = []
-        for target in sweptTargets {
-            files.append(contentsOf: try TestSourceTree.swiftFiles(in: target))
-        }
-        #expect(
-            !files.isEmpty,
-            "the enumerator found no test sources — a scan matching nothing reads exactly like a passing one"
-        )
-
-        var constructionsScanned = 0
-        for file in files {
-            let code = TestSourceTree.codeLines(of: try TestSourceTree.read(file))
-                .map(\.text)
-                .joined(separator: "\n")
-
-            for typeName in typeNames {
-                for construction in Self.constructions(of: typeName, in: code) {
-                    constructionsScanned += 1
-                    #expect(
-                        construction.contains("fileURL:"),
-                        """
-                        \(file.relativePath) builds a \(typeName) that names no fileURL, so it writes \
-                        to the real ~/Library/Application Support/Sonny path — with the deterministic \
-                        key a test process uses, which the packaged app cannot read. Give it this \
-                        fixture's own temp root.
-                        """
-                    )
-                }
-            }
-        }
-
-        // The floor keeps a broken matcher or a renamed type from passing this vacuously. It is a
-        // floor rather than an equality on purpose: fixtures are added often and the exact number is
-        // not the property under test — **which the message beside it used to contradict** by
-        // spelling a fixture count, and one the tree had already moved past (SONNY-326).
-        #expect(
-            constructionsScanned >= 150,
-            "expected the fixtures' store constructions, scanned \(constructionsScanned)"
-        )
-    }
-
-    /// **`Sources/` builds a default-path local store in exactly one place, and it is the factory**
-    /// (SONNY-269).
-    ///
-    /// **Why this exists when `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` is right
-    /// there.** That check counts a *type name*. SONNY-248 widened the count from one spelling to
-    /// every spelling that writes `AgentViewModel` beside its parenthesis — `Name(…)`,
-    /// `Name.init(…)`, either qualified by a module — and three spellings name the type nowhere near
-    /// the parenthesis and are therefore outside any name-keyed scan at all: a `typealias` and a
-    /// construction through it, a metatype value (`let t = AgentViewModel.self; t.init(…)`, which a
-    /// `final class` permits with no `required` initializer), and a bare contextual `.init(…)` where
-    /// an annotation or a return type fixes the type. All three compile.
-    ///
-    /// **Probed as a live defect before this test existed**, the way SONNY-248's four doors were. A
-    /// wrapper in `Sources/MacAgent/` built the thirteen stores inline and returned an
-    /// `AgentViewModel` through a `typealias` — so it hands its caller the developer's real
-    /// `~/Library` data and names neither `atItsRealStoreLocations` nor the type. With that file in
-    /// place at `a99a03a`: `LocalStoreInjectionScanTests` passed, **13 tests in 1 suite**, and so did
-    /// the whole flagged suite, **2342 tests in 162 suites**. Nothing in this repository saw it.
-    ///
-    /// **So this keys on a different property — but it is still a name, and a name is still
-    /// evadable.** This test's first version claimed that a wrapper "has to get the real stores from
-    /// somewhere; if it builds them, it names a store type beside a parenthesis". **That is not a
-    /// property, and PR #158's review proved it by walking through** (F1): the ticket's third
-    /// spelling — a bare contextual `.init(…)` where a parameter type fixes the type — applies to the
-    /// *store* names exactly as it applied to the view model's. Every store parameter of
-    /// `AgentViewModel.init` is a concrete type, so `routineStore: .init()` compiles and writes no
-    /// store type name anywhere; `ClipboardHistorySettingsStore` is reached with an annotation
-    /// (`let settings: ClipboardHistorySettingsStore = .init()`), which `constructions(of:in:)` also
-    /// skips, because `openingParenthesis(afterNameEndingAt:)` sees `=` after the name. The reviewer
-    /// built that wrapper, it compiled, it handed out the developer's real `~/Library` stores, and
-    /// the whole flagged suite passed at **2344 in 162**.
-    ///
-    /// **What this test is, therefore: the arm that catches the spelling a session reaches for by
-    /// accident.** `RoutineStore()` is caught here and this remains a real improvement on the name
-    /// count it supplements. The arm that is *spelling-proof* is
-    /// `noAppSourceOutsideTheFactoryNamesAStoreParameterLabel` below, and the two overlap on purpose.
-    ///
-    /// **`Sources/MacAgentCore/` is the one excluded directory, and the argument is written rather
-    /// than implied** — the same debt PR #109's F5 found in the test-tree sweep above. It is the
-    /// stores' own target and it constructs default-path stores legitimately, three ways:
-    /// `LocalDataDeletionService.defaultStoreFileURLs()` builds every store to read its URL, which is
-    /// what a privacy wipe is *for*; `LocalStoreClassification` does the same to answer what each
-    /// store's file is called; and `ClipboardHistoryMonitor`'s own default is how the thirteenth
-    /// store reaches the view model at all. Blanket-flagging those would flag the plumbing this rule
-    /// depends on.
-    ///
-    /// **The residual, restated because the first version of this sentence was false** (cycle 2, G1).
-    /// It said the uncovered case was "a wrapper that obtained its stores from somewhere else —
-    /// passed in, or read off an existing view model". The real one **builds** them:
-    ///
-    ///     enum StoreVendor {
-    ///         static func stores() -> (RoutineStore, TaskHistoryStore) { (.init(), .init()) }
-    ///     }
-    ///
-    /// A store *vendor* that never constructs an `AgentViewModel` writes no parameter label, because
-    /// there is no call to label, and no store type beside a parenthesis, because `.init()` names
-    /// nothing. **Neither arm of this suite reaches it, and no scan keyed on what a caller writes
-    /// can** — the label would be written by its *caller*, and its caller may legitimately be a test
-    /// fixture. `Sources/MacAgentCore/` is outside the sweep as well, for the reasons argued above.
-    ///
-    /// **A count, not just a file set**, for the reason PR #109's re-check gives about the factory:
-    /// a second convenience written *inside* `AgentViewModel.swift` would keep the file set identical.
-    /// The expected count is derived from `LocalStore.allCases` rather than written down — every
-    /// store that is a parameter of its own, which is all thirteen except the clipboard history the
-    /// monitor carries.
-    ///
-    /// **This suite is a tripwire, not a boundary, and it says so here because that is where a
-    /// reader meets it** (founder conclusion, PR #158 cycle 2). Five doors have now been closed on
-    /// this one hazard across four different keys — the view model's name, every spelling of that
-    /// name, the thirteen store type names, and finally a parameter label — and the vendor shape in
-    /// the residual above is reachable by none of them, because a *scan* can only see what a caller
-    /// happens to write and Swift lets a caller write almost nothing. What closes it is the
-    /// compiler: **SONNY-350** requires a location parameter on all thirteen stores, so
-    /// `RoutineStore()` and `.init()` stop compiling and the legitimate sites become named
-    /// factories. Until that lands, read a green run here as *nobody did the obvious thing*, not as
-    /// *nobody can*. **Do not spend another round widening this scan to reach the vendor shape** —
-    /// that is the fourth key failing the way the first three did.
-    @Test
-    func noAppSourceBuildsALocalStoreWithoutNamingItsFileURL() throws {
-        let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
-        #expect(Set(typeNames).count == LocalStore.allCases.count, "two stores share a type name")
-
-        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
-        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
-            Issue.record("could not enumerate Sources/")
-            return
-        }
-
-        var defaultPathSites: [String: Int] = [:]
-        var filesRead = 0
-        var filesSkipped = 0
-        for case let url as URL in walker where url.pathExtension == "swift" {
-            guard !url.pathComponents.contains("MacAgentCore") else {
-                filesSkipped += 1
-                continue
-            }
-            filesRead += 1
-            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
-                .map(\.text)
-                .joined(separator: "\n")
-            for typeName in typeNames {
-                for construction in Self.constructions(of: typeName, in: code)
-                where !construction.contains("fileURL:") {
-                    defaultPathSites[url.lastPathComponent, default: 0] += 1
-                }
-            }
-        }
-
-        // Both floors, because either half enumerating to nothing would make this vacuously green
-        // and would do it silently — the exclusion has to be excluding something real, and the swept
-        // half has to be the real app target.
-        #expect(filesRead > 20, "the enumerator saw \(filesRead) swept app sources — too few to be the real tree")
-        #expect(filesSkipped > 100, "the MacAgentCore exclusion skipped \(filesSkipped) files — too few to be that target")
-
-        let expected = LocalStore.allCases.filter { Self.injection(of: $0).parameterLabel != nil }.count
-        let found = defaultPathSites.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
-        #expect(
-            defaultPathSites == ["AgentViewModel.swift": expected],
-            """
-            Sources/ builds default-path local stores in \(found) — it may do so in exactly one \
-            place, AgentViewModel.\(Self.realStoreFactoryName)(), and \(expected) times there. A \
-            store built anywhere else with no fileURL: points at the developer's real \
-            ~/Library/Application Support/Sonny data, and a wrapper handing that out names neither \
-            the factory nor, if it is spelled through a typealias or a metatype, the view model type.
-            """
-        )
-    }
-
-    /// **The sweep above, shown flagging the defect it names** — this suite's own rule, and the
-    /// reason the probe in that comment was run against the real tree first.
-    ///
-    /// The held sample is the wrapper in all three of the spellings a name-keyed scan cannot see. For
-    /// each one, two things are asserted and the pair is the whole point: `constructions(of:
-    /// "AgentViewModel", in:)` finds **nothing**, so the older guard is blind to it; and the
-    /// store-type sweep finds the inline constructions, so this one is not.
-    ///
-    /// **A fourth spelling defeats this arm too, and it has its own held sample** —
-    /// `theLabelArmSeesTheSpellingTheStoreTypeArmCannotSee` (PR #158 review, F1). These three write
-    /// their stores as `RoutineStore()`; write them `routineStore: .init()` instead and the store
-    /// sweep goes blind in the same way the name count already was.
-    @Test
-    func theAppSourceSweepFlagsEveryWrapperSpellingTheNameCountCannotSee() {
-        let samples: [(String, String)] = [
-            ("typealias", """
-            typealias ConvenientViewModel = AgentViewModel
-            enum DeveloperConvenience {
-                static func viewModel() -> ConvenientViewModel {
-                    ConvenientViewModel(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
-                }
-            }
-            """),
-            ("metatype", """
-            enum DeveloperConvenience {
-                static func viewModel() -> AnyObject {
-                    let type = AgentViewModel.self
-                    return type.init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
-                }
-            }
-            """),
-            ("contextual .init", """
-            enum DeveloperConvenience {
-                static func viewModel() -> AgentViewModel {
-                    .init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
-                }
-            }
-            """)
-        ]
-        for (label, sample) in samples {
-            #expect(
-                Self.constructions(of: "AgentViewModel", in: sample).isEmpty,
-                Comment(rawValue: "\(label): the name count can see this after all — the sample is not the door")
-            )
-            let inline = LocalStore.allCases
-                .map { Self.injection(of: $0).typeName }
-                .flatMap { Self.constructions(of: $0, in: sample) }
-                .filter { !$0.contains("fileURL:") }
-            #expect(inline.count == 2, Comment(rawValue: "\(label): the store sweep found \(inline.count) of the 2 inline stores"))
-        }
-
-        // And the negative control: the same wrapper handed its stores instead of building them is
-        // not this sweep's to catch, which is the residual the test above writes down.
-        let passedIn = """
-        enum DeveloperConvenience {
-            static func viewModel(routineStore: RoutineStore) -> AgentViewModel {
-                .init(routineStore: routineStore)
-            }
-        }
-        """
-        let inline = LocalStore.allCases
-            .map { Self.injection(of: $0).typeName }
-            .flatMap { Self.constructions(of: $0, in: passedIn) }
-        #expect(inline.isEmpty, "a store that is passed in is not a construction")
-    }
 
     /// **The spelling-proof arm: a parameter label cannot be aliased, metatyped, or elided**
     /// (SONNY-269, PR #158 review F1).
@@ -1005,6 +909,115 @@ struct LocalStoreInjectionScanTests {
         #expect(factoryCall.contains("finderRevealer:"), "the argument is not passed by that label any more")
     }
 
+    /// **The wipe is handed the real file list, and the trade that makes this test necessary**
+    /// (PR #162 review F5).
+    ///
+    /// `LocalDataDeletionService.fileURLs` used to be `[URL]? = nil`, falling through to
+    /// `defaultStoreFileURLs(fileManager:)` — so `LocalDataDeletionService()` compiled and silently
+    /// resolved the founder's real thirteen files, on the type that deletes them. That door is now
+    /// shut by the compiler, and `noStoreVendorDefaultsAStoreParameter` holds it shut.
+    ///
+    /// **Closing it moved a correct-by-default into a hand-written argument at exactly one site**,
+    /// and that site is the shipping app's, unreachable from any behavioural test — the same shape
+    /// as `finderRevealer` above. The first version of this test checked that `defaultStoreFileURLs`
+    /// was *named* somewhere in the factory call, which caught `fileURLs: []` and nothing subtler:
+    /// `Array(defaultStoreFileURLs().dropFirst())` passed the whole suite while the wipe left
+    /// `vision-sessions.json` on disk and the dialog went on naming it (PR #162 review N1/W2). A
+    /// presence check sees wholesale replacement and never a list derived wrongly from the right
+    /// function — the same shape CLAUDE.md records for the wipe's own sentence, one level out.
+    ///
+    /// **So the argument is not assembled at the factory any more.**
+    /// `LocalDataDeletionService.acrossEveryLocalStore()` is `realFileURL`'s pattern one level up:
+    /// the reach stays in words and there is nothing left at the call site to get wrong. That makes
+    /// this test a check on *which member* the factory calls, which is a property with exactly one
+    /// right answer — and it is the whole property, because what that member returns is pinned by
+    /// value by `theWipeReachesEveryLocalStore`.
+    @Test
+    func theRealStoreFactoryHandsTheWipeTheRealFileList() throws {
+        let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
+        let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
+
+        let calls = Self.constructions(of: "AgentViewModel", in: code)
+        #expect(calls.count == 1, "AgentViewModel.swift constructs the type \(calls.count) times")
+        let factoryCall = try #require(calls.first)
+
+        #expect(
+            factoryCall.contains("localDataDeletionService:"),
+            "the wipe is not passed to the view model by that label any more"
+        )
+        // Assembled for the same reason the factory's own name is: this file is swept for the
+        // spellings that reach a real location.
+        #expect(
+            factoryCall.contains("acrossEvery" + "LocalStore"),
+            """
+            the real-store factory no longer reaches the wipe through its every-store member, so \
+            Settings' "delete everything Sonny keeps on this Mac" runs against whatever list the \
+            factory assembled instead. An empty one deletes nothing; one store short leaves that \
+            store's file on disk while the dialog goes on naming it. No behavioural test can reach \
+            this line; it is the shipping app's.
+            """
+        )
+        // And nothing is hand-assembled beside it: a factory that names the member *and* builds a
+        // list of its own would satisfy the check above while the second argument is what ships.
+        #expect(
+            !factoryCall.contains("defaultStore" + "FileURLs"),
+            "the factory assembles a store-file list of its own again — that is the argument N1 removed"
+        )
+    }
+
+    /// **The executor reads the clipboard store the monitor writes, and never one of its own**
+    /// (SONNY-350).
+    ///
+    /// `AgentActionExecutor` takes a `clipboardHistoryStore` of its own, and that parameter carried
+    /// a default resolving to the real file until this ticket. `AgentViewModel.makeExecutor` passed
+    /// five of the executor's six stores and let this one default — so a fixture that had carefully
+    /// injected a `ClipboardHistoryMonitor` at a temp root still had "show me my clipboard history"
+    /// reading the developer's own copied text. The lookup is read-only, so nothing corrupted and
+    /// no test failed; what was live is the divergence `ClipboardHistoryMonitor.historyStore`
+    /// forbids in its own doc comment, inside the file that comment sits in.
+    ///
+    /// **A source rule rather than a behavioural one, and the reason is honest rather than
+    /// convenient.** The obvious test — seed the fixture's store, run the lookup, read the text back
+    /// — cannot be written deterministically: the adapter's answer reaches the view model only as
+    /// `finalSummary`, which is a count ("Found 1 clipboard item."), and a count discriminates
+    /// against the real store only when the developer's own history happens not to hold the same
+    /// number. That is a test whose result changes with the machine running it, which this
+    /// repository does not accept as evidence. So the property held here is the wiring itself: there
+    /// is exactly one `clipboardHistoryStore:` argument in `AgentViewModel.swift`, and it is the
+    /// monitor's own store. A second one, or a store built inline, fails.
+    @Test
+    func theExecutorIsHandedTheClipboardMonitorsOwnStore() throws {
+        let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
+        let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
+
+        let uses = Self.argumentLabelUses(of: "clipboardHistoryStore", in: code)
+        #expect(
+            uses.count == 1,
+            """
+            AgentViewModel.swift names `clipboardHistoryStore:` \(uses.count) times, expected once. \
+            The executor must read the store the monitor writes; a second site is a second answer to \
+            "which file is the clipboard history".
+            """
+        )
+        // `argumentLabelUses` returns the label and its colon, which is what the count above
+        // needs; the *value* is the rest of that line, which is what this rule is about.
+        let argumentLines = TestSourceTree.codeLines(of: source)
+            .map(\.text)
+            .filter { $0.contains("clipboardHistoryStore:") }
+        #expect(argumentLines.count == 1, "expected one line carrying the argument, got \(argumentLines.count)")
+        for line in argumentLines {
+            #expect(
+                line.contains("clipboardHistoryMonitor.historyStore"),
+                """
+                AgentViewModel.swift passes something other than the monitor's own store as \
+                `clipboardHistoryStore:` — so what the lookup reads and what recording writes can \
+                differ, which is exactly what ClipboardHistoryMonitor.historyStore exists to \
+                prevent. The line is: \(line.trimmingCharacters(in: .whitespaces))
+                """
+            )
+        }
+    }
+
     /// The same door from the other side: no test may ask for the real locations either.
     ///
     /// Scanned across every test target, because a helper in the support target would be the least
@@ -1034,44 +1047,113 @@ struct LocalStoreInjectionScanTests {
         }
     }
 
-    /// **This suite's own reach, proven rather than claimed** — the residual
-    /// `OutputLocationFixtureWiringScanTests` was corrected for on PR #100: a sweep is only a guard
-    /// once it has been shown to flag the thing it names. Run over text carrying the defect, the
-    /// matcher finds it; run over text carrying the fixed form, it does not.
+    /// The store-level twin of the rule above, and the one thing SONNY-350's compile-time rule
+    /// cannot see.
+    ///
+    /// Requiring `fileURL:` stops a test reaching the real path *by silence*. It does not stop one
+    /// reaching it **in words** — `TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL())`
+    /// compiles, and it must, because that is exactly what the shipping app writes. So the
+    /// population is held instead of the spelling banned.
+    ///
+    /// **The needle is every public spelling, not the one this ticket added** (PR #162 review F4).
+    /// A guard matching only `realFileURL` reads as complete and is not: `LocalStore.<case>.fileURL()`,
+    /// `ClipboardHistoryStore.defaultDirectory(…)` and `LocalDataDeletionService.defaultStoreFileURLs()`
+    /// all compile and all resolve the same real path. The first is the one a fixture author would
+    /// actually reach for, because three files on this list already call it for legitimate reasons
+    /// and a neighbouring example is the strongest argument a codebase makes. Widening the needle is
+    /// what turned a four-file list into a seven-file one — the extra three were reaching a real
+    /// location before SONNY-350 too, through a door the narrow needle could not see.
+    ///
+    /// **A floor as well as a ceiling**, for the reason the label arm above gives: a set that only
+    /// forbids passes vacuously the day the matcher breaks. An eighth file here is a real decision —
+    /// either that test wants an `UnreachableLocalStores` store, or it belongs on this list with its
+    /// reason written beside it.
     @Test
-    func theSweepFlagsAStoreBuiltWithNoFileURLAndClearsOneBuiltWithIt() {
-        let defective = """
-        let viewModel = AgentViewModel(
-            taskHistoryStore: TaskHistoryStore(),
-            outputLocationStore: OutputLocationStore(whitelist: PathWhitelist(roots: [root]))
-        )
-        """
-        let fixed = """
-        let viewModel = AgentViewModel(
-            taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
-            outputLocationStore: OutputLocationStore(
-                fileURL: root.appendingPathComponent("output-locations.json"),
-                whitelist: PathWhitelist(roots: [root])
+    func onlyTheShippedConstantsTestsNameAStoresRealLocation() throws {
+        // **Every one of these reads a URL and none of them writes through it**, which is the line
+        // this list is drawn on. Resolving a real location costs nothing — `realFileURL` and
+        // `fileURL()` build a `URL`, and the caps below are decided in an initializer — so a test
+        // that names one and never opens it is safe. A test that *writes* through one is the
+        // failure this whole ticket exists to close, and no entry here does.
+        let permitted: Set<String> = [
+            // The shipped task-history cap, read off a store built the way production builds one.
+            "MacAgentCoreTests/TaskHistoryRetentionTests.swift",
+            // The plan store's cap, which must equal the task row's.
+            "MacAgentCoreTests/TaskResultStorageTests.swift",
+            // The shipped fourteen-day idle expiry.
+            "MacAgentCoreTests/ResumableTaskStoreTests.swift",
+            // That row J's file sits beside the others under Application Support.
+            "MacAgentCoreTests/ApprovedAppStoreTests.swift",
+            // The three below arrived when this needle widened past `realFileURL` (PR #162 review
+            // F4). Each was already reaching a real location before SONNY-350, through a spelling
+            // the narrow needle could not see — so they are disclosure rather than new reach.
+            //
+            // That `LocalStore.allCases`' file URLs and `defaultStoreFileURLs()` are one population,
+            // which is how a fourteenth store is refused until it is classified.
+            "MacAgentCoreTests/LocalStorageSecurityTests.swift",
+            // The stored-property classifier, which reads each store's *filename* off its URL.
+            "MacAgentTests/ProductShellTests.swift",
+            // This file's own premise test: that every store's real location really is under
+            // Application Support. It is the one assertion that has to name the real path by
+            // definition — a premise proved somewhere else would be a premise about somewhere else.
+            "MacAgentCoreTests/LocalStoreInjectionScanTests.swift"
+        ]
+
+        var files: [TestSourceTree.SourceFile] = []
+        for target in TestSourceTree.targets {
+            files.append(contentsOf: try TestSourceTree.swiftFiles(in: target))
+        }
+        #expect(!files.isEmpty, "the enumerator found no test sources")
+
+        // **Every public spelling that resolves the real path, not just the obvious one** (PR #162
+        // review F4). `realFileURL` is the one this ticket added, and a needle matching only it
+        // reads as a complete guard while three other compiling spellings walk past:
+        // `LocalStore.<case>.fileURL()`, `ClipboardHistoryStore.defaultDirectory(…)` and
+        // `LocalDataDeletionService.defaultStoreFileURLs()`. The first is the plausible one, because
+        // several fixtures already call it for legitimate reasons and a fixture author has a
+        // neighbouring example to copy. Assembled from pieces so the literals never appear in this
+        // file, which the sweep reads like any other test source.
+        let spellings = [
+            "real" + "FileURL",
+            "default" + "Directory",
+            "defaultStore" + "FileURLs",
+            // Not `URL()`: `LocalStore.fileURL(fileManager:)` takes a defaulted parameter, so
+            // `fileURL(fileManager: .default)` typechecks and walks past a closing-paren needle
+            // (PR #162 review N2). The opening parenthesis is still needed — bare `fileURL` matches
+            // the stored property on every store — and widening to it adds no permitted file: the
+            // one extra match under `Tests/` is a `///` line, which `codeLines` strips before the
+            // sweep reads it.
+            ".file" + "URL("
+        ]
+        var found: Set<String> = []
+
+        for file in files {
+            let code = TestSourceTree.codeLines(of: try TestSourceTree.read(file))
+                .map(\.text)
+                .joined(separator: "\n")
+            guard spellings.contains(where: { code.contains($0) }) else {
+                continue
+            }
+            found.insert(file.relativePath)
+            #expect(
+                permitted.contains(file.relativePath),
+                """
+                \(file.relativePath) names a store's real ~/Library location. A fixture that does \
+                not care about the file wants UnreachableLocalStores; one that does wants its own \
+                temp root. If this site really is about what production builds, add it to this \
+                test's list with the reason.
+                """
             )
-        )
-        """
-
-        for typeName in ["TaskHistoryStore", "OutputLocationStore"] {
-            let flagged = Self.constructions(of: typeName, in: defective)
-                .filter { !$0.contains("fileURL:") }
-            #expect(flagged.count == 1, "\(typeName) was not flagged in the defective text")
-
-            let cleared = Self.constructions(of: typeName, in: fixed)
-                .filter { !$0.contains("fileURL:") }
-            #expect(cleared.isEmpty, "\(typeName) was flagged in the fixed text")
         }
 
-        // And a longer type name is not matched by a shorter one that ends the same way — the trap
-        // this repository's other textual scans have hit, and the reason the matcher checks the
-        // character before the name.
-        let settings = "ClipboardHistorySettingsStore(fileURL: url)"
-        #expect(Self.constructions(of: "ClipboardHistoryStore", in: settings).isEmpty)
-        #expect(Self.constructions(of: "ClipboardHistorySettingsStore", in: settings).count == 1)
+        #expect(
+            found == permitted,
+            """
+            these permitted files no longer name a store's real location: \
+            \(permitted.subtracting(found).sorted().joined(separator: ", ")) — drop them from the \
+            list, or the list is protecting a site that has gone.
+            """
+        )
     }
 
     /// **The count knows every spelling that names the type, shown on held text** (SONNY-248, T3).
@@ -1099,6 +1181,13 @@ struct LocalStoreInjectionScanTests {
             "MacAgent.AgentViewModel(routineStore: store)",
             "MacAgent.AgentViewModel.init(routineStore: store)"
         ]
+        // **A floor on the table, which the table did not have** (PR #162 review N3). Each loop
+        // asserts once per sample and nothing asserts how many samples there are, so deleting one
+        // removes an assertion and fails nothing — a mutant aimed here measures the table rather
+        // than the matcher, which is what made cycle 1's F1a a non-result. Same anti-vacuity shape
+        // as `checked == 15` above.
+        #expect(constructing.count == 7, "a spelling was dropped from the positive samples")
+
         for text in constructing {
             #expect(
                 Self.constructions(of: "AgentViewModel", in: text) == ["routineStore: store"],
@@ -1116,53 +1205,12 @@ struct LocalStoreInjectionScanTests {
             "makeAgentViewModel(routineStore: store)",
             "Legacy.AgentViewModel(routineStore: store)"
         ]
+        #expect(notConstructing.count == 8, "a look-alike was dropped from the negative samples")
+
         for text in notConstructing {
             #expect(
                 Self.constructions(of: "AgentViewModel", in: text).isEmpty,
                 "counted as a construction: \(text)"
-            )
-        }
-    }
-
-    /// **The store sweep inherits the same fix, because it is the same matcher** (SONNY-248, T3).
-    ///
-    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` is the other caller of
-    /// `constructions(of:in:)`, and it had the identical blind spot for the identical reason: a
-    /// fixture writing `TaskHistoryStore.init()` — or `MacAgentCore.TaskHistoryStore()`, which the
-    /// app target has to write when a name collides — was counted zero and swept past, at a store
-    /// pointing straight at `~/Library/Application Support/Sonny`. Checked here rather than assumed
-    /// from the shared helper, because "they call the same function" is exactly the claim this
-    /// repository keeps finding to be true of the code and false of the behaviour — and probed live
-    /// as well as held: a `Tests/MacAgentTests/` file whose only content was
-    /// `TaskHistoryStore.init()` was swept past at `9cd5b64` (`swift test --filter
-    /// LocalStoreInjectionScanTests` → 8 tests in 1 suite passed) and is named by
-    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` with the matcher fixed.
-    @Test
-    func theFileURLSweepSeesTheSameSpellings() {
-        let defective = """
-        let viewModel = AgentViewModel.init(
-            taskHistoryStore: TaskHistoryStore.init(),
-            outputLocationStore: MacAgentCore.OutputLocationStore(whitelist: PathWhitelist(roots: [root]))
-        )
-        """
-        let fixed = """
-        let viewModel = AgentViewModel.init(
-            taskHistoryStore: TaskHistoryStore.init(fileURL: root.appendingPathComponent("task-history.json")),
-            outputLocationStore: MacAgentCore.OutputLocationStore(
-                fileURL: root.appendingPathComponent("output-locations.json"),
-                whitelist: PathWhitelist(roots: [root])
-            )
-        )
-        """
-
-        for typeName in ["TaskHistoryStore", "OutputLocationStore"] {
-            #expect(
-                Self.constructions(of: typeName, in: defective).filter { !$0.contains("fileURL:") }.count == 1,
-                "\(typeName) was not flagged in the defective text"
-            )
-            #expect(
-                Self.constructions(of: typeName, in: fixed).filter { !$0.contains("fileURL:") }.isEmpty,
-                "\(typeName) was flagged in the fixed text"
             )
         }
     }
@@ -1194,18 +1242,45 @@ struct LocalStoreInjectionScanTests {
     /// and a default written inside a comment cannot fail it. A parenthesis inside a string literal
     /// would miscount the depth; the signature contains none.
     static func initializerParameters() throws -> [Parameter] {
-        let source = try String(contentsOf: viewModelSource, encoding: .utf8)
+        // An argument label plus an internal name ("_ foo:") would need the second word; the
+        // signature has none, and one added later shows up as a label nothing matches rather
+        // than as a silent pass.
+        try parameters(ofInitializerAt: "\n    init(", in: viewModelSource)
+    }
+
+    enum ScanError: Error {
+        case initializerNotFound
+    }
+
+    /// The parameters of one initializer in an arbitrary source file, in declaration order.
+    ///
+    /// The same parse as `initializerParameters()` above, which now delegates to it. Split out for
+    /// `noStoreVendorDefaultsAStoreParameter`, which has four more initializers to read and no
+    /// reason to own a second copy of a paren-balancing scanner.
+    static func parameters(ofInitializerAt marker: String, in file: URL) throws -> [Parameter] {
+        let source = try String(contentsOf: file, encoding: .utf8)
         let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
-        guard let start = code.range(of: "\n    init(") else {
+        guard let start = code.range(of: marker) else {
             throw ScanError.initializerNotFound
         }
 
+        // **The scan starts at the marker's first character, not its last.** A marker naming the
+        // first parameter — which is how two of the vendors below are told apart from an earlier
+        // `public init(` in the same file — ends at a colon rather than at the opening parenthesis,
+        // so a scanner starting at its end counts the first parenthesis of a *default value* as the
+        // parameter list's own and closes on that value's. What it returns then is a fragment: a
+        // parse that finds a handful of plausible parameters and none of the ones being asked
+        // about, which reads exactly like a signature that has lost them.
         var depth = 0
-        var index = code.index(before: start.upperBound)
+        var index = start.lowerBound
+        var opened: String.Index?
         var closed: String.Index?
         while index < code.endIndex {
             if code[index] == "(" {
                 depth += 1
+                if depth == 1 {
+                    opened = index
+                }
             } else if code[index] == ")" {
                 depth -= 1
                 if depth == 0 {
@@ -1215,27 +1290,20 @@ struct LocalStoreInjectionScanTests {
             }
             index = code.index(after: index)
         }
-        guard let closed else {
+        guard let opened, let closed else {
             throw ScanError.initializerNotFound
         }
 
-        let body = code[start.upperBound..<closed]
+        let body = code[code.index(after: opened)..<closed]
         return splitTopLevel(body).compactMap { piece in
             let trimmed = piece.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let colon = trimmed.firstIndex(of: ":") else {
                 return nil
             }
-            // An argument label plus an internal name ("_ foo:") would need the second word; the
-            // signature has none, and one added later shows up as a label nothing matches rather
-            // than as a silent pass.
             let label = String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
             let rest = String(trimmed[trimmed.index(after: colon)...])
             return Parameter(label: label, hasDefault: containsTopLevelDefault(rest))
         }
-    }
-
-    enum ScanError: Error {
-        case initializerNotFound
     }
 
     /// Splits a parameter list on commas that are not inside brackets of any kind.

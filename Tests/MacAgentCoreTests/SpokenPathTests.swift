@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -312,14 +313,16 @@ struct SpokenPathTests {
 
     // MARK: - The reported command, through the executor
 
-    /// **Every executor here is temp-rooted, stores included** (PR #106 review, F7). A default
-    /// `AgentActionExecutor()` binds six real local stores under `~/Library/Application
+    /// **Every executor here is temp-rooted, stores included** (PR #106 review, F7). An executor
+    /// built with no store named used to bind six local stores under `~/Library/Application
     /// Support/Sonny`, and `LocalStorageEncryption` swaps in an ephemeral key inside a test
     /// process — so the day a `prepare` path starts writing, it writes the developer's own data
     /// back unreadable rather than merely wrong. That is SONNY-209's failure with a worse ending,
-    /// and the first version of this suite stood one code change away from it. All six are named
-    /// explicitly; the executor's other defaulted stores are SONNY-240's to close, not this
-    /// suite's to reach around.
+    /// and the first version of this suite stood one code change away from it.
+    ///
+    /// **That default is gone now** (SONNY-350): `AgentActionExecutor` has no defaulted store left,
+    /// so a fixture that omits one does not build. This suite kept naming all six before the
+    /// compiler required it, which is why nothing here changed.
     ///
     /// The whitelist is temp-rooted too, which costs nothing here: a relative or tilde path always
     /// resolves against the *home* directory, so what these tests read out of a refusal is the

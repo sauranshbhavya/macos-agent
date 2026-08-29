@@ -149,20 +149,24 @@ public struct OutputLocationStore: @unchecked Sendable {
     private let whitelist: PathWhitelist
 
     public init(
-        fileURL: URL? = nil,
+        fileURL: URL,
         fileManager: FileManager = .default,
         encryption: LocalStorageEncryption = .shared,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
+        self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
         self.whitelist = whitelist
-        if let fileURL {
-            self.fileURL = fileURL
-        } else {
-            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-                .appendingPathComponent("output-locations.json")
-        }
+    }
+
+    /// Where the shipping app keeps this store.
+    ///
+    /// The rule that makes this a named call rather than an initializer default is on
+    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
+    public static func realFileURL(fileManager: FileManager = .default) -> URL {
+        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
+            .appendingPathComponent("output-locations.json")
     }
 
     /// Records the folders one finished run wrote into, one use each.

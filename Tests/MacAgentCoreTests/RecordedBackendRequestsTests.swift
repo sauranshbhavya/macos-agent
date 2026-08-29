@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 
 /// SONNY-331. `RecordedBackendRequests.only` says "exactly one", and now checks it.
 ///

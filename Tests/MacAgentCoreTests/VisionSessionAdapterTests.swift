@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -53,7 +54,13 @@ struct VisionSessionAdapterTests {
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             installedAppResolver: InstalledAppResolver(source: FixedAppSource(installed)),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: FixedRunningApps(running),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
             visionSession: vision
         )
     }
@@ -518,7 +525,13 @@ struct MixedVisionPlanTests {
 
     private static func executor() -> AgentActionExecutor {
         AgentActionExecutor(
-            installedAppResolver: InstalledAppResolver(source: FixedAppSource([safari, notes]))
+            installedAppResolver: InstalledAppResolver(source: FixedAppSource([safari, notes])),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
     }
 

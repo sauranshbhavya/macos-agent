@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -479,6 +480,9 @@ struct PrebuiltPlanDispatchTests {
                 fileOpener: UnusedFileOpener(),
                 routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
                 workspaceStore: store,
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
                 shortcutCatalog: UnusedShortcutCatalog(),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")

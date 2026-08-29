@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// SONNY-10. The floating widget's permission panel is the surface most users meet their first
 /// approval on, and until this change its first-run copy explained Sonny's *policy* ("we always

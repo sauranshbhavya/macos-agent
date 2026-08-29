@@ -19,10 +19,10 @@ public struct InstantCommandResolver: Sendable {
     private let installedAppResolver: any InstalledAppResolving
 
     public init(
-        snippetStore: SnippetStore = SnippetStore(),
-        recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
-        routineStore: RoutineStore = RoutineStore(),
-        workspaceStore: WorkspaceStore = WorkspaceStore(),
+        snippetStore: SnippetStore,
+        recentArtifactStore: RecentArtifactStore,
+        routineStore: RoutineStore,
+        workspaceStore: WorkspaceStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared
     ) {

@@ -1,8 +1,8 @@
 import Foundation
+import MacAgentCore
 import MacAgentTestSupport
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// **Spec §16.3's guarantee, driven rather than described** (SONNY-136).
 ///

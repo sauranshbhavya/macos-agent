@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// The progress the executor reports as a run goes (row 13, SONNY-210) — the half of resuming that

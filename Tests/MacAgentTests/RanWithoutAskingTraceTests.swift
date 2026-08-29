@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// SONNY-99's trace, reshaped by the consequence rule (2026-08-13). Under the rule a tier-2 file
 /// write and an advisory-only tier-3 both run unprompted, and on screen they would look exactly
