@@ -865,9 +865,7 @@ final class AgentViewModel: ObservableObject {
                 store: clipboardHistoryStore,
                 settingsStore: clipboardHistorySettingsStore
             ),
-            localDataDeletionService: LocalDataDeletionService(
-                fileURLs: LocalDataDeletionService.defaultStoreFileURLs()
-            ),
+            localDataDeletionService: LocalDataDeletionService.acrossEveryLocalStore(),
             // The one client the process holds, built in `main.swift` beside the real Keychain and
             // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
             backendClient: backendClient,

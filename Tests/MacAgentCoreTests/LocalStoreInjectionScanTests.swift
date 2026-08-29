@@ -919,11 +919,19 @@ struct LocalStoreInjectionScanTests {
     ///
     /// **Closing it moved a correct-by-default into a hand-written argument at exactly one site**,
     /// and that site is the shipping app's, unreachable from any behavioural test — the same shape
-    /// as `finderRevealer` above. A factory changed to pass `fileURLs: []` would compile, satisfy
-    /// every guard in this file, and ship a Settings wipe that deletes nothing while telling the
-    /// user by name what it took. Before SONNY-350 the default made that mistake impossible to make
-    /// silently; the trade is worth it — a silent *deletion* reach is worse than a loud one — but it
-    /// is a trade, and this is what pays for it.
+    /// as `finderRevealer` above. The first version of this test checked that `defaultStoreFileURLs`
+    /// was *named* somewhere in the factory call, which caught `fileURLs: []` and nothing subtler:
+    /// `Array(defaultStoreFileURLs().dropFirst())` passed the whole suite while the wipe left
+    /// `vision-sessions.json` on disk and the dialog went on naming it (PR #162 review N1/W2). A
+    /// presence check sees wholesale replacement and never a list derived wrongly from the right
+    /// function — the same shape CLAUDE.md records for the wipe's own sentence, one level out.
+    ///
+    /// **So the argument is not assembled at the factory any more.**
+    /// `LocalDataDeletionService.acrossEveryLocalStore()` is `realFileURL`'s pattern one level up:
+    /// the reach stays in words and there is nothing left at the call site to get wrong. That makes
+    /// this test a check on *which member* the factory calls, which is a property with exactly one
+    /// right answer — and it is the whole property, because what that member returns is pinned by
+    /// value by `theWipeReachesEveryLocalStore`.
     @Test
     func theRealStoreFactoryHandsTheWipeTheRealFileList() throws {
         let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
@@ -940,13 +948,20 @@ struct LocalStoreInjectionScanTests {
         // Assembled for the same reason the factory's own name is: this file is swept for the
         // spellings that reach a real location.
         #expect(
-            factoryCall.contains("defaultStore" + "FileURLs"),
+            factoryCall.contains("acrossEvery" + "LocalStore"),
             """
-            the real-store factory no longer hands the wipe the real file list, so Settings' \
-            "delete everything Sonny keeps on this Mac" would run against whatever list it was \
-            given instead — and an empty one deletes nothing while the dialog still names all \
-            thirteen stores. No behavioural test can reach this line; it is the shipping app's.
+            the real-store factory no longer reaches the wipe through its every-store member, so \
+            Settings' "delete everything Sonny keeps on this Mac" runs against whatever list the \
+            factory assembled instead. An empty one deletes nothing; one store short leaves that \
+            store's file on disk while the dialog goes on naming it. No behavioural test can reach \
+            this line; it is the shipping app's.
             """
+        )
+        // And nothing is hand-assembled beside it: a factory that names the member *and* builds a
+        // list of its own would satisfy the check above while the second argument is what ships.
+        #expect(
+            !factoryCall.contains("defaultStore" + "FileURLs"),
+            "the factory assembles a store-file list of its own again — that is the argument N1 removed"
         )
     }
 
@@ -1102,7 +1117,13 @@ struct LocalStoreInjectionScanTests {
             "real" + "FileURL",
             "default" + "Directory",
             "defaultStore" + "FileURLs",
-            ".file" + "URL()"
+            // Not `URL()`: `LocalStore.fileURL(fileManager:)` takes a defaulted parameter, so
+            // `fileURL(fileManager: .default)` typechecks and walks past a closing-paren needle
+            // (PR #162 review N2). The opening parenthesis is still needed — bare `fileURL` matches
+            // the stored property on every store — and widening to it adds no permitted file: the
+            // one extra match under `Tests/` is a `///` line, which `codeLines` strips before the
+            // sweep reads it.
+            ".file" + "URL("
         ]
         var found: Set<String> = []
 
@@ -1160,6 +1181,13 @@ struct LocalStoreInjectionScanTests {
             "MacAgent.AgentViewModel(routineStore: store)",
             "MacAgent.AgentViewModel.init(routineStore: store)"
         ]
+        // **A floor on the table, which the table did not have** (PR #162 review N3). Each loop
+        // asserts once per sample and nothing asserts how many samples there are, so deleting one
+        // removes an assertion and fails nothing — a mutant aimed here measures the table rather
+        // than the matcher, which is what made cycle 1's F1a a non-result. Same anti-vacuity shape
+        // as `checked == 15` above.
+        #expect(constructing.count == 7, "a spelling was dropped from the positive samples")
+
         for text in constructing {
             #expect(
                 Self.constructions(of: "AgentViewModel", in: text) == ["routineStore: store"],
@@ -1177,6 +1205,8 @@ struct LocalStoreInjectionScanTests {
             "makeAgentViewModel(routineStore: store)",
             "Legacy.AgentViewModel(routineStore: store)"
         ]
+        #expect(notConstructing.count == 8, "a look-alike was dropped from the negative samples")
+
         for text in notConstructing {
             #expect(
                 Self.constructions(of: "AgentViewModel", in: text).isEmpty,
