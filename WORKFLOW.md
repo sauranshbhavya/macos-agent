@@ -482,6 +482,18 @@ every post-close round — a re-check, a late finding, a manual-test failure —
 the user to exactly one session. (Trigger: two mis-pasted prompts landed fix instructions
 in reviewer terminals, which then implemented and pushed duplicate rounds of the same work.)
 
+**A test a reviewer writes is a finding, not a fix, and it travels with its own run line.**
+Handing a probe to an implementing lane is a move this process began making routinely in the
+2026-08-29 wave; it fits the bullet above rather than breaking it, because the reviewer supplies
+the scenario and the evidence and the session that owns the ticket writes the version that lands.
+The evidence includes the runner's own pass/skip count for that probe. A skipped test reads
+exactly like a passing one: PR #164's cycle-2 test was offered as proven with a log reading
+`1 passed | 1 skipped`, so its assertions had never executed, and they asserted the wrong value
+besides — the right one was in the same session's own trace output. The implementer re-proves the
+probe in the branch instead of transcribing it, and a probe that will not reproduce is a finding to
+hand back rather than a test to make pass. (`CLAUDE.md`'s Claims and evidence section carries the
+general rule.)
+
 **Review cycles are capped at three: the initial review, one fix round, one re-check.** The
 re-check is the last word **on finding things**; what may continue past it is verification of
 a named fix, under the scoped-round rule below. Anything still outstanding below the bar of
