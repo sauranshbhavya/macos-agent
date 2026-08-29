@@ -14,6 +14,43 @@ const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
 const SALT = "test-salt-not-a-secret";
 
+/**
+ * **The instant every rate-limit test below counts at** (SONNY-341).
+ *
+ * `consume` counts against a FIXED window — `windowStart` is `floor(now / windowSeconds) *
+ * windowSeconds` — so a 15-minute window turns over at :00, :15, :30 and :45 and a 60-minute one at
+ * :00. A test that spends a budget to its ceiling on the real clock and then asserts the next call
+ * is refused is betting that its calls do not straddle one of those instants, and four times an hour
+ * they do: the ceiling call lands in a new window, the counter is 0 again, and it is allowed.
+ * Measured on this file's own concurrency test at `def8c3a` — 40 racing `consume` calls, 20 clocked
+ * a second before an 11:00 turnover and 20 at it, allowed **6** where the test asserts 3; the same
+ * 40 on one frozen instant allowed 3.
+ *
+ * **The fix is one frozen instant per test, not a wider bound.** Every call in a test uses this
+ * value, so every call lands in one window and there is no turnover left to straddle, however long
+ * the test takes and whenever it runs. Where the instant SITS is not what makes that work — the
+ * freezing is — but it is strictly interior to all three declared window lengths, exactly centred in
+ * the 60-second and 15-minute ones and 62.5% through the hour
+ * (`node -e 'const t=Date.parse("2026-08-21T10:37:30Z")/1000; for (const w of [60,900,3600]) console.log(w, t%w, "of", w)'`
+ * → `60 30 of 60`, `900 450 of 900`, `3600 2250 of 3600`), which keeps the `retryAfterSeconds`
+ * bounds below strict rather than satisfied by an equality.
+ *
+ * **Pinned at single-call sites too, where nothing can straddle.** The property worth having is that
+ * no test in this file reads the real clock at all, so that a reader checking for one has a yes or a
+ * no rather than a judgement per call — and so that a later edit turning one call into a loop
+ * inherits a pinned clock instead of the defect.
+ *
+ * **Convention is all that holds this, and the compiler was meant to.** `consume`'s `now` still
+ * defaults to `new Date()`, so the wrong thing stays the shorter thing to write and a new test can
+ * reintroduce the defect here without anything saying so. Removing that default — every production
+ * call site already passes an explicit `now` (`git grep -c 'consume(' -- server/src` at `def8c3a`
+ * → `auth/ratelimit.ts:1` the declaration, `entitlement/store.ts:1` and `routes/auth.ts:4`) — is the
+ * same move `AgentViewModel`'s store parameters made, and it is written and measured and NOT in this
+ * branch: `src/auth/` belongs to the SONNY-196/230 lane while that lane is open. SONNY-341's ticket
+ * carries the patch and the reason.
+ */
+const NOW = new Date("2026-08-21T10:37:30Z");
+
 describeDb("rate limits and the code lifecycle", () => {
   let client: pg.Client;
 
@@ -32,7 +69,7 @@ describeDb("rate limits and the code lifecycle", () => {
       const bucket = bucketKey("addr", "a@example.com", SALT);
       const verdicts = [];
       for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max + 1; i += 1) {
-        verdicts.push(await consume(client, bucket, CODE_REQUEST_PER_ADDRESS));
+        verdicts.push(await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, NOW));
       }
       expect(verdicts.slice(0, CODE_REQUEST_PER_ADDRESS.max).every((v) => v.allowed)).toBe(true);
       const refused = verdicts.at(-1)!;
@@ -47,7 +84,7 @@ describeDb("rate limits and the code lifecycle", () => {
       // a limit of "three, usually" — and an auth endpoint is where that would be probed on purpose.
       const bucket = bucketKey("addr", "race@example.com", SALT);
       const results = await Promise.all(
-        Array.from({ length: 40 }, () => consume(client, bucket, CODE_REQUEST_PER_ADDRESS)),
+        Array.from({ length: 40 }, () => consume(client, bucket, CODE_REQUEST_PER_ADDRESS, NOW)),
       );
       expect(results.filter((r) => r.allowed)).toHaveLength(CODE_REQUEST_PER_ADDRESS.max);
       const { rows } = await client.query<{ count: number }>(
@@ -62,25 +99,28 @@ describeDb("rate limits and the code lifecycle", () => {
       const addr = bucketKey("addr", "indep@example.com", SALT);
       const src = bucketKey("src", "203.0.113.7", SALT);
       for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max; i += 1) {
-        await consume(client, addr, CODE_REQUEST_PER_ADDRESS);
+        await consume(client, addr, CODE_REQUEST_PER_ADDRESS, NOW);
       }
-      expect((await consume(client, addr, CODE_REQUEST_PER_ADDRESS)).allowed).toBe(false);
-      expect((await consume(client, src, CODE_REQUEST_PER_SOURCE)).allowed).toBe(true);
+      expect((await consume(client, addr, CODE_REQUEST_PER_ADDRESS, NOW)).allowed).toBe(false);
+      expect((await consume(client, src, CODE_REQUEST_PER_SOURCE, NOW)).allowed).toBe(true);
     });
 
     it("starts a fresh budget in the next window", async () => {
+      // **The one test here that drives a turnover on purpose, and the pattern the rest now follow**
+      // (SONNY-341): it passed an explicit clock from the day it was written and was the only test
+      // in either rate-limit file immune to the defect this ticket fixes. It reads the shared
+      // instant rather than a literal of its own, so the file has one clock.
       const bucket = bucketKey("addr", "window@example.com", SALT);
-      const now = new Date("2026-08-21T10:00:00Z");
       for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max; i += 1) {
-        await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, now);
+        await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, NOW);
       }
-      expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, now)).allowed).toBe(false);
-      const later = new Date(now.getTime() + CODE_REQUEST_PER_ADDRESS.windowSeconds * 1000);
+      expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, NOW)).allowed).toBe(false);
+      const later = new Date(NOW.getTime() + CODE_REQUEST_PER_ADDRESS.windowSeconds * 1000);
       expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, later)).allowed).toBe(true);
     });
 
     it("stores no raw address or source, only a salted hash", async () => {
-      await consume(client, bucketKey("addr", "private@example.com", SALT), CODE_REQUEST_PER_ADDRESS);
+      await consume(client, bucketKey("addr", "private@example.com", SALT), CODE_REQUEST_PER_ADDRESS, NOW);
       const { rows } = await client.query<{ bucket: string }>("SELECT bucket FROM sonny.auth_rate_limit");
       expect(rows[0]!.bucket).not.toContain("private@example.com");
       expect(rows[0]!.bucket).toMatch(/^addr:[0-9a-f]{64}$/);
@@ -110,11 +150,11 @@ describeDb("rate limits and the code lifecycle", () => {
       const start = bucketKey("src", source, SALT);
       const verify = bucketKey("verifysrc", source, SALT);
       for (let i = 0; i < CODE_REQUEST_PER_SOURCE.max; i += 1) {
-        expect((await consume(client, start, CODE_REQUEST_PER_SOURCE)).allowed).toBe(true);
+        expect((await consume(client, start, CODE_REQUEST_PER_SOURCE, NOW)).allowed).toBe(true);
       }
-      expect((await consume(client, start, CODE_REQUEST_PER_SOURCE)).allowed).toBe(false);
+      expect((await consume(client, start, CODE_REQUEST_PER_SOURCE, NOW)).allowed).toBe(false);
       // The verify budget is untouched, which is the whole of the property.
-      expect((await consume(client, verify, CODE_VERIFY_PER_SOURCE)).allowed).toBe(true);
+      expect((await consume(client, verify, CODE_VERIFY_PER_SOURCE, NOW)).allowed).toBe(true);
     });
 
     it("refuses to build a bucket with no salt configured", () => {
