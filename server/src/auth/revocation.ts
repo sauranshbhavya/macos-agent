@@ -38,6 +38,12 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  *
  * - the account holding the identity that named it is **closed** — the original case (0006), the
  *   user asked to be gone and their Supabase sessions should go with them; or
+ * **Both disjuncts rest on `provider_session_revoked_at` meaning "the revocation owed for this id's
+ * current episode has been performed", never "this id has been revoked at least once"** (PR #164
+ * review, F1). Under the second reading one stamp makes an id un-owed forever, and every close
+ * after it revokes nothing. Migration 0014's trigger is what keeps the first reading true: it
+ * clears the stamp whenever the identity observes the id again, because that is a new episode.
+ *
  * - the identity has since named a **different** id, so this one is **superseded** — SONNY-230. The
  *   superseded provider-side user may still hold live sessions, and before 0014 nothing anywhere
  *   said so: `resolve()`'s `COALESCE($5, supabase_user_id)` overwrote the column that named it, and
@@ -47,11 +53,24 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * on a *live* account is exactly the state SONNY-196 is about — Supabase re-keyed the subject
  * underneath us — and waiting for a close before revoking would mean never revoking it.
  *
- * Written as a fragment interpolated into three queries rather than repeated in each, because 0009
- * exists entirely because the delete guard and the drain had drifted apart on one clause. The
- * fragment carries no parameters and no caller input; it is a constant.
+ * **Exported, and that is the whole of what makes the sentence below true** (PR #164 review, F4).
+ * This docstring used to say the fragment was shared by "three queries … because 0009 exists
+ * entirely because the delete guard and the drain had drifted apart on one clause" — while the one
+ * query site outside this file that *could* have shared it, `owedByAccount` in `../revocations.ts`,
+ * had a hand-written byte-identical copy, because the constant was a `const` with no `export` and
+ * could not be imported. Nothing was wrong at runtime; what was wrong was a comment asserting a
+ * structural guarantee the code did not provide, which is exactly the state 0009 was written about.
+ *
+ * Four query sites share it now: the drain's claim, the drain's mark-done, `owedRevocationCount`
+ * here, and `owedByAccount` there. **The fifth copy is the delete guard's, inside migration 0014,
+ * and it is unavoidable** — a trigger body cannot import TypeScript. It is the reason `0009` is
+ * cited above rather than merely remembered, and it is the copy to change first when this changes.
+ *
+ * The fragment carries no parameters and no caller input; it is a constant, and it names the
+ * aliases `i` (`sonny.identity`) and `pu` (`sonny.identity_provider_user`), so every query
+ * interpolating it must use those.
  */
-const OWED_PREDICATE = "AND (i.account_closed OR pu.superseded_at IS NOT NULL)";
+export const OWED_PREDICATE = "AND (i.account_closed OR pu.superseded_at IS NOT NULL)";
 
 export interface RevocationOutcome {
   /**
@@ -163,6 +182,15 @@ export async function drainOwedRevocations(
         // set, an operator who fixed the provider and re-ran the drain would be told there was
         // nothing to do for the next five minutes, which is the same class of wrong answer F2 was
         // about. Back-off is a different concern and this ticket does not need one.
+        //
+        // **It releases every row naming this id, including ones another drain holds a live lease
+        // on, and 0014 made that set larger** (PR #164 review, F8). The statement is `main`'s and is
+        // unchanged; what changed underneath it is the table, which now holds one row per
+        // `(identity, id)` **ever observed** rather than one per identity currently naming it. The
+        // harm is bounded to a duplicate provider call, which this function's own docstring already
+        // concedes for any call outliving its lease, and narrowing it would mean carrying the
+        // claimed row's identity through the failure path to buy nothing the lease does not already
+        // give. Written down rather than changed.
         await client.query(
           "UPDATE sonny.identity_provider_user SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
           [owed.supabase_user_id],
@@ -200,10 +228,19 @@ export async function drainOwedRevocations(
   return { revoked, failed: failures.length, failures };
 }
 
-/** How many revocations are still owed, for the health of a deployment rather than for a request. */
+/**
+ * How many revocations are still owed, for the health of a deployment rather than for a request.
+ *
+ * **`DISTINCT pu.supabase_user_id`, because that is the unit of the work** (PR #164 review, F3).
+ * One `signOutAllForUser` clears every row naming one provider-side user, so a raw row count told an
+ * operator an account owed 2 while one drain call cleared it and `RevocationOutcome.revoked`
+ * reported 1 — three figures sharing a noun and not a unit. Two identities naming one Supabase user
+ * is not a hypothetical shape; `attribution.ts`'s header says it is what the whole account/identity
+ * separation exists to allow.
+ */
 export async function owedRevocationCount(client: pg.Client): Promise<number> {
   const { rows } = await client.query<{ n: number }>(
-    `SELECT count(*)::int AS n
+    `SELECT count(DISTINCT pu.supabase_user_id)::int AS n
        FROM sonny.identity_provider_user pu
        JOIN sonny.identity i ON i.id = pu.identity_id
       WHERE pu.provider_session_revoked_at IS NULL
@@ -225,7 +262,7 @@ export async function owedRevocationCount(client: pg.Client): Promise<number> {
  */
 export async function supersededProviderUserCount(client: pg.Client): Promise<number> {
   const { rows } = await client.query<{ n: number }>(
-    `SELECT count(*)::int AS n
+    `SELECT count(DISTINCT supabase_user_id)::int AS n
        FROM sonny.identity_provider_user
       WHERE superseded_at IS NOT NULL AND provider_session_revoked_at IS NULL`,
   );

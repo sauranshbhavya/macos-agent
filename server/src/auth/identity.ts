@@ -155,6 +155,20 @@ export async function resolve(
       // supersession recorded here would go unrecorded the first time a backfill, a support script
       // or a future link path wrote that column.
       //
+      // **What the trigger catches is any statement that NAMES the column, not any writer** (PR #164
+      // review, F5, correcting the wider claim these lines used to make). `AFTER … UPDATE OF
+      // supabase_user_id` keys on the SET list of the original statement, so a `BEFORE` trigger
+      // rewriting `NEW.supabase_user_id` on an update that does not name it, and anything running
+      // under `SET session_replication_role = replica`, do not fire it. Neither is reachable from
+      // application code today; the migration's header has the measurements and why the obvious
+      // half-fix is not taken.
+      //
+      // **This UPDATE also ends any revocation episode for the id it writes** (PR #164 review, F1).
+      // The refresh names `supabase_user_id` on every sign-in, so the trigger's `ON CONFLICT` arm
+      // runs every time and clears `provider_session_revoked_at` — which is what stops a single past
+      // revocation making an id un-owed forever, through a come-back or through an operator
+      // reopening a closed account.
+      //
       // **And a new id arriving IS the reconciliation** (SONNY-196). Supabase removes unconfirmed
       // identities on its own schedule and tells us nothing; what we see afterwards is this
       // `(provider, subject)` presenting a different `supabase_user_id`. That is the provider
