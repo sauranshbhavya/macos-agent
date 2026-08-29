@@ -43,19 +43,75 @@ battery_record_field() {
   sed -n "s/^$2 //p" "$1" | head -1
 }
 
-# Is this pid a live battery? Both halves matter: the pid must exist AND its command line must name
-# the tool, or a reused pid reads as a battery that ended long ago.
-battery_owner_alive() {
-  local pid="$1" command
-  case "$pid" in
+# The start time of a running process, normalised, or nothing at all. This is what identifies a
+# process rather than merely naming one: a pid the kernel has handed to something else since is a
+# different process with a different start time, and no amount of matching on a command line can
+# tell those apart.
+battery_process_start() {
+  case "$1" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [ -n "$command" ] || return 1
-  case "$command" in
-    *mutate*) return 0 ;;
-  esac
-  return 1
+  ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1
+}
+
+# Is this pid THIS battery? pid plus the start time recorded when the lock was taken, and both must
+# match (SONNY-347, PR #161's F1).
+#
+# It used to be pid-exists plus a command line containing "mutate", which is the reading
+# `lock_stale_reason` has always applied — and the justification did not travel with the code.
+# There, being wrong refuses a run: fail-closed. Here it is fail-OPEN, and in three directions at
+# once. The reviewer reproduced all three against the real hook with a live
+# `tail -f .../scripts/mutate` as the impostor — the exact "an editor with this file open" case that
+# comment names: the hook skipped the suite saying a battery held the checkout when none did; an
+# abandoned mutant was MASKED, because the live answer is reached before the in-flight record is
+# ever read, in the one scenario SONNY-347 exists for; and `scripts/mutate unlock` refused and told
+# the session to `kill` an unrelated process, leaving `rm -rf .git/mutate.lock` — which destroys the
+# only copy of the pristine bytes — as the way out.
+#
+# **Reordering the record check ahead of the liveness check does not fix it**, and the wrongness is
+# not obvious: a live battery carries an in-flight record BY CONSTRUCTION, because record_inflight
+# writes `meta` before the mutant is applied and clear_inflight removes it only after the restore.
+# A reorder reports every live battery as abandoned.
+#
+# A record carrying no `lstart` is one this version did not write, so it is read as NOT live. That
+# is a transitional state only — a lock taken by a `scripts/mutate` older than this change, still
+# running — and the consequence is that such a lock is reclaimed with a reason printed rather than
+# defended. The alternative was to keep the substring reading as a fallback, which is to keep the
+# hole this exists to close.
+battery_owner_alive() {
+  local pid="$1" recorded="$2" actual
+  [ -n "$recorded" ] || return 1
+  actual="$(battery_process_start "$pid")" || return 1
+  [ -n "$actual" ] || return 1
+  [ "$actual" = "$recorded" ]
+}
+
+# The reading of somebody else's lock — the one `scripts/mutate` applies to `warnings.lock` and
+# `scripts/warnings` applies to `mutate.lock`. Prints the pid and succeeds when that lock is held by
+# a process that is still the one which took it; prints nothing and fails otherwise. Both tools
+# write the same owner record, so one reading answers for both.
+battery_lock_owner_pid() {
+  local dir="$1" pid
+  [ -d "$dir" ] && [ -f "$dir/owner" ] || return 1
+  pid="$(battery_record_field "$dir/owner" pid)"
+  battery_owner_alive "$pid" "$(battery_record_field "$dir/owner" lstart)" || return 1
+  printf '%s' "$pid"
+}
+
+# What a tool writes into its own lock so the reading above can identify it later. Both tools call
+# this, so the record's shape has one definition.
+battery_write_owner_record() {
+  # battery_write_owner_record <lock dir> [extra key] [extra value] ...
+  local dir="$1"; shift
+  {
+    printf 'pid %s\n' "$$"
+    printf 'lstart %s\n' "$(battery_process_start "$$")"
+    printf 'started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    while [ "$#" -ge 2 ]; do
+      printf '%s %s\n' "$1" "$2"
+      shift 2
+    done
+  } >"$dir/owner"
 }
 
 # The whole reading, in one call. Never fails: a directory that is not a git checkout answers
@@ -77,7 +133,7 @@ battery_state() {
   BATTERY_PLAN="$(battery_record_field "$lock/owner" plan)"
   BATTERY_HEAD="$(battery_record_field "$lock/owner" head)"
 
-  if battery_owner_alive "$BATTERY_PID"; then
+  if battery_owner_alive "$BATTERY_PID" "$(battery_record_field "$lock/owner" lstart)"; then
     BATTERY_STATE="live"
     return 0
   fi
@@ -110,8 +166,27 @@ battery_state_detail() {
       printf 'regression. Wait for pid %s to finish, then re-run.\n' "${BATTERY_PID:-unknown}"
       ;;
     abandoned)
+      if [ -z "$BATTERY_FILE" ]; then
+        # PR #161, F5. `meta` exists and names no file — a kill or an out-of-space part way through
+        # writing it. Every message downstream used to print "unknown" twice and read as a harness
+        # that had lost track of itself. The pristine copy beside that record is still the only
+        # copy of somebody's source file, so the answer is to say exactly that and point at it.
+        printf '  record      : DAMAGED — it names no file\n'
+        printf '  lock        : %s\n' "$BATTERY_LOCK"
+        printf '\n'
+        printf 'A battery was killed here, and the record it left is incomplete: it does not say\n'
+        printf 'which file it had mutated. What it does still hold is the copy that battery took\n'
+        printf 'before mutating anything:\n'
+        printf '\n'
+        printf '  %s/inflight/pristine\n' "$BATTERY_LOCK"
+        printf '\n'
+        printf 'That is the only copy of those bytes. Nothing here will delete it. Find which file\n'
+        printf 'it belongs to (`git diff` will name the mutated one), put it back by hand, and then\n'
+        printf 'remove the lock directory.\n'
+        return 0
+      fi
       printf '  mutant      : %s\n' "${BATTERY_ID:-unknown}"
-      printf '  file        : %s\n' "${BATTERY_FILE:-unknown}"
+      printf '  file        : %s\n' "$BATTERY_FILE"
       printf '  measured at : %s\n' "${BATTERY_MUTANT_SHA:-unknown}"
       printf '  killed run  : pid %s, started %s\n' "${BATTERY_PID:-unknown}" "${BATTERY_STARTED:-unknown}"
       printf '\n'

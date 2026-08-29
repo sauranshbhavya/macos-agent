@@ -336,8 +336,10 @@ What this does and does not prevent:
       hook, skip and say they skipped — rather than reporting a genuine red about a state nobody
       asked about. That is the failure PR #109 hit: a hook ran the suite mid-mutant and reported it
       failing, which was entirely true and entirely meaningless about the branch. A hand-typed
-      `swift build` in another terminal is still outside anything a script can reach, and so is
-      `server/scripts/deploy.sh`, which the lane making this change was not allowed to touch.
+      `swift build` in another terminal is still outside anything a script can reach.
+      `server/scripts/deploy.sh` takes no guard and needs none: it already tags its image
+      <sha>-dirty off `git status --porcelain` and says so on stderr, and a mutant is an
+      uncommitted tracked change, so an image built mid-mutant is labelled rather than silent.
     * A process that WRITES a tracked file during a mutant's suite run is caught after that
       mutant, by the dirty-tree check between mutants, not while it runs. A `git checkout` in this
       checkout mid-build is the loud version and usually breaks the build outright with "input
@@ -398,6 +400,11 @@ What this does and does not prevent:
       process, and it names the log to read.
     * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
       running batteries at once share nothing and are not refused.
+    * The guards above check once, when the tool starts. A battery that begins AFTER the stop hook
+      has checked, but during the ~1 minute its suite takes, still produces the false red SONNY-258
+      is about. Same check-then-act window as the two tools refusing each other, and the same
+      answer: what is covered is a battery already under way when the other thing starts, which is
+      the reachable case (PR #161, F6).
     * MUTATE_TEST_CMD replaces the suite command outright. If the replacement invokes SwiftPM it
       must carry --scratch-path "$MUTATE_SCRATCH" or the run is refused; if it invokes something
       else, this script cannot know what that something else shares.
@@ -487,12 +494,16 @@ lock_field() {
 }
 
 # Prints why the lock is stale, or prints nothing at all if its owner is genuinely still running a
-# battery. Both halves of a pid check matter here: a pid that no longer exists is the ordinary
-# killed-run case, and a pid that exists but belongs to something else is pid reuse, which on a Mac
-# that has wrapped around its pid space is not exotic. The one case this reads as live when it is
-# not is a pid reused by anything whose command line happens to say "mutate" — another battery, or
-# an editor with this file open. That error refuses a run rather than allowing two, and
-# `scripts/mutate unlock` reports the same reading, so the way out of it is visible.
+# battery. The decision is `battery_owner_alive`'s and nothing else's — pid plus the start time
+# recorded when the lock was taken — so this script, `scripts/warnings` and every consumer of the
+# library read one rule (PR #161, F1).
+#
+# This used to decide on the pid existing plus a command line containing "mutate", and accepted that
+# a pid reused by "another battery, or an editor with this file open" would read as live, because
+# the error refuses a run rather than allowing two. That justification is this function's alone: the
+# same reading in `battery_state` is fail-OPEN, and the reviewer reproduced a live `tail -f` on this
+# script masking a real abandoned mutant. The command line is still read, but only to say what the
+# pid belongs to now — never to decide.
 lock_stale_reason() {
   local pid="$1" owner_command
   if [[ ! -f "$LOCK_DIR/owner" ]]; then
@@ -503,14 +514,18 @@ lock_stale_reason() {
     printf 'its owner record names no usable pid'
     return 0
   fi
+  if battery_owner_alive "$pid" "$(lock_field lstart)"; then
+    return 0
+  fi
   owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   if [[ -z "$owner_command" ]]; then
     printf 'the process that took it (pid %s) is gone' "$pid"
     return 0
   fi
-  case "$owner_command" in
-    *mutate*) return 0 ;;
-  esac
+  if [[ -z "$(lock_field lstart)" ]]; then
+    printf 'its owner record predates this version and cannot identify pid %s' "$pid"
+    return 0
+  fi
   printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
 }
 
@@ -527,16 +542,9 @@ lock_stale_reason() {
 # a battery in a different worktree has its own working tree and its own build directory and is no
 # hazard at all.
 foreign_lock_holder() {
-  local dir="$1" pattern="$2" pid owner_command
-  [[ -d "$dir" && -f "$dir/owner" ]] || return 1
-  pid="$(sed -n 's/^pid //p' "$dir/owner" | head -1)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ -n "$owner_command" ]] || return 1
-  case "$owner_command" in
-    $pattern) printf '%s' "$pid"; return 0 ;;
-  esac
-  return 1
+  # The pattern argument is gone: identity is the recorded start time now, not a command line
+  # (PR #161, F1). Both tools write the same owner record, so one reading answers for both.
+  battery_lock_owner_pid "$1"
 }
 
 foreign_lock_field() {
@@ -652,19 +660,16 @@ acquire_lock() {
   LOCK_DIR="$git_dir/mutate.lock"
 
   local warnings_pid
-  if warnings_pid="$(foreign_lock_holder "$git_dir/warnings.lock" '*warnings*')"; then
+  if warnings_pid="$(foreign_lock_holder "$git_dir/warnings.lock")"; then
     refuse_warnings_run "$warnings_pid" "$git_dir/warnings.lock"
   fi
 
   for attempt in 1 2 3; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       LOCK_OWNED="yes"
-      {
-        printf 'pid %s\n' "$$"
-        printf 'started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf 'plan %s\n' "$plan"
-        printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
-      } >"$LOCK_DIR/owner"
+      battery_write_owner_record "$LOCK_DIR" \
+        plan "$plan" \
+        head "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
       return 0
     fi
 
@@ -734,17 +739,51 @@ EOF
 # did. Otherwise it exits through finish() itself, because three of the four cases are not "cleared
 # a stale lock" and must not print that line.
 restore_abandoned_mutant() {
-  local meta="$LOCK_DIR/inflight/meta" file id sha stamp aside
+  local meta="$LOCK_DIR/inflight/meta" pristine="$LOCK_DIR/inflight/pristine"
+  local file id sha stamp aside
   [[ -f "$meta" ]] || return 0
 
   id="$(battery_record_field "$meta" id)"
   file="$(battery_record_field "$meta" file)"
   sha="$(battery_record_field "$meta" sha)"
 
+  # PR #161, F5. A record that names no file is damaged — a kill, or an out-of-space, part way
+  # through the meta write. This used to fall through to case 3, which prints "NOT restoring " with
+  # a hole where the filename goes and then CLEARS THE LOCK — throwing away the pristine copy, which
+  # at that moment is the only copy of somebody's source file in existence. Refuse, keep everything,
+  # and say where the bytes are.
+  if [[ -z "$file" ]]; then
+    battery_state
+    cat >&2 <<EOF
+$SCRIPT_NAME: NOT clearing anything — the record a killed battery left is damaged.
+
+$(battery_state_detail)
+EOF
+    finish 1
+  fi
+
+  # PR #161, F3. Everything below writes `pristine` over a source file, so it is worth knowing that
+  # `pristine` is a file with bytes in it. A zero-length one used to pass every check here and empty
+  # the source file while reporting a successful restore — the verification step could not catch it,
+  # because comparing the copy against what it was copied from can only ever pass.
+  if [[ ! -f "$pristine" || ! -s "$pristine" ]]; then
+    cat >&2 <<EOF
+$SCRIPT_NAME: NOT restoring $file — the copy this would restore from is missing or empty.
+
+  mutant   : $id
+  file     : $file
+  expected : $pristine
+
+Writing it over $file would empty that file and report a successful restore. Nothing was written
+and the lock is kept, so whatever is still in that directory stays recoverable. Look at it by hand.
+EOF
+    finish 1
+  fi
+
   # Case 1: the file is already back to what the killed run saved — restored by hand, or killed in
   # the window between the copy and the patch. Nothing to do, and saying otherwise would claim a
   # restore that did not happen.
-  if [[ -f "$file" ]] && cmp -s "$file" "$LOCK_DIR/inflight/pristine"; then
+  if [[ -f "$file" ]] && cmp -s "$file" "$pristine"; then
     printf '%s: a killed battery left mutant %s in %s.\n' "$SCRIPT_NAME" "$id" "$file"
     printf '    That file already matches the copy taken before it was mutated, so there was\n'
     printf '    nothing to restore. Clearing the record.\n'
@@ -755,9 +794,16 @@ restore_abandoned_mutant() {
   # the copy taken before the mutation — not from HEAD, for the same reason the battery itself does
   # not: a revert that cannot reach past the file it mutated cannot destroy anything else either.
   if [[ -f "$file" && -f "$LOCK_DIR/inflight/mutated" ]] && cmp -s "$file" "$LOCK_DIR/inflight/mutated"; then
-    cp "$LOCK_DIR/inflight/pristine" "$file"
-    cmp -s "$LOCK_DIR/inflight/pristine" "$file" \
-      || die "failed to restore $file from the copy the killed battery took"
+    cp "$pristine" "$file"
+    # Checked against the MUTANT, not against the copy just written (PR #161, F3). The obvious
+    # `cmp pristine "$file"` immediately after `cp pristine "$file"` is a tautology: it compares a
+    # copy with its own source and can only fail on a partial write. This asserts the thing the
+    # command claims to have done — that what is on disk is no longer the mutant — which is a
+    # genuine post-condition, because reaching this branch at all required the file to equal
+    # `mutated` and to differ from `pristine`.
+    if cmp -s "$file" "$LOCK_DIR/inflight/mutated"; then
+      die "failed to restore $file — it still matches the mutant that killed battery left in it"
+    fi
     rm -rf -- "$LOCK_DIR"
     cat <<EOF
 $SCRIPT_NAME: restored $file — a killed battery had left mutant $id in it.
@@ -766,9 +812,9 @@ $SCRIPT_NAME: restored $file — a killed battery had left mutant $id in it.
   measured at : $sha
   restored to : the bytes copied out of that file before the mutation was applied
 
-The run lock is cleared too. \`git status --porcelain\` should print nothing for that path now;
-if it prints something, the file carried uncommitted work beside the mutant and that work is
-still there.
+The run lock is cleared too. If \`git status --porcelain\` still prints that path, the file carried
+uncommitted work beside the mutant and that work is still there — check it rather than assuming
+either way.
 EOF
     finish 0
   fi
@@ -777,10 +823,36 @@ EOF
   # or deleted since the battery died. Overwriting it would destroy whatever that is, so the bytes
   # are kept and this refuses instead. Kept OUTSIDE the lock, and the lock is cleared, so this
   # command is not a permanent wedge: run it twice and the second run reports an empty checkout.
-  stamp="$(date +%Y%m%dT%H%M%S)"
+  # PR #161, F2 — and this is SONNY-347's own failure mode reappearing inside the fix for it. The
+  # copy used to be `cp -R ... || true`, the message named both files unconditionally, and the
+  # `rm -rf` below then removed the only other copies: reproduced with an unwritable destination,
+  # the user was left holding a file with an unaccounted-for deliberate defect, told to diff it
+  # against two files that did not exist, and with ZERO copies of the pre-mutation bytes anywhere.
+  # So the copy is checked, and the lock is deleted only after it succeeded. The stamp carries the
+  # pid as well as the second, because two `unlock` runs inside one second used to merge.
+  stamp="$(date +%Y%m%dT%H%M%S)-$$"
   aside="$(dirname "$LOCK_DIR")/mutate-abandoned-$stamp"
-  mkdir -p "$aside"
-  cp -R "$LOCK_DIR/inflight/." "$aside/" 2>/dev/null || true
+  if ! mkdir -p "$aside" \
+    || ! cp "$pristine" "$aside/pristine" \
+    || { [[ -f "$LOCK_DIR/inflight/mutated" ]] && ! cp "$LOCK_DIR/inflight/mutated" "$aside/mutated"; }; then
+    cat >&2 <<EOF
+$SCRIPT_NAME: NOT restoring $file, and NOT clearing the lock — the copies could not be kept.
+
+  mutant : $id
+  file   : $file
+  wanted : $aside
+
+That file is neither the mutant this battery left nor the original it saved, so restoring it would
+destroy whatever it is now. The copies would normally be moved out of the lock first, and that
+failed — a full disk, or a read-only .git. Nothing was written and nothing was deleted, so the only
+copy of the pre-mutation bytes is still here:
+
+  $pristine
+
+Fix whatever stopped the copy, then run this command again.
+EOF
+    finish 1
+  fi
   rm -rf -- "$LOCK_DIR"
   cat >&2 <<EOF
 $SCRIPT_NAME: NOT restoring $file — it is neither the mutant nor the original.
@@ -1628,6 +1700,18 @@ battery() {
     # After the restore is verified, never before it: between these two lines is the only window in
     # which the record could name a mutant that is no longer there, and it is one statement wide.
     clear_inflight
+    # And the invariant that step exists for, asserted rather than assumed (PR #161, F4).
+    # `clear_inflight` could be deleted outright and every selftest check still passed, because
+    # `release_lock`'s outer `rm -rf` cleans up after the LAST mutant either way. What it actually
+    # buys is between mutants: with a stale `meta` still present, a kill during the NEXT mutant's
+    # pristine copy leaves a record naming mutant N over a half-written copy of mutant N+1's file —
+    # which is exactly the zero-length-pristine state F3 had to be taught to refuse, reached by an
+    # ordinary kill instead of external damage. One line here makes the invariant observable, and
+    # the two-mutant selftest arm below fails the moment it stops holding.
+    [[ ! -e "$LOCK_DIR/inflight" ]] \
+      || die "the in-flight record for ${M_ID[$idx]} outlived its restore. The next mutant would
+       overwrite its pristine copy underneath a record still naming this one, so a kill during that
+       window would leave a record pointing at bytes that are neither file's."
     require_clean_tree_after "${M_ID[$idx]}"
 
     if [[ $code -eq 0 ]]; then
@@ -1862,6 +1946,26 @@ SAMPLE
         if hour < 12 { return "Morning" }
 >>> to
         if hour < 13 { return "Morning" }
+>>> end
+PLAN
+
+  # Two mutants in one battery: the only shape in which the record for mutant N and the record for
+  # mutant N+1 both exist during one run, which is what PR #161's F4 is about.
+  cat >"$root/two.plan" <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+
+>>> mutant M2 the fallback made evening
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+>>> to
+    static func fallback() -> String { // evening
 >>> end
 PLAN
 
@@ -2725,7 +2829,8 @@ exit 1'
   "$warnings_decoy" &
   local warnings_pid=$!
   mkdir -p .git/warnings.lock
-  printf 'pid %s\nstarted 2026-01-01 00:00:00\nhead deadbeef\n' "$warnings_pid" \
+  printf 'pid %s\nlstart %s\nstarted 2026-01-01 00:00:00\nhead deadbeef\n' \
+    "$warnings_pid" "$(battery_process_start "$warnings_pid")" \
     >.git/warnings.lock/owner
   st_run "$kills_the_mutant" "$root/kill.plan"
   st_eq "the battery is refused" "$ST_EXIT" "1"
@@ -2759,14 +2864,33 @@ exit 1'
   st_contains "and says it cleared a stale lock" "$ST_OUT" "cleared a stale lock"
   st_contains "and says which process is gone" "$ST_OUT" "pid $dead_pid) is gone"
 
+  # Pid reuse, which is what this looks like from the inside: the record's start time belongs to the
+  # battery that died, and the pid now belongs to something started later. Before PR #161's F1 the
+  # decision was the command line, so this fixture only had to be a process — and an impostor whose
+  # command line happened to say "mutate" (the reviewer used a live `tail -f` on this very file)
+  # read as a LIVE battery and masked a real abandoned mutant. The recorded start time settles it
+  # without asking what the process is called.
   sleep 30 &
   local other_pid=$!
+  mkdir -p .git/mutate.lock
+  printf 'pid %s\nlstart Thu Jan  1 00:00:00 2026\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' \
+    "$other_pid" >.git/mutate.lock/owner
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "a lock whose pid was reused is not treated as live" "$ST_EXIT" "0"
+  st_contains "and the reclaim says what the pid is now" "$ST_OUT" "belongs to something else now"
+
+  # The same live pid, this time with a record carrying no start time at all — a lock taken by a
+  # `scripts/mutate` older than F1's fix. It is read as stale rather than defended, deliberately:
+  # keeping the old substring reading as a fallback would keep the hole. The reclaim says which of
+  # the two it is, because "predates this version" and "belongs to something else" send a reader to
+  # completely different places.
   mkdir -p .git/mutate.lock
   printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$other_pid" \
     >.git/mutate.lock/owner
   st_run "$kills_the_mutant" "$root/kill.plan"
-  st_eq "a lock whose pid was reused is not treated as live" "$ST_EXIT" "0"
-  st_contains "and the reclaim says what the pid is now" "$ST_OUT" "belongs to something else now"
+  st_eq "a record with no start time is not treated as live either" "$ST_EXIT" "0"
+  st_contains "and the reclaim says which case it is" "$ST_OUT" "predates this version"
+  st_absent "and does not claim the pid was reused" "$ST_OUT" "belongs to something else now"
   kill "$other_pid" 2>/dev/null || true
   wait "$other_pid" 2>/dev/null || true
 
@@ -2998,6 +3122,149 @@ $kills_the_mutant" "$root/kill.plan"
   rm -rf -- .git/mutate-abandoned-*
   git checkout -- sample.swift
 
+  printf '\n==> An impostor holding a reused pid does not mask an abandoned mutant (PR #161, F1)\n'
+  # The reviewer's reproduction, kept. Liveness used to be "the pid exists and its command line says
+  # mutate", which is exactly what a live `tail -f .../scripts/mutate` looks like — the "editor with
+  # this file open" case the old comment named as acceptable, because THERE being wrong refuses a
+  # run. In `battery_state` the same reading is fail-open in three directions at once: the hook
+  # skipped the suite saying a battery held the checkout, the abandoned mutant underneath was never
+  # reported because `live` is answered before the record is read, and `unlock` refused and told the
+  # session to kill an unrelated process. The record's start time settles it without asking what the
+  # process is called.
+  local impostor_dir="$root/impostor-bin"
+  mkdir -p "$impostor_dir"
+  printf '#!/bin/sh\nsleep 60\n' >"$impostor_dir/mutate"
+  chmod +x "$impostor_dir/mutate"
+  "$impostor_dir/mutate" &
+  local impostor_pid=$!
+  mkdir -p .git/mutate.lock/inflight
+  printf 'pid %s\nlstart Thu Jan  1 00:00:00 2026\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead deadbeef\n' \
+    "$impostor_pid" >.git/mutate.lock/owner
+  { printf 'id M1\n'; printf 'file sample.swift\n'; printf 'sha deadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >.git/mutate.lock/inflight/meta
+  cp sample.swift .git/mutate.lock/inflight/pristine
+  sed 's/hour < 12/hour < 13/' sample.swift >.git/mutate.lock/inflight/mutated
+  cp .git/mutate.lock/inflight/mutated sample.swift
+  st_run "$records_that_it_ran" "$root/kill.plan"
+  st_eq "the battery is refused" "$ST_EXIT" "1"
+  st_contains "and it is the abandoned-mutant refusal, not the live-battery one" "$ST_OUT" \
+    "left its mutant in this working tree"
+  st_absent "the impostor is not reported as a battery holding the checkout" "$ST_OUT" \
+    "another battery already holds"
+  st_run "$always_pass" unlock
+  st_eq "unlock is not wedged by the impostor" "$ST_EXIT" "0"
+  st_contains "and restores the mutant" "$ST_OUT" "restored sample.swift"
+  st_absent "and never tells anyone to kill the impostor" "$ST_OUT" "still running a battery"
+  st_eq "the tree is clean afterwards" "$(git status --porcelain)" ""
+  kill "$impostor_pid" 2>/dev/null || true
+  wait "$impostor_pid" 2>/dev/null || true
+
+  printf '\n==> unlock refuses rather than restoring from a pristine copy that is empty (F3)\n'
+  # A zero-length `pristine` used to pass every check and empty the source file while reporting a
+  # successful restore, because the verification compared the copy against the file it had just been
+  # copied from — a comparison that can only pass. Reachable from a damaged lock directory, or from
+  # a zero-length file after an unclean shutdown.
+  mkdir -p .git/mutate.lock/inflight
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  { printf 'id M1\n'; printf 'file sample.swift\n'; printf 'sha deadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >.git/mutate.lock/inflight/meta
+  : >.git/mutate.lock/inflight/pristine
+  sed 's/hour < 12/hour < 13/' sample.swift >.git/mutate.lock/inflight/mutated
+  cp .git/mutate.lock/inflight/mutated sample.swift
+  st_run "$always_pass" unlock
+  st_eq "unlock exits 1" "$ST_EXIT" "1"
+  st_contains "and says the copy it would restore from is unusable" "$ST_OUT" "missing or empty"
+  if [[ -s sample.swift ]]; then
+    st_pass "the source file was not emptied"
+  else
+    st_fail "unlock wrote a zero-length pristine over the source file"
+  fi
+  if [[ -d .git/mutate.lock ]]; then
+    st_pass "and the lock is kept, so whatever is left stays recoverable"
+  else
+    st_fail "unlock threw the damaged record away"
+  fi
+  rm -rf -- .git/mutate.lock
+  git checkout -- sample.swift
+
+  printf '\n==> unlock keeps the copies before it deletes the originals (F2)\n'
+  # SONNY-347's own failure mode, reintroduced inside the fix for it: `cp -R ... || true` swallowed
+  # the failure, the message named both kept files unconditionally, and the `rm -rf` then removed
+  # the only other copies — leaving a file with an unaccounted-for deliberate defect, an instruction
+  # to diff it against two files that do not exist, and zero copies of the pre-mutation bytes.
+  # An unreadable `pristine` is the cheapest way to make the copy fail without touching .git's mode.
+  mkdir -p .git/mutate.lock/inflight
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  { printf 'id M1\n'; printf 'file sample.swift\n'; printf 'sha deadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >.git/mutate.lock/inflight/meta
+  cp sample.swift .git/mutate.lock/inflight/pristine
+  sed 's/hour < 12/hour < 13/' sample.swift >.git/mutate.lock/inflight/mutated
+  printf '// edited after the battery died\n' >>sample.swift
+  chmod 000 .git/mutate.lock/inflight/pristine
+  st_run "$always_pass" unlock
+  chmod 644 .git/mutate.lock/inflight/pristine 2>/dev/null || true
+  st_eq "unlock exits 1" "$ST_EXIT" "1"
+  st_contains "and says the copies could not be kept" "$ST_OUT" "the copies could not be kept"
+  st_absent "and does not name files it did not write" "$ST_OUT" "the file as that battery left it"
+  if [[ -f .git/mutate.lock/inflight/pristine ]]; then
+    st_pass "the only copy of the pre-mutation bytes is still there"
+  else
+    st_fail "unlock deleted the pristine copy after failing to keep one"
+  fi
+  if grep -q "edited after the battery died" sample.swift; then
+    st_pass "and the work that arrived after the battery is untouched"
+  else
+    st_fail "unlock wrote over a file it had just said it would not restore"
+  fi
+  rm -rf -- .git/mutate.lock .git/mutate-abandoned-*
+  git checkout -- sample.swift
+
+  printf '\n==> A record that names no file is refused with everything kept (F5)\n'
+  # `meta` present and empty — a kill, or an out-of-space, part way through writing it. This used to
+  # fall through to the case-3 path, which prints "NOT restoring " with a hole where the filename
+  # goes and then CLEARS THE LOCK, throwing away a pristine copy that at that moment is the only
+  # copy of somebody's source file.
+  mkdir -p .git/mutate.lock/inflight
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  : >.git/mutate.lock/inflight/meta
+  cp sample.swift .git/mutate.lock/inflight/pristine
+  st_run "$always_pass" unlock
+  st_eq "unlock exits 1" "$ST_EXIT" "1"
+  st_contains "and says the record is damaged" "$ST_OUT" "DAMAGED"
+  st_contains "and points at the copy it is keeping" "$ST_OUT" "inflight/pristine"
+  st_absent "and does not print a sentence with the filename missing" "$ST_OUT" "NOT restoring  —"
+  if [[ -f .git/mutate.lock/inflight/pristine ]]; then
+    st_pass "the pristine copy is kept"
+  else
+    st_fail "a damaged record cost the only copy of the file"
+  fi
+  rm -rf -- .git/mutate.lock
+
+  printf '\n==> A two-mutant battery clears each record before it writes the next (F4)\n'
+  # `clear_inflight` could be deleted outright and this selftest still reported 263 checks, 0
+  # failures, exit 0 — `release_lock`'s outer `rm -rf` cleans up after the LAST mutant either way,
+  # so nothing watched the step that matters BETWEEN mutants. With a stale `meta` still present, a
+  # kill during the next mutant's pristine copy leaves a record naming mutant N over a half-written
+  # copy of N+1's file, which is the empty-pristine state above reached by an ordinary kill. The
+  # harness now asserts the invariant itself, one line after the restore; this is the arm that
+  # watches that assertion.
+  local kills_either_mutant='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift || grep -q "// evening" sample.swift; then
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+  st_run "$kills_either_mutant" "$root/two.plan"
+  st_eq "a two-mutant battery runs to the end" "$ST_EXIT" "0"
+  st_contains "the first mutant is reported" "$ST_OUT" "the morning boundary widened"
+  st_contains "and so is the second" "$ST_OUT" "the fallback made evening"
+  st_absent "and no record outlived its restore" "$ST_OUT" "outlived its restore"
+  st_eq "the tree is clean afterwards" "$(git status --porcelain)" ""
+
   printf '\n==> The stop hook does not run the suite during a battery, and says it did not\n'
   # SONNY-258. A build outside the battery reading a tree the battery owns: the hook compiled what
   # was on disk mid-mutant and reported the suite red on PR #109. The redness was real and said
@@ -3012,7 +3279,8 @@ $kills_the_mutant" "$root/kill.plan"
     # name a pid that exists AND whose command line names this tool, or the reading is of a lock
     # nobody holds. This selftest process is exactly that.
     mkdir -p .git/mutate.lock
-    printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan live.plan\nhead deadbeef\n' "$$" \
+    printf 'pid %s\nlstart %s\nstarted 2026-01-01 00:00:00\nplan live.plan\nhead deadbeef\n' \
+      "$$" "$(battery_process_start "$$")" \
       >.git/mutate.lock/owner
     rm -f .git/battery-skips.log
     set +e
@@ -3052,6 +3320,23 @@ $kills_the_mutant" "$root/kill.plan"
     st_contains "and which file" "$hook_err" "sample.swift"
     st_contains "and how to recover it" "$hook_err" "scripts/mutate unlock"
     st_eq "and still wrote nothing into the working tree" "$(git status --porcelain)" ""
+
+    # And with the library gone. The hook guards its source with `-r` and so falls back to its old
+    # behaviour, which is the right direction for `live` — a false red is loud and a false green is
+    # not — and the wrong one for `abandoned`, where the suite over a surviving mutant can be green.
+    # The fallback needs no library: the record is a file at a path `git rev-parse` can name.
+    mv scripts/lib/battery-state.sh "$root/lib-parked.sh"
+    set +e
+    hook_out="$(printf '{"stop_hook_active": false}' \
+      | CLAUDE_PROJECT_DIR="$root/repo" "$hook" 2>"$root/hook.err")"
+    hook_exit=$?
+    set -e
+    hook_err="$(cat "$root/hook.err" 2>/dev/null || true)"
+    mv "$root/lib-parked.sh" scripts/lib/battery-state.sh
+    st_eq "a missing library does not let an abandoned mutant through" "$hook_exit" "2"
+    st_contains "and it says the suite was not run" "$hook_err" "suite was NOT run"
+    st_contains "and still hands over the recovery" "$hook_err" "scripts/mutate unlock"
+    st_eq "and the tree is still untouched" "$(git status --porcelain)" ""
     rm -rf -- .git/mutate.lock
   fi
 

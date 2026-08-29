@@ -68,6 +68,24 @@ if [ -r "$battery_lib" ]; then
       exit 2
       ;;
   esac
+else
+  # The library is committed, so its absence means a broken checkout rather than an ordinary state —
+  # but the two directions are not equally safe to fail open on, and the guard above is deliberately
+  # `-r` rather than fatal. Skipping the `live` case is right: a false red is loud and a false green
+  # is not. Skipping the `abandoned` case is not, because the suite over a surviving mutant can be
+  # green. This needs no library. (PR #161, review — raised as a two-line close rather than a
+  # finding.)
+  battery_git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)"
+  if [ -n "$battery_git_dir" ] && [ -f "$battery_git_dir/mutate.lock/inflight/meta" ]; then
+    {
+      printf 'Stop hook: this working tree may carry a mutant, and the test suite was NOT run.\n\n'
+      printf 'A mutation battery left an in-flight record at %s.\n' \
+        "$battery_git_dir/mutate.lock/inflight/meta"
+      printf 'scripts/lib/battery-state.sh is missing from this checkout, so nothing here can say\n'
+      printf 'whether that battery is still running. Run: scripts/mutate unlock\n'
+    } >&2
+    exit 2
+  fi
 fi
 
 if [ "$stop_hook_active" = "true" ]; then
