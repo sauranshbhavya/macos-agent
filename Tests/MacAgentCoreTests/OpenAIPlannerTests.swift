@@ -131,27 +131,30 @@ struct OpenAIPlannerTests {
         #expect(sent.authorization == "Bearer test-access-token")
     }
 
+    /// **No provider name reaches the system prompt at all, which is the count this test was
+    /// written to watch move.**
+    ///
+    /// It was `theOnlyProviderNameLeftInTheSystemPromptIsTheOneTheDegradationBranchRemoves`, and it
+    /// asserted exactly one occurrence of "openai": `PermissionReadinessCapabilityAdapter`'s tool
+    /// description said *"Show readiness for OpenAI key, …"*, describing a readiness row that
+    /// genuinely still read `OPENAI_API_KEY`. SONNY-130 left it deliberately, on the reasoning that
+    /// the sentence was accurate about something that had not moved yet; SONNY-136 moved it, so the
+    /// count is zero and the name says so.
+    ///
+    /// **The system prompt is where this matters most**, and it is worth stating rather than
+    /// leaving as an inherited habit: the prompt folds in every capability's description and side
+    /// effects (`ToolRegistry.plannerDescription`), so a provider name written into any adapter's
+    /// metadata is a provider name sent to whichever provider `MODEL_ROUTE_PLAN` happens to pick —
+    /// which is the thing §4.2 says the client must not know about.
     @Test
-    func theOnlyProviderNameLeftInTheSystemPromptIsTheOneTheDegradationBranchRemoves() throws {
-        // **Recorded as a test rather than left for a reader to discover.** The system prompt folds
-        // in every capability's description and side effects (`ToolRegistry.plannerDescription`), and
-        // one of them still names a provider: `PermissionReadinessCapabilityAdapter` describes a
-        // readiness check that genuinely still reads `OPENAI_API_KEY`, and removing that key check —
-        // with the "export a variable" strings beside it — is `feature/row-12-degradation`'s, which
-        // cannot run until both gateways land. So the sentence is accurate about a thing that has
-        // not moved yet, and this ticket's never-touch list says to leave it.
-        //
-        // `WebResearchMarkdownCapabilityAdapter`'s was the other one and it was **corrected**, not
-        // left: it said fetched page content is sent "to OpenAI", which this branch made false, and
-        // it is a claim a user reads before approving an egress rather than a stale variable name.
-        //
-        // This test fails when either half changes, which is the point: the day the degradation
-        // branch removes the key check, this expectation is what says the count has moved.
+    func noProviderNameReachesTheSystemPrompt() throws {
         let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default).lowercased()
-        #expect(prompt.components(separatedBy: "openai").count - 1 == 1)
-        #expect(prompt.contains("show readiness for openai key"))
+        #expect(prompt.components(separatedBy: "openai").count - 1 == 0)
+        // The readiness tool is still described, and now by its real subject. Asserted so that
+        // "zero occurrences of openai" cannot be satisfied by the description disappearing.
+        #expect(prompt.contains("show readiness for the sonny account"))
         #expect(!prompt.contains("content to openai"))
-        for forbidden in ["api.openai.com", "gpt-", "anthropic", "cerebras", "tavily"] {
+        for forbidden in ["api.openai.com", "gpt-", "anthropic", "cerebras", "tavily", "opencode"] {
             #expect(!prompt.contains(forbidden), "the system prompt names \(forbidden)")
         }
     }
@@ -498,6 +501,57 @@ struct OpenAIPlannerTests {
         #expect(!SonnyBackendError.isCancellation(PlannerError.backend(.offline)))
         #expect(!SonnyBackendError.isCancellation(PlannerError.backend(.notSignedIn)))
         #expect(!SonnyBackendError.isCancellation(PlannerError.missingOutputText))
+    }
+
+    /// **Every sentence `PlannerError` can show a user, asserted** (SONNY-136).
+    ///
+    /// **Written because a battery found nothing holding one of them.** SONNY-136 renamed
+    /// `missingAPIKey` to `noPlannerRan` — the case's one live producer is
+    /// `InstantOnlyFallbackPlanner`, handed to a run whose plan is already made, so what it reported
+    /// and what it was named after had come apart — and the ticket's own battery then mutated the
+    /// new sentence into the shared *"Sonny couldn't finish this one. Try again."* and the whole
+    /// suite passed (R10, `SURVIVED`, at `b490513`). The case was reachable, its wording was a
+    /// decision, and nothing was watching it.
+    ///
+    /// **The retry assertion is the half that is a rule rather than a literal.** §9.3's non-retryable
+    /// list is not advice — "retrying any of these produces the identical failure and burns a round
+    /// trip" — and a run that reached a planner it was never meant to consult is in exactly that
+    /// position: pressing the button again sends the same plan down the same path. So the sentence
+    /// says what happened and stops. The same rule for the wire errors is held by
+    /// `SonnyBackendCopyTests`, in `aNonRetryableFailureNeverTellsTheUserToTryAgain`; this is the
+    /// one case of it that `SonnyBackendCopy` does not own. (Written that way round because a symbol
+    /// wrapped across two comment lines is a citation `git grep` cannot resolve, which is the same
+    /// failure as naming one that does not exist.)
+    @Test
+    func everySentencePlannerErrorCanShowIsHeldHere() {
+        #expect(PlannerError.noPlannerRan.errorDescription == "Sonny couldn't plan this one.")
+        #expect(
+            PlannerError.noPlannerRan.errorDescription?.lowercased().contains("try again") == false,
+            "a retry sends the same plan down the same path"
+        )
+        #expect(
+            PlannerError.missingOutputText.errorDescription == "Sonny couldn't read the plan that came back."
+        )
+
+        // Neither names a provider or a variable — the founder's decision of 2026-08-19, applied to
+        // the two sentences this type owns. `missingOutputText` read "OpenAI response did not
+        // include text output." until SONNY-136.
+        for sentence in [
+            PlannerError.noPlannerRan.errorDescription,
+            PlannerError.missingOutputText.errorDescription,
+        ] {
+            let text = sentence ?? ""
+            #expect(!text.isEmpty)
+            #expect(!text.localizedCaseInsensitiveContains("openai"))
+            #expect(!text.contains("_KEY"))
+        }
+
+        // And the third case is `SonnyBackendCopy`'s, unchanged, so the three are not three places
+        // the copy rules get applied.
+        #expect(
+            PlannerError.backend(.notSignedIn).errorDescription
+                == SonnyBackendCopy.sentence(for: .notSignedIn)
+        )
     }
 
     // MARK: - Fixtures

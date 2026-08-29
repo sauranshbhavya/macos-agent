@@ -863,6 +863,12 @@ struct ProductShellTests {
             // silently reset the user's preferences would be a different feature.
             "errorIsPersistent", "usePointerCursors", "displayFullNames", "interactionMode",
             "voiceHotKeyStatus", "voiceHotKeyReady", "permissionItems", "clipboardHistoryPollFailure",
+            // `modelAccessReadiness` is this group's own subject twice over (SONNY-136): it is the
+            // readiness row's input, and the fact it reports — a session in the Keychain — is the
+            // one thing `deleteLocalData` most deliberately does not touch, for the reason
+            // `backendClient` gives above. A wipe that reset it would make the readiness page say
+            // "sign in" to a user who still is.
+            "modelAccessReadiness",
             // `plannerFallbackNotice` stood beside `scheduledRunNotice` and is gone with the widget
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
@@ -1778,11 +1784,18 @@ struct ProductShellTests {
         viewModel.deliverTranscriptionError(failure)
 
         #expect(viewModel.isTranscribingVoice == false)
-        #expect(viewModel.errorMessage == "OpenAI transcription response did not include text.")
+        // **The sentence is provider-neutral since SONNY-136**, which is why it changed here without
+        // this test's subject changing: it read "OpenAI transcription response did not include
+        // text.", and the founder's decision of 2026-08-19 is that user-visible copy names no
+        // provider. What is being asserted is unchanged — that the ordinary failure reaches the user
+        // with the error's own sentence and a log line naming it a failure.
+        #expect(viewModel.errorMessage == "Sonny couldn't read anything back from that recording.")
         #expect(viewModel.errorMessage == failure.errorDescription)
         #expect(viewModel.errorIsPersistent == false, "try again and it is just as likely to work")
         let appended = viewModel.logStore.events.dropFirst(loggedBefore).map(\.message)
-        #expect(appended == ["Transcription failed: OpenAI transcription response did not include text."])
+        #expect(
+            appended == ["Transcription failed: Sonny couldn't read anything back from that recording."]
+        )
     }
 
     /// **The real catch routes through that one seam, and sets no error of its own** (SONNY-327).
@@ -2505,9 +2518,11 @@ struct ProductShellTests {
 
     /// **F1's seam test.** The vision journal is the fifth `.trace` store and was the one nothing
     /// pinned: its withholding decision lived inline in `makeLiveVisionEnvironment()`, which no test
-    /// here can execute — `makeVisionEnvironment` returns `nil` without an API key, and the vision
-    /// tests inject `visionSessionEnvironment` directly and bypass it. So a mutation handing the
-    /// store over regardless of policy survived the whole suite.
+    /// here can execute — the vision tests inject `visionSessionEnvironment` directly and bypass
+    /// it. So a mutation handing the store over regardless of policy survived the whole suite.
+    /// (This used to give a second reason, that `makeVisionEnvironment` returns `nil` without an
+    /// API key. SONNY-131 made that builder non-Optional and SONNY-136 deleted the key; the
+    /// injection is the reason that remains, and it is the one that was doing the work.)
     ///
     /// Asserting the decision is asserting the suppression: row I built `journalStore == nil` as
     /// "run the session, record nothing", so withholding the store *is* the mechanism. This test's

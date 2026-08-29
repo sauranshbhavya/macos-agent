@@ -26,6 +26,54 @@ public struct SystemMicrophonePermissionChecker: MicrophonePermissionChecking {
     }
 }
 
+/// Whether this Mac is set up to reach the models Sonny's non-local capabilities run on
+/// (SONNY-136).
+///
+/// **This replaces a check on `OPENAI_API_KEY`, and the replacement is a different question rather
+/// than the same question asked better.** Until SONNY-130 the readiness row asked whether one
+/// environment variable was set, and answered `.ready` or `.needsAction` on it. Both of its
+/// sentences were wrong the moment planning, transcription, search and screen control moved behind
+/// Sonny's own gateway: nothing reads that variable, so a user who had never exported it — everyone
+/// launching the packaged app from Finder, which inherits no shell environment — was told to go and
+/// set something that changes nothing, and a user who had one was shown a green row for a credential
+/// that does nothing. The second is the worse of the two, because it reports readiness that is not
+/// readiness (PR #139, F10).
+///
+/// **It stays a presence check and does not become a reachability check**, which is the choice
+/// SONNY-136's third requirement asks to be made explicitly. Three reasons, and the first is the one
+/// that decides it:
+///
+/// - Readiness is about what this Mac has been set up to do, and reachability is about whether the
+///   backend is up right now. They are different questions with different answers and different
+///   next actions, and the second already has a surface — the sentence a failed run shows, which
+///   `SonnyBackendCopy` owns. A readiness row that went red because the Wi-Fi is off would be
+///   reporting an outage in a list of settings.
+/// - It would put a network call behind rendering a Settings page and behind
+///   `PermissionReadinessCapabilityAdapter`, a tier-0 capability whose whole character is that it
+///   reads local state and prompts for nothing.
+/// - Spec §16.3 guarantees free local capabilities keep working with no network. A page that
+///   reported "needs action" while offline would contradict that in the one place a user goes to
+///   find out what works.
+///
+/// **What it does *not* yet report is entitlement**, and that is left rather than approximated.
+/// SONNY-135 builds the signed claim this Mac verifies offline (`EntitlementDecision`,
+/// `EntitlementService`), which is the only thing that can answer "is this account allowed to do
+/// this" without a network call; it had not merged when SONNY-136 ran, and inventing a second
+/// notion of entitlement here to fill the gap would have been a second answer to a question that
+/// gets exactly one. So this reports the half that is answerable today — a session is held — and the
+/// entitled half is owed. **SONNY-336 is the landing spot**, filed with what the wiring needs and
+/// the three decisions it has to make; nothing here approximates it and nothing reports ready on
+/// its behalf.
+public enum ModelAccessReadiness: Equatable, Sendable {
+    /// A session is stored on this Mac.
+    case signedIn
+    /// No session is stored on this Mac, so every gateway route will refuse.
+    case signedOut
+    /// Not asked yet, or the stored session could not be read. **Never reported as ready**: a check
+    /// that could not be completed is not a check that passed.
+    case undetermined
+}
+
 public enum PermissionReadinessState: String, Codable, Equatable, Sendable {
     case ready
     case needsAction
@@ -69,14 +117,12 @@ public struct PermissionReadinessService: Sendable {
         self.microphonePermissionChecker = microphonePermissionChecker
     }
 
-    public func currentStatus(hasAPIKey: Bool, hotKeyReady: Bool) -> [PermissionReadinessItem] {
+    public func currentStatus(
+        modelAccess: ModelAccessReadiness,
+        hotKeyReady: Bool
+    ) -> [PermissionReadinessItem] {
         [
-            PermissionReadinessItem(
-                id: "openai",
-                title: "OpenAI",
-                state: hasAPIKey ? .ready : .needsAction,
-                detail: hasAPIKey ? "OPENAI_API_KEY is set." : "Export OPENAI_API_KEY before launching Sonny."
-            ),
+            modelAccessStatus(modelAccess),
             microphoneStatus(),
             PermissionReadinessItem(
                 id: "hotkey",
@@ -105,6 +151,37 @@ public struct PermissionReadinessService: Sendable {
             accessibilityStatus(),
             screenRecordingStatus()
         ]
+    }
+
+    /// The row that replaced "OpenAI". ``ModelAccessReadiness`` carries the reasoning.
+    ///
+    /// **The id changes with the meaning.** It was `openai`, and an id is what a caller keys a row
+    /// by — leaving it while the row came to mean something else is how a surface goes on rendering
+    /// the old thing under a new sentence.
+    private func modelAccessStatus(_ readiness: ModelAccessReadiness) -> PermissionReadinessItem {
+        switch readiness {
+        case .signedIn:
+            return PermissionReadinessItem(
+                id: "sonny-account",
+                title: "Sonny account",
+                state: .ready,
+                detail: "Signed in."
+            )
+        case .signedOut:
+            return PermissionReadinessItem(
+                id: "sonny-account",
+                title: "Sonny account",
+                state: .needsAction,
+                detail: "Sign in to Sonny in Command Center."
+            )
+        case .undetermined:
+            return PermissionReadinessItem(
+                id: "sonny-account",
+                title: "Sonny account",
+                state: .unknown,
+                detail: "Sonny checks this when it needs it."
+            )
+        }
     }
 
     private func accessibilityStatus() -> PermissionReadinessItem {

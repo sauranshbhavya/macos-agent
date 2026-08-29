@@ -1,14 +1,14 @@
 import Foundation
 
+/// Everything a transcription through Sonny's backend can fail with.
+///
+/// **`missingAPIKey` and `badResponse(Int, String)` are gone** (SONNY-136). SONNY-130 kept both
+/// unreachable — no transcriber reads a provider key and none reads an HTTP status — because the
+/// sentence naming the variable was the environment-variable surface, and that surface belonged to
+/// the ticket that owns it. Removing the sentence and keeping the case would have left an enum case
+/// nothing can construct and nothing can throw, so both went together.
 public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackendError {
-    /// **Unreachable since SONNY-130 and deliberately kept.** No transcriber reads a provider key
-    /// any more; removing the case and the sentence naming the variable is
-    /// `feature/row-12-degradation`'s, and it cannot run until both gateways land.
-    case missingAPIKey
     case unreadableAudioFile(String)
-    /// Unreachable for the same reason: no HTTP status is read here any more. The gateway's typed
-    /// failures arrive as `backend` below.
-    case badResponse(Int, String)
     case missingText
     /// The recording is longer than Sonny will transcribe. **This is the client half of SONNY-130's
     /// audio limit**, and the sentence below is what the user actually sees.
@@ -42,14 +42,10 @@ public enum TranscriptionError: Error, LocalizedError, Equatable, CarriesBackend
 
     public var errorDescription: String? {
         switch self {
-        case .missingAPIKey:
-            return "OPENAI_API_KEY is not set. Add it to the environment before using voice input."
         case .unreadableAudioFile(let path):
             return "Could not read recorded audio at \(path)."
-        case .badResponse(let status, let body):
-            return "OpenAI transcription request failed with HTTP \(status): \(body)"
         case .missingText:
-            return "OpenAI transcription response did not include text."
+            return "Sonny couldn't read anything back from that recording."
         case .recordingTooLong(let maximumSeconds):
             return VoiceRecordingLimit.refusalSentence(maximumSeconds: maximumSeconds)
         case .backend(let error):

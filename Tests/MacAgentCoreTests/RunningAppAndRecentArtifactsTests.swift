@@ -439,6 +439,6 @@ private final class FakeRunningAppSwitcher: RunningAppSwitching {
 private struct FailingPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("Planner should not be called for running app or recent artifact instant commands.")
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }

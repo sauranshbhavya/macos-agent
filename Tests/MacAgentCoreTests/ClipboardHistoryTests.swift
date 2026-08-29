@@ -240,7 +240,7 @@ private final class FakePasteboardReader: PasteboardReading {
 private struct FailingPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("Planner should not be called for clipboard instant commands.")
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }
 

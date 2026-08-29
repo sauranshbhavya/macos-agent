@@ -2427,7 +2427,7 @@ private final class ResumableFixturePlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         receivedCommands.append(command)
         guard let plan else {
-            throw PlannerError.missingAPIKey
+            throw PlannerError.noPlannerRan
         }
         return plan
     }

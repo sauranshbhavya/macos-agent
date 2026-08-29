@@ -431,6 +431,6 @@ private final class StubRunningAppSwitcher: RunningAppSwitching {
 private struct UncalledPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("The planner must not be reached for an instant-resolved switch command.")
-        throw PlannerError.missingAPIKey
+        throw PlannerError.noPlannerRan
     }
 }
