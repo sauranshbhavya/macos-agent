@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// What the task-detail sheet renders and how tall it is (row E, SONNY-148).
 ///

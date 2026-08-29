@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// The enumeration `AgentRunResult.summaryProvenance`'s doc comment names as its guard (row E,
 /// SONNY-147).

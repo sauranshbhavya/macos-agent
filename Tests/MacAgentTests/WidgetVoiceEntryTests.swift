@@ -1,8 +1,8 @@
 import Foundation
-import Testing
-import MacAgentTestSupport
-@testable import MacAgent
 import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
 
 /// SONNY-173. The floating widget's mic button and the push-to-talk hotkey are two doors onto one
 /// action, and with no API key exported they answered differently: the hotkey said the key was not

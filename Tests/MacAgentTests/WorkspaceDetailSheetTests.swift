@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgent
 @testable import MacAgentCore
 
@@ -945,6 +945,9 @@ struct WorkspaceDetailSheetTests {
             fileOpener: HermeticFileOpener(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: store,
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutCatalog: SheetTestShortcutCatalog(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")

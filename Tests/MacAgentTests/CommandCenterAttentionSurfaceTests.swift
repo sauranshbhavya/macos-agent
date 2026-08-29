@@ -1,8 +1,8 @@
 import Foundation
-import Testing
-import MacAgentTestSupport
-@testable import MacAgent
 import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
 
 /// Branch 10 checkpoint 1. Command Center gains its own permission/clarification/failure surface,
 /// which was framed as a hard prerequisite for unattended scheduled runs: a scheduled routine has

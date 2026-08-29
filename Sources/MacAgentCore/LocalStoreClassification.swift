@@ -161,31 +161,31 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     public func fileURL(fileManager: FileManager = .default) -> URL {
         switch self {
         case .visionSessionJournal:
-            return VisionSessionJournalStore(fileManager: fileManager).fileURL
+            return VisionSessionJournalStore.realFileURL(fileManager: fileManager)
         case .routines:
-            return RoutineStore(fileManager: fileManager).fileURL
+            return RoutineStore.realFileURL(fileManager: fileManager)
         case .workspaces:
-            return WorkspaceStore(fileManager: fileManager).fileURL
+            return WorkspaceStore.realFileURL(fileManager: fileManager)
         case .clipboardHistory:
-            return ClipboardHistoryStore(fileManager: fileManager).fileURL
+            return ClipboardHistoryStore.realFileURL(fileManager: fileManager)
         case .clipboardHistorySettings:
-            return ClipboardHistorySettingsStore(fileManager: fileManager).fileURL
+            return ClipboardHistorySettingsStore.realFileURL(fileManager: fileManager)
         case .snippets:
-            return SnippetStore(fileManager: fileManager).fileURL
+            return SnippetStore.realFileURL(fileManager: fileManager)
         case .recentArtifacts:
-            return RecentArtifactStore(fileManager: fileManager).fileURL
+            return RecentArtifactStore.realFileURL(fileManager: fileManager)
         case .shortcutRunHistory:
-            return ShortcutRunHistoryStore(fileManager: fileManager).fileURL
+            return ShortcutRunHistoryStore.realFileURL(fileManager: fileManager)
         case .taskHistory:
-            return TaskHistoryStore(fileManager: fileManager).fileURL
+            return TaskHistoryStore.realFileURL(fileManager: fileManager)
         case .taskPlanDetails:
-            return TaskPlanDetailStore(fileManager: fileManager).fileURL
+            return TaskPlanDetailStore.realFileURL(fileManager: fileManager)
         case .approvedApps:
-            return ApprovedAppStore(fileManager: fileManager).fileURL
+            return ApprovedAppStore.realFileURL(fileManager: fileManager)
         case .outputLocations:
-            return OutputLocationStore(fileManager: fileManager).fileURL
+            return OutputLocationStore.realFileURL(fileManager: fileManager)
         case .resumableTasks:
-            return ResumableTaskStore(fileManager: fileManager).fileURL
+            return ResumableTaskStore.realFileURL(fileManager: fileManager)
         }
     }
 

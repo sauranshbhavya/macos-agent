@@ -94,9 +94,10 @@ struct TaskHistoryRetentionTests {
 
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        // Built the way production builds it — no cap argument anywhere.
-        #expect(TaskHistoryStore().maxItems == 10_000)
-        #expect(TaskHistoryStore(fileManager: .default).maxItems == 10_000)
+        // Built the way production builds it — the named real location, and no cap argument
+        // anywhere. `realFileURL()` resolves a path and touches nothing; `maxItems` is decided in
+        // the initializer, so no file is read or written by any line here (SONNY-350).
+        #expect(TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL()).maxItems == 10_000)
         #expect(TaskHistoryStore(fileURL: root.appendingPathComponent("t.json")).maxItems == 10_000)
 
         // And the floor, so a mistyped cap cannot silently mean "keep nothing".

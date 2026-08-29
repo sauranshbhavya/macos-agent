@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -438,7 +439,11 @@ struct OpenAppOverTheInstalledUniverseTests {
                 installedAppResolver: InstalledAppResolver(source: FixedAppSource(installed)),
                 appOpener: appOpener,
                 routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
-                workspaceStore: workspaceStore
+                workspaceStore: workspaceStore,
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
             )
         }
 

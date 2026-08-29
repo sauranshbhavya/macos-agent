@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// SONNY-92: the containment layer, one check at a time.

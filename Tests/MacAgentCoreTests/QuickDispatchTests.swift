@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -13,7 +14,12 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try routineStore.save(StoredRoutine(name: "Morning Setup", steps: [openSafariStep()]))
         try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))
-        let resolver = InstantCommandResolver(routineStore: routineStore, workspaceStore: workspaceStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
 
         guard case .plan(let routinePlan) = resolver.resolve(command: "run morning setup") else {
             Issue.record("Expected saved routine launch to resolve locally.")
@@ -41,7 +47,12 @@ struct QuickDispatchTests {
         try workspaceStore.save(StoredWorkspace(name: "Slack", apps: ["Notes"], urls: []))
         try routineStore.save(StoredRoutine(name: "Deep Work", steps: [openSafariStep()]))
         try workspaceStore.save(StoredWorkspace(name: "Deep Work", apps: ["Safari"], urls: []))
-        let resolver = InstantCommandResolver(routineStore: routineStore, workspaceStore: workspaceStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
 
         // A workspace named like an installed app: "open Slack" is ambiguous and must reach the
         // planner, while the explicit kind-prefixed form stays instant.
@@ -73,6 +84,8 @@ struct QuickDispatchTests {
             StoredWorkspace(name: "slack", apps: ["Notes"], urls: ["https://example.com"])
         )
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -101,6 +114,8 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "Hehe", apps: ["Safari"], urls: []))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -124,6 +139,8 @@ struct QuickDispatchTests {
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try routineStore.save(StoredRoutine(name: "vibe", steps: [openSafariStep()]))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         )
@@ -147,6 +164,8 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -167,6 +186,8 @@ struct QuickDispatchTests {
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try routineStore.save(StoredRoutine(name: "vibe", steps: [openSafariStep()]))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         )
@@ -188,6 +209,8 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -204,6 +227,8 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -225,6 +250,8 @@ struct QuickDispatchTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "Slack", apps: ["Notes"], urls: []))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore
         )
@@ -250,6 +277,8 @@ struct QuickDispatchTests {
         try workspaceStore.save(StoredWorkspace(name: "Figma", apps: ["Notes"], urls: []))
         try routineStore.save(StoredRoutine(name: "Discord", steps: [openSafariStep()]))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: routineStore,
             workspaceStore: workspaceStore,
             installedAppResolver: Self.resolver(installing: ["Figma": "com.figma.Desktop", "Discord": "com.hnc.Discord"])
@@ -288,6 +317,8 @@ struct QuickDispatchTests {
         try workspaceStore.save(StoredWorkspace(name: "Figma", apps: ["Notes"], urls: []))
         try routineStore.save(StoredRoutine(name: "Discord", steps: [openSafariStep()]))
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: routineStore,
             workspaceStore: workspaceStore,
             installedAppResolver: Self.resolver(installing: [:])
@@ -328,6 +359,8 @@ struct QuickDispatchTests {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         )
@@ -354,7 +387,12 @@ struct QuickDispatchTests {
         let output = root.appendingPathComponent("draft.md")
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try routineStore.save(StoredRoutine(name: "Draft Routine", steps: [draftStep(output: output)]))
-        let resolver = InstantCommandResolver(routineStore: routineStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: routineStore,
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
         guard case .plan(let plan) = resolver.resolve(command: "run draft routine") else {
             Issue.record("Expected saved routine launch to resolve locally.")
             return
@@ -383,7 +421,12 @@ struct QuickDispatchTests {
         try Data("original".utf8).write(to: output)
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try routineStore.save(StoredRoutine(name: "Overwrite Draft", steps: [draftStep(output: output)]))
-        let resolver = InstantCommandResolver(routineStore: routineStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: routineStore,
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
         guard case .plan(let plan) = resolver.resolve(command: "Overwrite Draft") else {
             Issue.record("Expected exact saved routine name to resolve locally.")
             return
@@ -419,7 +462,12 @@ struct QuickDispatchTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))
-        let resolver = InstantCommandResolver(workspaceStore: workspaceStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: workspaceStore
+        )
         guard case .plan(let plan) = resolver.resolve(command: "open my research workspace") else {
             Issue.record("Expected saved workspace launch to resolve locally.")
             return
@@ -472,7 +520,11 @@ struct QuickDispatchTests {
             browserOpener: browserOpener,
             appOpener: appOpener,
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
-            workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+            workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
     }
 

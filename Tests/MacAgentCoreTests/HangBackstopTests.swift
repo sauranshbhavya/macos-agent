@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 
 /// SONNY-302. What a hang backstop is allowed to conclude from running out of wall clock.
 ///

@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgent
 @testable import MacAgentCore
 

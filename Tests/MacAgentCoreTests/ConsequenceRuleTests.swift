@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -1141,7 +1142,9 @@ struct ConsequenceRuleTests {
             fileOpener: UnusedFileOpener(),
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: snippetStore ?? SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-history.json")
             )
