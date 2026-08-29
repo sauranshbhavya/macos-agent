@@ -4,6 +4,7 @@ import { buildApp } from "../src/app.js";
 import { authWiringFrom, intendsAuth } from "../src/auth/deps.js";
 import { ServiceRoleKeyNotConfigured, SupabaseAuthProvider } from "../src/auth/supabase.js";
 import { ConfigError, loadConfig, type Config } from "../src/config.js";
+import { testDatabaseUrl } from "./support/database.js";
 
 /** `fetch`'s first parameter, named without `RequestInfo` — the lib here is ES2023, not DOM. */
 type FetchInput = Parameters<typeof globalThis.fetch>[0];
@@ -36,7 +37,20 @@ const secret = "a-signing-key-long-enough-to-clear-the-floor";
 const serviceRole = "a-service-role-key";
 const anon = "an-anon-key";
 const issuer = "https://project-ref.supabase.co/auth/v1";
-const database = "postgres://postgres:postgres@localhost:55433/postgres";
+/**
+ * **Read from `DATABASE_URL`, with the same fallback `npm run test:db` uses** (SONNY-352). This was
+ * a literal, and so was `entitlement.test.ts`'s — which made `DATABASE_URL` configurable for most of
+ * the suite and inert for these two, so a second lane pointing its runner at another port still had
+ * two files naming the first lane's port. Nothing in a run says which database answered, which is
+ * the false-measurement family CLAUDE.md's Claims-and-evidence section is about: a construct
+ * silently answering a question nobody asked.
+ *
+ * No socket is opened from here either way — see the note above on `pg.Pool` connecting lazily — so
+ * what this fixes is the knob rather than a live cross-connection. The knob is worth fixing on its
+ * own terms: one port, set in one place, and `testDatabaseUrl` is where the third file will find it
+ * instead of writing a fourth literal.
+ */
+const database = testDatabaseUrl();
 const signingKey = generateKeyPairSync("ed25519")
   .privateKey.export({ type: "pkcs8", format: "der" })
   .toString("base64");

@@ -43,6 +43,7 @@ import type { MeteringStore } from "../src/metering/store.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore, testSigningKey } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { testDatabaseUrl } from "./support/database.js";
 
 /**
  * Contract §5.3's entitlement claim and §7.2's `entitlement.*` and `limit.*` refusals, driven
@@ -846,7 +847,8 @@ const jwtSecret = "a-signing-key-long-enough-to-clear-the-floor";
 describe("startup refuses rather than serving a gateway that cannot check", () => {
   const AUTH_ENV = {
     SONNY_ENV: "local",
-    DATABASE_URL: "postgres://postgres:postgres@localhost:55433/postgres",
+    // SONNY-352: one knob for the port, not a literal per file. `support/database.ts` has why.
+    DATABASE_URL: testDatabaseUrl(),
     RATE_LIMIT_SALT: salt,
     SUPABASE_JWT_SECRET: jwtSecret,
     SUPABASE_JWT_ISSUER: "https://project-ref.supabase.co/auth/v1",
