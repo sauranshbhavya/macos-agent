@@ -5,6 +5,9 @@ one is an entry rather than a fragment of one.
 Run it from anywhere inside the repository:
 
     scripts/changelog-order              # check the working tree's changelog
+    scripts/changelog-order check <path> # check some other copy of it — a `git show` of an
+                                         # older tree, say, which is how a finding count is
+                                         # quoted as evidence and re-derived by a reviewer
     scripts/changelog-order selftest     # re-prove every arm still fires
 
 Exit 0 clean, 2 findings, 1 when no trustworthy measurement was made — a run that cannot
@@ -301,6 +304,27 @@ def selftest() -> int:
                 if expect:
                     print("        expected a finding containing: " + expect)
 
+        # `check <path>` must actually read that path. An argument silently ignored would
+        # check the repository's own changelog, find it clean, and exit 0 — a finding count
+        # quoted as evidence would then be a measurement of the wrong file, in the
+        # reassuring direction. Run through the real command line, not through check().
+        bad = _write(tmp, ["new/b", "new/c", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"])
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", bad],
+                              capture_output=True, text=True, cwd=os.getcwd())
+        # The fixture's branch names exist in the fixture repository, not in this one, so what
+        # the real merge log makes of them is "no such merge" rather than an ordering finding.
+        # Either way the proof is the same and is the only one that matters: the findings name
+        # the fixture's own file and its own entries, so the path was read.
+        # Not "new/b": that is the fixture's first entry, which this check deliberately exempts
+        # from needing a merge. Assert on one it does report.
+        named = os.path.basename(bad) in proc.stdout and "new/c" in proc.stdout
+        if proc.returncode == 2 and named:
+            print("  ok    `check <path>` reads the path it is given")
+        else:
+            print("  FAIL  `check <path>` did not read the path it is given "
+                  "(exit %d, named=%s)" % (proc.returncode, named))
+            failures += 1
+
         # A refusal rather than a clean zero, proved rather than asserted.
         empty = os.path.join(tmp, "empty.md")
         open(empty, "w").write("# nothing here\n")
@@ -315,7 +339,7 @@ def selftest() -> int:
                 print("  FAIL  %s — it returned an answer instead" % name)
                 failures += 1
 
-    print("selftest: %d case(s), %d failure(s)" % (len(cases) + 2, failures))
+    print("selftest: %d case(s), %d failure(s)" % (len(cases) + 3, failures))
     return 0 if failures == 0 else 2
 
 
@@ -328,7 +352,11 @@ def main(argv: list[str]) -> int:
         return 0 if args[0] in ("help", "--help") else 1
     try:
         root = repo_root()
-        path = os.path.join(root, CHANGELOG)
+        # `check <path>` reads some other copy of the file — an older tree written out with
+        # `git show`, most usefully — against this repository's merge log. The default is the
+        # working tree's own. Ordering is a property of the file *and* the mainline, so the
+        # log always comes from the repository this is run in.
+        path = os.path.abspath(args[1]) if len(args) > 1 else os.path.join(root, CHANGELOG)
         findings = check(path, root)
     except Unmeasurable as exc:
         print("changelog-order: no measurement was made — %s" % exc, file=sys.stderr)
@@ -339,8 +367,9 @@ def main(argv: list[str]) -> int:
         print("\n%d finding(s). The changelog's Entry Template preamble states where an entry "
               "goes and why the file has two eras." % len(findings), file=sys.stderr)
         return 2
+    shown = os.path.relpath(path, root) if path.startswith(root) else path
     print("changelog-order: %s is in merge order, %d entries, both eras."
-          % (CHANGELOG, len(entries(open(path, encoding='utf-8').read()))))
+          % (shown, len(entries(open(path, encoding='utf-8').read()))))
     return 0
 
 
