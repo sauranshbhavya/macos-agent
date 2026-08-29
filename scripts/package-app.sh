@@ -39,6 +39,24 @@ cd "$ROOT_DIR"
 # shellcheck source=lib/signing.sh
 . "$ROOT_DIR/scripts/lib/signing.sh"
 
+# This script builds whatever is on disk and hands the founder a .app to test by hand — which for
+# some behaviour is the only verification it ever gets. A tree that is mid-mutant, or that a killed
+# battery left mutated, would be packaged into that bundle without a word, and the manual pass would
+# then be testing a deliberate defect (SONNY-258, SONNY-347).
+# shellcheck source=lib/battery-state.sh
+. "$ROOT_DIR/scripts/lib/battery-state.sh"
+battery_state
+case "$BATTERY_STATE" in
+  live|abandoned)
+    battery_journal "scripts/package-app.sh" "refused to package: battery state is $BATTERY_STATE"
+    printf 'error: refusing to package — this working tree is under a mutation battery.\n\n' >&2
+    battery_state_detail >&2
+    printf '\nA bundle built now would carry a mutant, and the manual pass over it is the only\n' >&2
+    printf 'verification some of this behaviour ever gets.\n' >&2
+    exit 1
+    ;;
+esac
+
 SIGN_IDENTITY="$(sonny_read_signing_identity "$ROOT_DIR")"
 
 if sonny_signing_identity_is_adhoc "$SIGN_IDENTITY"; then

@@ -64,6 +64,21 @@ set -euo pipefail
 
 readonly SCRIPT_NAME="scripts/warnings"
 
+# The shared reading of this checkout's battery state. This script has refused to run beside a LIVE
+# battery since SONNY-184; what it could not see until SONNY-347 is a battery that was killed with
+# its mutant still applied, which leaves the same deliberately broken file on disk with no process
+# holding anything. A count taken over that tree is the same false measurement SONNY-184 closed,
+# reached through a different door — and this script measures the working tree deliberately, so
+# nothing else in it would notice.
+BATTERY_STATE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/battery-state.sh"
+readonly BATTERY_STATE_LIB
+if [[ ! -r "$BATTERY_STATE_LIB" ]]; then
+  printf 'scripts/warnings: required library not found: %s\n' "$BATTERY_STATE_LIB" >&2
+  exit 1
+fi
+# shellcheck source=lib/battery-state.sh
+. "$BATTERY_STATE_LIB"
+
 # The frameworks directory the test targets need. Without `-Xswiftc -F <this>` the test targets do
 # not compile at all — `error: no such module 'Testing'` — which would make this script report a
 # build failure on a perfectly good tree. CLAUDE.md's Commands section is the same flag and the
@@ -227,11 +242,12 @@ lock_field() {
   sed -n "s/^$1 //p" "$LOCK_DIR/owner" | head -1
 }
 
-# Prints why the lock is stale, or prints nothing if its owner is genuinely still running. Both
-# halves of the pid check matter: a pid that no longer exists is the ordinary killed-run case, and
-# a pid that exists but belongs to something else is pid reuse. The one case this reads as live
-# when it is not is a pid reused by something whose command line says "warnings" — that refuses a
-# run rather than allowing two, and `unlock` reports the same reading, so the way out stays visible.
+# Prints why the lock is stale, or prints nothing if its owner is genuinely still running. The
+# decision is `battery_owner_alive`'s — pid plus the start time recorded when the lock was taken —
+# so this script, `scripts/mutate` and the library's own consumers all read one rule (PR #161, F1).
+# It used to accept any pid whose command line said "warnings", which cannot tell a reused pid from
+# the run that took the lock; the command line is still read, but only to say what that pid belongs
+# to now.
 lock_stale_reason() {
   local pid="$1" owner_command
   if [[ ! -f "$LOCK_DIR/owner" ]]; then
@@ -242,14 +258,18 @@ lock_stale_reason() {
     printf 'its owner record names no usable pid'
     return 0
   fi
+  if battery_owner_alive "$pid" "$(lock_field lstart)"; then
+    return 0
+  fi
   owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   if [[ -z "$owner_command" ]]; then
     printf 'the process that took it (pid %s) is gone' "$pid"
     return 0
   fi
-  case "$owner_command" in
-    *warnings*) return 0 ;;
-  esac
+  if [[ -z "$(lock_field lstart)" ]]; then
+    printf 'its owner record predates this version and cannot identify pid %s' "$pid"
+    return 0
+  fi
   printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
 }
 
@@ -265,16 +285,9 @@ lock_stale_reason() {
 # a battery in a different worktree has its own working tree and its own build directory and is no
 # hazard at all.
 foreign_lock_holder() {
-  local dir="$1" pattern="$2" pid owner_command
-  [[ -d "$dir" && -f "$dir/owner" ]] || return 1
-  pid="$(sed -n 's/^pid //p' "$dir/owner" | head -1)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-  [[ -n "$owner_command" ]] || return 1
-  case "$owner_command" in
-    $pattern) printf '%s' "$pid"; return 0 ;;
-  esac
-  return 1
+  # The pattern argument is gone: identity is the recorded start time now, not a command line
+  # (PR #161, F1). Both tools write the same owner record, so one reading answers for both.
+  battery_lock_owner_pid "$1"
 }
 
 foreign_lock_field() {
@@ -333,18 +346,31 @@ acquire_lock() {
   LOCK_DIR="$git_dir/warnings.lock"
 
   local battery_pid
-  if battery_pid="$(foreign_lock_holder "$git_dir/mutate.lock" '*mutate*')"; then
+  if battery_pid="$(foreign_lock_holder "$git_dir/mutate.lock")"; then
     refuse_mutation_battery "$battery_pid" "$git_dir/mutate.lock"
+  fi
+
+  # And the killed battery's leftovers, which hold no lock anyone is alive to defend (SONNY-347).
+  battery_state
+  if [[ "$BATTERY_STATE" == "abandoned" ]]; then
+    battery_journal "$SCRIPT_NAME" "refused: killed battery left mutant ${BATTERY_ID:-?} in ${BATTERY_FILE:-?}"
+    cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — a killed battery left its mutant in this working tree.
+
+$(battery_state_detail)
+
+This script recompiles every file in the tree and stamps the count with a SHA. Over that file the
+count would describe code that SHA never contained, and this report cannot be told apart from a
+true one — the whole failure this script exists to make impossible.
+EOF
+    finish 1
   fi
 
   for attempt in 1 2 3; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       LOCK_OWNED="yes"
-      {
-        printf 'pid %s\n' "$$"
-        printf 'started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-        printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
-      } >"$LOCK_DIR/owner"
+      battery_write_owner_record "$LOCK_DIR" \
+        head "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
       return 0
     fi
 
@@ -847,9 +873,10 @@ selftest() {
   local git_dir
   git_dir="$(git -C "$repo" rev-parse --absolute-git-dir)"
   mkdir -p "$git_dir/warnings.lock"
-  # A pid that is alive and whose command line says "warnings" — this selftest's own shell is both.
-  { printf 'pid %s\n' "$$"; printf 'started now\n'; printf 'head deadbeef\n'; } \
-    >"$git_dir/warnings.lock/owner"
+  # A pid that is alive, recorded with the start time that identifies it. The command line no
+  # longer matters (PR #161, F1) — this record is written by the same helper the real acquire_lock
+  # uses, so the fixture cannot drift from the thing it stands in for.
+  battery_write_owner_record "$git_dir/warnings.lock" head deadbeef
   set +e
   out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
   set -e
@@ -880,6 +907,7 @@ selftest() {
   git_dir="$(git -C "$repo" rev-parse --absolute-git-dir)"
   mkdir -p "$git_dir/mutate.lock"
   { printf 'pid %s\n' "$battery_pid"
+    printf 'lstart %s\n' "$(battery_process_start "$battery_pid")"
     printf 'started 2026-01-01 00:00:00\n'
     printf 'plan throwaway.plan\n'
     printf 'head deadbeef\n'; } >"$git_dir/mutate.lock/owner"
@@ -897,6 +925,31 @@ selftest() {
   out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
   set -e
   st_absent "a dead battery's leftover lock does not block a run" "$out" "a mutation battery holds"
+
+  printf '\n  but a killed battery that left its MUTANT behind is refused (SONNY-347)\n'
+  # The other direction of the same lock, and the one nothing here could see until the in-flight
+  # record existed. A run killed with -9 leaves no live pid to refuse for — the arm above is right
+  # that a bare leftover lock must block nothing — while the tree still carries the mutated file.
+  # This script recompiles every file in the tree and stamps a SHA on the count, so that is exactly
+  # the false measurement SONNY-184 closed for the live case, arriving through the other door.
+  mkdir -p "$git_dir/mutate.lock/inflight"
+  { printf 'pid %s\n' "$battery_pid"
+    printf 'started 2026-01-01 00:00:00\n'
+    printf 'plan throwaway.plan\n'
+    printf 'head deadbeef\n'; } >"$git_dir/mutate.lock/owner"
+  { printf 'id R4\n'
+    printf 'file Sources/Thing.swift\n'
+    printf 'sha deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >"$git_dir/mutate.lock/inflight/meta"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 1" "$status" "1"
+  st_contains "and says a killed battery left a mutant" "$out" "left its mutant in this working tree"
+  st_contains "and names the mutant" "$out" "R4"
+  st_contains "and names the file it is in" "$out" "Sources/Thing.swift"
+  st_contains "and hands over the recovery" "$out" "scripts/mutate unlock"
+  st_absent "and does not go on to build anything" "$out" "emptying"
   rm -rf -- "$git_dir/mutate.lock"
 
   printf '\n  an ordinary .build/ survives a run, so this costs no incremental rebuild after it\n'
