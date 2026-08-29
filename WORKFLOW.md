@@ -167,12 +167,30 @@ has documented consequences:
   through the user anyway; never launch the packaged app — or a bare `swift run MacAgent`,
   which hits the same shared local stores despite lacking bundle identity — from a second
   worktree while any instance is running.
-- **Merge one branch at a time.** After each merge, other in-flight worktrees rebase onto
-  the new `main` before continuing. Never batch-merge parallel branches. The rebase
-  rewrites the ticket branch, so the follow-up `git push --force-with-lease` **on the
-  session's own ticket branch** is covered by the same standing authorization as regular
-  pushes — always `--force-with-lease`, never bare `--force`, and force-pushing any other
-  branch (or anything on `main`) is never authorized.
+- **Merge one branch at a time, and rebase once — at merge time, never after each merge.**
+  Never batch-merge parallel branches: they land one at a time, in an order the user sets,
+  because two branches merged together is how a conflict resolution nobody read reaches
+  `main`. **What a lane does while it waits is finish on its base, push, and hold.** It does
+  not hop onto each new `main` as the wave merges around it. When it is genuinely next —
+  which the user says, either by naming it or because every branch ahead of it has landed —
+  it does exactly one hop, re-verifies once on the merged base under step 5's rules, and
+  merges. **Zero hops is better than one** and is the right answer when the merge is clean
+  and step 5's tree-identity proof covers every path the branch's figures depend on; the hop
+  is for when a conflict, or a dependency the merged range moved, makes the branch's
+  verification untrue of the tree it is about to land on. **This bullet said the opposite
+  until 2026-08-29** — "After each merge, other in-flight worktrees rebase onto the new
+  `main` before continuing" — and one lane followed it for five hops, paying a full
+  re-verification at each, which is hours of work nobody read. Each hop also re-opens step
+  5's mutant question and re-stamps every figure the changelog entry carries, so the cost
+  compounds rather than adding up. **The cost of holding instead, stated rather than left to
+  be found:** a branch that sits through a long wave meets a bigger conflict at its one hop
+  than it would have met at any single earlier one. That is one conflict resolved once
+  against N resolved N times, and it is the trade the instruction makes. (Founder
+  instruction 2026-08-28; written here 2026-08-29 by SONNY-351.) The hop rewrites the ticket
+  branch, so the follow-up `git push --force-with-lease` **on the session's own ticket
+  branch** is covered by the same standing authorization as regular pushes — always
+  `--force-with-lease`, never bare `--force`, and force-pushing any other branch (or
+  anything on `main`) is never authorized.
 - **Worktree lifecycle differs by role.** An implementing session's worktree lives for its
   whole assigned ticket sequence and is removed once the last of those branches merges
   (`git worktree remove`); audit occasionally with `git worktree list`. A reviewing
@@ -182,6 +200,21 @@ has documented consequences:
   **a reviewer never removes its own worktree.** (Trigger: the SONNY-44 round-1 reviewer
   removed the directory it was running in, and the session's stop hook then fired from a
   path that no longer existed.)
+
+**A long lane is a coordination failure before it is a session's.** The five levers that keep
+lanes short are all the coordinator's, and they sit in three different steps because that is
+where each one bites: the concurrency cap and the rebase-timing rule above, step 5's scoped
+post-rebase battery re-runs, and step 7's right-sizing and its limit on what one round
+carries. Step 5's ninety-minute stop is the one a session owns, and it is a backstop for when
+the five were got wrong rather than a substitute for them. (Founder
+instruction 2026-08-28, at the tail of the 2026-08-27/28 wave, after three lanes ran one to
+five hours each: *"terminals running for unnecessarily long times is a clear dead route for
+the speedy execution and hence we cannot afford to do such mistakes."* Three of the five were
+written into this file by SONNY-340 on 2026-08-29 and the remaining two by SONNY-351 the same
+day. This paragraph is the frame both of those were missing: without it the five read as
+unrelated economies rather than as one instruction, and a session reading only the
+ninety-minute stop concludes that lane length is its own discipline problem, which is the
+opposite of what was said.)
 
 ## 4. Pull the ticket
 
@@ -403,6 +436,26 @@ cross a moved head is step 5's tree-identity proof: `git rev-parse <old>:<path> 
 printing one hash twice makes the figure a measurement *of* the new head rather than a stale
 one re-stamped at it, and the entry carries the proof beside the figure. No proof, no carry.
 
+**A diff that touches the changelog runs `scripts/changelog-order`, and its exit code goes in
+the closing comment beside the suite's.** It is a second or two, it needs no build, and it is
+owed by exactly the diffs that can break it — every branch writing an entry, and nothing else.
+It checks three things: that the entries are in `main`'s first-parent merge order within each
+of the file's two eras, that no entry names a branch that never merged, and that every heading
+has exactly one entry under it. That last arm is not about ordering at all and is the reason
+the tool exists rather than a rule in prose: at `85bdccb` the file held a heading with no entry
+beneath it and a second heading glued to the end of the previous entry's last line by a lost
+newline, so no line-anchored search could see it — and the entry's own self-verifying `awk`
+command, pointed at that invisible heading, had been answering a number nobody read for two
+merges (SONNY-329). **A misplaced entry raises no rebase conflict, because nobody else is
+editing that spot, so a clean merge is the tell** — five have been recorded that way.
+
+**This is named here, in the step that writes the entry, for the reason the check itself is not
+enough.** `CLAUDE.md`'s Non-obvious gotchas record what happened to SONNY-64's guard: a check
+people learn to skip has stopped existing. What keeps `scripts/warnings` and `scripts/mutate`
+alive is that step 5 names them as owed verification, not that they are good tools. So this one
+is owed by a named population too, and a session that writes an entry and does not report its
+exit code has not finished step 7.
+
 **Not every branch owes one, and what decides it is what the branch recorded, not what it
 touched.** An entry is owed whenever a branch records anything of the kind the sentence above
 names — a durable architectural decision, a pitfall discovered, or a correction to the record;
@@ -521,6 +574,38 @@ does the scoped verification round below move it, because what that bounds is ve
 rather than the search. This composes with the depth scaling below: depth scales to the diff, cycle count to what the
 cycles actually find. (Decided by the user 2026-08-06, after full third-cycle reviewer
 sessions ran over mechanical fix rounds on PRs #30 and #31.)
+
+**Cap what a round carries.** A fix round routes what blocks the merge plus what is genuinely
+cheap; everything else is proposed for its own ticket. Eight or nine findings in one round is
+a long round by construction — the fix session works them one at a time, each one is verified,
+and the branch holds a merge slot for the whole of it (step 3's cap, and the lane-length frame
+beside it). The cap above bounds how many rounds a review may run; this bounds how much any
+one of them is asked to carry, and a round can be entirely above the recorded-residual bar and
+still be too big, which is why that bar alone was never enough.
+
+**It creates no power to defer a defect, and reading it as one inverts the oldest rule in this
+repository.** Three filters run in order and only the middle one is this rule's:
+
+- Below the recorded-residual bar — wording, test-name precision, a claim imprecise rather
+  than wrong — recorded on the ticket and left, exactly as the cap's paragraph above already
+  says.
+- Above the bar and blocking, or above the bar and cheap enough that filing a ticket costs
+  more than the fix — this round takes it. That is the whole of the lever.
+- Above the bar, not blocking, not cheap — the only case where anything moves, and what moves
+  it is not this rule but the fix-in-branch rule's own deferral clause: the user's explicit
+  decision plus a named landing spot recorded on a ticket (step 5). The coordinator *proposes*
+  that split when it routes the round; the user's decision is what discharges fix-in-branch.
+  Without that decision the finding stays in the round.
+
+**The cap is on what the round carries, never on what the review reports.** A reviewer files
+everything it found, at step 7's evidence bar; a reviewer that trims its own findings to keep a
+round small has stopped being adversarial, which is the one thing a review is for. **That covers
+a reviewer's probe explicitly**, since the paragraph above makes one a finding rather than a fix:
+a probe is routed by the three filters like any other finding, and a probe demonstrating a defect
+above the bar is that defect's evidence, so it travels with the fix rather than being the cheap
+half left out of the round. Nothing here licenses reporting one fewer probe because the round is
+already full. (Founder instruction 2026-08-28, the fifth of the lane-length levers in step 3;
+written here 2026-08-29 by SONNY-351.)
 
 **A round past the cap is available to verify a named fix, and to do nothing else — the scoped
 verification round.** It exists because the cap was exempted on **every branch reviewed under the
