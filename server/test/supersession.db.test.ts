@@ -409,9 +409,17 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     });
 
     it("does not un-spend a revocation the identity never observed again", async () => {
-      // The other direction, so the fix is not "clear it always". A superseded id that is revoked
-      // and never comes back stays revoked: no new sessions were minted for it, so nothing more is
-      // owed, and a drain that kept re-asking would call the provider forever for nothing.
+      // **What this test does and does not establish, corrected** (PR #164 cycle 2, C-F2). The fix
+      // round called it "the direction that must not clear" and said it stopped the fix being
+      // "clear it always". **It cannot.** Nothing fires the trigger after the drain stamps here, so
+      // the state it asserts is never disturbed — by an over-clearing mutant or by anything else.
+      // It is a true assertion about a sequence that does not exercise the clearing at all, and
+      // the reviewer's mutant that cleared every row of the identity SURVIVED a 60-test run beside
+      // it. The test below it is the one that pins that direction.
+      //
+      // What this one does establish is still worth having: a superseded id revoked and never
+      // observed again stays revoked, so a drain does not re-ask the provider about an episode
+      // that ended.
       const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
       await resolve(client, assertion("a@example.com", SECOND));
       expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
@@ -419,6 +427,48 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       await close(accountId);
       // Only SECOND is owed — FIRST's episode ended and no later one began.
       expect(await owedRevocationCount(client)).toBe(1);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([SECOND]);
+    });
+
+    it("does not un-spend a superseded id when an ordinary repeat sign-in names the current one", async () => {
+      // **The reviewer's test, taken verbatim in substance** (PR #164 cycle 2, C-F2), and the gap it
+      // fills was found by a **surviving mutant** rather than by reading the test above and
+      // believing its description. That is the sentence worth keeping: a test whose stated
+      // guarantee it cannot deliver reads exactly like one that can, and the only thing that told
+      // the two apart was a mutant that lived.
+      //
+      // The scenario nothing covered: an ordinary repeat sign-in, naming the id the identity
+      // **already holds**, after a supersession has been drained. The trigger fires — rule 1's
+      // refresh names `supabase_user_id` every time — so an `ON CONFLICT` arm that cleared more
+      // than the conflicting row would un-spend the superseded id here. The drain would then call
+      // the provider about an episode that ended, every later sign-in would re-owe it, and
+      // `npm run revocations` would report a debt that never drains.
+      //
+      // The shipped arm is scoped to the conflicting row by construction, so this passes as
+      // written; the reviewer proved it fails against the over-clearing mutant, and the same mutant
+      // is now killed by it in this repository's own battery.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: true, revoked: true },
+        { supabase_user_id: SECOND, superseded: false, revoked: false },
+      ]);
+
+      // The repeat sign-in. Same id the identity already names, so no supersession — but the
+      // trigger runs, which is the whole point.
+      await resolve(client, assertion("a@example.com", SECOND));
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: true, revoked: true },
+        { supabase_user_id: SECOND, superseded: false, revoked: false },
+      ]);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      // And FIRST is not re-asked on a later close: its episode ended and no later one began.
+      await close(accountId);
       provider.revokedUsers = [];
       await drainOwedRevocations(client, provider);
       expect(provider.revokedUsers).toEqual([SECOND]);

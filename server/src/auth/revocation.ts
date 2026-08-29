@@ -32,28 +32,31 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  */
 
 /**
- * **What "owed" means, in one place, because three queries have to agree about it.**
+ * **What "owed" means, in one place, because four queries have to agree about it.**
  *
  * A provider-side user id is owed a revocation when nothing has recorded one for it AND either:
  *
  * - the account holding the identity that named it is **closed** — the original case (0006), the
  *   user asked to be gone and their Supabase sessions should go with them; or
+ * - the identity has since named a **different** id, so this one is **superseded** — SONNY-230. The
+ *   superseded provider-side user may still hold live sessions, and before 0014 nothing anywhere
+ *   said so: `resolve()`'s `COALESCE($5, supabase_user_id)` overwrote the column that named it, and
+ *   `npm run revocations` was correct to report nothing while being wrong about the world.
+ *
  * **Both disjuncts rest on `provider_session_revoked_at` meaning "the revocation owed for this id's
  * current episode has been performed", never "this id has been revoked at least once"** (PR #164
  * review, F1). Under the second reading one stamp makes an id un-owed forever, and every close
  * after it revokes nothing. Migration 0014's trigger is what keeps the first reading true: it
  * clears the stamp whenever the identity observes the id again, because that is a new episode.
  *
- * - the identity has since named a **different** id, so this one is **superseded** — SONNY-230. The
- *   superseded provider-side user may still hold live sessions, and before 0014 nothing anywhere
- *   said so: `resolve()`'s `COALESCE($5, supabase_user_id)` overwrote the column that named it, and
- *   `npm run revocations` was correct to report nothing while being wrong about the world.
- *
  * **The second disjunct does not require a closed account, and that is the point.** A supersession
  * on a *live* account is exactly the state SONNY-196 is about — Supabase re-keyed the subject
  * underneath us — and waiting for a close before revoking would mean never revoking it.
  *
  * **Exported, and that is the whole of what makes the sentence below true** (PR #164 review, F4).
+ * **The headline above said "three queries" for a further round while this paragraph said four**
+ * (PR #164 cycle 2, C-F3) — a docstring whose own two halves disagreed about the number the fix was
+ * about, which is the same shape as the claim it was written to correct.
  * This docstring used to say the fragment was shared by "three queries … because 0009 exists
  * entirely because the delete guard and the drain had drifted apart on one clause" — while the one
  * query site outside this file that *could* have shared it, `owedByAccount` in `../revocations.ts`,

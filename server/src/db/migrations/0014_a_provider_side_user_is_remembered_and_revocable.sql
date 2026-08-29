@@ -178,15 +178,32 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- un-superseded → superseded again was invisible to the claim query for up to
 -- `sonny.revocation_lease_seconds()`. A lease belongs to an episode too.
 --
--- **Why clearing rather than a timestamp comparison.** The other shape on offer was
--- `provider_session_revoked_at IS NULL OR provider_session_revoked_at < last_seen_at`. It closes
--- the same two routes, and it decides them by comparing a `timestamptz` written by SQL `now()`
--- against one written from a JavaScript `Date` — two clocks, microsecond and millisecond
--- resolution — so a tie has to be broken by a `<` / `<=` choice where one direction silently drops
--- a revocation and the other can hand a row back to the drain every lease period forever. Clearing
--- needs no comparison and no tie: whichever of the two writes commits last is right on its own
--- terms. A drain stamping after a sign-in really did revoke that sign-in's sessions; a sign-in
--- clearing after a drain really does owe a new one.
+-- **Why clearing rather than a timestamp comparison, and the reason is stronger than a tie**
+-- (PR #164 cycle 2, C-F4, which replaced the argument this comment used to make). The other shape
+-- on offer was `provider_session_revoked_at IS NULL OR provider_session_revoked_at < last_seen_at`.
+-- It closes the same two routes and it cannot be trusted, for two measured reasons rather than a
+-- hypothetical tie-break:
+--
+-- 1. **The two clocks are not merely different resolutions, they carry a systematic offset.**
+--    `last_seen_at` is SQL `now()`; `provider_session_revoked_at` is bound from a JavaScript
+--    `Date`. Measured against a local container, twelve samples of `now() - jsDate`: **103, 99, 99,
+--    103, 99, 99, 99, 99, 99, 99, 98, 98 ms** — about 100 ms before any cross-host skew, and in the
+--    direction that makes a stamp look older than it is. A `<` / `<=` choice does not address a
+--    hundred-millisecond bias; it only decides an exact equality that would essentially never
+--    arrive.
+-- 2. **The stamp is not the time the provider call returned — it is the time the drain STARTED.**
+--    `drainOwedRevocations` captures `const now = options.now ?? new Date()` **once**, before a loop
+--    that runs up to 100 provider calls. So the value written can be minutes behind the write, and a
+--    comparison against a `last_seen_at` that SQL wrote *during* that loop would read a
+--    genuinely-completed revocation as still owed. That is a property of this code rather than of
+--    anyone's clock, and it kills the comparison on its own.
+--
+-- Clearing needs no comparison and no clock at all: whichever of the two writes commits last is
+-- right on its own terms. A drain stamping after a sign-in really did revoke that sign-in's
+-- sessions; a sign-in clearing after a drain really does owe a new one. **And the interleaving was
+-- traced rather than assumed** — a sign-in landing *inside* `signOutAllForUser` leaves the row
+-- **un-stamped** rather than wrongly stamped, because the mark-done re-checks `OWED_PREDICATE` per
+-- row, so the conservative direction is the one that happens and a later close owes the id afresh.
 CREATE OR REPLACE FUNCTION sonny.record_provider_side_user() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
