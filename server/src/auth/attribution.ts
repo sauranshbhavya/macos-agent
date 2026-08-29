@@ -19,6 +19,15 @@ import type pg from "pg";
  * `NOT i.account_closed` matches rule 1's exclusion: an identity a closed account left behind
  * attributes nobody, exactly as it signs nobody in.
  *
+ * **This reads `sonny.identity.supabase_user_id` — the CURRENT id — and must never read
+ * `sonny.identity_provider_user`** (SONNY-196, SONNY-230). That table is the history of every
+ * provider-side user an identity has named, and it exists so a **superseded** id can be revoked and
+ * reported. Joining it here would do the exact opposite of what it is for: it would let a token
+ * minted for a superseded provider-side user attribute to the account again, which is the thing
+ * these two tickets are about preventing. A superseded id resolves to no live identity, so this
+ * query finds nothing and the gate answers 401 — that is the property, and
+ * `supersession.db.test.ts` pins it in both directions.
+ *
  * **Moved here from `routes/auth.ts` by SONNY-203**, unchanged, because it is now what the
  * authenticated-route gate runs on every protected request as well as what the refresh route runs.
  * `auth/identity.ts` would have been the other home; it holds the identity-linking *rule*, which is
