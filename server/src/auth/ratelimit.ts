@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 
 /**
- * Fixed-window rate limiting for the auth endpoints.
+ * Fixed-window rate limiting for the auth endpoints, and — since SONNY-135 — for an authenticated
+ * account's own request rate.
  *
  * **The limits exist for two different reasons and are therefore two different buckets.** Per
  * address stops one mailbox being flooded; per source stops one caller enumerating addresses or
@@ -79,6 +80,33 @@ export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 }
 export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
 
 /**
+ * How many requests one signed-in account may make in a minute: **120**.
+ *
+ * **This is an abuse ceiling, not an allowance** (SONNY-135). The distinction is what keeps it out
+ * of SONNY-212's territory: an allowance is what a plan buys and is measured over a billing period,
+ * while this bounds how fast a single credential can be driven and clears by waiting a minute. The
+ * two refusals are different codes for exactly that reason — §7.2 gives `limit.rate` a `Retry-After`
+ * and denies `limit.spend` one, "because waiting seconds does not fix it".
+ *
+ * **Sized against the busiest thing Sonny legitimately does.** A screen-control session is at most
+ * twelve iterations, one gateway call each, and every one of them waits on a vision round trip
+ * measured in seconds (§12 gives that route a 90-second upstream deadline). So a real session cannot
+ * approach two calls a second even if the model answered instantly, and a user running several
+ * sessions and a few planning calls at once is still an order of magnitude below this. A leaked
+ * token driven flat out by a script meets it immediately, which is the case it exists for — and the
+ * spend cap is what bounds that token over the period, since 120 a minute is a great deal over a
+ * month.
+ *
+ * **Keyed on the account and never on the address**, unlike the four limits above: those protect an
+ * unauthenticated endpoint, where the caller has no identity yet and the source is all there is.
+ * Here the caller is verified, so the bucket is the thing being protected — and keying this one on
+ * the source would put every user behind one office NAT or one carrier CGNAT into a shared ceiling,
+ * which the `CODE_VERIFY_PER_SOURCE` docstring above already records as the cost of doing that where
+ * there was no alternative. Here there is one.
+ */
+export const ACCOUNT_REQUESTS: Limit = { max: 120, windowSeconds: 60 };
+
+/**
  * Salted hash of a bucket key. Raw addresses and source identifiers are personal data, and a table
  * of them is a liability that buys nothing — rate limiting only ever needs equality.
  *
@@ -86,7 +114,7 @@ export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 }
  * rainbow-table lookup away from the address itself.
  */
 export function bucketKey(
-  kind: "addr" | "src" | "verify" | "verifysrc",
+  kind: "addr" | "src" | "verify" | "verifysrc" | "acct",
   value: string,
   salt: string,
 ): string {
@@ -107,6 +135,13 @@ function windowStart(limit: Limit, now: Date): Date {
 
 /**
  * Consume one unit against `bucket`, atomically.
+ *
+ * **`sonny.auth_rate_limit`'s name is historical and its shape is not.** The table is
+ * `(bucket, window_start, count)` and knows nothing about authentication; SONNY-135 counts an
+ * account's request rate in it rather than adding a second counter beside it, for the reason the
+ * host decision gives about the spend cap — a second mechanism for the same question is how the
+ * question ends up answered by neither. The `kind` prefix on every bucket key is what keeps the two
+ * populations from ever meeting.
  *
  * The whole mechanism is the single `INSERT … ON CONFLICT DO UPDATE … WHERE`: the row is created or
  * incremented in one statement, and the `WHERE` on the update is what refuses the increment once the
@@ -142,7 +177,46 @@ export async function consume(
   return { allowed: true, count: result.rows[0]!.count, retryAfterSeconds };
 }
 
-/** Old windows are dead weight; nothing reads them once their window has passed. */
+/**
+ * The instant before which every window in this table is dead, given `now`.
+ *
+ * **Computed from the declared limits rather than written as a literal** (PR #152's review, F4). A
+ * literal would be a second copy of the longest window, and the one thing a sweep must never do is
+ * delete a window something is still counting against — which is what a stale literal would start
+ * doing the moment a limit's window grew.
+ *
+ * **`ALL_LIMITS` is the population, and it is a list rather than a derivation, so something has to
+ * hold it** (cycle 3's N3). The sentence that stood here — "a sixth limit is covered by existing" —
+ * was true of `staleWindowsBefore` and false of the array it reads: a limit declared in this file
+ * and left out of the array is invisible to both, and the test named for it read `ALL_LIMITS` on
+ * both sides, so a reviewer's sixth limit with a day-long window left the whole suite green.
+ * `theSweepsCutOffCoversEveryDeclaredLimit` counts `: Limit =` declarations in this file's source
+ * against `ALL_LIMITS.length`, which is the shape `test/support/routes.ts` uses for the same
+ * problem — ask the source, not the list.
+ */
+export const ALL_LIMITS: readonly Limit[] = [
+  CODE_REQUEST_PER_ADDRESS,
+  CODE_REQUEST_PER_SOURCE,
+  CODE_VERIFY_PER_ADDRESS,
+  CODE_VERIFY_PER_SOURCE,
+  ACCOUNT_REQUESTS,
+];
+
+export function staleWindowsBefore(now: Date): Date {
+  const longest = Math.max(...ALL_LIMITS.map((limit) => limit.windowSeconds));
+  return new Date(now.getTime() - longest * 1000);
+}
+
+/**
+ * Old windows are dead weight; nothing reads them once their window has passed.
+ *
+ * **This had no caller outside a test until SONNY-135, and that stopped being tolerable when the
+ * load changed** (PR #152's review, F4). Before this branch the table took a row per sign-in
+ * attempt; the per-account limiter takes one per account per minute for the life of the deployment,
+ * which is an order of magnitude more and grows with users rather than with sign-ins.
+ * `npm run entitlements -- sweep` calls it now, beside the reservation sweep, so there is one
+ * command to schedule rather than two mechanisms with none.
+ */
 export async function sweep(client: pg.Client, olderThan: Date): Promise<number> {
   const result = await client.query(
     "DELETE FROM sonny.auth_rate_limit WHERE window_start < $1",

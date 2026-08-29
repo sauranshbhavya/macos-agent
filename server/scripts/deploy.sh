@@ -163,6 +163,13 @@ PASSTHROUGH=(
   SUPABASE_ANON_KEY
   DATABASE_URL
   RATE_LIMIT_SALT
+  # SONNY-135's three. All three are required wherever auth is mounted, so a container given the
+  # Supabase names and not these exits 78 naming them -- which is the intended failure and not a
+  # regression: the alternative is a gateway that mounts authenticated routes it cannot check
+  # entitlements or spend for.
+  ENTITLEMENT_SIGNING_KEY
+  ENTITLEMENT_SIGNING_KEY_ID
+  SPEND_CAP_UNITS
   # SONNY-130's two, and SONNY-132's two. See the block above for why these four and not VISION_API_KEY.
   OPENAI_API_KEY
   TAVILY_API_KEY

@@ -93,7 +93,12 @@ PATTERNS_CI=(
   # `docker inspect` dump or anything else that serialises an environment. Verified missed before
   # the `["']?` was added and caught after. The optional closing quote does not widen anything else:
   # without a following `=` or `:` there is still no match.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  # `ENTITLEMENT_SIGNING_KEY` joined this list with SONNY-135, and it is the one on it whose leak is
+  # not a read but a WRITE: it is the Ed25519 private half every entitlement claim is signed with, so
+  # anyone holding it can mint a claim granting any capability to any account, on any deployment
+  # still using that key. It carries no vendor prefix -- it is base64 of a DER key -- so the name is
+  # the only thing that can catch it, exactly as for the three beside it.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the
