@@ -1278,10 +1278,18 @@ relaunch on the same sequence, so only the signed-in half is owed.
       skipping ahead. (Only (b) is needed: the previous row left you signed out and ungranted, so
       both steps are still outstanding.)
 - [ ] **(new 2026-08-28, SONNY-137) — it runs once.** Continuing from the row above, decline both
-      steps to reach the end. Quit and reopen **twice**: it must not run again either time. Then, if
-      you are signed in from an earlier row, **sign out and reopen** — it must still not run, because
-      signing out is not a new first run. (If you are not signed in, that half is already covered by
-      the row above and can be skipped.)
+      steps to reach the end. Quit and reopen **twice**: it must not run again either time. **That
+      half runs today.**
+      **The sign-out half waits on SONNY-280's resume steps (1)–(5), for the same reason the headline
+      row does** — being signed in at all needs a real account, so "sign out and reopen, and confirm
+      it still does not run" cannot be reached until then. Run it in the same sitting as the headline
+      row: finish that row, then quit, reopen, sign out, and reopen again. It must still not run,
+      because signing out is not a new first run — which is the one thing that tells a persisted flag
+      apart from a state derived from whether you are signed in.
+      (An earlier version of this row said the sign-out half was "already covered by the row above"
+      and could be skipped. It is not covered by any row above, and it is not optional: no row before
+      it signs out, and the row it credited — resuming mid-sequence — never signs in. PR #159's
+      cycle-2 review.)
 - [ ] **(new 2026-08-28, SONNY-137) — one model behind both doors. Reset (b) and (c)**, launch, and
       get to the screen-access step (decline sign-in if it appears). Press **Request access** under
       Screen Recording, then close the sequence and open Settings → Security & Access → Screen
