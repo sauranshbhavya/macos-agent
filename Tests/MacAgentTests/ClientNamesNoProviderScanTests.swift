@@ -103,15 +103,19 @@ struct ClientNamesNoProviderScanTests {
     /// which inherits no shell environment, so any read that gates behaviour is a feature that
     /// silently is not there for every user who is not the founder in a terminal.
     ///
-    /// The three that are allowed, each with the reason it is not provider configuration:
+    /// The three names that are allowed, each with the reason it is not provider configuration:
     ///
     /// - `MAC_AGENT_MOCK_DOCX` — the DOCX conversion mock, so a test can exercise the converter
     ///   without Microsoft Word. On SONNY-136's never-touch list by name.
     /// - `XCTestConfigurationFilePath` — set by the test runner, read twice to answer "am I in a
     ///   test process". Nothing a user's build can be affected by, because a user's build is not one.
-    /// - `overrideEnvironmentVariable` — the debug-only staging pointer, whose whole declaration
-    ///   sits inside `#if DEBUG` and is not compiled into a release binary at all. Also on the
-    ///   never-touch list, and `SignInReleaseSwitchScanTests` is what holds the `#if` in place.
+    /// - `overrideEnvironmentVariable` — a debug-only pointer whose whole declaration sits inside
+    ///   `#if DEBUG` and is not compiled into a release binary at all. **Two different types now
+    ///   spell their constant that way**: `SonnyBackendEnvironment`'s staging pointer, and
+    ///   `EntitlementKeys`' public-key pointer, which arrived on `main` from SONNY-135 while this
+    ///   branch was in review and is built to the first one's pattern for the first one's reason.
+    ///   Neither is provider configuration and neither reaches a release build;
+    ///   `SignInReleaseSwitchScanTests` is what holds the `#if` in place for the staging one.
     ///
     /// **This scan reads a subscript, not a symbol**, so an indirection cannot hide a read from it:
     /// `let p = ProcessInfo.processInfo` followed by `p.environment["X"]` is found, and that shape
@@ -126,7 +130,7 @@ struct ClientNamesNoProviderScanTests {
     /// three checks rather than one so that a later reader is not told a single regex does more than
     /// it does.
     @Test
-    func theOnlyEnvironmentSubscriptsLeftAreTheThreeThatAreNotProviderConfiguration() throws {
+    func everyEnvironmentSubscriptLeftIsOneThatIsNotProviderConfiguration() throws {
         let allowed = ["\"MAC_AGENT_MOCK_DOCX\"", "\"XCTestConfigurationFilePath\"", "overrideEnvironmentVariable"]
         let subscripts = try NSRegularExpression(pattern: "\\benvironment\\s*\\[\\s*([^\\]]+?)\\s*\\]")
 
@@ -139,13 +143,17 @@ struct ClientNamesNoProviderScanTests {
             }
         }
 
-        // The scan means nothing if it found nothing: four reads of three allowed names are known
-        // to be there — `XCTestConfigurationFilePath` twice, in `InstalledAppResolver` and
-        // `LocalStorageEncryption` — so an empty result is a broken scan rather than a clean tree
-        // (`CLAUDE.md`, "a clean zero is the one answer that looks like good news"). The count is
-        // pinned rather than only the names, so that a *second* read of an allowed name — a new
-        // `MAC_AGENT_MOCK_DOCX` gate somewhere else — is a deliberate act rather than a silent one.
-        #expect(found.count == 4, "found \(found.map { "\($0.path): \($0.key)" })")
+        // The scan means nothing if it found nothing, so an empty result is a broken scan rather
+        // than a clean tree (`CLAUDE.md`, "a clean zero is the one answer that looks like good
+        // news"). The count is pinned rather than only the names, so that a *second* read of an
+        // allowed name is a deliberate act rather than a silent one.
+        //
+        // **Five, and the fifth arrived on `main` while this branch was in review** (SONNY-135's
+        // entitlement key pointer). The count is what caught it, and it had to be: `EntitlementKeys`
+        // names its constant `overrideEnvironmentVariable`, exactly as `SonnyBackendEnvironment`
+        // does, and this scan reads text — so the *key* check passed and only the count could tell
+        // the two apart. That is the job this assertion was written for, arriving.
+        #expect(found.count == 5, "found \(found.map { "\($0.path): \($0.key)" })")
         for read in found {
             #expect(
                 allowed.contains(read.key),
@@ -221,12 +229,13 @@ struct ClientNamesNoProviderScanTests {
     /// parameter), and the reason to write it down is the one this finding is about: a claim about
     /// a choke point is a claim about the language, and it should name which step it is claiming.
     ///
-    /// The five allowed sites, each with the reason it is not a provider read: the DOCX mock flag,
-    /// the two test-process probes, the debug-only staging pointer's injectable parameter, and one
-    /// that is not an environment read at all — `SonnyBackendClient` reading
+    /// The allowed sites, each with the reason it is not a provider read: the DOCX mock flag, the
+    /// two test-process probes, the two debug-only pointers' injectable parameters — the staging
+    /// host and, since SONNY-135 merged during this branch's review, the entitlement public keys —
+    /// and one that is not an environment read at all: `SonnyBackendClient` reading
     /// `operatingSystemVersion` for its `User-Agent`.
     @Test
-    func everyProcessInfoAcquisitionIsOneOfTheFiveThatAreNotProviderConfiguration() throws {
+    func everyProcessInfoAcquisitionIsOneThatIsNotProviderConfiguration() throws {
         // `ProcessInfo.processInfo` or `ProcessInfo()`, wrapping tolerated. This is the only way to
         // hold one, so it is the only door a read can come through.
         let acquisition = try NSRegularExpression(
@@ -264,6 +273,9 @@ struct ClientNamesNoProviderScanTests {
         }
         let allowed = [
             "MacAgentCore/DocumentConverter.swift",
+            // SONNY-135's debug-only entitlement public-key pointer, which landed on `main` during
+            // this branch's review and which this scan caught at the rebase — the guard working.
+            "MacAgentCore/EntitlementKeys.swift",
             "MacAgentCore/InstalledAppResolver.swift",
             "MacAgentCore/LocalStorageEncryption.swift",
             "MacAgentCore/SonnyBackendClient.swift",
