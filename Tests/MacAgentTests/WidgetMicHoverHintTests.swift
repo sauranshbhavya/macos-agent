@@ -129,8 +129,13 @@ struct WidgetMicHoverHintTests {
     @Test
     func theConfigurationHintArmsNoCountdownAndLeavesWithThePointer() {
         let model = MicHoverHintModel()
+        // A literal of this file's own since SONNY-136, which deleted the constant this took:
+        // `AgentViewModel.missingAPIKeyVoiceMessage` was the default answer of a property whose live
+        // answer is `nil`, so it went with the environment variable it was about. Nothing here was
+        // ever about that sentence — what is asserted is that a hint carrying *a* problem arms no
+        // countdown — so the fixture states one rather than borrowing a shipped string.
         let problem = MicHoverHintPresentation(
-            message: AgentViewModel.missingAPIKeyVoiceMessage,
+            message: "Sonny has no transcription provider configured.",
             autoDismissDelay: nil
         )
 

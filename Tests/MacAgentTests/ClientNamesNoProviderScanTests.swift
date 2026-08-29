@@ -65,24 +65,238 @@ struct ClientNamesNoProviderScanTests {
         }
     }
 
-    /// No shipping source holds a provider credential's variable name.
+    /// No shipping source holds a provider credential's or a model-selection variable's name.
     ///
-    /// **`OPENAI_API_KEY` is deliberately not on this list and its absence is not an oversight.**
-    /// SONNY-130's never-touch list required that string to stay in four files as the wording of an
-    /// error the user can still be shown, and `feature/row-12-degradation` (SONNY-136) owns removing
-    /// it. What this list holds is the ones no ticket has a reason to keep: the credential
-    /// `CerebrasPlanner` read, and the two model-selection variables it read beside it.
+    /// **`OPENAI_API_KEY` and the three beside it were deliberately absent from this list until
+    /// SONNY-136, and are on it now.** SONNY-130's never-touch list required those strings to stay
+    /// in four files as the wording of errors the user could still be shown, and
+    /// `feature/row-12-degradation` owned removing them; that ticket has run, so what was an
+    /// exception with a named owner is now the rule with no exceptions. This is the list of every
+    /// provider credential and model-selection variable the client has ever read.
+    ///
+    /// **Comments are stripped before the search**, per `MacAgentSource.read`, so the doc comments
+    /// that record *why* each one went — and quote the sentences they used to produce — do not fail
+    /// this. That is the right direction: those paragraphs are the record of a removal, and a scan
+    /// that forbade writing one down would push the reasoning out of the tree.
     @Test
-    func noShippingSourceNamesTheCerebrasCredentialOrItsModelVariables() throws {
-        let forbidden = ["CEREBRAS_API_KEY", "CEREBRAS_MODEL", "SONNY_CEREBRAS_STRUCTURED"]
+    func noShippingSourceNamesAProviderCredentialOrAModelSelectionVariable() throws {
+        let forbidden = [
+            "CEREBRAS_API_KEY", "CEREBRAS_MODEL", "SONNY_CEREBRAS_STRUCTURED",
+            "OPENAI_API_KEY", "TAVILY_API_KEY", "OPENCODE_API_KEY",
+            "OPENAI_MODEL", "OPENAI_TRANSCRIBE_MODEL", "SONNY_VISION_MODEL",
+        ]
         for source in try shippingSources() {
             for name in forbidden {
                 #expect(
                     !source.text.contains(name),
-                    "\(source.path) names \(name) — that credential is the gateway's since SONNY-132"
+                    "\(source.path) names \(name) — every provider credential and model choice is server-side configuration"
                 )
             }
         }
+    }
+
+    /// **SONNY-106 section E, as a scan: no environment variable is required for anything.**
+    ///
+    /// An allow-list rather than a deny-list, and that is the whole value of it. A deny-list stops
+    /// the variables somebody thought of; this fails on a *fourth* environment read of any name,
+    /// which is the shape the requirement actually has — the packaged app is launched from Finder,
+    /// which inherits no shell environment, so any read that gates behaviour is a feature that
+    /// silently is not there for every user who is not the founder in a terminal.
+    ///
+    /// The three names that are allowed, each with the reason it is not provider configuration:
+    ///
+    /// - `MAC_AGENT_MOCK_DOCX` — the DOCX conversion mock, so a test can exercise the converter
+    ///   without Microsoft Word. On SONNY-136's never-touch list by name.
+    /// - `XCTestConfigurationFilePath` — set by the test runner, read twice to answer "am I in a
+    ///   test process". Nothing a user's build can be affected by, because a user's build is not one.
+    /// - `overrideEnvironmentVariable` — a debug-only pointer whose whole declaration sits inside
+    ///   `#if DEBUG` and is not compiled into a release binary at all. **Two different types now
+    ///   spell their constant that way**: `SonnyBackendEnvironment`'s staging pointer, and
+    ///   `EntitlementKeys`' public-key pointer, which arrived on `main` from SONNY-135 while this
+    ///   branch was in review and is built to the first one's pattern for the first one's reason.
+    ///   Neither is provider configuration and neither reaches a release build;
+    ///   `SignInReleaseSwitchScanTests` is what holds the `#if` in place for the staging one.
+    ///
+    /// **This scan reads a subscript, not a symbol**, so an indirection cannot hide a read from it:
+    /// `let p = ProcessInfo.processInfo` followed by `p.environment["X"]` is found, and that shape
+    /// is not hypothetical — two of the three allowed reads are written exactly that way, and a
+    /// grep for `ProcessInfo.processInfo.environment` finds neither.
+    ///
+    /// **A subscript is not the only way to read the environment, and this test alone does not hold
+    /// the property its name claims** (PR #153's F5). It was written asserting that it fails on "a
+    /// fourth environment read of any name"; a planted `getenv("X")` and a planted
+    /// `ProcessInfo.processInfo.environment.first { … }` each passed it. Those two shapes are held
+    /// by the two tests below, and the three together are what the claim rests on — stated here as
+    /// three checks rather than one so that a later reader is not told a single regex does more than
+    /// it does.
+    @Test
+    func everyEnvironmentSubscriptLeftIsOneThatIsNotProviderConfiguration() throws {
+        let allowed = ["\"MAC_AGENT_MOCK_DOCX\"", "\"XCTestConfigurationFilePath\"", "overrideEnvironmentVariable"]
+        let subscripts = try NSRegularExpression(pattern: "\\benvironment\\s*\\[\\s*([^\\]]+?)\\s*\\]")
+
+        var found: [(path: String, key: String)] = []
+        for source in try shippingSources() {
+            let range = NSRange(source.text.startIndex..., in: source.text)
+            for match in subscripts.matches(in: source.text, range: range) {
+                guard let keyRange = Range(match.range(at: 1), in: source.text) else { continue }
+                found.append((source.path, String(source.text[keyRange])))
+            }
+        }
+
+        // The scan means nothing if it found nothing, so an empty result is a broken scan rather
+        // than a clean tree (`CLAUDE.md`, "a clean zero is the one answer that looks like good
+        // news"). The count is pinned rather than only the names, so that a *second* read of an
+        // allowed name is a deliberate act rather than a silent one.
+        //
+        // **Five, and the fifth arrived on `main` while this branch was in review** (SONNY-135's
+        // entitlement key pointer). The count is what caught it, and it had to be: `EntitlementKeys`
+        // names its constant `overrideEnvironmentVariable`, exactly as `SonnyBackendEnvironment`
+        // does, and this scan reads text — so the *key* check passed and only the count could tell
+        // the two apart. That is the job this assertion was written for, arriving.
+        #expect(found.count == 5, "found \(found.map { "\($0.path): \($0.key)" })")
+        for read in found {
+            #expect(
+                allowed.contains(read.key),
+                "\(read.path) reads the environment for \(read.key) — SONNY-106 section E requires that a user's build need no environment variable"
+            )
+        }
+        // Each allowed key is actually present, so the list cannot rot into three names that no
+        // longer match anything while the scan goes on reporting a clean tree.
+        for key in allowed {
+            #expect(found.contains { $0.key == key }, "\(key) is allowed but no source reads it")
+        }
+    }
+
+    /// **The C-level door, which the subscript scan cannot see at all** (PR #153's F5).
+    ///
+    /// `getenv` reaches the same environment without going near `ProcessInfo`, and a planted
+    /// `getenv("SONNY_PLANTED_B")` passed the subscript scan with six green tests. There is no
+    /// allow-list here because there is nothing to allow: no shipping source has ever called any of
+    /// these, and a build that needs one is a build that has acquired an environment dependency,
+    /// which is the thing SONNY-106 section E forbids. `setenv`/`unsetenv` are refused in the same
+    /// breath — a shipping target that *writes* the environment is a stranger defect than one that
+    /// reads it.
+    @Test
+    func noShippingSourceReachesTheEnvironmentThroughTheCLibrary() throws {
+        let forbidden = ["getenv", "setenv", "unsetenv", "environ"]
+        let sources = try shippingSources()
+        #expect(sources.count > 50)
+        for source in sources {
+            for symbol in forbidden {
+                // Word-bounded, so `environment` does not read as `environ` and
+                // `SonnyBackendEnvironment` does not read as either.
+                let pattern = try NSRegularExpression(pattern: "\\b\(symbol)\\b")
+                let range = NSRange(source.text.startIndex..., in: source.text)
+                #expect(
+                    pattern.firstMatch(in: source.text, range: range) == nil,
+                    "\(source.path) calls \(symbol) — SONNY-106 section E is about reads of any shape, not about subscripts"
+                )
+            }
+        }
+    }
+
+    /// **The choke point, one hop earlier than the obvious place** (PR #153's F5, corrected by its
+    /// cycle-2 C2-F5).
+    ///
+    /// **The first version of this anchored on obtaining the *map* and was one hop too late.** It
+    /// matched `…processInfo.environment` not followed by `[`, on the argument that every
+    /// indirection has to obtain the map somewhere. The reviewer planted the counterexample and it
+    /// passed all eight tests in this file:
+    ///
+    /// ```swift
+    /// let info = ProcessInfo.processInfo
+    /// let all = info.environment
+    /// return all.first { $0.key == "SONNY_PLANTED_D" }?.value
+    /// ```
+    ///
+    /// The indirection can go through the **object** instead of the map — and that is not an exotic
+    /// shape, it is the idiom two of the three permitted reads already use
+    /// (`InstalledAppResolver` and `LocalStorageEncryption` both bind `let processInfo =
+    /// ProcessInfo.processInfo` and subscript it six lines later). They were caught only because
+    /// they happen to finish with a subscript.
+    ///
+    /// **What this anchors on instead is acquiring a `ProcessInfo` instance at all**, which is a
+    /// claim about the language rather than about a regex: in Swift there are exactly two routes to
+    /// the process environment, `getenv` and an instance of this type. The test above refuses the
+    /// first outright, so every read that exists has to pass through here. An indirection hidden
+    /// behind any number of locals, stored properties, computed vars or helper functions still has
+    /// one line where the instance is obtained, and that line is in this list.
+    ///
+    /// **The residual, stated rather than implied.** This is complete for a shipping target that
+    /// acquires its own instance, which is every read in the tree. It would not see an instance
+    /// handed in from outside the two targets — a parameter of type `ProcessInfo` passed by a
+    /// dependency. Nothing does that today (`git grep -n ': ProcessInfo' -- Sources` finds no such
+    /// parameter), and the reason to write it down is the one this finding is about: a claim about
+    /// a choke point is a claim about the language, and it should name which step it is claiming.
+    ///
+    /// The allowed sites, each with the reason it is not a provider read: the DOCX mock flag, the
+    /// two test-process probes, the two debug-only pointers' injectable parameters — the staging
+    /// host and, since SONNY-135 merged during this branch's review, the entitlement public keys —
+    /// and one that is not an environment read at all: `SonnyBackendClient` reading
+    /// `operatingSystemVersion` for its `User-Agent`.
+    @Test
+    func everyProcessInfoAcquisitionIsOneThatIsNotProviderConfiguration() throws {
+        // `ProcessInfo.processInfo` or `ProcessInfo()`, wrapping tolerated. This is the only way to
+        // hold one, so it is the only door a read can come through.
+        let acquisition = try NSRegularExpression(
+            pattern: "ProcessInfo\\s*(?:\\.\\s*processInfo|\\(\\s*\\))"
+        )
+
+        // **The pattern is run against known-bad input before it is pointed at the tree.** A scan
+        // whose regex quietly stops matching reports a clean tree forever, and the tree is the one
+        // place that cannot tell you so — this file's own history is the argument: cycle 1's version
+        // of this check anchored one hop too late and answered "clean" to a real read for a whole
+        // review cycle. Same discipline as `UntrustedContentBoundaryScalarMatchingTests`, after a
+        // scan there flagged 0 of 13 historical instances while its doc promised otherwise.
+        //
+        // The first of these is the exact shape PR #153's cycle 2 planted and that the previous
+        // anchor passed: the indirection goes through the object, so neither `environment[` nor an
+        // adjacent `processInfo.environment` appears anywhere.
+        for mustMatch in [
+            "let info = ProcessInfo.processInfo\nlet all = info.environment",
+            "ProcessInfo.processInfo.environment[\"X\"]",
+            "ProcessInfo().environment",
+            "ProcessInfo\n    .processInfo",
+        ] {
+            #expect(
+                acquisition.firstMatch(in: mustMatch, range: NSRange(mustMatch.startIndex..., in: mustMatch)) != nil,
+                "the acquisition pattern no longer matches: \(mustMatch)"
+            )
+        }
+        // And it is not matching everything: a type *named* for the process, and a mention of the
+        // word in prose, are not acquisitions.
+        for mustNotMatch in ["SonnyBackendEnvironment.resolve()", "the ProcessInfo type"] as [String] {
+            #expect(
+                acquisition.firstMatch(in: mustNotMatch, range: NSRange(mustNotMatch.startIndex..., in: mustNotMatch)) == nil,
+                "the acquisition pattern matches something that is not one: \(mustNotMatch)"
+            )
+        }
+        let allowed = [
+            "MacAgentCore/DocumentConverter.swift",
+            // SONNY-135's debug-only entitlement public-key pointer, which landed on `main` during
+            // this branch's review and which this scan caught at the rebase — the guard working.
+            "MacAgentCore/EntitlementKeys.swift",
+            "MacAgentCore/InstalledAppResolver.swift",
+            "MacAgentCore/LocalStorageEncryption.swift",
+            "MacAgentCore/SonnyBackendClient.swift",
+            "MacAgentCore/SonnyBackendEnvironment.swift",
+        ]
+        var found: [String] = []
+        let sources = try shippingSources()
+        #expect(sources.count > 50)
+        for source in sources {
+            let range = NSRange(source.text.startIndex..., in: source.text)
+            for _ in acquisition.matches(in: source.text, range: range) {
+                found.append(source.path)
+            }
+        }
+        // Exact, and sorted so the failure names what moved rather than only that something did.
+        // Both directions: a sixth acquisition fails, and an allowed site that stops acquiring one
+        // fails too, so the list cannot rot into five paths that match nothing.
+        #expect(
+            found.sorted() == allowed,
+            "the set of files that acquire a ProcessInfo has changed: \(found.sorted())"
+        )
     }
 
     /// No shipping source reaches a model vendor's endpoint.

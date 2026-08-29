@@ -12,14 +12,21 @@ public extension Planning {
 }
 
 public enum PlannerError: Error, LocalizedError, Equatable, CarriesBackendError {
-    /// **Unreachable since SONNY-130 and deliberately kept.** Nothing constructs a planner from an
-    /// environment variable any more, so nothing can throw this — but removing the case, and the
-    /// sentence naming the variable, is `feature/row-12-degradation`'s, which cannot run until both
-    /// gateways land. `InstantOnlyFallbackPlanner` still throws it as its "no planner ran" signal.
-    case missingAPIKey
-    /// Unreachable for the same reason: no client here reads an HTTP status any more. The gateway's
-    /// typed failures arrive as `backend` below.
-    case badResponse(Int, String)
+    /// A run reached a planner that should never have been asked for a plan (SONNY-136).
+    ///
+    /// **This is `missingAPIKey` renamed to the condition it actually reports, not a new case.** The
+    /// old name and its sentence — "OPENAI_API_KEY is not set. Add it to the environment before
+    /// launching the app." — described a state that stopped existing when SONNY-130 moved planning
+    /// behind the gateway, and the case did not go with it because `InstantOnlyFallbackPlanner`
+    /// still throws it: a run built from a pre-built plan or from the instant resolver is given a
+    /// planner that refuses, so that "this plan is already made" is a property of the runner rather
+    /// than a convention. So the one *reachable* thing this case reported was being reported in the
+    /// words of an unreachable one — a live path wearing a dead message, which is the shape this
+    /// ticket exists to remove.
+    ///
+    /// Reaching it means a plan-less run got as far as planning, which no retry and no user action
+    /// fixes, so the sentence says what happened and stops rather than inviting one.
+    case noPlannerRan
     /// Still live. `OpenAIResponseParser` throws it and `VisionModelClient` uses that parser.
     /// **This named `CerebrasPlanner` as a second user until SONNY-132 deleted that class** — the
     /// open-weights planner is a server-side provider now, so its parsing happens in
@@ -45,12 +52,14 @@ public enum PlannerError: Error, LocalizedError, Equatable, CarriesBackendError 
 
     public var errorDescription: String? {
         switch self {
-        case .missingAPIKey:
-            return "OPENAI_API_KEY is not set. Add it to the environment before launching the app."
-        case .badResponse(let status, let body):
-            return "OpenAI planner request failed with HTTP \(status): \(body)"
+        case .noPlannerRan:
+            return "Sonny couldn't plan this one."
         case .missingOutputText:
-            return "OpenAI response did not include text output."
+            // **Provider-neutral since SONNY-136.** It read "OpenAI response did not include text
+            // output." — a vendor's name in a sentence a user can be shown, which the founder's
+            // decision of 2026-08-19 forbids and which stopped being true besides: which provider
+            // answers a plan is `MODEL_ROUTE_PLAN` on the gateway and may be any of three.
+            return "Sonny couldn't read the plan that came back."
         case .backend(let error):
             return SonnyBackendCopy.sentence(for: error)
         }

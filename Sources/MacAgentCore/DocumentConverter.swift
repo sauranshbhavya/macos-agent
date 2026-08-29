@@ -19,7 +19,20 @@ public enum DocumentConversionError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .wordUnavailable:
-            return "Microsoft Word is unavailable. Set MAC_AGENT_MOCK_DOCX=1 to create clearly marked mock PDF placeholders."
+            // **The one user-facing sentence in the tree that still named an environment variable,
+            // reworded on the founder's ratification of 2026-08-28** (SONNY-136). It read
+            // "Microsoft Word is unavailable. Set MAC_AGENT_MOCK_DOCX=1 to create clearly marked
+            // mock PDF placeholders." — an instruction that is right for a developer running the
+            // suite and wrong for everyone else: this is thrown from a live path any user without
+            // Word reaches, and exporting that flag does not give them a converted document, it
+            // gives them a placeholder saying the conversion did not happen.
+            //
+            // **The flag itself is untouched and is not this ticket's**, which is why the change is
+            // one string literal in this file and nothing else: `MAC_AGENT_MOCK_DOCX` is named on
+            // SONNY-136's never-touch list, the read at `AutoDocumentConverter`'s `enabled:`
+            // parameter stays, and the mock path behaves exactly as before. The ratification's own
+            // discharge condition was "this file, one string literal".
+            return "Microsoft Word isn't available, so Sonny can't convert this document."
         case .conversionFailed(let detail):
             return "DOCX conversion failed: \(detail)"
         case .mockWriteFailed(let detail):

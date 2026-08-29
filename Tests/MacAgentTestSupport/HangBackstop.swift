@@ -186,6 +186,70 @@ public enum HangBackstop {
         """
     }
 
+    /// The error ``waitOrAbandon(for:deadline:ceiling:observationFloor:sourceLocation:until:)`` throws
+    /// when it gives up, so the test **ends** instead of carrying on (SONNY-136, PR #153's F2).
+    ///
+    /// **Why an error and not a returned verdict.** ``wait(for:...)`` records its issue and returns,
+    /// which is correct for a caller that wants to keep going — and is the cascade this type's own
+    /// doc describes when the caller does not: the test runs on with a precondition that never
+    /// arrived and records ordinary `Expectation failed` assertions, one per line it would have
+    /// checked. Those are the issues `scripts/mutate-untrusted-failures` cannot excuse, because they
+    /// are indistinguishable from real ones, so a starved run comes back looking exactly like a
+    /// mutation kill. Throwing is what makes the set of issues such a test can record *finite and
+    /// declared*: the backstop's own, and this one.
+    ///
+    /// `CustomStringConvertible` rather than a bare `Error`, because swift-testing renders a thrown
+    /// error as `Caught error: <description>` and a struct printed by its synthesized description
+    /// would carry no sentence for the classifier to match.
+    public struct Abandoned: Error, CustomStringConvertible {
+        public let description: String
+
+        public init(description: String) {
+            self.description = description
+        }
+    }
+
+    /// The wording ``Abandoned`` carries, and the signature `scripts/mutate-untrusted-failures`
+    /// declares so a battery reads it as the non-evidence it is.
+    ///
+    /// It says what happened to the *test*, not what happened to the code: the wait above has
+    /// already recorded whether it was stuck or starved, and this is only the reason nothing after
+    /// it ran.
+    public static func abandonedMessage(_ description: String) -> String {
+        "the wait for \(description) was abandoned, so this test stopped here rather than asserting against a precondition that never arrived."
+    }
+
+    /// ``wait(for:...)``, except that giving up **ends the test** rather than returning to it.
+    ///
+    /// Use this wherever the thing being waited for is a *precondition* — a run that has to finish
+    /// before its result can be read, a published value that has to settle before a row can be
+    /// checked. Use ``wait(for:...)`` where the wait is the assertion itself and the caller has
+    /// nothing further to do.
+    ///
+    /// **The condition is evaluated once more after the wait returns**, rather than trusting the
+    /// wait's own exit: `wait` returns an observation count for both the success and the give-up
+    /// paths, so the count cannot say which happened, and re-reading the condition is cheaper than
+    /// a second return channel.
+    @MainActor
+    public static func waitOrAbandon(
+        for description: String,
+        deadline: TimeInterval = deadlockDeadline,
+        ceiling: TimeInterval = starvationCeiling,
+        observationFloor: Int = observationFloor,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        until condition: @MainActor () -> Bool
+    ) async throws {
+        _ = try await wait(
+            for: description,
+            deadline: deadline,
+            ceiling: ceiling,
+            observationFloor: observationFloor,
+            sourceLocation: sourceLocation,
+            until: condition
+        )
+        guard condition() else { throw Abandoned(description: abandonedMessage(description)) }
+    }
+
     /// Polls `condition` on the caller's actor until it is true, or until ``verdict(elapsed:observations:deadline:ceiling:observationFloor:)``
     /// says to stop, and records the matching issue when it does.
     ///

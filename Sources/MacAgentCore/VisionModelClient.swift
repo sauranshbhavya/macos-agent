@@ -54,22 +54,22 @@ public protocol VisionModelDeciding: Sendable {
     ) async throws -> String
 }
 
+/// Everything the vision route can fail with.
+///
+/// **Three cases are gone** (SONNY-136), all three unreachable and all three kept by SONNY-131 only
+/// until the ticket owning the environment-variable surface could remove the sentence that named a
+/// variable. `missingAPIKey(String)` interpolated a variable's name into *"Sonny needs … set to use
+/// screen control."*, which was the last user-facing string in the tree naming one;
+/// `badResponse(status:body:)` read an HTTP status no client here reads any more; and
+/// `unreadableReply(String)` described a body without `output_text`, which §4.5 makes a required
+/// field, so such a body fails to decode and arrives as `SonnyBackendError.undecodableResponse`
+/// inside ``backend(_:)``.
+///
+/// **`payloadCarriedNoImage` and `payloadTooLarge` stay because both are live** — SONNY-114's
+/// ceiling refuses before anything is sent, and neither has ever been about a credential.
 public enum VisionModelClientError: Error, Equatable, LocalizedError, CarriesBackendError {
-    /// **Unreachable since SONNY-131 and deliberately kept**, on the precedent SONNY-130 set for the
-    /// four text routes' equivalents. Nothing constructs a vision client from an environment variable
-    /// any more, so nothing can throw this — removing the case, and the sentence naming a variable, is
-    /// `feature/row-12-degradation`'s, which cannot run until every gateway route has landed.
-    case missingAPIKey(String)
     case payloadCarriedNoImage
     case payloadTooLarge(bytes: Int, limit: Int)
-    /// Unreachable for the same reason: no client here reads an HTTP status any more. The gateway's
-    /// typed failures arrive as ``backend(_:)`` below, and §7.1 forbids displaying the server's own
-    /// body in any case.
-    case badResponse(status: Int, body: String)
-    /// Unreachable for the same reason: `output_text` is a required field of §4.5's response, so a
-    /// body without it fails to decode rather than decoding into nothing — which arrives as
-    /// `SonnyBackendError.undecodableResponse` inside ``backend(_:)``.
-    case unreadableReply(String)
     /// A call to Sonny's backend failed. The user sees ``SonnyBackendCopy``'s sentence for it, never
     /// the server's own `message` (§7.1).
     case backend(SonnyBackendError)
@@ -84,16 +84,10 @@ public enum VisionModelClientError: Error, Equatable, LocalizedError, CarriesBac
 
     public var errorDescription: String? {
         switch self {
-        case .missingAPIKey(let name):
-            return "Sonny needs \(name) set to use screen control."
         case .payloadCarriedNoImage:
             return "The redacted capture carried no image to send."
         case .payloadTooLarge(let bytes, let limit):
             return "The window screenshot is \(bytes) bytes, over the \(limit)-byte limit for one request."
-        case .badResponse(let status, _):
-            return "The vision model returned HTTP \(status)."
-        case .unreadableReply:
-            return "Sonny could not read the vision model's reply."
         case .backend(let error):
             return SonnyBackendCopy.sentence(for: error)
         }

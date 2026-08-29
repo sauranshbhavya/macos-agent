@@ -347,7 +347,21 @@ struct VisionSessionRunTests {
         recognizer: (any ImageTextRecognizing)? = nil,
         /// A send that fails at a chosen iteration — SONNY-131's mid-loop decision (`nil` for every
         /// test that is not about it).
-        modelFailure: (iteration: Int, error: any Error)? = nil
+        modelFailure: (iteration: Int, error: any Error)? = nil,
+        /// A **real** `SonnyVisionModelClient` in place of the scripted double, for the one test
+        /// whose subject is what happens on the wire between iterations (SONNY-136).
+        ///
+        /// `nil` everywhere else, and that is the right default: every other test here is about the
+        /// loop's own decisions, and routing those through a URL stub would make each of them a test
+        /// of the client as well. When this is passed, `Fixture.model` is a scripted model that
+        /// never runs and its recordings say nothing — the test that passes this reads the wire
+        /// instead.
+        visionModelClient: (any VisionModelDeciding)? = nil,
+        /// The client the view model itself is built with. Defaults to the hermetic one, which is
+        /// what every test that is not about the network wants; the token-expiry test hands over the
+        /// same signed-in client its vision client sends through, because §3.3's single-flight
+        /// refresh guard is state on one actor and two clients would be two of them.
+        backendClient: SonnyBackendClient? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -405,7 +419,7 @@ struct VisionSessionRunTests {
             // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
             // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
             // every request fails before a URL is built, and an in-memory Keychain of its own.
-            backendClient: makeHermeticBackendClient(),
+            backendClient: backendClient ?? makeHermeticBackendClient(),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
             makePlanner: { _, _ in delegationPlanner ?? UnreachableVisionPlanner() },
@@ -427,7 +441,7 @@ struct VisionSessionRunTests {
                 egressPolicy: egressPolicy
             ),
             synthesizer: synthesizer,
-            modelClient: model,
+            modelClient: visionModelClient ?? model,
             limits: limits,
             attentionMonitor: attention ?? AlwaysAttendedMonitor(),
             permissionChecker: permissions ?? DeterministicScreenPermissions(),
@@ -2311,6 +2325,167 @@ struct VisionSessionRunTests {
 
     /// The iteration cap, through the whole stack: a model that never says done is stopped, with an
     /// honest sentence and no product surface offering to continue.
+    // MARK: - SONNY-136: a token that expires between iterations
+
+    /// **The one test in this file that talks to a real client over a URL stub**, because its
+    /// subject is what happens on the wire between two iterations rather than what the loop decides.
+    ///
+    /// SONNY-136's fifth requirement: a screen-control session makes up to twelve sequential
+    /// requests with continuity held entirely client-side in the runner's `history`, and an access
+    /// token that expires partway through must refresh and carry on rather than drop the session.
+    /// `VisionSessionRunner`'s own declaration states the outcome — "`auth.token_expired` between
+    /// iteration 4 and 5 never reaches this type" — and §7.2 case 1a's words for what the user gets
+    /// are "nothing — this is invisible when it works".
+    ///
+    /// **That paragraph named this test before it existed.** It cited
+    /// `aTokenExpiryMidSessionIsInvisibleAndTheSessionCarriesOn` as what held the claim and no such
+    /// test was in the tree at `4824e50` (`git grep -c aTokenExpiryMidSession -- Tests` → exit 1,
+    /// no output). The behaviour was real — the refresh lives in `SonnyBackendClient.send` and its
+    /// own suite covers it on a single request — but nothing had ever run it inside a session, which
+    /// is the case the requirement is about: a refresh that worked on request one and lost the
+    /// history on request five would pass every existing test.
+    ///
+    /// **Four things are asserted, and the last two are what make it more than "it did not crash".**
+    /// The session reaches `done` at the iteration it was scripted to; exactly one refresh POST is
+    /// made, not one per subsequent request; every send after the refresh carries the *new* bearer;
+    /// and the user is told nothing at all — no error, and the final summary is the session's own.
+    @Test
+    func aTokenExpiryMidSessionIsInvisibleAndTheSessionCarriesOn() async throws {
+        let backend = SignedInBackendFixture(accessToken: "access-before")
+        let recorded = RecordedBackendRequests()
+        // The token expires on the fourth screen request, which is mid-session by construction: the
+        // script runs six iterations, so there are sends on both sides of it.
+        let expireOnScreenRequest = 4
+        let screenRequests = Counter()
+        backend.register { request in
+            recorded.append(request)
+            let path = request.url?.path ?? ""
+            if path == "/v1/auth/refresh" {
+                return .reply(
+                    statusCode: 200,
+                    headers: ["Content-Type": "application/json"],
+                    body: try! JSONSerialization.data(withJSONObject: [
+                        "access_token": "access-after",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "expires_at": "2026-08-28T10:41:07Z",
+                        "refresh_token": "refresh-after",
+                        "user": ["id": "test-user"],
+                    ])
+                )
+            }
+            let attempt = screenRequests.next()
+            if attempt == expireOnScreenRequest {
+                return .reply(
+                    statusCode: 401,
+                    headers: ["Content-Type": "application/json"],
+                    body: try! JSONSerialization.data(withJSONObject: [
+                        "error": [
+                            "code": "auth.token_expired",
+                            "message": "Server-authored sentence the client must never display.",
+                            "retryable": false,
+                            "request_id": "req_expired",
+                        ],
+                    ])
+                )
+            }
+            // Five clicks then done. The replay of the expired request is the fifth screen call and
+            // must get the same answer the fourth would have, so the script is keyed on how many
+            // *answers* have been given rather than on the raw attempt number.
+            let answered = attempt > expireOnScreenRequest ? attempt - 1 : attempt
+            let outputText = answered >= 6
+                ? #"{"action":"done","rationale":"Finished after the refresh."}"#
+                : #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+            return .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: [
+                    "request_id": "req_screen_\(attempt)",
+                    "output_text": outputText,
+                ])
+            )
+        }
+
+        let fixture = try makeFixture(
+            // Unused: the environment takes the real client below. The array cannot be empty because
+            // `ScriptedVisionModel` would answer "stuck" from it if it were ever reached, and a
+            // session that ended "stuck" is exactly the failure this test must not read as a pass.
+            replies: [#"{"action":"done","rationale":"the scripted model must not run"}"#],
+            limits: VisionSessionLimits(maximumIterations: 12, settleNanoseconds: 0),
+            visionModelClient: SonnyVisionModelClient(
+                client: backend.client,
+                taskContext: BackendTaskContext(taskID: "task-expiry", retention: .standard)
+            ),
+            backendClient: backend.client
+        )
+        defer {
+            backend.unregister()
+            fixture.tearDown()
+        }
+
+        fixture.viewModel.startVisionSession(goal: "click a few times", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The session ran past the expiry and finished on its own terms.
+        #expect(fixture.viewModel.finalSummary == "Finished after the refresh.")
+        #expect(fixture.synthesizer.clickCount == 5)
+        #expect(fixture.model.prompts.isEmpty, "the scripted double was reached; the real client was not used")
+
+        let paths = recorded.all.map(\.path)
+        #expect(paths.filter { $0 == "/v1/auth/refresh" }.count == 1, "\(paths)")
+        // Seven screen calls for six answers: the expired one and its replay.
+        #expect(paths.filter { $0 == "/v1/screen/analyze" }.count == 7, "\(paths)")
+
+        // **The replay and everything after it carry the new token.** Without this the test would
+        // pass on a client that refreshed and then went on presenting the dead credential, which the
+        // stub above would happily keep answering.
+        let screenCalls = recorded.all.filter { $0.path == "/v1/screen/analyze" }
+        #expect(screenCalls.prefix(4).allSatisfy { $0.authorization == "Bearer access-before" })
+        #expect(screenCalls.dropFirst(4).count == 3)
+        #expect(screenCalls.dropFirst(4).allSatisfy { $0.authorization == "Bearer access-after" })
+
+        // And §7.2 case 1a's promise: the user is told nothing, because nothing happened to them.
+        #expect(fixture.viewModel.errorMessage == nil)
+
+        // **The continuity itself, which nothing above reads** (PR #153's F6). Every assertion so
+        // far is about paths, counts and `Authorization` headers, and a session that refreshed
+        // perfectly and then forgot everything it had done would satisfy all of them — the stub
+        // scripts its replies off a request counter rather than off content, so it would finish
+        // byte-identically. Continuity is held entirely client-side in `VisionSessionRunner`'s own
+        // `history`, which reaches the wire inside the observed block, so a *later* body carrying an
+        // *earlier* iteration's line is the only place it is observable at all.
+        //
+        // Mutating the runner to drop its history from iteration 5 leaves every other assertion here
+        // green, which is the same vacuity the phantom citation had: a test that exists and checks
+        // the wrong thing.
+        let lastScreenBody = try #require(screenCalls.last).text
+        #expect(
+            lastScreenBody.contains("iteration 1: clicked"),
+            "the send after the refresh carried no history from before it"
+        )
+        #expect(
+            lastScreenBody.contains("iteration 4: clicked"),
+            "the send after the refresh lost the iterations either side of the expiry"
+        )
+        // The first send cannot carry a history, which is what makes the two above a real
+        // difference rather than a string that is always present.
+        #expect(!(try #require(screenCalls.first).text.contains("iteration 1: clicked")))
+    }
+
+    /// A counter the stub handler can advance. `BackendStubURLProtocol` runs its handler on a
+    /// URLSession worker, so this is a lock rather than an actor or a captured `var`.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func next() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+            return value
+        }
+    }
+
     // MARK: - SONNY-131: mid-loop failure, decided rather than discovered
 
     /// **The decision, exercised end to end: a send that fails at iteration 3 of a longer session
