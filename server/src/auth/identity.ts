@@ -140,6 +140,27 @@ export async function resolve(
     );
     if (existing.rows[0]) {
       // Refresh the hint and the Supabase user, both of which legitimately change over time.
+      //
+      // **`COALESCE($5, supabase_user_id)` still overwrites, and that is now safe rather than
+      // lossy** (SONNY-230, SONNY-196; migration 0014). It used to be the whole defect: the previous
+      // provider-side user id was the only record that it existed, so overwriting it made the
+      // superseded user unrevocable *and* unrecorded — `npm run revocations` reported nothing and
+      // was wrong about the world. `sonny.identity_provider_user` now keeps every id this identity
+      // has ever named, and an `AFTER UPDATE OF supabase_user_id` trigger stamps `superseded_at` on
+      // the one being replaced, which marks it owed a revocation immediately — on a live account,
+      // without waiting for a close.
+      //
+      // **Nothing here writes that table, deliberately.** The event is the column changing, so the
+      // record is made by whatever changes it rather than by this function remembering to. A
+      // supersession recorded here would go unrecorded the first time a backfill, a support script
+      // or a future link path wrote that column.
+      //
+      // **And a new id arriving IS the reconciliation** (SONNY-196). Supabase removes unconfirmed
+      // identities on its own schedule and tells us nothing; what we see afterwards is this
+      // `(provider, subject)` presenting a different `supabase_user_id`. That is the provider
+      // reporting the removal, in the exchange we already make — which is why there is no probe on
+      // this path and no service-role key in front of a user waiting to sign in.
+      //
       // **The row count is checked** (PR #87 R6). The predicate repeats `NOT account_closed`, so a
       // close committed between the SELECT above and this UPDATE matches nothing — and without the
       // check this function would have gone on to return a closed account as a successful sign-in.
