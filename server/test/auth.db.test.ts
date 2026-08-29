@@ -786,8 +786,10 @@ describeDb("the auth endpoints", () => {
       // **And the one that failed is recorded as still owed**, which is what gives it a path to
       // completion at all. A loop that merely caught and continued would leave it nowhere.
       const owed = await client.query<{ supabase_user_id: string }>(
-        `SELECT supabase_user_id FROM sonny.identity
-          WHERE account_id = $1 AND provider_session_revoked_at IS NULL AND supabase_user_id IS NOT NULL`,
+        `SELECT pu.supabase_user_id
+           FROM sonny.identity_provider_user pu
+           JOIN sonny.identity i ON i.id = pu.identity_id
+          WHERE i.account_id = $1 AND pu.provider_session_revoked_at IS NULL`,
         [accountId],
       );
       expect(owed.rows.map((r) => r.supabase_user_id)).toEqual([FAILING]);
@@ -873,13 +875,21 @@ describeDb("the auth endpoints", () => {
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "alive@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "alive@example.com", code: "1" } })).json().user.id;
       // Never closed, never revoked, and `provider_session_revoked_at` is NULL — which is exactly
-      // what the missing clause was counting.
+      // what the missing clause was counting. **The column moved to `sonny.identity_provider_user`
+      // with migration 0014** (SONNY-230); the state being asserted is unchanged, and so is the
+      // reason: a live account has never owed anything, and neither `account_closed` nor
+      // `superseded_at` is set here.
       const { rows } = await client.query(
-        "SELECT deleted_at, account_closed, provider_session_revoked_at FROM sonny.identity i JOIN sonny.account a ON a.id = i.account_id WHERE a.id = $1",
+        `SELECT a.deleted_at, i.account_closed, pu.provider_session_revoked_at, pu.superseded_at
+           FROM sonny.identity i
+           JOIN sonny.account a ON a.id = i.account_id
+           JOIN sonny.identity_provider_user pu ON pu.identity_id = i.id
+          WHERE a.id = $1`,
         [accountId]);
       expect(rows[0].deleted_at).toBeNull();
       expect(rows[0].account_closed).toBe(false);
       expect(rows[0].provider_session_revoked_at).toBeNull();
+      expect(rows[0].superseded_at).toBeNull();
       expect(await owedRevocationCount(client)).toBe(0);
 
       await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]);

@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import pg from "pg";
-import { owedRevocationCount } from "./auth/revocation.js";
+import { owedRevocationCount, supersededProviderUserCount } from "./auth/revocation.js";
 
 /**
  * `npm run revocations` — what provider-side revocation is still owed, and for which accounts.
@@ -8,8 +8,15 @@ import { owedRevocationCount } from "./auth/revocation.js";
  * **Why this exists as a command rather than as a background job** (PR #87 third round, F1). When
  * `DELETE /v1/account` cannot revoke an identity's provider-side sessions — a timeout, a provider
  * outage — the account still closes, and the debt is recorded as a NULL
- * `provider_session_revoked_at` on a closed identity. That record is what makes eventual completion
- * possible; it is not, by itself, eventual completion. Something has to look.
+ * `provider_session_revoked_at` in `sonny.identity_provider_user`. That record is what makes
+ * eventual completion possible; it is not, by itself, eventual completion. Something has to look.
+ *
+ * **A closed account is no longer the only way to owe one** (SONNY-196, SONNY-230; migration 0014).
+ * A **superseded** provider-side user id — an identity that used to name one Supabase user and now
+ * names another — is owed a revocation from the moment it is superseded, on a live account, because
+ * the superseded user may still hold sessions and nothing at this gateway will ever ask about it
+ * again. That is also the only reconciliation this gateway performs against Supabase removing an
+ * identity: the new id arriving IS the report that the old one is gone.
  *
  * The route drains its own account on the way through, which covers the ordinary case completely: a
  * provider that recovers within the same request is never seen. What it cannot cover is a provider
@@ -32,20 +39,36 @@ import { owedRevocationCount } from "./auth/revocation.js";
  */
 export interface OwedByAccount {
   readonly accountId: string;
-  readonly identities: number;
+  /** Provider-side user ids owed a revocation on this account. */
+  readonly providerUsers: number;
+  /**
+   * How many of those are owed because the id was **superseded** rather than because the account
+   * closed — SONNY-196's divergence, per account.
+   *
+   * Reported separately because it says something different: a closed account's debt is expected
+   * and drains away, while a superseded id on a **live** account means Supabase re-keyed that
+   * subject underneath this deployment. Before 0014 that state existed and was unrepresentable.
+   */
+  readonly superseded: number;
 }
 
 export async function owedByAccount(client: pg.Client): Promise<readonly OwedByAccount[]> {
-  const { rows } = await client.query<{ account_id: string; n: number }>(
-    `SELECT account_id, count(*)::int AS n
-       FROM sonny.identity
-      WHERE account_closed
-        AND provider_session_revoked_at IS NULL
-        AND supabase_user_id IS NOT NULL
-      GROUP BY account_id
-      ORDER BY account_id`,
+  const { rows } = await client.query<{ account_id: string; n: number; superseded: number }>(
+    `SELECT i.account_id,
+            count(*)::int AS n,
+            count(*) FILTER (WHERE pu.superseded_at IS NOT NULL)::int AS superseded
+       FROM sonny.identity_provider_user pu
+       JOIN sonny.identity i ON i.id = pu.identity_id
+      WHERE pu.provider_session_revoked_at IS NULL
+        AND (i.account_closed OR pu.superseded_at IS NOT NULL)
+      GROUP BY i.account_id
+      ORDER BY i.account_id`,
   );
-  return rows.map((row) => ({ accountId: row.account_id, identities: row.n }));
+  return rows.map((row) => ({
+    accountId: row.account_id,
+    providerUsers: row.n,
+    superseded: row.superseded,
+  }));
 }
 
 async function main(): Promise<void> {
@@ -64,9 +87,26 @@ async function main(): Promise<void> {
     }
     // Account ids only. A provider-side user id names a person at the provider, and a report that
     // gets pasted into a chat window should not carry one.
+    const superseded = await supersededProviderUserCount(client);
     process.stdout.write(`${total} provider-side revocation(s) owed:\n`);
     for (const row of await owedByAccount(client)) {
-      process.stdout.write(`  account ${row.accountId}  ${row.identities} identity/identities\n`);
+      const note = row.superseded > 0 ? `, ${row.superseded} superseded` : "";
+      process.stdout.write(
+        `  account ${row.accountId}  ${row.providerUsers} provider-side user(s)${note}\n`,
+      );
+    }
+    if (superseded > 0) {
+      // **SONNY-196's divergence, said out loud.** These are not closed accounts: they are live ones
+      // whose provider-side user id changed underneath them, which is what Supabase removing an
+      // unconfirmed identity looks like from here. Before 0014 the old id was overwritten and this
+      // line could not have been printed, because nothing remembered there had been one.
+      process.stdout.write(
+        `\n${superseded} of those are SUPERSEDED provider-side user ids: an identity that used to\n` +
+          "name one Supabase user now names another. That is this gateway's only evidence that\n" +
+          "Supabase re-keyed the subject — its documented behaviour when it removes an unconfirmed\n" +
+          "identity — and the superseded user's sessions are owed a revocation whether or not the\n" +
+          "account was ever closed (SONNY-196, SONNY-230).\n",
+      );
     }
     // **This said "needs a real AuthProvider adapter, which does not exist yet" until SONNY-307**,
     // which is the branch that wrote one — an operator reading this would have gone off to build
@@ -74,7 +114,7 @@ async function main(): Promise<void> {
     // reason these cannot be drained is narrower and is a property of Supabase, so the operator is
     // pointed at the decision that unblocks it rather than at work already done.
     process.stdout.write(
-      "\nThese accounts are closed and their provider-side sessions may still be live.\n" +
+      "\nThese accounts owe a provider-side revocation and those sessions may still be live.\n" +
         "The Supabase adapter exists (src/auth/supabase.ts) and cannot drain these: Supabase Auth\n" +
         "exposes no endpoint that revokes a user's sessions from their id alone, so\n" +
         "signOutAllForUser fails and the debt is kept rather than written off.\n" +
@@ -82,7 +122,8 @@ async function main(): Promise<void> {
         "  (a) delete the provider-side user, which takes its sessions with it, or\n" +
         "  (b) have the gateway mint a token for that user and sign it out globally.\n" +
         "Until one is chosen this count is expected to grow, and it is a real signal: every\n" +
-        "line above is an account someone closed whose provider-side sessions are still live.\n",
+        "line above is an account whose provider-side sessions are still live — because it was\n" +
+        "closed, or because the id that named its user was superseded and never revoked.\n",
     );
     process.exitCode = 1;
   } finally {
