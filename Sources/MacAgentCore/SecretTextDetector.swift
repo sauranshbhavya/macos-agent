@@ -365,13 +365,20 @@ struct SecretTextDetector {
     ///
     /// **Both directions measured, over one corpus materialised at `4824e50`** — `main`'s head at
     /// this branch's cut point, so it contains none of this branch's own fixtures, which are made of
-    /// the exact strings this detector fires on. Of the **106** colon-bound hyphenated pairs there,
+    /// the exact strings this detector fires on. Of the **99** colon-bound hyphenated pairs there,
     /// **75** carry a filename or path token and **23** carry no token, so **98 stay refused**;
-    /// **one** is given back. That one is `` `InstantCommandResolver:275-276` `` in the changelog — a
-    /// Swift type name cited without its `.swift` extension, which reads as a label under any rule
-    /// that does not know Swift. **A length cap would refuse it and is deliberately not added**: it
-    /// is one occurrence in 106, and a threshold chosen to exclude a 22-character type name would
-    /// have to be argued against `verification_code:` at 17.
+    /// **one** is given back. **This total read 106 for one round and did not reproduce** (cycle 2,
+    /// G2): 106 is 99 plus the 7 pairs the *run* guard refuses, which are not colon-bound at all —
+    /// and the parts of the sentence it sat in already summed to 99, which is how a reader caught it.
+    /// Re-derived: `python3 scan.py corpus` classifying every match of the spaced-pair pattern over
+    /// the laid-out corpus prints `colon-filename 75, colon-bare 23, colon-label 1, refused-run 7,
+    /// kept 16` — 75 + 23 + 1 = **99**.
+    ///
+    /// The one given back is `` `InstantCommandResolver:275-276` `` in the changelog — a Swift type
+    /// name cited without its `.swift` extension, which reads as a label under any rule that does not
+    /// know Swift. **A length cap would refuse it and is deliberately not added**: it is one
+    /// occurrence in 99, and a threshold chosen to exclude a 22-character type name would have to be
+    /// argued against `verification_code:` at 17.
     ///
     /// The colon still has to be *immediately* before the digits — `Code: 483-291` is preceded by a
     /// space and was never this function's business.
