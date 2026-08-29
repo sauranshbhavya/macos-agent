@@ -239,7 +239,25 @@ describeDb("migrations against a real Postgres", () => {
       expect(byKey.has(rateLimitEmailKey(key))).toBe(true);
     }
     await client.query("TRUNCATE sonny.sign_in_code_issue");
-  });
+    // **An explicit timeout, because this test's margin shrinks with every migration and its
+    // failure poisons the two tests after it.** It rolls every migration above 0006 back one at a
+    // time and re-applies them, so its cost is a function of the migration count: **2483 ms of the
+    // default 5000 ms at 14 migrations**, measured alone against an idle local Postgres
+    // (`npx vitest run test/migrate.db.test.ts --reporter=verbose`, SONNY-196/230's branch). A 2×
+    // margin that halves every fourteen migrations is not a number to leave implicit.
+    //
+    // **The shape of the failure is what makes it worth an explicit one rather than a note.**
+    // Vitest's timeout fails the test and moves on; it does not cancel the `down()` loop, which
+    // keeps issuing queries on the `client` this file shares with every test below it. So the next
+    // `up()` races a rollback still in flight, and what it reports is a schema error describing a
+    // state the tree never had — a wrong answer that reads like a real one, which is the class
+    // `CLAUDE.md`'s Claims-and-evidence section is about.
+    //
+    // **Not attributed to a run that was observed to do this.** One run on this branch did show a
+    // timeout here followed by two impossible schema errors below, and the cause of that run was
+    // another lane's suite writing to the same database (SONNY-352), not the duration. The number
+    // above is the reason for this change; that run is not.
+  }, 60_000);
 
   it("indexes supabase_user_id, which the auth gate reads on every protected request", async () => {
     // **0010, and the reason it is this branch's rather than a later one's** (PR #104's adversarial

@@ -19,9 +19,9 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * 1. **Catch and continue.** One identity's failure must not decide whether the others are tried.
  *    That alone converts "one stranded session" into "one stranded session instead of several",
  *    which is better and is not a fix.
- * 2. **Write down what is still owed.** `sonny.identity.provider_session_revoked_at` is NULL until a
- *    provider call actually returns, so the outstanding work is a query rather than a lost stack
- *    frame. That is what gives a post-closure transient failure a path to eventual completion: the
+ * 2. **Write down what is still owed.** `sonny.identity_provider_user.provider_session_revoked_at`
+ *    is NULL until a provider call actually returns, so the outstanding work is a query rather than
+ *    a lost stack frame. That is what gives a post-closure transient failure a path to eventual completion: the
  *    deletion route drains **its own account** after the close — not a backlog, which this line
  *    used to claim (PR #87 fifth round, F8) — and `npm run revocations` reports what is left from
  *    outside, needing no caller who can still authenticate.
@@ -31,10 +31,61 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * they can act on. The request records the debt and returns; something else pays it.
  */
 
+/**
+ * **What "owed" means, in one place, because four queries have to agree about it.**
+ *
+ * A provider-side user id is owed a revocation when nothing has recorded one for it AND either:
+ *
+ * - the account holding the identity that named it is **closed** — the original case (0006), the
+ *   user asked to be gone and their Supabase sessions should go with them; or
+ * - the identity has since named a **different** id, so this one is **superseded** — SONNY-230. The
+ *   superseded provider-side user may still hold live sessions, and before 0014 nothing anywhere
+ *   said so: `resolve()`'s `COALESCE($5, supabase_user_id)` overwrote the column that named it, and
+ *   `npm run revocations` was correct to report nothing while being wrong about the world.
+ *
+ * **Both disjuncts rest on `provider_session_revoked_at` meaning "the revocation owed for this id's
+ * current episode has been performed", never "this id has been revoked at least once"** (PR #164
+ * review, F1). Under the second reading one stamp makes an id un-owed forever, and every close
+ * after it revokes nothing. Migration 0014's trigger is what keeps the first reading true: it
+ * clears the stamp whenever the identity observes the id again, because that is a new episode.
+ *
+ * **The second disjunct does not require a closed account, and that is the point.** A supersession
+ * on a *live* account is exactly the state SONNY-196 is about — Supabase re-keyed the subject
+ * underneath us — and waiting for a close before revoking would mean never revoking it.
+ *
+ * **Exported, and that is the whole of what makes the sentence below true** (PR #164 review, F4).
+ * **The headline above said "three queries" for a further round while this paragraph said four**
+ * (PR #164 cycle 2, C-F3) — a docstring whose own two halves disagreed about the number the fix was
+ * about, which is the same shape as the claim it was written to correct.
+ * This docstring used to say the fragment was shared by "three queries … because 0009 exists
+ * entirely because the delete guard and the drain had drifted apart on one clause" — while the one
+ * query site outside this file that *could* have shared it, `owedByAccount` in `../revocations.ts`,
+ * had a hand-written byte-identical copy, because the constant was a `const` with no `export` and
+ * could not be imported. Nothing was wrong at runtime; what was wrong was a comment asserting a
+ * structural guarantee the code did not provide, which is exactly the state 0009 was written about.
+ *
+ * Four query sites share it now: the drain's claim, the drain's mark-done, `owedRevocationCount`
+ * here, and `owedByAccount` there. **The fifth copy is the delete guard's, inside migration 0014,
+ * and it is unavoidable** — a trigger body cannot import TypeScript. It is the reason `0009` is
+ * cited above rather than merely remembered, and it is the copy to change first when this changes.
+ *
+ * The fragment carries no parameters and no caller input; it is a constant, and it names the
+ * aliases `i` (`sonny.identity`) and `pu` (`sonny.identity_provider_user`), so every query
+ * interpolating it must use those.
+ */
+export const OWED_PREDICATE = "AND (i.account_closed OR pu.superseded_at IS NOT NULL)";
+
 export interface RevocationOutcome {
-  /** Identities whose provider-side sessions are now recorded as revoked by this call. */
+  /**
+   * Provider-side users whose sessions are now recorded as revoked by this call.
+   *
+   * **Counted per provider-side user, not per identity** — which is what it always meant, since one
+   * `signOutAllForUser` takes every session of one user and the stamp below fans out to every row
+   * naming it. Before 0014 the unit of the count and the unit of the table disagreed, which is the
+   * mismatch SONNY-230 fell through.
+   */
   readonly revoked: number;
-  /** Identities attempted and still owed. Their rows keep `provider_session_revoked_at` NULL. */
+  /** Attempted and still owed. Their rows keep `provider_session_revoked_at` NULL. */
   readonly failed: number;
   /** One line per failure, provider-side user id and the error's name — never the error object. */
   readonly failures: readonly { readonly supabaseUserId: string; readonly reason: string }[];
@@ -45,8 +96,9 @@ interface Owed {
 }
 
 /**
- * Attempt every outstanding revocation for one closed account, or — with no account id — for every
- * closed account that still has one owed.
+ * Attempt every outstanding revocation for one account, or — with no account id — for every account
+ * that still has one owed. **"Owed" is `OWED_PREDICATE` above and includes a superseded id on a
+ * live account**, so this is no longer a walk over closed accounts alone.
  *
  * **`ProviderRejected` counts as done, and nothing else does.** The provider saying "no such user"
  * or "already gone" is the state being asked for; a timeout, a 500 or a network error is not, and
@@ -96,23 +148,24 @@ export async function drainOwedRevocations(
     // comment here was right to avoid, and a drain that dies mid-call leaves a lease that expires
     // rather than a claim nobody recorded.
     const claim = await client.query<Owed>(
-      `UPDATE sonny.identity SET revocation_claimed_at = $3::timestamptz
+      `UPDATE sonny.identity_provider_user SET revocation_claimed_at = $3::timestamptz
         WHERE id = (
-          SELECT id FROM sonny.identity
-           WHERE account_closed
-             AND provider_session_revoked_at IS NULL
-             AND supabase_user_id IS NOT NULL
-             AND ($1::uuid IS NULL OR account_id = $1::uuid)
+          SELECT pu.id
+            FROM sonny.identity_provider_user pu
+            JOIN sonny.identity i ON i.id = pu.identity_id
+           WHERE pu.provider_session_revoked_at IS NULL
+             ${OWED_PREDICATE}
+             AND ($1::uuid IS NULL OR i.account_id = $1::uuid)
              -- Both sides cast to text on purpose: supabase_user_id is a uuid column, and binding
              -- this list as uuid[] turns any malformed element into a 22P02 raised by the database
              -- rather than a value this function can see and refuse.
-             AND supabase_user_id::text <> ALL($2::text[])
-             AND (revocation_claimed_at IS NULL
-                  OR revocation_claimed_at
+             AND pu.supabase_user_id::text <> ALL($2::text[])
+             AND (pu.revocation_claimed_at IS NULL
+                  OR pu.revocation_claimed_at
                        < $3::timestamptz - make_interval(secs => sonny.revocation_lease_seconds()))
-           ORDER BY id
+           ORDER BY pu.id
            LIMIT 1
-           FOR UPDATE SKIP LOCKED
+           FOR UPDATE OF pu SKIP LOCKED
         )
         RETURNING supabase_user_id`,
       [options.accountId ?? null, failures.map((f) => f.supabaseUserId), now],
@@ -132,8 +185,17 @@ export async function drainOwedRevocations(
         // set, an operator who fixed the provider and re-ran the drain would be told there was
         // nothing to do for the next five minutes, which is the same class of wrong answer F2 was
         // about. Back-off is a different concern and this ticket does not need one.
+        //
+        // **It releases every row naming this id, including ones another drain holds a live lease
+        // on, and 0014 made that set larger** (PR #164 review, F8). The statement is `main`'s and is
+        // unchanged; what changed underneath it is the table, which now holds one row per
+        // `(identity, id)` **ever observed** rather than one per identity currently naming it. The
+        // harm is bounded to a duplicate provider call, which this function's own docstring already
+        // concedes for any call outliving its lease, and narrowing it would mean carrying the
+        // claimed row's identity through the failure path to buy nothing the lease does not already
+        // give. Written down rather than changed.
         await client.query(
-          "UPDATE sonny.identity SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
+          "UPDATE sonny.identity_provider_user SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
           [owed.supabase_user_id],
         );
         // This run still excludes it, so one dead user cannot spin the loop.
@@ -146,15 +208,21 @@ export async function drainOwedRevocations(
       // The provider has no such session. That is the state we wanted, so it is recorded as done.
     }
 
-    // **Every identity naming this provider-side user**, not just the row that was claimed: one
+    // **Every row naming this provider-side user**, not just the one that was claimed: one
     // `signOutAllForUser` revokes all of that user's sessions, so marking one row would leave the
     // others owed forever and every drain would call the provider again for nothing.
+    //
+    // **Owed rows only, and the restriction is load-bearing.** A row naming this same user id that
+    // is *current* on a *live* account is not owed anything; stamping it would mean that when that
+    // account is later closed, the drain would consider its debt already paid — for sessions minted
+    // after this call returned. Same fragment as the claim, so the two cannot drift.
     await client.query(
-      `UPDATE sonny.identity
+      `UPDATE sonny.identity_provider_user pu
           SET provider_session_revoked_at = $2
-        WHERE supabase_user_id = $1
-          AND account_closed
-          AND provider_session_revoked_at IS NULL`,
+        WHERE pu.supabase_user_id = $1
+          AND pu.provider_session_revoked_at IS NULL
+          AND EXISTS (SELECT 1 FROM sonny.identity i
+                       WHERE i.id = pu.identity_id ${OWED_PREDICATE})`,
       [owed.supabase_user_id, now],
     );
     revoked += 1;
@@ -163,11 +231,43 @@ export async function drainOwedRevocations(
   return { revoked, failed: failures.length, failures };
 }
 
-/** How many revocations are still owed, for the health of a deployment rather than for a request. */
+/**
+ * How many revocations are still owed, for the health of a deployment rather than for a request.
+ *
+ * **`DISTINCT pu.supabase_user_id`, because that is the unit of the work** (PR #164 review, F3).
+ * One `signOutAllForUser` clears every row naming one provider-side user, so a raw row count told an
+ * operator an account owed 2 while one drain call cleared it and `RevocationOutcome.revoked`
+ * reported 1 — three figures sharing a noun and not a unit. Two identities naming one Supabase user
+ * is not a hypothetical shape; `attribution.ts`'s header says it is what the whole account/identity
+ * separation exists to allow.
+ */
 export async function owedRevocationCount(client: pg.Client): Promise<number> {
   const { rows } = await client.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM sonny.identity
-      WHERE account_closed AND provider_session_revoked_at IS NULL AND supabase_user_id IS NOT NULL`,
+    `SELECT count(DISTINCT pu.supabase_user_id)::int AS n
+       FROM sonny.identity_provider_user pu
+       JOIN sonny.identity i ON i.id = pu.identity_id
+      WHERE pu.provider_session_revoked_at IS NULL
+        ${OWED_PREDICATE}`,
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
+ * How many of those are owed **because the id was superseded rather than because an account closed**
+ * — SONNY-196's divergence, counted.
+ *
+ * This is the number that was unrepresentable before: a live account whose provider-side user was
+ * re-keyed underneath it. It is reported separately by `npm run revocations` because it means
+ * something different to an operator — a closed account's debt is expected and drains away, while a
+ * growing supersession count on live accounts says Supabase is re-keying users under this
+ * deployment, which is either the unconfirmed-identity pruning SONNY-196 is about or something
+ * nobody has explained yet.
+ */
+export async function supersededProviderUserCount(client: pg.Client): Promise<number> {
+  const { rows } = await client.query<{ n: number }>(
+    `SELECT count(DISTINCT supabase_user_id)::int AS n
+       FROM sonny.identity_provider_user
+      WHERE superseded_at IS NOT NULL AND provider_session_revoked_at IS NULL`,
   );
   return rows[0]?.n ?? 0;
 }

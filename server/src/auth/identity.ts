@@ -140,6 +140,51 @@ export async function resolve(
     );
     if (existing.rows[0]) {
       // Refresh the hint and the Supabase user, both of which legitimately change over time.
+      //
+      // **`COALESCE($5, supabase_user_id)` still overwrites, and that is now safe rather than
+      // lossy** (SONNY-230, SONNY-196; migration 0014). It used to be the whole defect: the previous
+      // provider-side user id was the only record that it existed, so overwriting it made the
+      // superseded user unrevocable *and* unrecorded — `npm run revocations` reported nothing and
+      // was wrong about the world. `sonny.identity_provider_user` now keeps every id this identity
+      // has ever named, and an `AFTER UPDATE OF supabase_user_id` trigger stamps `superseded_at` on
+      // the one being replaced, which marks it owed a revocation immediately — on a live account,
+      // without waiting for a close.
+      //
+      // **Nothing here writes that table, deliberately.** The event is the column changing, so the
+      // record is made by whatever changes it rather than by this function remembering to. A
+      // supersession recorded here would go unrecorded the first time a backfill, a support script
+      // or a future link path wrote that column.
+      //
+      // **What the trigger catches is any statement that NAMES the column, not any writer** (PR #164
+      // review, F5, correcting the wider claim these lines used to make). `AFTER … UPDATE OF
+      // supabase_user_id` keys on the SET list of the original statement, so a `BEFORE` trigger
+      // rewriting `NEW.supabase_user_id` on an update that does not name it, and anything running
+      // under `SET session_replication_role = replica`, do not fire it. Neither is reachable from
+      // application code today; the migration's header has the measurements and why the obvious
+      // half-fix is not taken.
+      //
+      // **This UPDATE also ends any revocation episode for the id it writes** (PR #164 review, F1).
+      // This refresh names `supabase_user_id` unconditionally, so every sign-in **that reaches
+      // `resolve()`** runs the trigger's `ON CONFLICT` arm and clears `provider_session_revoked_at`
+      // — which is what stops a single past revocation making an id un-owed forever, through a
+      // come-back or through an operator reopening a closed account.
+      //
+      // **"Every sign-in" is the wrong scope and this comment used to use it** (PR #164 cycle 2,
+      // C-F1). `resolve()` has exactly one production call site, `POST /v1/auth/email/verify`, and
+      // it is not the only way to reach a signed-in state: **`POST /v1/auth/refresh` mints a full
+      // session, never calls `resolve()`, and therefore never fires the trigger.** So a user who
+      // returns by refreshing rather than by signing in keeps a stale revocation stamp, and
+      // SONNY-358's reopen route stays open for them — reproduced over real HTTP by that review.
+      // **Deferred by founder decision of 2026-08-29 and owned by SONNY-358**, sequenced ahead of
+      // SONNY-313, which is what makes it reachable. Latent until then, because `signOutAllForUser`
+      // throws unconditionally and no row reaches a non-NULL stamp in production today.
+      //
+      // **And a new id arriving IS the reconciliation** (SONNY-196). Supabase removes unconfirmed
+      // identities on its own schedule and tells us nothing; what we see afterwards is this
+      // `(provider, subject)` presenting a different `supabase_user_id`. That is the provider
+      // reporting the removal, in the exchange we already make — which is why there is no probe on
+      // this path and no service-role key in front of a user waiting to sign in.
+      //
       // **The row count is checked** (PR #87 R6). The predicate repeats `NOT account_closed`, so a
       // close committed between the SELECT above and this UPDATE matches nothing — and without the
       // check this function would have gone on to return a closed account as a successful sign-in.
