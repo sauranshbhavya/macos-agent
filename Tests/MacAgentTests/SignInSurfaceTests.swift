@@ -487,11 +487,23 @@ struct SignInSurfaceTests {
     /// `BackendOutageTests` holds that a refresh moves the row — so what is left is the one line
     /// joining them, and a scan is the only instrument for it. Same shape and same reason as
     /// `onlyMainAsksForTheRealKeychain`, which guards the neighbouring line in the same file.
+    ///
+    /// **It reads the closure's body, not two tokens anywhere in the file** (cycle 2's C2-F7). The
+    /// first version checked `contains("accountModel.sessionDidChange")`, `contains("refreshPermissions()")`
+    /// and a count of one — and the reviewer showed that an *empty* hook beside a stray top-level
+    /// `agentViewModel.refreshPermissions()` satisfies all three, which is a file that compiles,
+    /// refreshes once at launch, and never follows a session again. That is the exact defect this
+    /// scan exists to catch, passing. `MacAgentSource.braceBlock(of:openedBy:)` is the instrument
+    /// for it and was already in the tree.
     @Test
     func mainJoinsTheSessionHookToTheReadinessRefresh() throws {
         let source = try MacAgentSource.read("main.swift")
-        #expect(source.contains("accountModel.sessionDidChange"), "main.swift no longer sets the hook")
-        #expect(source.contains("refreshPermissions()"), "main.swift's hook no longer refreshes readiness")
+        // The hook's own body, by brace matching — so what is asserted is what the closure *does*.
+        let hookBody = try MacAgentSource.braceBlock(of: source, openedBy: "accountModel.sessionDidChange = {")
+        #expect(
+            hookBody.contains("refreshPermissions()"),
+            "main.swift's session hook no longer refreshes readiness; its body is: \(hookBody)"
+        )
         // And it is one assignment rather than several, so the scan cannot pass on a leftover.
         #expect(MacAgentSource.count(of: "sessionDidChange", inText: source) == 1)
     }

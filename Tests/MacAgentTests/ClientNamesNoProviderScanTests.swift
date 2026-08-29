@@ -187,40 +187,73 @@ struct ClientNamesNoProviderScanTests {
         }
     }
 
-    /// **The whole-map capture, which is the shape a maintainer is most likely to reach for**
-    /// (PR #153's F5).
+    /// **The choke point, one hop earlier than the obvious place** (PR #153's F5, corrected by its
+    /// cycle-2 C2-F5).
     ///
-    /// `ProcessInfo.processInfo.environment.first { $0.key == "X" }?.value` reads one variable
-    /// without a subscript anywhere, and it passed the subscript scan. It matters more than the
-    /// `getenv` hole because the shape is *already in the tree*: `SonnyBackendEnvironment.resolve`
-    /// takes `environment: [String: String] = ProcessInfo.processInfo.environment` as a defaulted
-    /// parameter, so a reader copying the nearest example copies a whole-map capture.
+    /// **The first version of this anchored on obtaining the *map* and was one hop too late.** It
+    /// matched `…processInfo.environment` not followed by `[`, on the argument that every
+    /// indirection has to obtain the map somewhere. The reviewer planted the counterexample and it
+    /// passed all eight tests in this file:
     ///
-    /// **This is the choke point the other two are not.** Every indirection has to obtain the map
-    /// somewhere, and obtaining it means writing `…processInfo.environment` without a following
-    /// `[` — so a read hidden behind any number of local variables, stored properties or helper
-    /// functions is still caught here, at the one line that touches `ProcessInfo`. The one capture
-    /// allowed is the debug-only staging pointer's defaulted parameter, which is a *seam* rather
-    /// than a read: it is what lets every test hand `resolve` a dictionary of its own.
+    /// ```swift
+    /// let info = ProcessInfo.processInfo
+    /// let all = info.environment
+    /// return all.first { $0.key == "SONNY_PLANTED_D" }?.value
+    /// ```
+    ///
+    /// The indirection can go through the **object** instead of the map — and that is not an exotic
+    /// shape, it is the idiom two of the three permitted reads already use
+    /// (`InstalledAppResolver` and `LocalStorageEncryption` both bind `let processInfo =
+    /// ProcessInfo.processInfo` and subscript it six lines later). They were caught only because
+    /// they happen to finish with a subscript.
+    ///
+    /// **What this anchors on instead is acquiring a `ProcessInfo` instance at all**, which is a
+    /// claim about the language rather than about a regex: in Swift there are exactly two routes to
+    /// the process environment, `getenv` and an instance of this type. The test above refuses the
+    /// first outright, so every read that exists has to pass through here. An indirection hidden
+    /// behind any number of locals, stored properties, computed vars or helper functions still has
+    /// one line where the instance is obtained, and that line is in this list.
+    ///
+    /// **The residual, stated rather than implied.** This is complete for a shipping target that
+    /// acquires its own instance, which is every read in the tree. It would not see an instance
+    /// handed in from outside the two targets — a parameter of type `ProcessInfo` passed by a
+    /// dependency. Nothing does that today (`git grep -n ': ProcessInfo' -- Sources` finds no such
+    /// parameter), and the reason to write it down is the one this finding is about: a claim about
+    /// a choke point is a claim about the language, and it should name which step it is claiming.
+    ///
+    /// The five allowed sites, each with the reason it is not a provider read: the DOCX mock flag,
+    /// the two test-process probes, the debug-only staging pointer's injectable parameter, and one
+    /// that is not an environment read at all — `SonnyBackendClient` reading
+    /// `operatingSystemVersion` for its `User-Agent`.
     @Test
-    func theOnlyWholeEnvironmentCaptureIsTheStagingPointersInjectableParameter() throws {
-        // `ProcessInfo.processInfo.environment` or `ProcessInfo().environment`, wrapping tolerated,
-        // *not* followed by a subscript.
-        let capture = try NSRegularExpression(
-            pattern: "ProcessInfo\\s*(?:\\.\\s*processInfo|\\(\\s*\\))\\s*\\.\\s*environment\\s*(?!\\[)"
+    func everyProcessInfoAcquisitionIsOneOfTheFiveThatAreNotProviderConfiguration() throws {
+        // `ProcessInfo.processInfo` or `ProcessInfo()`, wrapping tolerated. This is the only way to
+        // hold one, so it is the only door a read can come through.
+        let acquisition = try NSRegularExpression(
+            pattern: "ProcessInfo\\s*(?:\\.\\s*processInfo|\\(\\s*\\))"
         )
+        let allowed = [
+            "MacAgentCore/DocumentConverter.swift",
+            "MacAgentCore/InstalledAppResolver.swift",
+            "MacAgentCore/LocalStorageEncryption.swift",
+            "MacAgentCore/SonnyBackendClient.swift",
+            "MacAgentCore/SonnyBackendEnvironment.swift",
+        ]
         var found: [String] = []
         let sources = try shippingSources()
         #expect(sources.count > 50)
         for source in sources {
             let range = NSRange(source.text.startIndex..., in: source.text)
-            for _ in capture.matches(in: source.text, range: range) {
+            for _ in acquisition.matches(in: source.text, range: range) {
                 found.append(source.path)
             }
         }
+        // Exact, and sorted so the failure names what moved rather than only that something did.
+        // Both directions: a sixth acquisition fails, and an allowed site that stops acquiring one
+        // fails too, so the list cannot rot into five paths that match nothing.
         #expect(
-            found == ["MacAgentCore/SonnyBackendEnvironment.swift"],
-            "the whole process environment is captured somewhere new: \(found)"
+            found.sorted() == allowed,
+            "the set of files that acquire a ProcessInfo has changed: \(found.sorted())"
         )
     }
 

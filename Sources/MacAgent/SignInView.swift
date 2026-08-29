@@ -156,9 +156,18 @@ final class SonnyAccountModel: ObservableObject {
             code = ""
             step = .signedIn
         }
-        // **Outside `run`, and only when a session really arrived.** `run` swallows the failure into
-        // `failure`, so a call inside it would fire on a wrong code too — and the whole point of
-        // this hook is that the readiness row follows the session rather than the attempt.
+        // **Only when a session really arrived — and the guard is what does that, not the
+        // placement** (PR #153, cycle 2's C2-F6). This comment used to say `run` swallows the
+        // failure so a call inside it would fire on a wrong code too. It would not:
+        // `service.verifyEmailCode` throws before `identity` is assigned, so a hook inside the
+        // closure is simply never reached on a refusal — the reviewer built that mutant and it
+        // survived the whole suite, correctly. What actually protects the refused case is the
+        // `identity != nil` test on this line, and `aSuccessfulSignInAnnouncesItselfAndAFailedOne
+        // DoesNot` is what holds it: remove the guard and its `refusedAnnouncements == 0` fails.
+        //
+        // Outside `run` for a different and smaller reason: `run` sets `isBusy = false` in a
+        // `defer`, and a hook that fires while the surface still says it is busy invites the
+        // refresh to read state the sign-in has not finished publishing.
         if identity != nil { sessionDidChange?() }
     }
 
