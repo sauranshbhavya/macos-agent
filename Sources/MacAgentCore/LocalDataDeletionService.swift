@@ -320,6 +320,34 @@ public struct LocalDataDeletionService: @unchecked Sendable {
         return result
     }
 
+    /// The wipe over **every** local store, correct by construction (PR #162 review N1/W2).
+    ///
+    /// `fileURLs` became required so that `LocalDataDeletionService()` could not silently resolve
+    /// the real thirteen files. That closed a silent reach and opened a quieter one: the shipping
+    /// factory then had to *assemble* the argument by hand, at the one site no behavioural test can
+    /// reach, and `theRealStoreFactoryHandsTheWipeTheRealFileList` could only check that
+    /// `defaultStoreFileURLs` was *named* somewhere in that call. A presence check catches wholesale
+    /// replacement — `fileURLs: []` dies — and cannot see a list derived wrongly from the right
+    /// function. `Array(defaultStoreFileURLs().dropFirst())` passed the entire suite while the wipe
+    /// left `vision-sessions.json` on disk and the confirmation dialog went on naming it: the store
+    /// this file's own comment calls the loudest possible failure of a privacy wipe.
+    ///
+    /// So the argument is not assembled any more. This is `realFileURL`'s pattern one level up —
+    /// the reach stays in words, and there is nothing left at the call site to get wrong. A
+    /// fourteenth store joins it without anyone editing the factory, because
+    /// `theWipeReachesEveryLocalStore` pins `defaultStoreFileURLs()` against `LocalStore.allCases`
+    /// by value.
+    ///
+    /// **This does not weaken the door that was closed.** `LocalDataDeletionService()` still does
+    /// not compile; a caller wanting the real thirteen has to write this member's name, and
+    /// `noStoreVendorDefaultsAStoreParameter` still refuses a default on `fileURLs`.
+    public static func acrossEveryLocalStore(fileManager: FileManager = .default) -> LocalDataDeletionService {
+        LocalDataDeletionService(
+            fileManager: fileManager,
+            fileURLs: defaultStoreFileURLs(fileManager: fileManager)
+        )
+    }
+
     public static func defaultStoreFileURLs(fileManager: FileManager = .default) -> [URL] {
         [
             // Row I's action journal. A wipe that left a record of every click Sonny made inside the

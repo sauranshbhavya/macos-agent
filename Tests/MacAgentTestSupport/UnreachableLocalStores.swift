@@ -48,10 +48,6 @@ public enum UnreachableLocalStores {
         ClipboardHistoryStore(fileURL: fileURL("clipboard-history.json"))
     }
 
-    public static func clipboardHistorySettings() -> ClipboardHistorySettingsStore {
-        ClipboardHistorySettingsStore(fileURL: fileURL("clipboard-history-settings.json"))
-    }
-
     public static func snippets() -> SnippetStore {
         SnippetStore(fileURL: fileURL("snippets.json"))
     }
