@@ -99,9 +99,19 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- rule 1's refresh always does, so a sign-in that does not change the id still bumps `last_seen_at`
 -- and one that does change it supersedes the old id in the same statement.
 --
--- **`IS DISTINCT FROM`, not `<>`**: `supabase_user_id` is nullable on the parent, and `NULL <> 'x'`
--- is NULL rather than true, so `<>` would silently skip the first id an identity acquires after
--- having been created without one.
+-- **`IS DISTINCT FROM`, not `<>`, and the case it buys is NEW being NULL rather than OLD.** The
+-- `OLD.supabase_user_id IS NOT NULL` line above already settles the old side, so the two spellings
+-- agree on every update that sets a real id — which is every update `resolve()` makes, since its
+-- `COALESCE` cannot write a NULL. They differ on a writer that *clears* the column: `'x' <> NULL` is
+-- NULL rather than true, so `<>` would leave the cleared id sitting there un-superseded, still
+-- current in the history, still attributing nothing and owed nothing. `IS DISTINCT FROM` supersedes
+-- it, which is the same answer as for any other id the identity stopped naming.
+--
+-- **This comment claimed the opposite and was caught by a mutant.** It said `<>` would skip "the
+-- first id an identity acquires after having been created without one" — a case that goes through
+-- the INSERT branch below and never reaches this line at all. A battery replacing `IS DISTINCT
+-- FROM` with `<>` SURVIVED against the test written from that reading, which is what a wrong
+-- explanation of a correct line costs: the test it produces guards nothing.
 --
 -- **An id that comes back is current again.** `ON CONFLICT … SET superseded_at = NULL` is
 -- deliberate: if the provider hands the same user id back for this subject, that id is once more

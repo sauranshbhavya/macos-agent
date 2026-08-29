@@ -301,9 +301,8 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
 
     it("records the first id an identity acquires after having none", async () => {
       // `supabase_user_id` is nullable — 0002 says an identity can exist before its Supabase user
-      // does. `NULL <> 'x'` is NULL rather than true, so a trigger written with `<>` instead of
-      // `IS DISTINCT FROM` would take the supersession branch's decision on a NULL and could skip
-      // the insert; this pins that the first real id is recorded.
+      // does, and until it has one there is nothing to remember. This is the INSERT branch of the
+      // trigger, reached with no supersession to consider.
       const { accountId } = await resolve(client, {
         provider: "email", subject: "none@example.com", email: "none@example.com",
         emailVerified: true, supabaseUserId: undefined,
@@ -314,6 +313,33 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
         { supabase_user_id: FIRST, superseded: false, revoked: false },
       ]);
       expect(await owedRevocationCount(client)).toBe(0);
+    });
+
+    it("supersedes an id that is CLEARED rather than replaced", async () => {
+      // **This test exists because a mutant survived and the comment explaining the line was
+      // wrong.** The trigger's supersession branch reads `OLD.supabase_user_id IS DISTINCT FROM
+      // NEW.supabase_user_id`, and both that migration's comment and the test above claimed `<>`
+      // would break the *first-id* case — which goes through the INSERT branch and never reaches
+      // that line. So replacing `IS DISTINCT FROM` with `<>` changed nothing any test could see,
+      // and the battery reported SURVIVED.
+      //
+      // The case the operator actually buys is a writer that **clears** the column: `'x' <> NULL`
+      // is NULL rather than true, so under `<>` the cleared id would stay in the history marked
+      // current — attributing nothing, because the identity no longer names it, and owed nothing,
+      // because nothing marked it superseded. That is precisely SONNY-230's unrevocable-and-
+      // unrecorded state, reached through a different door. `resolve()` cannot produce it (its
+      // `COALESCE` never writes a NULL), which is exactly why it needs a test rather than being
+      // left to the one caller that happens to be safe.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await client.query(
+        "UPDATE sonny.identity SET supabase_user_id = NULL WHERE account_id = $1", [accountId]);
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: true, revoked: false },
+      ]);
+      expect(await owedRevocationCount(client)).toBe(1);
+      expect(await supersededProviderUserCount(client)).toBe(1);
+      // And it cannot sign anyone in, which is the property that makes the record worth having.
+      expect(await accountForSupabaseUser(client, FIRST)).toEqual({ ambiguous: false });
     });
   });
 
