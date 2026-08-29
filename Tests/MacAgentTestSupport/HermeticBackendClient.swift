@@ -18,12 +18,16 @@ import Foundation
 public func makeHermeticBackendClient(
     environment: SonnyBackendEnvironment? = nil,
     keychain: InMemoryKeychainSecretStore = InMemoryKeychainSecretStore(),
-    session: URLSession? = nil
+    session: URLSession? = nil,
+    now: (@Sendable () -> Date)? = nil,
+    monotonicNow: (@Sendable () -> ContinuousClock.Instant)? = nil
 ) -> SonnyBackendClient {
     SonnyBackendClient(
         environment: environment,
         tokenStore: KeychainAccountTokenStore(secretStore: keychain),
-        session: session ?? URLSession(configuration: .ephemeral)
+        session: session ?? URLSession(configuration: .ephemeral),
+        now: now ?? Date.init,
+        monotonicNow: monotonicNow ?? { ContinuousClock.now }
     )
 }
 
@@ -40,19 +44,31 @@ public struct SignedInBackendFixture {
     public let baseURL: URL
     public let host: String
 
+    /// `now` is the client's clock, and **the session's expiry is derived from it rather than from
+    /// the wall clock** (SONNY-135). A fixture that pinned a client to an instant while dating its
+    /// token from `Date()` would put the two hours apart, and a test that moved the clock forward
+    /// would trip the proactive token refresh it was not testing. Deriving both from one closure
+    /// keeps `expiresIn` meaning what it says whatever clock the test chooses.
     public init(
         accessToken: String = "test-access-token",
-        expiresIn: TimeInterval = 3600
+        expiresIn: TimeInterval = 3600,
+        now: (@Sendable () -> Date)? = nil,
+        /// The clock a wall-clock change cannot move (SONNY-135). A test that moves `now` backwards
+        /// while leaving this alone is a test of a user setting their Mac's clock back, which is the
+        /// case the entitlement mark exists for — and it needs both clocks to be movable separately
+        /// or it cannot be written at all.
+        monotonicNow: (@Sendable () -> ContinuousClock.Instant)? = nil
     ) {
         let stub = BackendStubURLProtocol.makeSession()
         host = stub.host
         baseURL = stub.baseURL
+        let clock = now ?? Date.init
         let keychain = InMemoryKeychainSecretStore()
         let store = KeychainAccountTokenStore(secretStore: keychain)
         try? store.saveTokens(SonnyAccountTokens(
             accessToken: accessToken,
             refreshToken: "test-refresh-token",
-            accessTokenExpiresAt: Date().addingTimeInterval(expiresIn),
+            accessTokenExpiresAt: clock().addingTimeInterval(expiresIn),
             refreshTokenExpiresAt: nil,
             userID: "test-user",
             emailAddress: "someone@example.com"
@@ -60,7 +76,9 @@ public struct SignedInBackendFixture {
         client = SonnyBackendClient(
             environment: SonnyBackendEnvironment(baseURL: stub.baseURL, source: .debugOverride),
             tokenStore: store,
-            session: stub.session
+            session: stub.session,
+            now: clock,
+            monotonicNow: monotonicNow ?? { ContinuousClock.now }
         )
     }
 

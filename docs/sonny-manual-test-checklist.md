@@ -1768,6 +1768,79 @@ sanity checks on end-to-end behaviour, not on the fold.
       deliberately *not* folded, so a note that reads as one run-on line, or that has lost the page's
       paragraphs, is the regression to report.
 
+### Is this user allowed, and have they used more than they are allowed (new 2026-08-28, SONNY-135)
+
+**What changed:** the gateway now signs an entitlement claim the Mac verifies **locally, with no
+network call**, and enforces a per-account rate limit and a per-account spend cap before any provider
+is called. Nothing is gated yet — which capability keys gate which features is row 18's (SONNY-23) —
+so what these rows check is the machinery and the two directions it must fail in.
+
+**The first row is the headline and it needs nothing set up.** The other three need a signed-in
+session and a container, and therefore queue behind the same deferred identity sitting the metering
+rows above name: **SONNY-280's founder-deferral comment of 2026-08-27 and its numbered resume
+checklist, steps (1) through (5)**. The three blockers that section lists — the project's JWT key
+mode, the locked Magic Link template, and `deploy.sh local` never having run with real credentials —
+block these rows identically, and for the same reason: every metered route is authenticated.
+
+**Setup for the last three, once that resume has run.** The metering section's container setup, plus
+three new variables the container now requires wherever sign-in is mounted — a gateway given the
+Supabase names and not these **exits 78 naming them**, which is the intended failure and not a
+regression:
+
+```
+export ENTITLEMENT_SIGNING_KEY="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n')"
+export ENTITLEMENT_SIGNING_KEY_ID=sonny-dev-1
+export SPEND_CAP_UNITS=3          # deliberately tiny, so the cap is reachable by hand
+./scripts/deploy.sh local
+cd server && npm run build && npm run entitlements -- public-key   # prints "sonny-dev-1  <key>"
+```
+
+Then point the app at that container and hand it the public key, both of which are debug-only and
+exist in no build a user runs:
+
+```
+defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080
+defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the key printed above>"
+```
+
+- [ ] **(new 2026-08-28, SONNY-135) — the headline row, and it needs no server, no sign-in and no
+      network at all.** In the packaged app, turn Wi-Fi **off**. Then run, in the widget: a
+      calculation (`calc 12 * 9`), a saved snippet by its trigger, a saved routine (`run <name>`),
+      and a saved workspace (`open <name>`). **All four must work exactly as they do online.** This
+      is the guarantee the whole row-12 architecture leans on — free local capabilities never consult
+      an entitlement, so there is nothing for a missing network to fail closed on — and a refusal, a
+      hang, or a message about a plan or a connection on any of the four is the finding. Do it signed
+      out as well as signed in; the answer must be identical.
+- [ ] **(new 2026-08-28, SONNY-135) — after SONNY-280's resume steps (1)–(5).** With the container
+      running and the app signed in, run three commands that reach the backend (any planning command
+      will do). The third must be refused, because `SPEND_CAP_UNITS=3` and each call spends one unit.
+      **Read the message the app shows**: it must say *"You're out of allowance for this period."* —
+      a sentence, not a raw error, not a status code, and not an invitation to try again. Then run
+      `npm run entitlements -- show <account-id>` and confirm it reports 3 spent of 3. What would be
+      a finding: a fourth call succeeding, a raw error string, or a message telling the user to wait.
+- [ ] **(new 2026-08-28, SONNY-135) — after the row above, and it is the offline half of it.** With
+      the cap still exhausted, turn Wi-Fi off and repeat the four local commands from the headline
+      row. They must all still work: the cap bounds what goes to the backend and touches nothing
+      local. Then, still offline, run a command that needs the backend — it must fail with *"You're
+      offline. Everything Sonny does on this Mac still works."* rather than with an allowance
+      message, because being offline and being out of allowance are different states and the app
+      must not confuse them.
+- [ ] **(new 2026-08-28, SONNY-135) — the clock row, and it is the one most likely to surprise.**
+      Signed in, with the container running, open System Settings → General → Date & Time, turn off
+      "Set time and date automatically", and move the Mac's clock **forward one day**. Then use the
+      app normally for a minute: local commands, one backend command. **Nothing should change** — the
+      claim is honoured for three days past its own expiry, so a day forward is well inside that.
+      Then move the clock **back one week** and try again: local commands must still work, and the
+      app must not start behaving as though a lapsed plan had become current again. Set the clock
+      back to automatic afterwards. Anything that reads as a crash, a hang, or a sudden loss of a
+      capability that was working is the finding.
+      **The backward half is the one that changed** (2026-08-28, PR #152's review, F1): until that
+      round the app judged expiry against a clock its owner could set, so rolling it back really did
+      make a lapsed plan current again. It now remembers the latest time a server actually reported
+      and carries it forward on a clock nothing on the Mac can move, so the rollback should do
+      nothing at all. **Do this half offline** — with the container up, any request corrects the
+      clock and there is nothing to see.
+
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
 SONNY-296 re-checked the seven dated prototype-limitation findings in the spec's §4 and §4A.4

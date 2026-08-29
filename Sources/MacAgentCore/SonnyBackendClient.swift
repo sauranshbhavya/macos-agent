@@ -171,6 +171,7 @@ public actor SonnyBackendClient {
     private let platform: String
     private let retryDelays: SonnyBackendRetryDelays
     private let now: @Sendable () -> Date
+    private let monotonicNow: @Sendable () -> ContinuousClock.Instant
     private let jitterFraction: @Sendable () -> Double
     private let sleepForRetry: @Sendable (TimeInterval) async throws -> Void
 
@@ -189,7 +190,23 @@ public actor SonnyBackendClient {
     private var refreshTask: Task<Void, Error>?
     /// Server time minus this Mac's time, from the `Date` header every response carries (§3.5).
     /// All expiry arithmetic runs in server time, because the user can change their own clock.
+    ///
+    /// **This offset alone is not a defence against a clock the user changes, and the distinction
+    /// cost a real hole** (SONNY-135, PR #152's review, F1). It is a *correction*, applied to the
+    /// local clock — so `serverNow()` moves with the local clock, exactly, and a user who sets their
+    /// Mac back a week gets a `serverNow()` a week earlier. What cannot be moved that way is
+    /// `lastServerObservation` below, which pairs an instant a server actually reported with a
+    /// **monotonic** reading, so the pair can be advanced by elapsed time rather than by a
+    /// settable clock.
     private var serverClockOffset: TimeInterval = 0
+
+    /// The most recent instant a server reported, and the monotonic reading it arrived at.
+    ///
+    /// Written only from a `Date` header this client actually received, so it is the one time source
+    /// here that a user cannot author. `nil` until a response has been seen at all — a first launch,
+    /// or a relaunch with no network — which is why `EntitlementService` persists what it derives
+    /// from this rather than relying on it surviving a process.
+    private var lastServerObservation: ObservedServerTime?
 
     /// `tokenStore` has no default, deliberately.
     ///
@@ -207,6 +224,10 @@ public actor SonnyBackendClient {
         platform: String = SonnyClientIdentity.platform,
         retryDelays: SonnyBackendRetryDelays = .contractDefault,
         now: @escaping @Sendable () -> Date = Date.init,
+        /// A clock a wall-clock change cannot move, for the one thing that must not be movable:
+        /// how much real time has passed since a server last told this client what time it was.
+        /// `ContinuousClock` keeps counting across sleep, which `ProcessInfo.systemUptime` does not.
+        monotonicNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
         jitterFraction: @escaping @Sendable () -> Double = { Double.random(in: 0...0.25) },
         sleepForRetry: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
             try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
@@ -219,6 +240,7 @@ public actor SonnyBackendClient {
         self.platform = platform
         self.retryDelays = retryDelays
         self.now = now
+        self.monotonicNow = monotonicNow
         self.jitterFraction = jitterFraction
         self.sleepForRetry = sleepForRetry
     }
@@ -638,10 +660,61 @@ public actor SonnyBackendClient {
 
     func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
 
+    /// The last instant a server reported, paired with the monotonic reading it arrived at.
+    ///
+    /// **The pair is the point.** An instant alone would have to be compared against a clock the user
+    /// controls; with the monotonic reading beside it a caller can say "that instant, plus however
+    /// much real time has passed since", and no wall-clock change can shorten that. `nil` when no
+    /// response has ever been seen, which a caller must treat as "no trustworthy time" rather than
+    /// as "now".
+    func lastObservedServerTime() -> ObservedServerTime? { lastServerObservation }
+
     private func recordServerClock(from response: HTTPURLResponse) {
         guard let header = response.value(forHTTPHeaderField: "Date"),
               let serverDate = SonnyHTTPDate.parse(header) else { return }
         serverClockOffset = serverDate.timeIntervalSince(now())
+        // **Only ever forward.** A response that reports an earlier instant than one already seen —
+        // a proxy with a slow clock, a replayed response — must not lower what this client will
+        // vouch for, or the defence could be walked back by the same party it defends against.
+        if let existing = lastServerObservation, existing.serverInstant >= serverDate { return }
+        lastServerObservation = ObservedServerTime(serverInstant: serverDate, monotonicAt: monotonicNow())
+    }
+}
+
+/// An instant a server reported, and the monotonic reading it was received at (SONNY-135).
+///
+/// **Two values because either alone is defeated by the thing the other answers.** A server instant
+/// on its own goes stale the moment it is stored and has to be compared against *some* clock; the
+/// local one is the user's to set. A monotonic reading on its own says how much time has passed and
+/// never says from when. Together they say "this instant, plus the real time since", which is a
+/// statement a wall-clock change cannot alter.
+public struct ObservedServerTime: Equatable, Sendable {
+    public let serverInstant: Date
+    public let monotonicAt: ContinuousClock.Instant
+
+    public init(serverInstant: Date, monotonicAt: ContinuousClock.Instant) {
+        self.serverInstant = serverInstant
+        self.monotonicAt = monotonicAt
+    }
+
+    /// This observation carried forward to `monotonicNow` — the instant it implies the server's
+    /// clock now reads.
+    ///
+    /// Elapsed time is clamped at zero: a monotonic clock never goes backwards, so a negative
+    /// reading is a caller comparing two different clocks, and answering the observation unchanged
+    /// is the conservative reading of that mistake.
+    public func projected(to monotonicNow: ContinuousClock.Instant) -> Date {
+        let elapsed = monotonicAt.duration(to: monotonicNow)
+        return serverInstant.addingTimeInterval(max(0, TimeInterval(elapsed)))
+    }
+}
+
+extension TimeInterval {
+    /// A `Duration` as seconds. `components` is `(seconds, attoseconds)`; both are needed, because
+    /// dropping the fraction would make a sub-second duration read as no time at all.
+    init(_ duration: Duration) {
+        let parts = duration.components
+        self = Double(parts.seconds) + Double(parts.attoseconds) * 1e-18
     }
 }
 

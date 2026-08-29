@@ -24,21 +24,39 @@ import Testing
 @Suite
 @MainActor
 struct SignInReleaseSwitchScanTests {
-    /// Everything that names the debug-only pointer. The two string literals are what a `strings`
-    /// sweep of the release binary looks for; the three identifiers are what a release build would
-    /// have to be able to resolve.
-    static let overrideTokens = [
+    /// The two string literals a `strings` sweep of the release binary looks for. **Unique to this
+    /// pointer**, which is what makes the file-set assertion below meaningful.
+    static let pointerLiterals = [
         "\"SONNY_BACKEND_BASE_URL\"",
-        "\"SonnyBackendBaseURL\"",
+        "\"SonnyBackendBaseURL\""
+    ]
+
+    /// The identifiers a release build would have to be able to resolve.
+    ///
+    /// **Split out from the literals by SONNY-135, and the split is the correction rather than a
+    /// tidy-up.** These three names are the *shape* of a debug-only pointer in this repository, not
+    /// the property of one, and that ticket added a second pointer — the entitlement public-key
+    /// override in `SonnyEntitlementKeys` — which mirrors the pattern deliberately, identifiers
+    /// included. With one combined list the file-set assertion below started failing on a file whose
+    /// `#if DEBUG` guarding was perfectly correct, which would have pushed the next author into
+    /// renaming a well-chosen identifier to satisfy a test about a different pointer.
+    ///
+    /// So the guarantee is split where it actually divides: the **literals** are unique to this
+    /// pointer and must live in exactly one file, and **every mention of either list** — in any file
+    /// — must sit inside an active `#if DEBUG`, which is the property SONNY-106 needs and the one
+    /// worth checking across the whole tree.
+    static let sharedOverrideIdentifiers = [
         "overrideEnvironmentVariable",
         "overrideDefaultsKey",
         "normalizedOverride"
     ]
 
+    static var overrideTokens: [String] { pointerLiterals + sharedOverrideIdentifiers }
+
     @Test
     func everyMentionOfTheStagingPointerInSourcesIsInsideIfDebug() throws {
         var offenders: [String] = []
-        var files: Set<String> = []
+        var literalFiles: Set<String> = []
         var mentions = 0
 
         for url in try MacAgentSource.appSourceFiles() + MacAgentSource.coreSourceFiles() {
@@ -48,7 +66,9 @@ struct SignInReleaseSwitchScanTests {
             for (index, line) in lines.enumerated() {
                 guard Self.overrideTokens.contains(where: line.contains) else { continue }
                 mentions += 1
-                files.insert(url.lastPathComponent)
+                if Self.pointerLiterals.contains(where: line.contains) {
+                    literalFiles.insert(url.lastPathComponent)
+                }
                 if !guarded[index] {
                     offenders.append("\(url.lastPathComponent):\(index + 1) \(line.trimmingCharacters(in: .whitespaces))")
                 }
@@ -57,7 +77,10 @@ struct SignInReleaseSwitchScanTests {
 
         // A walker that found nothing reads exactly like a tree with nothing to find.
         #expect(mentions >= 5, "the scan saw \(mentions) mentions — too few to be the real declaration")
-        #expect(files == ["SonnyBackendEnvironment.swift"], "the pointer is named in \(files.sorted())")
+        #expect(
+            literalFiles == ["SonnyBackendEnvironment.swift"],
+            "this pointer's own literals are named in \(literalFiles.sorted())"
+        )
         #expect(offenders.isEmpty, "outside #if DEBUG:\n\(offenders.joined(separator: "\n"))")
     }
 

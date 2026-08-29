@@ -258,6 +258,21 @@ public enum SonnyBackendCopy {
         // is an interception rather than an edit to `SignInFailure`.
         if case .api(let api) = error {
             switch api.code {
+            case .entitlementRequired:
+                // **§7.2 case 2, and it reached `.unexpected` before SONNY-135** — `SignInFailure`
+                // maps both entitlement codes there, correctly for the three unauthenticated
+                // sign-in routes it was written for and wrongly here, where the shared sentence
+                // ("Try again") invites a retry that is guaranteed to produce the identical answer.
+                // The same interception, and the same reasoning, as the three codes below it.
+                //
+                // The words are `EntitlementCopy`'s, so a refusal the server raises and one this Mac
+                // decides locally cannot say two different things about the same state.
+                return EntitlementCopy.message(for: .notEntitled)
+            case .entitlementExpired:
+                // §7.2 case 2a: the entitlement lapsed mid-task. §16.4's graceful halt means the
+                // step in flight finishes and the next one is blocked, so what the user needs is the
+                // reason rather than a retry.
+                return EntitlementCopy.message(for: .lapsed)
             case .providerRejected:
                 // §7.2 case 5b's own words: "Told Sonny could not do this one. A retry would fail
                 // identically." So the sentence says what happened and stops.
