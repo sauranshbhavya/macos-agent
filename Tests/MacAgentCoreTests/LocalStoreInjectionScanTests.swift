@@ -869,6 +869,59 @@ struct LocalStoreInjectionScanTests {
         #expect(factoryCall.contains("finderRevealer:"), "the argument is not passed by that label any more")
     }
 
+    /// **The executor reads the clipboard store the monitor writes, and never one of its own**
+    /// (SONNY-350).
+    ///
+    /// `AgentActionExecutor` takes a `clipboardHistoryStore` of its own, and that parameter carried
+    /// a default resolving to the real file until this ticket. `AgentViewModel.makeExecutor` passed
+    /// five of the executor's six stores and let this one default — so a fixture that had carefully
+    /// injected a `ClipboardHistoryMonitor` at a temp root still had "show me my clipboard history"
+    /// reading the developer's own copied text. The lookup is read-only, so nothing corrupted and
+    /// no test failed; what was live is the divergence `ClipboardHistoryMonitor.historyStore`
+    /// forbids in its own doc comment, inside the file that comment sits in.
+    ///
+    /// **A source rule rather than a behavioural one, and the reason is honest rather than
+    /// convenient.** The obvious test — seed the fixture's store, run the lookup, read the text back
+    /// — cannot be written deterministically: the adapter's answer reaches the view model only as
+    /// `finalSummary`, which is a count ("Found 1 clipboard item."), and a count discriminates
+    /// against the real store only when the developer's own history happens not to hold the same
+    /// number. That is a test whose result changes with the machine running it, which this
+    /// repository does not accept as evidence. So the property held here is the wiring itself: there
+    /// is exactly one `clipboardHistoryStore:` argument in `AgentViewModel.swift`, and it is the
+    /// monitor's own store. A second one, or a store built inline, fails.
+    @Test
+    func theExecutorIsHandedTheClipboardMonitorsOwnStore() throws {
+        let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
+        let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
+
+        let uses = Self.argumentLabelUses(of: "clipboardHistoryStore", in: code)
+        #expect(
+            uses.count == 1,
+            """
+            AgentViewModel.swift names `clipboardHistoryStore:` \(uses.count) times, expected once. \
+            The executor must read the store the monitor writes; a second site is a second answer to \
+            "which file is the clipboard history".
+            """
+        )
+        // `argumentLabelUses` returns the label and its colon, which is what the count above
+        // needs; the *value* is the rest of that line, which is what this rule is about.
+        let argumentLines = TestSourceTree.codeLines(of: source)
+            .map(\.text)
+            .filter { $0.contains("clipboardHistoryStore:") }
+        #expect(argumentLines.count == 1, "expected one line carrying the argument, got \(argumentLines.count)")
+        for line in argumentLines {
+            #expect(
+                line.contains("clipboardHistoryMonitor.historyStore"),
+                """
+                AgentViewModel.swift passes something other than the monitor's own store as \
+                `clipboardHistoryStore:` — so what the lookup reads and what recording writes can \
+                differ, which is exactly what ClipboardHistoryMonitor.historyStore exists to \
+                prevent. The line is: \(line.trimmingCharacters(in: .whitespaces))
+                """
+            )
+        }
+    }
+
     /// The same door from the other side: no test may ask for the real locations either.
     ///
     /// Scanned across every test target, because a helper in the support target would be the least
