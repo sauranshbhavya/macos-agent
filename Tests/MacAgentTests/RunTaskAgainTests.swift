@@ -1,8 +1,8 @@
 import Foundation
-import Testing
-import MacAgentTestSupport
-@testable import MacAgent
 import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
 
 /// "Run again" — re-ask Sonny with the same words, never replay the plan (row E, SONNY-149).
 ///

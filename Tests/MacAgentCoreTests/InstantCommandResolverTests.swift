@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -17,7 +18,12 @@ struct InstantCommandResolverTests {
 
     @Test
     func resolverBuildsCalculatorPlanForExplicitAndBareInputs() throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let explicitPlan) = resolver.resolve(command: "calc 2 + 2") else {
             Issue.record("Expected explicit calculator command to resolve locally.")
@@ -38,7 +44,12 @@ struct InstantCommandResolverTests {
 
     @Test
     func resolverClarifiesEmptyCalculatorCommand() throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .clarify(let plan) = resolver.resolve(command: "calculate") else {
             Issue.record("Expected empty calculator command to ask a clarification.")
@@ -51,7 +62,12 @@ struct InstantCommandResolverTests {
 
     @Test
     func instantCalculatorBypassesPlannerButUsesRunnerRiskPipeline() async throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
         guard case .plan(let plan) = resolver.resolve(command: "calc 2 + 2 * 3") else {
             Issue.record("Expected calculator command to resolve locally.")
             return
@@ -61,7 +77,15 @@ struct InstantCommandResolverTests {
         let usageRecorder = TaskUsageRecorder()
         let runner = AgentRunner(
             planner: FailingPlanner(),
-            executor: AgentActionExecutor(usageRecorder: usageRecorder),
+            executor: AgentActionExecutor(
+                routineStore: UnreachableLocalStores.routines(),
+                workspaceStore: UnreachableLocalStores.workspaces(),
+                usageRecorder: usageRecorder,
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            ),
             logStore: logStore
         )
 
@@ -96,7 +120,12 @@ struct InstantCommandResolverTests {
     /// way the evaluator will, and the plan carries that form so its own summary says `2 + 2`.
     @Test
     func bareArithmeticWithATrailingEqualsSignResolvesToTheCalculator() throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         for command in ["2 + 2 =", "2 + 2 = ", "2+2=", "2 + 2 = ?", "2 + 2?"] {
             guard case .plan(let plan) = resolver.resolve(command: command) else {

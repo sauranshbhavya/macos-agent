@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -103,7 +104,12 @@ struct ClipboardHistoryTests {
 
     @Test
     func resolverBuildsClipboardHistoryPlans() throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let allPlan) = resolver.resolve(command: "clipboard history") else {
             Issue.record("Expected clipboard history command to resolve locally.")
@@ -128,7 +134,15 @@ struct ClipboardHistoryTests {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         try store.record("Invoice 123", copiedAt: now)
         try store.record("Meeting notes", copiedAt: now.addingTimeInterval(1))
-        let executor = AgentActionExecutor(clipboardHistoryStore: store, now: { now.addingTimeInterval(2) })
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: store,
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            now: { now.addingTimeInterval(2) }
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Search clipboard history.",

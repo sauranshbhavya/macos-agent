@@ -291,7 +291,7 @@ struct TaskResultStorageTests {
 
         // Every production construction shape, none of them passing a cap.
         #expect(TaskPlanDetailStore(fileURL: root.appendingPathComponent("p.json")).maxDetails == 10_000)
-        #expect(TaskPlanDetailStore(fileManager: .default).maxDetails == 10_000)
+        #expect(TaskPlanDetailStore(fileURL: TaskPlanDetailStore.realFileURL()).maxDetails == 10_000)
         #expect(
             TaskPlanDetailStore(fileURL: root.appendingPathComponent("p.json")).maxDetails
                 == TaskHistoryStore.defaultMaxItems
@@ -326,8 +326,14 @@ struct TaskResultStorageTests {
     func noProductionPathPassesACapToThePlanStore() throws {
         for file in ["AgentViewModel.swift", "LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
             let text = try sourceNamed(file)
-            let constructions = text.components(separatedBy: "TaskPlanDetailStore(").count - 1
-            #expect(constructions >= 1, "\(file) should still construct the store")
+            // **Both spellings, since SONNY-350 split them.** Two of these three files used to
+            // construct a store purely to read `.fileURL` off it; they call the store's named
+            // `realFileURL` now, which constructs nothing. A needle matching only `(` therefore
+            // answered zero for them — the search failing, reported as the population being small.
+            let named = ["TaskPlanDetailStore(", "TaskPlanDetailStore.realFileURL("]
+                .map { text.components(separatedBy: $0).count - 1 }
+                .reduce(0, +)
+            #expect(named >= 1, "\(file) should still name the store")
             #expect(
                 !text.contains("maxDetails:"),
                 "\(file) passes a cap to TaskPlanDetailStore — a shorter life is a founder decision, not a parameter"

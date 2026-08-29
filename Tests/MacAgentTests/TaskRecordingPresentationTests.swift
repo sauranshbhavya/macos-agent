@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// The name is the mechanism (founder, 2026-08-16), so it gets a test rather than a review comment.
 struct TaskRecordingPresentationTests {

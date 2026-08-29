@@ -835,27 +835,36 @@ final class AgentViewModel: ObservableObject {
     /// object.
     static func atItsRealStoreLocations(backendClient: SonnyBackendClient) -> AgentViewModel {
         let whitelist = PathWhitelist()
-        let clipboardHistorySettingsStore = ClipboardHistorySettingsStore()
+        let clipboardHistorySettingsStore = ClipboardHistorySettingsStore(
+            fileURL: ClipboardHistorySettingsStore.realFileURL()
+        )
+        let clipboardHistoryStore = ClipboardHistoryStore(fileURL: ClipboardHistoryStore.realFileURL())
         return AgentViewModel(
-            routineStore: RoutineStore(),
-            workspaceStore: WorkspaceStore(),
-            snippetStore: SnippetStore(),
-            recentArtifactStore: RecentArtifactStore(),
+            routineStore: RoutineStore(fileURL: RoutineStore.realFileURL()),
+            workspaceStore: WorkspaceStore(fileURL: WorkspaceStore.realFileURL()),
+            snippetStore: SnippetStore(fileURL: SnippetStore.realFileURL()),
+            recentArtifactStore: RecentArtifactStore(fileURL: RecentArtifactStore.realFileURL()),
             // The real thing, named here for the same reason the thirteen store locations are: this
             // is the one place the shipping app asks for something that reaches the machine
             // (SONNY-239). It sits in this list rather than defaulting on the initializer because a
             // default nobody writes is a default nobody can see — SONNY-240's whole argument,
             // applied to a parameter that opens Finder rather than one that writes a file.
             finderRevealer: { NSWorkspace.shared.activateFileViewerSelecting($0) },
-            shortcutRunHistoryStore: ShortcutRunHistoryStore(),
-            taskHistoryStore: TaskHistoryStore(),
-            taskPlanDetailStore: TaskPlanDetailStore(),
-            visionSessionJournalStore: VisionSessionJournalStore(),
+            shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: ShortcutRunHistoryStore.realFileURL()),
+            taskHistoryStore: TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL()),
+            taskPlanDetailStore: TaskPlanDetailStore(fileURL: TaskPlanDetailStore.realFileURL()),
+            visionSessionJournalStore: VisionSessionJournalStore(fileURL: VisionSessionJournalStore.realFileURL()),
             clipboardHistorySettingsStore: clipboardHistorySettingsStore,
-            approvedAppStore: ApprovedAppStore(),
-            outputLocationStore: OutputLocationStore(whitelist: whitelist),
-            resumableTaskStore: ResumableTaskStore(),
-            clipboardHistoryMonitor: ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore),
+            approvedAppStore: ApprovedAppStore(fileURL: ApprovedAppStore.realFileURL()),
+            outputLocationStore: OutputLocationStore(
+                fileURL: OutputLocationStore.realFileURL(),
+                whitelist: whitelist
+            ),
+            resumableTaskStore: ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()),
+            clipboardHistoryMonitor: ClipboardHistoryMonitor(
+                store: clipboardHistoryStore,
+                settingsStore: clipboardHistorySettingsStore
+            ),
             localDataDeletionService: LocalDataDeletionService(),
             // The one client the process holds, built in `main.swift` beside the real Keychain and
             // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
@@ -895,13 +904,19 @@ final class AgentViewModel: ObservableObject {
     /// would make that call site harmless instead of absent.
     ///
     /// **What this does not prevent**, stated rather than left to be discovered: a call site is now
-    /// forced to *pass* a store, not to pass a sensible one — `taskHistoryStore: TaskHistoryStore()`
-    /// satisfies the compiler and still writes to the real path. That residue is what
-    /// `LocalStoreInjectionScanTests` covers, and the two together are the whole guard. Nor does it
-    /// touch the non-store seams below (`browserOpener`, `shortcutCatalog`, `zipArchiver` and the
-    /// rest), which default to real implementations that shell out and open real applications; that
-    /// is a different hazard with a different blast radius, and every fixture passes hermetic ones
-    /// today.
+    /// forced to *pass* a store, not to pass a sensible one. That used to mean `taskHistoryStore:
+    /// TaskHistoryStore()` — a store that named no location and silently resolved the real one.
+    /// **SONNY-350 closed that spelling**: `fileURL` is a required parameter of all thirteen store
+    /// initializers, so the only way to reach `~/Library/Application Support/Sonny/` is to write
+    /// `TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL())`, in words, where a reader and a
+    /// sweep can both see it. The residue is now that sentence rather than silence, and
+    /// `LocalStoreInjectionScanTests.onlyTheShippedConstantsTestsNameAStoresRealLocation` holds the
+    /// four tests permitted to write it.
+    ///
+    /// Nor does any of this touch the non-store seams below (`browserOpener`, `shortcutCatalog`,
+    /// `zipArchiver` and the rest), which default to real implementations that shell out and open
+    /// real applications; that is a different hazard with a different blast radius, and every
+    /// fixture passes hermetic ones today.
     init(
         audioRecorder: AudioCommandRecorder = AudioCommandRecorder(),
         permissionReadinessService: PermissionReadinessService = PermissionReadinessService(),
@@ -4784,6 +4799,14 @@ final class AgentViewModel: ObservableObject {
                 usageRecorder: taskUsageRecorder
             ),
             usageRecorder: taskUsageRecorder,
+            // The monitor's own store, not a second one. The executor only *reads* clipboard
+            // history, so while this parameter carried a default it read the real
+            // `~/Library/Application Support/Sonny/clipboard-history.json` — including from every
+            // fixture that had carefully injected a monitor at a temp root. Found by the compiler
+            // the moment SONNY-350 removed the default, and fixed the way
+            // `ClipboardHistoryMonitor.historyStore` says to: reading it back off the already
+            // injected monitor cannot diverge from what recording writes.
+            clipboardHistoryStore: clipboardHistoryMonitor.historyStore,
             snippetStore: snippetStore,
             runningAppSwitcher: runningAppSwitcher,
             recentArtifactStore: recentArtifactStore,

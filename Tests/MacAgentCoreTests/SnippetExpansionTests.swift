@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -44,7 +45,12 @@ struct SnippetExpansionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         try store.save(StoredSnippet(trigger: ";sig", expansion: "Best,\nSonny"))
-        let resolver = InstantCommandResolver(snippetStore: store)
+        let resolver = InstantCommandResolver(
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let plan) = resolver.resolve(command: ";sig") else {
             Issue.record("Expected saved snippet trigger to resolve locally.")
@@ -61,7 +67,12 @@ struct SnippetExpansionTests {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
-        let resolver = InstantCommandResolver(snippetStore: store)
+        let resolver = InstantCommandResolver(
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let savePlan) = resolver.resolve(command: "snippet save ;sig = Best, Sonny") else {
             Issue.record("Expected snippet save command to resolve locally.")
@@ -73,7 +84,12 @@ struct SnippetExpansionTests {
         #expect(savePlan.steps[0].draftContent == "Best, Sonny")
 
         let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
             now: { Date(timeIntervalSince1970: 123) }
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
@@ -109,11 +125,21 @@ struct SnippetExpansionTests {
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         try store.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
         let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
             now: { Date(timeIntervalSince1970: 123) }
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
-        let resolver = InstantCommandResolver(snippetStore: store)
+        let resolver = InstantCommandResolver(
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let savePlan) = resolver.resolve(command: "snippet save ;sig = New text") else {
             Issue.record("Expected snippet save command to resolve locally.")
@@ -145,9 +171,22 @@ struct SnippetExpansionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         try store.save(StoredSnippet(trigger: ";sig", expansion: "Best, Sonny"))
-        let executor = AgentActionExecutor(snippetStore: store, now: { Date(timeIntervalSince1970: 123) })
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            now: { Date(timeIntervalSince1970: 123) }
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
-        let resolver = InstantCommandResolver(snippetStore: store)
+        let resolver = InstantCommandResolver(
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let savePlan) = resolver.resolve(command: "snippet save ;sig = Best, Sonny") else {
             Issue.record("Expected snippet save command to resolve locally.")
@@ -178,7 +217,15 @@ struct SnippetExpansionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         try store.save(StoredSnippet(trigger: ";sig", expansion: "Best, Sonny"))
-        let executor = AgentActionExecutor(snippetStore: store, now: { Date(timeIntervalSince1970: 123) })
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            now: { Date(timeIntervalSince1970: 123) }
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Save snippet ;sig.",
@@ -203,7 +250,12 @@ struct SnippetExpansionTests {
 
     @Test
     func snippetSaveCommandClarifiesWhenTriggerOrExpansionIsMissing() {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .clarify(let clarifyPlan) = resolver.resolve(command: "snippet save ;sig") else {
             Issue.record("Expected malformed snippet save command to ask for clarification.")
@@ -221,7 +273,14 @@ struct SnippetExpansionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         try store.save(StoredSnippet(trigger: ";sig", expansion: "Best,\nSonny"))
-        let executor = AgentActionExecutor(snippetStore: store)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: store,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Expand snippet ;sig.",

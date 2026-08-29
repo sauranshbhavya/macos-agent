@@ -85,7 +85,10 @@ struct ResumableTaskStoreTests {
     @Test
     func theShippedIdlePeriodIsFourteenDays() {
         #expect(ResumableTaskStore.defaultIdleExpiry == 14 * 24 * 60 * 60)
-        #expect(ResumableTaskStore().idleExpiry == ResumableTaskStore.defaultIdleExpiry)
+        #expect(
+            ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()).idleExpiry
+                == ResumableTaskStore.defaultIdleExpiry
+        )
     }
 
     /// The safety rail, not the lifecycle. Oldest activity is what goes.
@@ -357,7 +360,12 @@ struct ResumableTaskStoreTests {
 
         for file in try shippedSwiftFiles() {
             let lines = TestSourceTree.codeLines(of: try String(contentsOf: file, encoding: .utf8))
-            for (index, line) in lines.enumerated() where line.text.contains("ResumableTaskStore(") {
+            // Both spellings: SONNY-350 turned two of the three sites from a construction into a
+            // call to the store's named `realFileURL`, and a needle matching only `(` would answer
+            // one — a search that stopped reaching two thirds of its own population, reported as
+            // the population having shrunk.
+            for (index, line) in lines.enumerated() where line.text.contains("ResumableTaskStore(")
+                || line.text.contains("ResumableTaskStore.realFileURL(") {
                 constructionSites += 1
                 // The construction and the few lines under it, because an argument list can be
                 // written across several. Six is comfortably more than the longest construction in

@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// The delete surface's logic, pulled out of the SwiftUI body so the suite can reach it.
 ///

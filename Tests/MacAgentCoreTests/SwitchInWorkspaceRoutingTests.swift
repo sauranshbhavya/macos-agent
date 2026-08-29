@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -306,7 +307,15 @@ struct SwitchInWorkspaceRoutingTests {
         ])
         let runner = AgentRunner(
             planner: UncalledPlanner(),
-            executor: AgentActionExecutor(runningAppSwitcher: switcher)
+            executor: AgentActionExecutor(
+                routineStore: UnreachableLocalStores.routines(),
+                workspaceStore: UnreachableLocalStores.workspaces(),
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                runningAppSwitcher: switcher,
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            )
         )
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
         #expect(prepared.plan.steps[0].resolvedAppName == "Xcode")
@@ -347,7 +356,15 @@ struct SwitchInWorkspaceRoutingTests {
 
         let runner = AgentRunner(
             planner: UncalledPlanner(),
-            executor: AgentActionExecutor(runningAppSwitcher: StubRunningAppSwitcher(apps: []))
+            executor: AgentActionExecutor(
+                routineStore: UnreachableLocalStores.routines(),
+                workspaceStore: UnreachableLocalStores.workspaces(),
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                runningAppSwitcher: StubRunningAppSwitcher(apps: []),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            )
         )
         #expect(throws: RunningAppSwitchError.noMatchingRunningApp("xcod")) {
             _ = try runner.prepare(plan: plan, source: .instantResolver)
@@ -382,6 +399,7 @@ struct SwitchInWorkspaceRoutingTests {
             try workspaceStore.save(StoredWorkspace(name: "Switch", apps: ["Chrome"], urls: []))
             resolver = InstantCommandResolver(
                 snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
                 routineStore: routineStore,
                 workspaceStore: workspaceStore
             )

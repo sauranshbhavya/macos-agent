@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 @Suite(.serialized)

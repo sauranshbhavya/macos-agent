@@ -1,8 +1,8 @@
 import Foundation
+import MacAgentCore
 import MacAgentTestSupport
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// The two fields every content-bearing request carries, from the run they describe (SONNY-130).
 ///

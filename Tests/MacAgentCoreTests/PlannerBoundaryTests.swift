@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -356,6 +357,7 @@ struct PlannerBoundaryTests {
         try snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Sent from Sonny"))
         let resolver = InstantCommandResolver(
             snippetStore: snippetStore,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         )

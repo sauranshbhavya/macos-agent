@@ -102,7 +102,7 @@ public final class AgentRunner {
 
     public init(
         planner: any Planning,
-        executor: AgentActionExecutor = AgentActionExecutor(),
+        executor: AgentActionExecutor,
         logStore: AgentLogStore = AgentLogStore(),
         approvalPolicy: RiskApprovalPolicy = .default,
         recentArtifactStore: RecentArtifactStore? = nil,
@@ -121,7 +121,7 @@ public final class AgentRunner {
     /// somebody happened to look at (SONNY-209).
     public init(
         plannerProvider: @escaping () throws -> any Planning,
-        executor: AgentActionExecutor = AgentActionExecutor(),
+        executor: AgentActionExecutor,
         logStore: AgentLogStore = AgentLogStore(),
         approvalPolicy: RiskApprovalPolicy = .default,
         recentArtifactStore: RecentArtifactStore? = nil,

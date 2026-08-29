@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -1223,6 +1224,9 @@ struct EditWorkspaceTests {
                 fileOpener: NoopFileOpener(),
                 routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
                 workspaceStore: store,
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
                 shortcutCatalog: FakeShortcutCatalog(names: []),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")
@@ -1402,6 +1406,9 @@ struct EditWorkspaceScopeOnlyDisclosureTests {
                 fileOpener: ScopeOnlyNoopFileOpener(),
                 routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
                 workspaceStore: store,
+                clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+                snippetStore: UnreachableLocalStores.snippets(),
+                recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
                 shortcutCatalog: FakeShortcutCatalog(names: []),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")

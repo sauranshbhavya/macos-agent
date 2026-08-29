@@ -305,33 +305,33 @@ public struct LocalDataDeletionService: @unchecked Sendable {
         [
             // Row I's action journal. A wipe that left a record of every click Sonny made inside the
             // user's apps would be the loudest possible failure of a privacy wipe.
-            VisionSessionJournalStore(fileManager: fileManager).fileURL,
-            RoutineStore(fileManager: fileManager).fileURL,
-            WorkspaceStore(fileManager: fileManager).fileURL,
-            ClipboardHistoryStore(fileManager: fileManager).fileURL,
-            ClipboardHistorySettingsStore(fileManager: fileManager).fileURL,
-            SnippetStore(fileManager: fileManager).fileURL,
-            RecentArtifactStore(fileManager: fileManager).fileURL,
-            ShortcutRunHistoryStore(fileManager: fileManager).fileURL,
-            TaskHistoryStore(fileManager: fileManager).fileURL,
+            VisionSessionJournalStore.realFileURL(fileManager: fileManager),
+            RoutineStore.realFileURL(fileManager: fileManager),
+            WorkspaceStore.realFileURL(fileManager: fileManager),
+            ClipboardHistoryStore.realFileURL(fileManager: fileManager),
+            ClipboardHistorySettingsStore.realFileURL(fileManager: fileManager),
+            SnippetStore.realFileURL(fileManager: fileManager),
+            RecentArtifactStore.realFileURL(fileManager: fileManager),
+            ShortcutRunHistoryStore.realFileURL(fileManager: fileManager),
+            TaskHistoryStore.realFileURL(fileManager: fileManager),
             // Row E's plan details. Deleted with the same wipe as the rows they hang off — a wipe
             // that left the plan of every task Sonny ran would be the same failure as leaving the
             // rows themselves.
-            TaskPlanDetailStore(fileManager: fileManager).fileURL,
+            TaskPlanDetailStore.realFileURL(fileManager: fileManager),
             // Row J's per-app grants. A durable record of which apps the user let Sonny drive is
             // theirs to erase along with everything else — and leaving it behind would also leave
             // the wipe's own promise half-true.
-            ApprovedAppStore(fileManager: fileManager).fileURL,
+            ApprovedAppStore.realFileURL(fileManager: fileManager),
             // Row 13's common output locations (SONNY-209). A short list of folder paths, which
             // sounds harmless and is not: where somebody's work goes is a map of what they work on,
             // and folder names are theirs. Erased with the rest for the same reason as everything
             // above it.
-            OutputLocationStore(fileManager: fileManager).fileURL,
+            OutputLocationStore.realFileURL(fileManager: fileManager),
             // Row 13's unfinished runs (SONNY-210). It holds a whole plan — the steps, the paths
             // they name, the draft text they carry — for a task the user started and did not
             // finish, which is as much of their content as any row in task history and is left
             // behind by a wipe that forgot it.
-            ResumableTaskStore(fileManager: fileManager).fileURL
+            ResumableTaskStore.realFileURL(fileManager: fileManager)
         ]
     }
 

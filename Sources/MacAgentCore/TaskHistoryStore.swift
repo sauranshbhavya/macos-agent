@@ -232,20 +232,24 @@ public struct TaskHistoryStore: @unchecked Sendable {
     private let encryption: LocalStorageEncryption
 
     public init(
-        fileURL: URL? = nil,
+        fileURL: URL,
         fileManager: FileManager = .default,
         encryption: LocalStorageEncryption = .shared,
         maxItems: Int = Self.defaultMaxItems
     ) {
+        self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
         self.maxItems = max(1, maxItems)
-        if let fileURL {
-            self.fileURL = fileURL
-        } else {
-            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-                .appendingPathComponent("task-history.json")
-        }
+    }
+
+    /// Where the shipping app keeps this store.
+    ///
+    /// The rule that makes this a named call rather than an initializer default is on
+    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
+    public static func realFileURL(fileManager: FileManager = .default) -> URL {
+        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
+            .appendingPathComponent("task-history.json")
     }
 
     /// Appends one record, evicting the oldest once the cap is passed.
