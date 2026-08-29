@@ -280,6 +280,391 @@ struct LocalStoreInjectionScanTests {
         )
     }
 
+    /// **`Sources/` builds a default-path local store in exactly one place, and it is the factory**
+    /// (SONNY-269).
+    ///
+    /// **Why this exists when `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` is right
+    /// there.** That check counts a *type name*. SONNY-248 widened the count from one spelling to
+    /// every spelling that writes `AgentViewModel` beside its parenthesis — `Name(…)`,
+    /// `Name.init(…)`, either qualified by a module — and three spellings name the type nowhere near
+    /// the parenthesis and are therefore outside any name-keyed scan at all: a `typealias` and a
+    /// construction through it, a metatype value (`let t = AgentViewModel.self; t.init(…)`, which a
+    /// `final class` permits with no `required` initializer), and a bare contextual `.init(…)` where
+    /// an annotation or a return type fixes the type. All three compile.
+    ///
+    /// **Probed as a live defect before this test existed**, the way SONNY-248's four doors were. A
+    /// wrapper in `Sources/MacAgent/` built the thirteen stores inline and returned an
+    /// `AgentViewModel` through a `typealias` — so it hands its caller the developer's real
+    /// `~/Library` data and names neither `atItsRealStoreLocations` nor the type. With that file in
+    /// place at `a99a03a`: `LocalStoreInjectionScanTests` passed, **13 tests in 1 suite**, and so did
+    /// the whole flagged suite, **2342 tests in 162 suites**. Nothing in this repository saw it.
+    ///
+    /// **So this keys on a different property — but it is still a name, and a name is still
+    /// evadable.** This test's first version claimed that a wrapper "has to get the real stores from
+    /// somewhere; if it builds them, it names a store type beside a parenthesis". **That is not a
+    /// property, and PR #158's review proved it by walking through** (F1): the ticket's third
+    /// spelling — a bare contextual `.init(…)` where a parameter type fixes the type — applies to the
+    /// *store* names exactly as it applied to the view model's. Every store parameter of
+    /// `AgentViewModel.init` is a concrete type, so `routineStore: .init()` compiles and writes no
+    /// store type name anywhere; `ClipboardHistorySettingsStore` is reached with an annotation
+    /// (`let settings: ClipboardHistorySettingsStore = .init()`), which `constructions(of:in:)` also
+    /// skips, because `openingParenthesis(afterNameEndingAt:)` sees `=` after the name. The reviewer
+    /// built that wrapper, it compiled, it handed out the developer's real `~/Library` stores, and
+    /// the whole flagged suite passed at **2344 in 162**.
+    ///
+    /// **What this test is, therefore: the arm that catches the spelling a session reaches for by
+    /// accident.** `RoutineStore()` is caught here and this remains a real improvement on the name
+    /// count it supplements. The arm that is *spelling-proof* is
+    /// `noAppSourceOutsideTheFactoryNamesAStoreParameterLabel` below, and the two overlap on purpose.
+    ///
+    /// **`Sources/MacAgentCore/` is the one excluded directory, and the argument is written rather
+    /// than implied** — the same debt PR #109's F5 found in the test-tree sweep above. It is the
+    /// stores' own target and it constructs default-path stores legitimately, three ways:
+    /// `LocalDataDeletionService.defaultStoreFileURLs()` builds every store to read its URL, which is
+    /// what a privacy wipe is *for*; `LocalStoreClassification` does the same to answer what each
+    /// store's file is called; and `ClipboardHistoryMonitor`'s own default is how the thirteenth
+    /// store reaches the view model at all. Blanket-flagging those would flag the plumbing this rule
+    /// depends on.
+    ///
+    /// **The residual, restated because the first version of this sentence was false** (cycle 2, G1).
+    /// It said the uncovered case was "a wrapper that obtained its stores from somewhere else —
+    /// passed in, or read off an existing view model". The real one **builds** them:
+    ///
+    ///     enum StoreVendor {
+    ///         static func stores() -> (RoutineStore, TaskHistoryStore) { (.init(), .init()) }
+    ///     }
+    ///
+    /// A store *vendor* that never constructs an `AgentViewModel` writes no parameter label, because
+    /// there is no call to label, and no store type beside a parenthesis, because `.init()` names
+    /// nothing. **Neither arm of this suite reaches it, and no scan keyed on what a caller writes
+    /// can** — the label would be written by its *caller*, and its caller may legitimately be a test
+    /// fixture. `Sources/MacAgentCore/` is outside the sweep as well, for the reasons argued above.
+    ///
+    /// **A count, not just a file set**, for the reason PR #109's re-check gives about the factory:
+    /// a second convenience written *inside* `AgentViewModel.swift` would keep the file set identical.
+    /// The expected count is derived from `LocalStore.allCases` rather than written down — every
+    /// store that is a parameter of its own, which is all thirteen except the clipboard history the
+    /// monitor carries.
+    ///
+    /// **This suite is a tripwire, not a boundary, and it says so here because that is where a
+    /// reader meets it** (founder conclusion, PR #158 cycle 2). Five doors have now been closed on
+    /// this one hazard across four different keys — the view model's name, every spelling of that
+    /// name, the thirteen store type names, and finally a parameter label — and the vendor shape in
+    /// the residual above is reachable by none of them, because a *scan* can only see what a caller
+    /// happens to write and Swift lets a caller write almost nothing. What closes it is the
+    /// compiler: **SONNY-350** requires a location parameter on all thirteen stores, so
+    /// `RoutineStore()` and `.init()` stop compiling and the legitimate sites become named
+    /// factories. Until that lands, read a green run here as *nobody did the obvious thing*, not as
+    /// *nobody can*. **Do not spend another round widening this scan to reach the vendor shape** —
+    /// that is the fourth key failing the way the first three did.
+    @Test
+    func noAppSourceBuildsALocalStoreWithoutNamingItsFileURL() throws {
+        let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
+        #expect(Set(typeNames).count == LocalStore.allCases.count, "two stores share a type name")
+
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var defaultPathSites: [String: Int] = [:]
+        var filesRead = 0
+        var filesSkipped = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            guard !url.pathComponents.contains("MacAgentCore") else {
+                filesSkipped += 1
+                continue
+            }
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            for typeName in typeNames {
+                for construction in Self.constructions(of: typeName, in: code)
+                where !construction.contains("fileURL:") {
+                    defaultPathSites[url.lastPathComponent, default: 0] += 1
+                }
+            }
+        }
+
+        // Both floors, because either half enumerating to nothing would make this vacuously green
+        // and would do it silently — the exclusion has to be excluding something real, and the swept
+        // half has to be the real app target.
+        #expect(filesRead > 20, "the enumerator saw \(filesRead) swept app sources — too few to be the real tree")
+        #expect(filesSkipped > 100, "the MacAgentCore exclusion skipped \(filesSkipped) files — too few to be that target")
+
+        let expected = LocalStore.allCases.filter { Self.injection(of: $0).parameterLabel != nil }.count
+        let found = defaultPathSites.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
+        #expect(
+            defaultPathSites == ["AgentViewModel.swift": expected],
+            """
+            Sources/ builds default-path local stores in \(found) — it may do so in exactly one \
+            place, AgentViewModel.\(Self.realStoreFactoryName)(), and \(expected) times there. A \
+            store built anywhere else with no fileURL: points at the developer's real \
+            ~/Library/Application Support/Sonny data, and a wrapper handing that out names neither \
+            the factory nor, if it is spelled through a typealias or a metatype, the view model type.
+            """
+        )
+    }
+
+    /// **The sweep above, shown flagging the defect it names** — this suite's own rule, and the
+    /// reason the probe in that comment was run against the real tree first.
+    ///
+    /// The held sample is the wrapper in all three of the spellings a name-keyed scan cannot see. For
+    /// each one, two things are asserted and the pair is the whole point: `constructions(of:
+    /// "AgentViewModel", in:)` finds **nothing**, so the older guard is blind to it; and the
+    /// store-type sweep finds the inline constructions, so this one is not.
+    ///
+    /// **A fourth spelling defeats this arm too, and it has its own held sample** —
+    /// `theLabelArmSeesTheSpellingTheStoreTypeArmCannotSee` (PR #158 review, F1). These three write
+    /// their stores as `RoutineStore()`; write them `routineStore: .init()` instead and the store
+    /// sweep goes blind in the same way the name count already was.
+    @Test
+    func theAppSourceSweepFlagsEveryWrapperSpellingTheNameCountCannotSee() {
+        let samples: [(String, String)] = [
+            ("typealias", """
+            typealias ConvenientViewModel = AgentViewModel
+            enum DeveloperConvenience {
+                static func viewModel() -> ConvenientViewModel {
+                    ConvenientViewModel(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """),
+            ("metatype", """
+            enum DeveloperConvenience {
+                static func viewModel() -> AnyObject {
+                    let type = AgentViewModel.self
+                    return type.init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """),
+            ("contextual .init", """
+            enum DeveloperConvenience {
+                static func viewModel() -> AgentViewModel {
+                    .init(routineStore: RoutineStore(), taskHistoryStore: TaskHistoryStore())
+                }
+            }
+            """)
+        ]
+        for (label, sample) in samples {
+            #expect(
+                Self.constructions(of: "AgentViewModel", in: sample).isEmpty,
+                Comment(rawValue: "\(label): the name count can see this after all — the sample is not the door")
+            )
+            let inline = LocalStore.allCases
+                .map { Self.injection(of: $0).typeName }
+                .flatMap { Self.constructions(of: $0, in: sample) }
+                .filter { !$0.contains("fileURL:") }
+            #expect(inline.count == 2, Comment(rawValue: "\(label): the store sweep found \(inline.count) of the 2 inline stores"))
+        }
+
+        // And the negative control: the same wrapper handed its stores instead of building them is
+        // not this sweep's to catch, which is the residual the test above writes down.
+        let passedIn = """
+        enum DeveloperConvenience {
+            static func viewModel(routineStore: RoutineStore) -> AgentViewModel {
+                .init(routineStore: routineStore)
+            }
+        }
+        """
+        let inline = LocalStore.allCases
+            .map { Self.injection(of: $0).typeName }
+            .flatMap { Self.constructions(of: $0, in: passedIn) }
+        #expect(inline.isEmpty, "a store that is passed in is not a construction")
+    }
+
+    /// **The spelling-proof arm: a parameter label cannot be aliased, metatyped, or elided**
+    /// (SONNY-269, PR #158 review F1).
+    ///
+    /// Four doors have now been closed on this one hazard and each was closed on a *name* — first
+    /// `AgentViewModel(`, then every spelling that writes that name beside a parenthesis (SONNY-248),
+    /// then the thirteen store type names. Each time, the next spelling walked past, because Swift
+    /// lets a caller reach a type without naming it. **An argument label is the one thing in a call
+    /// that Swift will not let you leave out.** `AgentViewModel.init` labels every store parameter,
+    /// so any construction of it — through a typealias, through a metatype, through a bare
+    /// `.init(…)`, with the stores written `RoutineStore()` or `.init()` or through a factory of
+    /// their own — writes `routineStore:` in the source, verbatim. There is no spelling that does
+    /// not.
+    ///
+    /// **So the property is a file set rather than a count, and the file set is the whole of it.**
+    /// Outside `Sources/MacAgentCore/`, a store parameter label appears in `AgentViewModel.swift`
+    /// and nowhere else. The count is deliberately not asserted: it is 71 across the fifteen labels
+    /// today and it moves with ordinary work — a forwarding call site, a stored property, a new
+    /// consumer inside the view model — so an equality here would be a number that fails for reasons
+    /// that are not this rule. **What is asserted per label instead is a floor of two**, which is the
+    /// initializer's declaration plus the factory's argument, so a label that stopped appearing (a
+    /// renamed parameter, a broken matcher) fails rather than passing vacuously.
+    ///
+    /// **The in-file door this does not need to close, and why.** A *second* factory written inside
+    /// `AgentViewModel.swift` would add label uses to the one file this permits. It is closed
+    /// already, and by a different test: `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory`
+    /// bans `Self(` and `.init(` in that file outright, so a second factory there cannot use the
+    /// spelling that would hide it, and must write `AgentViewModel(` — where the name count, pinned
+    /// at exactly one, sees it.
+    ///
+    /// **The false positive this can produce, stated rather than discovered later.** A legitimate new
+    /// file under `Sources/MacAgent/` that took, say, `taskHistoryStore:` as a parameter of its own
+    /// would fail here. That is the rule working rather than misfiring — stores are assembled in one
+    /// place, and a second assembly point is the thing this suite exists to refuse — but the failure
+    /// message says so, in the shape the `.init(` ban's message already uses: if the site is
+    /// legitimate, the scan learns it rather than being dropped.
+    @Test
+    func noAppSourceOutsideTheFactoryNamesAStoreParameterLabel() throws {
+        let storeLabels = LocalStore.allCases.compactMap { Self.injection(of: $0).parameterLabel }
+        let labels = storeLabels + Self.otherRequiredParameters
+        #expect(
+            storeLabels.count == LocalStore.allCases.count - 1,
+            "expected every store but the clipboard history the monitor carries to be a parameter of its own"
+        )
+
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var elsewhere: [String] = []
+        var inTheFactorysFile: [String: Int] = [:]
+        var filesRead = 0
+        var filesSkipped = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            // The same exclusion the sweep above argues, for the same reason: `AgentActionExecutor`,
+            // `CapabilityAdapter`, `AgentRunner`, `InstantCommandResolver` and `WorkspaceTaskTagging`
+            // all take stores under these labels, legitimately, because they are handed the ones the
+            // view model already holds.
+            guard !url.pathComponents.contains("MacAgentCore") else {
+                filesSkipped += 1
+                continue
+            }
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            for label in labels {
+                let uses = Self.argumentLabelUses(of: label, in: code)
+                guard !uses.isEmpty else { continue }
+                if url.lastPathComponent == "AgentViewModel.swift" {
+                    inTheFactorysFile[label] = uses.count
+                } else {
+                    elsewhere.append("\(url.lastPathComponent) names \(label): \(uses.count)×")
+                }
+            }
+        }
+
+        #expect(filesRead > 20, "the enumerator saw \(filesRead) swept app sources — too few to be the real tree")
+        #expect(filesSkipped > 100, "the MacAgentCore exclusion skipped \(filesSkipped) files — too few to be that target")
+        #expect(
+            elsewhere.isEmpty,
+            """
+            \(elsewhere.sorted().joined(separator: "; ")) — a store parameter label outside \
+            AgentViewModel.swift means something other than the factory is assembling an \
+            AgentViewModel, and a label is the one part of that call Swift will not let a caller \
+            leave out, so no spelling hides it. If the site is legitimate, this scan needs to learn \
+            it rather than being dropped.
+            """
+        )
+
+        // Per label rather than in aggregate, so one label going quiet cannot be absorbed by the
+        // other fourteen.
+        for label in labels {
+            let uses = inTheFactorysFile[label] ?? 0
+            #expect(
+                uses >= 2,
+                """
+                AgentViewModel.swift names \(label) \(uses) time(s); the initializer's declaration \
+                and the factory's argument are two, so fewer means the parameter was renamed or this \
+                matcher stopped seeing it.
+                """
+            )
+        }
+    }
+
+    /// **The sweep above, shown seeing the spelling the store-type arm cannot** (PR #158 review, F1).
+    ///
+    /// The reviewer's wrapper, reduced to its two shapes: a store written `.init()` in argument
+    /// position, and a store reached through a type annotation. Three things are asserted per sample
+    /// and the triple is the point — the view-model name count finds nothing, the **store type**
+    /// sweep finds nothing either, and the label arm finds the labels.
+    @Test
+    func theLabelArmSeesTheSpellingTheStoreTypeArmCannotSee() {
+        let samples: [(String, String, Int)] = [
+            ("stores written .init() in argument position", """
+            typealias ConvenientViewModel = AgentViewModel
+            enum DeveloperConvenience {
+                static func viewModel() -> ConvenientViewModel {
+                    ConvenientViewModel(routineStore: .init(), taskHistoryStore: .init())
+                }
+            }
+            """, 2),
+            ("a store reached through a type annotation", """
+            enum DeveloperConvenience {
+                static func viewModel() -> AgentViewModel {
+                    let settings: ClipboardHistorySettingsStore = .init()
+                    return .init(clipboardHistorySettingsStore: settings)
+                }
+            }
+            """, 1)
+        ]
+        for (label, sample, expectedLabels) in samples {
+            #expect(
+                Self.constructions(of: "AgentViewModel", in: sample).isEmpty,
+                Comment(rawValue: "\(label): the view-model name count can see this after all")
+            )
+            let byType = LocalStore.allCases
+                .map { Self.injection(of: $0).typeName }
+                .flatMap { Self.constructions(of: $0, in: sample) }
+            #expect(
+                byType.isEmpty,
+                Comment(rawValue: "\(label): the store-type arm found \(byType.count) — this sample is not the door")
+            )
+            let byLabel = (LocalStore.allCases.compactMap { Self.injection(of: $0).parameterLabel })
+                .flatMap { Self.argumentLabelUses(of: $0, in: sample) }
+            #expect(
+                byLabel.count == expectedLabels,
+                Comment(rawValue: "\(label): the label arm found \(byLabel.count) of \(expectedLabels)")
+            )
+        }
+
+        // **Every kind of trivia Swift permits between a label and its colon**, which is the whole
+        // reason this key closes rather than moving. The first version skipped whitespace only, and
+        // the two below compiled straight past it (cycle 2, G1). The comment openers are assembled
+        // from characters rather than written out, for the reason `skippingTrivia` gives.
+        let slash = "/"
+        let star = "*"
+        let block = slash + star + " c " + star + slash
+        let line = slash + slash + " c"
+        for (label, text) in [
+            ("plain", "f(routineStore: .init())"),
+            ("space", "f(routineStore : .init())"),
+            ("newline", "f(routineStore\n    : .init())"),
+            ("backticks", "f(`routineStore`: .init())"),
+            ("backticks and space", "f(`routineStore` : .init())"),
+            ("block comment", "f(routineStore \(block) : .init())"),
+            ("nested block comment", "f(routineStore \(slash + star + " a " + block + " b " + star + slash) : .init())"),
+            ("line comment", "f(routineStore \(line)\n    : .init())")
+        ] {
+            #expect(
+                Self.argumentLabelUses(of: "routineStore", in: text).count == 1,
+                Comment(rawValue: "\(label): \(text.debugDescription)")
+            )
+        }
+
+        // **The identifier boundary, on an input that actually reaches it.** This assertion read
+        // `myRoutineStore:` for one round and was vacuous: `myRoutineStore` does not contain
+        // `routineStore` — the `R` is capital — so the search never found the label and the boundary
+        // check never ran (cycle 2, G3). One lowercase character is the difference between a test
+        // and a sentence.
+        #expect("myRoutineStore".contains("routineStore") == false, "the old input never reached the boundary check")
+        #expect("myroutineStore".contains("routineStore"), "the new input does reach it")
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(myroutineStore: .init())").isEmpty)
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(theroutineStore: .init())").isEmpty)
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "f(_routineStore: .init())").isEmpty)
+
+        // And a use that is not a label at all.
+        #expect(Self.argumentLabelUses(of: "routineStore", in: "let x = routineStore.load()").isEmpty)
+    }
+
     /// **The one door the compiler opens on purpose, and `main.swift` is the whole of who may walk
     /// through it** (PR #109 review F4).
     ///
@@ -994,6 +1379,101 @@ struct LocalStoreInjectionScanTests {
     /// *different* type — `SomeType.Store(` is `SomeType`'s nested `Store`, not this one — unless
     /// the prefix is one of this repository's own module names, which is the same type wearing its
     /// module.
+    /// Every use of `label` as an **argument label or a type-annotated binding** — the identifier,
+    /// any trivia Swift allows, then `:` — with the preceding character not part of a longer
+    /// identifier (SONNY-269, PR #158 review F1, and its cycle-2 G1).
+    ///
+    /// **Both shapes on purpose.** `f(routineStore: .init())` is the argument label, which is what
+    /// makes this spelling-proof. `let settings: ClipboardHistorySettingsStore = .init()` is a type
+    /// annotation and reads as the same text — and it is the shape the reviewer's wrapper used for
+    /// the one store the monitor has to share, so a matcher that saw only argument positions would
+    /// have missed half of the door it was written to close.
+    ///
+    /// **What may sit between the identifier and the colon is trivia, and trivia is a finite set** —
+    /// which is the whole reason this key is worth having. The first version skipped spaces, tabs
+    /// and newlines and nothing else, so `` `routineStore`: .init() `` and
+    /// `routineStore /* c */ : .init()` both compiled and both walked past it (cycle 2, G1). Swift
+    /// permits exactly: whitespace, a `//` line comment to the end of its line, and a `/* */` block
+    /// comment, which nests. All three are skipped now, and the backtick-escaped spelling of the
+    /// identifier is matched on both sides. **There is no fourth thing** — a label and its colon
+    /// cannot be separated by anything that is not trivia — so unlike the four name-keyed doors
+    /// before it, this one closes rather than moving.
+    ///
+    /// It deliberately does **not** try to tell a call from a declaration: the initializer's own
+    /// `routineStore: RoutineStore,` counts, which is what the floor of two above is counting.
+    static func argumentLabelUses(of label: String, in source: String) -> [String] {
+        guard !label.isEmpty else { return [] }
+        var uses: [String] = []
+        var index = source.startIndex
+        while let found = source.range(of: label, range: index..<source.endIndex) {
+            index = found.upperBound
+            if found.lowerBound > source.startIndex {
+                let before = source[source.index(before: found.lowerBound)]
+                if before.isLetter || before.isNumber || before == "_" {
+                    continue
+                }
+            }
+            var cursor = found.upperBound
+            // The closing half of a backtick-escaped identifier, which Swift requires on both sides
+            // and which is not trivia.
+            if cursor < source.endIndex, source[cursor] == "`" {
+                cursor = source.index(after: cursor)
+            }
+            cursor = skippingTrivia(from: cursor, in: source)
+            guard cursor < source.endIndex, source[cursor] == ":" else { continue }
+            uses.append(String(source[found.lowerBound...cursor]))
+        }
+        return uses
+    }
+
+    /// The first index at or after `start` that is not whitespace or a comment.
+    ///
+    /// Block comments nest in Swift, so the depth is counted rather than stopped at the first close.
+    /// The two comment openers are assembled from single characters rather than written out, because
+    /// this file is read by scans that strip comments and a literal opener inside one is the trap
+    /// `CLAUDE.md` records under the slash-star gotcha.
+    private static func skippingTrivia(from start: String.Index, in source: String) -> String.Index {
+        let slash: Character = "/"
+        let star: Character = "*"
+        var cursor = start
+        while cursor < source.endIndex {
+            let character = source[cursor]
+            if character.isWhitespace {
+                cursor = source.index(after: cursor)
+                continue
+            }
+            guard character == slash, source.index(after: cursor) < source.endIndex else {
+                return cursor
+            }
+            let second = source[source.index(after: cursor)]
+            if second == slash {
+                while cursor < source.endIndex, !source[cursor].isNewline {
+                    cursor = source.index(after: cursor)
+                }
+                continue
+            }
+            if second == star {
+                var depth = 1
+                cursor = source.index(cursor, offsetBy: 2)
+                while cursor < source.endIndex, depth > 0 {
+                    let next = source.index(after: cursor)
+                    if source[cursor] == slash, next < source.endIndex, source[next] == star {
+                        depth += 1
+                        cursor = source.index(cursor, offsetBy: 2)
+                    } else if source[cursor] == star, next < source.endIndex, source[next] == slash {
+                        depth -= 1
+                        cursor = source.index(cursor, offsetBy: 2)
+                    } else {
+                        cursor = next
+                    }
+                }
+                continue
+            }
+            return cursor
+        }
+        return cursor
+    }
+
     static func constructions(of name: String, in source: String) -> [String] {
         var results: [String] = []
         var searchStart = source.startIndex

@@ -129,6 +129,223 @@ struct LocalRedactionTextTests {
         ])
     }
 
+    // MARK: - The two shapes a developer's screen is made of (SONNY-278)
+
+    /// **A `File.swift:129-131` line-range citation is not a one-time code, and neither is the bare
+    /// continuation form.**
+    ///
+    /// The lines below are real, copied out of this repository's own tracked Markdown, which is
+    /// where the ticket was filed from: the unlabeled spaced pair fired on **98** colon-bound pairs
+    /// across the docs class of the corpus materialised at `4824e50` (and one more in the source
+    /// class, 99 in all), and every one blanked its whole line for the vision model.
+    ///
+    /// **What refuses them is the token in front of the colon, not the colon** — and this sentence
+    /// said the colon for one round, after the fix that made it false (cycle 2, G3). A colon-only
+    /// rule refuses every input below *and* refuses `PIN:483-291`, which is the false negative PR
+    /// #158's F2 was filed for. These inputs cannot tell the two rules apart, which is why they are
+    /// not the test that holds the discriminator; `aLabelPressedAgainstItsColonIsStillMasked` and
+    /// `aSpacedPairAgainstAColonIsStillDetected` are.
+    @Test
+    func aColonBoundLineRangeCitationIsNotAOneTimeCode() {
+        for citation in [
+            "the doc comment at `CerebrasPlanner.swift:129-131` and the table beside it",
+            "`VisionSessionContainment.swift:205`, `:209-210`, with a note",
+            "(`server/test/linking.db.test.ts:773-783`), which is the one that matters",
+            "`AutomationStores.swift:296-300` vs `:161-172`",
+            "AgentRunner.swift:110-119",
+            // The bare continuation form, which carries no token in front of its colon at all — 23
+            // of the 99 colon-bound pairs in the measured corpus (PR #158 review, F2).
+            "and `:778-779` beside it",
+            "server/test/linking.db.test.ts:773-783",
+            // **A path with no extension, which is the only input that exercises the `/` half of the
+            // locator test** (cycle 2, G3). Every other locator here carries a `.` as well, and the
+            // corpus carries **0** tokens with a `/` and no `.` — so until this line the `/` clause
+            // was held by nothing at all, in the corpus or in this suite, and deleting it changed
+            // no result.
+            "see src/main:129-131 for the loop",
+            "the runner at scripts/mutate:44-46"
+        ] {
+            let payload = textService().redactText(citation)
+            #expect(payload.report.isEmpty, Comment(rawValue: citation))
+            #expect(payload.maskedText == citation, Comment(rawValue: citation))
+        }
+    }
+
+    /// **A thousands-separated number is not a one-time code either** — the other ten of the
+    /// ticket's 105. `146 835` inside `1 146 835` is preceded by a space that is itself preceded by
+    /// a digit, which `precededByDigitOrHyphen` could not see because it looks one character back.
+    @Test
+    func aThousandsSeparatedNumberIsNotAOneTimeCode() {
+        for grouped in [
+            "clipboard-history.json is 1 011 740 bytes on disk",
+            "a genuine 1 207 697 byte response",
+            "task-history rows at 4 343 930 bytes"
+        ] {
+            let payload = textService().redactText(grouped)
+            #expect(payload.report.isEmpty, Comment(rawValue: grouped))
+            #expect(payload.maskedText == grouped, Comment(rawValue: grouped))
+        }
+    }
+
+    /// **The other direction, which is the half a narrowing loses if nobody writes it down.** The
+    /// hyphenated pair stays, because dropping it — the obvious fix — would leave `Your code is
+    /// 483-291` matched by nothing at all: it has no six contiguous digits for the contextual rule
+    /// and no space for the spaced one.
+    @Test
+    func aHyphenatedOneTimeCodeIsStillDetected() {
+        for display in [
+            "Your code is 483-291",
+            "Code: 483-291",
+            "483-291",
+            "Enter 483-291 to continue"
+        ] {
+            let payload = textService().redactText(display)
+            #expect(payload.report.map(\.detectionClass) == [.oneTimeCode], Comment(rawValue: display))
+            #expect(payload.maskedText?.contains("•••••") == true, Comment(rawValue: display))
+            #expect(payload.maskedText?.contains("483") == false, Comment(rawValue: display))
+        }
+    }
+
+    /// **The one shape the colon refusal newly misses, caught by the contextual rule instead.**
+    /// `code:483-291` has its colon immediately against the digits, exactly like a citation — so
+    /// the shape rule refuses it, and the context word carries it at 0.85 rather than 0.55. That is
+    /// why the contextual pattern's value alternation takes a separated pair.
+    @Test
+    func aLabelledCodeWithItsSeparatorAgainstTheColonIsStillDetected() {
+        for labelled in ["code:483-291", "otp:483 291", "verification_code:483-291"] {
+            let payload = textService().redactText(labelled)
+            #expect(
+                payload.report == [
+                    RedactionReportEntry(
+                        detectionClass: .oneTimeCode,
+                        count: 1,
+                        locationCategory: .text,
+                        confidence: 0.85,
+                        belowConfidenceThreshold: false
+                    )
+                ],
+                Comment(rawValue: labelled)
+            )
+            #expect(payload.maskedText?.hasSuffix("•••••") == true, Comment(rawValue: labelled))
+        }
+    }
+
+    /// **A label pressed against its colon keeps its match — the shape a colon-only refusal lost**
+    /// (PR #158 review, F2; founder ruling on the fix).
+    ///
+    /// Every one of these was masked before this branch, and the first version of the refusal
+    /// stopped masking them: it fired on any hyphenated pair against a colon, and the contextual
+    /// rule recovers only the seven context words it knows — so `2FA:483-291` survived by accident
+    /// while `MFA:483-291` and `PIN:483-291` did not. **On both paths**, because `redactCapture`
+    /// paints from the same `matches(in:)` and no match means no paint. Newly un-painting a labelled
+    /// secret is the wrong direction on a redaction path whatever it buys in false positives.
+    @Test
+    func aLabelPressedAgainstItsColonIsStillMasked() {
+        for labelled in [
+            "PIN:483-291",
+            "token:483-291",
+            "MFA:483-291",
+            "Auth:483-291",
+            "2FA:483-291",
+            "Ref:129-131",
+            "OTP:483-291"
+        ] {
+            let payload = textService().redactText(labelled)
+            #expect(payload.maskedText?.contains("•••••") == true, Comment(rawValue: labelled))
+            #expect(payload.maskedText?.contains("483") == false, Comment(rawValue: labelled))
+            #expect(
+                payload.report.map(\.detectionClass) == [.oneTimeCode],
+                Comment(rawValue: "\(labelled) -> \(payload.report.map(\.detectionClass))")
+            )
+        }
+    }
+
+    /// **What the discriminator costs, measured rather than estimated.**
+    ///
+    /// A Swift type name cited without its `.swift` extension reads as a label under any rule that
+    /// does not know Swift, so it is painted. Over the corpus materialised at `4824e50` that is
+    /// **one** occurrence of **99** colon-bound hyphenated pairs — this exact one, from the
+    /// changelog — against the whole labelled class recovered. A length cap would refuse it and is
+    /// deliberately not added: a threshold chosen to exclude a 22-character type name would have to
+    /// be argued against `verification_code:` at 17.
+    @Test
+    func aTypeNameCitedWithoutAnExtensionIsPaintedAndThatIsTheMeasuredCost() {
+        let payload = textService().redactText("`InstantCommandResolver:275-276` really does keep both")
+        #expect(payload.report.map(\.detectionClass) == [.oneTimeCode])
+        #expect(payload.maskedText?.contains("275") == false)
+
+        // And the two forms it is being told apart from, on the same line shape.
+        for locator in ["`AgentRunner.swift:110-119` really does keep both", "`:275-276` really does keep both"] {
+            let refused = textService().redactText(locator)
+            #expect(refused.report.isEmpty, Comment(rawValue: locator))
+            #expect(refused.maskedText == locator, Comment(rawValue: locator))
+        }
+    }
+
+    /// **The colon refusal is hyphenated-only, and the input that shows it has changed twice.**
+    ///
+    /// **First round.** A battery at `6cec301` widened the refusal to the spaced form and
+    /// **survived**: nothing held the narrower rule, because the obvious example — `Code:483 291` —
+    /// carries a context word and the contextual rule catches it either way. `Ref:483 291` was added
+    /// as the unlabelled case that told the two apart, and it killed the mutant.
+    ///
+    /// **Second round, and this is the part worth reading.** PR #158's F2 made the refusal key on a
+    /// *locator* rather than on the colon — so a label keeps its match whether or not the refusal is
+    /// hyphenated-only, and **`Ref:483 291` stopped discriminating**. The same mutant survived again
+    /// at `ffac638`, in this branch's own 26-mutant battery, and the test that had been written to
+    /// kill it passed. A test can stop holding its own name without changing a character; what
+    /// changed was the code underneath it.
+    ///
+    /// The input that distinguishes them now is a **locator** colon with a **spaced** pair —
+    /// `File.swift:483 291`, which the real rule keeps (no hyphen, so the refusal never applies) and
+    /// the widened rule drops (the token is a filename). Both are asserted, because the label case is
+    /// still a live regression test for the F2 fix even though it no longer separates these two.
+    ///
+    /// **Why narrow rather than wide.** Every colon-bound false positive in the corpus measured at
+    /// `4824e50` was hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no
+    /// measurement asked to refuse, in a detector whose whole design is fail-closed.
+    @Test
+    func aSpacedPairAgainstAColonIsStillDetected() {
+        let expected = [
+            RedactionReportEntry(
+                detectionClass: .oneTimeCode,
+                count: 1,
+                locationCategory: .text,
+                confidence: 0.55,
+                belowConfidenceThreshold: true
+            )
+        ]
+
+        // A label, which the locator rule keeps on its own — kept as the F2 regression it is.
+        let labelled = textService().redactText("Ref:483 291")
+        #expect(labelled.maskedText == "Ref:•••••")
+        #expect(labelled.report == expected)
+
+        // A locator, which only the hyphenated-only asymmetry keeps. This is the assertion the
+        // widened mutant fails.
+        let locator = textService().redactText("File.swift:483 291")
+        #expect(locator.maskedText == "File.swift:•••••")
+        #expect(locator.report == expected)
+    }
+
+    /// **What the run guard costs, stated rather than left to be found.**
+    ///
+    /// Two codes printed side by side separated by one space are, as text, a nine-digit grouped
+    /// number — so the second pair is refused and only the first is masked. The check refuses the
+    /// left side only, which is why the first survives; the symmetric right-side check was measured
+    /// over the same corpus, refused **0** additional matches, and would have lost this one too.
+    ///
+    /// **On the capture path it costs nothing**, and that is the reason this is acceptable rather
+    /// than merely small: `redactCapture` paints every observation a match touches, so the line is
+    /// painted whole by the first pair regardless. It is `redactText` — the window title and the
+    /// observed history — where the second pair's digits survive.
+    @Test
+    func twoCodesSideBySideReadAsOneGroupAndOnlyTheFirstIsMasked() {
+        let payload = textService().redactText("483 291 992 118")
+        #expect(payload.maskedText == "••••• 992 118")
+        #expect(payload.report.map(\.detectionClass) == [.oneTimeCode])
+    }
+
     @Test
     func mastercardTwoSeriesLuhnPassingCardMasksAboveThreshold() {
         // Mastercard's 2221–2720 BIN range (issued since 2017) — invisible to the detector's
