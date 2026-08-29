@@ -232,6 +232,36 @@ struct ClientNamesNoProviderScanTests {
         let acquisition = try NSRegularExpression(
             pattern: "ProcessInfo\\s*(?:\\.\\s*processInfo|\\(\\s*\\))"
         )
+
+        // **The pattern is run against known-bad input before it is pointed at the tree.** A scan
+        // whose regex quietly stops matching reports a clean tree forever, and the tree is the one
+        // place that cannot tell you so — this file's own history is the argument: cycle 1's version
+        // of this check anchored one hop too late and answered "clean" to a real read for a whole
+        // review cycle. Same discipline as `UntrustedContentBoundaryScalarMatchingTests`, after a
+        // scan there flagged 0 of 13 historical instances while its doc promised otherwise.
+        //
+        // The first of these is the exact shape PR #153's cycle 2 planted and that the previous
+        // anchor passed: the indirection goes through the object, so neither `environment[` nor an
+        // adjacent `processInfo.environment` appears anywhere.
+        for mustMatch in [
+            "let info = ProcessInfo.processInfo\nlet all = info.environment",
+            "ProcessInfo.processInfo.environment[\"X\"]",
+            "ProcessInfo().environment",
+            "ProcessInfo\n    .processInfo",
+        ] {
+            #expect(
+                acquisition.firstMatch(in: mustMatch, range: NSRange(mustMatch.startIndex..., in: mustMatch)) != nil,
+                "the acquisition pattern no longer matches: \(mustMatch)"
+            )
+        }
+        // And it is not matching everything: a type *named* for the process, and a mention of the
+        // word in prose, are not acquisitions.
+        for mustNotMatch in ["SonnyBackendEnvironment.resolve()", "the ProcessInfo type"] as [String] {
+            #expect(
+                acquisition.firstMatch(in: mustNotMatch, range: NSRange(mustNotMatch.startIndex..., in: mustNotMatch)) == nil,
+                "the acquisition pattern matches something that is not one: \(mustNotMatch)"
+            )
+        }
         let allowed = [
             "MacAgentCore/DocumentConverter.swift",
             "MacAgentCore/InstalledAppResolver.swift",
