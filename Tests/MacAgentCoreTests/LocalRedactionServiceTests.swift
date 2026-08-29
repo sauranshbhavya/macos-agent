@@ -268,22 +268,31 @@ struct LocalRedactionTextTests {
         }
     }
 
-    /// **The colon refusal is hyphenated-only, and that asymmetry is deliberate rather than an
-    /// oversight.** A mutation battery at `6cec301` widened it to the spaced form and **survived**:
-    /// nothing held the narrower rule, because the one obvious example — `Code:483 291` — has a
-    /// context word and the contextual rule catches it either way. The unlabelled case is what tells
-    /// the two apart, so it is asserted here.
+    /// **The colon refusal is hyphenated-only, and the input that shows it has changed twice.**
     ///
-    /// **Why narrow rather than wide.** Every colon-bound false positive in the measured corpus was
-    /// hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no measurement asked to
-    /// refuse, in a detector whose whole design is fail-closed. A reference number written
-    /// `Ref:483 291` is admittedly not a code; it is also not something the corpus contains, and
-    /// this file does not narrow a redaction on a guess.
+    /// **First round.** A battery at `6cec301` widened the refusal to the spaced form and
+    /// **survived**: nothing held the narrower rule, because the obvious example — `Code:483 291` —
+    /// carries a context word and the contextual rule catches it either way. `Ref:483 291` was added
+    /// as the unlabelled case that told the two apart, and it killed the mutant.
+    ///
+    /// **Second round, and this is the part worth reading.** PR #158's F2 made the refusal key on a
+    /// *locator* rather than on the colon — so a label keeps its match whether or not the refusal is
+    /// hyphenated-only, and **`Ref:483 291` stopped discriminating**. The same mutant survived again
+    /// at `ffac638`, in this branch's own 26-mutant battery, and the test that had been written to
+    /// kill it passed. A test can stop holding its own name without changing a character; what
+    /// changed was the code underneath it.
+    ///
+    /// The input that distinguishes them now is a **locator** colon with a **spaced** pair —
+    /// `File.swift:483 291`, which the real rule keeps (no hyphen, so the refusal never applies) and
+    /// the widened rule drops (the token is a filename). Both are asserted, because the label case is
+    /// still a live regression test for the F2 fix even though it no longer separates these two.
+    ///
+    /// **Why narrow rather than wide.** Every colon-bound false positive in the corpus measured at
+    /// `4824e50` was hyphenated — 106 of them, 0 spaced — so widening would refuse a shape no
+    /// measurement asked to refuse, in a detector whose whole design is fail-closed.
     @Test
     func aSpacedPairAgainstAColonIsStillDetected() {
-        let payload = textService().redactText("Ref:483 291")
-        #expect(payload.maskedText == "Ref:•••••")
-        #expect(payload.report == [
+        let expected = [
             RedactionReportEntry(
                 detectionClass: .oneTimeCode,
                 count: 1,
@@ -291,7 +300,18 @@ struct LocalRedactionTextTests {
                 confidence: 0.55,
                 belowConfidenceThreshold: true
             )
-        ])
+        ]
+
+        // A label, which the locator rule keeps on its own — kept as the F2 regression it is.
+        let labelled = textService().redactText("Ref:483 291")
+        #expect(labelled.maskedText == "Ref:•••••")
+        #expect(labelled.report == expected)
+
+        // A locator, which only the hyphenated-only asymmetry keeps. This is the assertion the
+        // widened mutant fails.
+        let locator = textService().redactText("File.swift:483 291")
+        #expect(locator.maskedText == "File.swift:•••••")
+        #expect(locator.report == expected)
     }
 
     /// **What the run guard costs, stated rather than left to be found.**
