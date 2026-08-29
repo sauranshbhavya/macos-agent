@@ -343,6 +343,136 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     });
   });
 
+  describe("a revocation is spent when the id is observed again (PR #164 review, F1)", () => {
+    // **The root cause both tests below reach through different doors.**
+    // `provider_session_revoked_at` is read by `OWED_PREDICATE` as "this id has no outstanding
+    // revocation", and it was being written as "this id has been revoked at least once". Under the
+    // second reading one stamp makes an id un-owed forever, so every close after it revokes
+    // nothing. The trigger now clears the stamp whenever the identity observes the id again,
+    // because that starts a new episode whose sessions nothing has revoked.
+
+    it("owes a fresh revocation after a revoked id comes back and the account is closed", async () => {
+      // Route one, which this branch introduced: the `ON CONFLICT … SET superseded_at = NULL` arm
+      // un-supersedes an id and used to leave the revocation stamp behind.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+
+      // Supabase hands FIRST back. The user signs in as FIRST and gets NEW sessions — which is why
+      // the revocation recorded a moment ago says nothing about the ones they hold now.
+      await resolve(client, assertion("a@example.com", FIRST));
+      expect(await historyFor(accountId)).toEqual([
+        { supabase_user_id: FIRST, superseded: false, revoked: false },
+        { supabase_user_id: SECOND, superseded: true, revoked: false },
+      ]);
+
+      await close(accountId);
+      expect(await owedRevocationCount(client)).toBe(2);
+      provider.revokedUsers = [];
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(2);
+      // **FIRST is asked about again.** Before the fix it was asked about once, ever, and the
+      // account then hard-deleted cleanly with those sessions live.
+      expect([...provider.revokedUsers].sort()).toEqual([FIRST, SECOND]);
+    });
+
+    it("owes a fresh revocation after a close, a drain, a reopen and a second close", async () => {
+      // **Route two, and it needs no supersession at all — it predates this branch** (SONNY-358,
+      // authorised by the founder to be fixed here rather than split across two branches, because
+      // it is one root cause). The reviewer measured this same sequence against `main` at `def8c3a`
+      // and got `owed = 1` after the first close and `owed = 0` after the reopen and the second.
+      //
+      // Reopening is `UPDATE sonny.account SET deleted_at = NULL`, which 0005's
+      // `mark_identities_closed` un-flags the identities for — `linking.db.test.ts` calls it "the
+      // only way an account is ever reopened". The user then signs in again, and rule 1's refresh
+      // names `supabase_user_id`, which is what lands in the trigger's `ON CONFLICT` arm.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [accountId]);
+      await resolve(client, assertion("a@example.com", FIRST));
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: false }]);
+
+      await close(accountId);
+      expect(await owedRevocationCount(client)).toBe(1);
+      // And the guard refuses to destroy the record, which it could not have done before: the
+      // reviewer's reproduction ended with the account hard-deleting cleanly.
+      await expect(client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]))
+        .rejects.toThrow(/still owes 1 provider-side revocation/);
+
+      provider.revokedUsers = [];
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+    });
+
+    it("does not un-spend a revocation the identity never observed again", async () => {
+      // The other direction, so the fix is not "clear it always". A superseded id that is revoked
+      // and never comes back stays revoked: no new sessions were minted for it, so nothing more is
+      // owed, and a drain that kept re-asking would call the provider forever for nothing.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+
+      await close(accountId);
+      // Only SECOND is owed — FIRST's episode ended and no later one began.
+      expect(await owedRevocationCount(client)).toBe(1);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([SECOND]);
+    });
+
+    it("clears a dead drain's lease when the id comes back", async () => {
+      // The review's F8 note, closed by the same two lines: a row superseded, claimed by a drain
+      // that then died, un-superseded and superseded again used to be invisible to the claim query
+      // for up to `sonny.revocation_lease_seconds()`. A lease belongs to an episode too.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await resolve(client, assertion("a@example.com", SECOND));
+      await client.query(
+        "UPDATE sonny.identity_provider_user SET revocation_claimed_at = now() WHERE supabase_user_id = $1",
+        [FIRST]);
+      // A live lease hides it, which is the mechanism working.
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(0);
+
+      await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      const { rows } = await client.query<{ claimed: boolean }>(
+        `SELECT (revocation_claimed_at IS NOT NULL) AS claimed
+           FROM sonny.identity_provider_user WHERE supabase_user_id = $1`, [FIRST]);
+      expect(rows[0]!.claimed).toBe(false);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(2);
+    });
+  });
+
+  describe("the counts are per provider-side user, which is the unit of the work", () => {
+    it("counts one provider-side user named by two identities once", async () => {
+      // **PR #164 review, F3.** `owedByAccount` counted rows and printed them under the noun
+      // "provider-side user(s)", so an operator was told an account owed 2 while one drain call
+      // cleared it and `RevocationOutcome.revoked` said 1 — three figures sharing a word and not a
+      // unit. Two identities naming one Supabase user is the shape `attribution.ts`'s header says
+      // the whole account/identity separation exists to allow.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, supabase_user_id, link_method)
+         VALUES ($1,'google','google-sub-3','a@example.com',true,false,$2,'explicit')`,
+        [accountId, FIRST]);
+      await close(accountId);
+
+      expect(await owedRevocationCount(client)).toBe(1);
+      expect(await owedByAccount(client)).toEqual([
+        { accountId, providerUsers: 1, superseded: 0 },
+      ]);
+      const outcome = await drainOwedRevocations(client, provider);
+      // One call, one revocation, one owed — the three figures now agree.
+      expect(outcome.revoked).toBe(1);
+      expect(provider.revokedUsers).toEqual([FIRST]);
+      expect(await owedRevocationCount(client)).toBe(0);
+    });
+  });
+
   describe("the drain and the delete guard agree about the same set", () => {
     it("refuses to hard-delete a live account that still owes a superseded revocation", async () => {
       // 0009's rule — the guard counts what the drain counts — applied to the set the drain now

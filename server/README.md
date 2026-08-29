@@ -24,7 +24,7 @@ Run from `server/`.
 | `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
-| `npm run revocations` | What provider-side revocation is still owed on closed accounts. Exit 1 when any is. See "Owed revocations" below. |
+| `npm run revocations` | What provider-side revocation is still owed — on closed accounts, and on live ones whose provider-side user id was superseded. Exit 1 when any is. See "Owed revocations" below. |
 | `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
 | `npm run snapshots -- build\|list\|trace\|sweep` | Build the documented corpus training reads from, see which snapshots hold a task's content, or run the content-expiry sweep by hand. |
@@ -38,7 +38,20 @@ Run from `server/`.
 
 Closing an account revokes its provider-side sessions. When the provider is unreachable at that
 moment the account **still closes** — that is the state the user asked for and it is committed — and
-the revocation is recorded as **owed**: `sonny.identity.provider_session_revoked_at` stays NULL.
+the revocation is recorded as **owed**: `sonny.identity_provider_user.provider_session_revoked_at`
+stays NULL.
+
+**That column moved off `sonny.identity` in migration 0014** (SONNY-196/SONNY-230), because a
+revocation is owed for a *provider-side user id* rather than for an identity. `sonny.identity` no
+longer has it, so a query naming `sonny.identity.provider_session_revoked_at` answers `42703` rather
+than an answer — this line said exactly that until PR #164's review found it.
+
+**A closed account is no longer the only way to owe one.** `sonny.identity_provider_user` keeps every
+Supabase user id an identity has ever named, and a **superseded** one — an id the identity used to
+name and no longer does, which is what Supabase re-keying a subject looks like from here — is owed a
+revocation from the moment it is superseded, on a live account. `provider_session_revoked_at` means
+"the revocation owed for that id's **current episode** has been performed", not "this id has been
+revoked at least once": observing the id again starts a new episode and clears the stamp.
 
 This matters because a closed account can no longer be attributed to its caller, by design, so the
 user cannot retry it themselves. Before the debt was recorded (PR #87 third round, F1) one transient
@@ -65,7 +78,8 @@ and present it to `/logout?scope=global`) are both founder decisions and neither
 take; the reasoning is in that method's docstring.
 
 **The constraint this places on anything that deletes accounts — `feature/row-12-retention` above
-all.** The debt lives on the identity row, and `sonny.identity.account_id` cascades on delete, so a
+all.** The debt lives on `sonny.identity_provider_user`, which cascades to `sonny.identity` on
+`identity_id` and from there to `sonny.account` on `account_id`, so a
 hard `DELETE FROM sonny.account` would take the record of the debt with it while the provider-side
 session stayed live — and this command would then report a clean sweep, which is the worst possible
 answer (PR #87 fifth round, F2). **Migration 0008 refuses that delete** with a
@@ -430,6 +444,16 @@ What *is* closed, on every single request: a token naming a **closed or deleted 
 because attribution reads live state rather than remembering a decision. So `DELETE /v1/account`
 takes effect immediately for every token that names it, including tokens minted before the deletion.
 
+**And a token naming a superseded provider-side user is refused on the same read, immediately**
+(SONNY-196/SONNY-230). `accountForSupabaseUser` matches `sonny.identity.supabase_user_id`, which is
+only ever the id the identity names *now*; once Supabase re-keys a subject and the next sign-in
+adopts the new id, the old one matches no live identity and the gate answers `401
+auth.token_revoked` on the very next request rather than at `exp`. It must stay that way: the
+history in `sonny.identity_provider_user` exists so a superseded id can be *revoked and reported*,
+and joining it here would let a token minted for one attribute to the account again — the exact
+inverse. At Supabase those tokens keep working until they expire, which is SONNY-237's window above
+and not this one.
+
 Closing the remaining window means a denylist of revoked sessions consulted per request — a table, a
 migration, and a dependency on Supabase's `session_id` claim being present. Filed as **SONNY-237**
 rather than built into SONNY-203, which owns verification and the gate.
@@ -523,7 +547,12 @@ is publishable by design and is sent as `apikey` on every call.
 **The service-role key is a real secret and is deliberately not required** (founder decision
 2026-08-27, option (c)). It bypasses every row-level policy and can act as any user, and **exactly
 one method reaches for it — `deleteUser` — which nothing calls today**: account closure revokes
-sessions and deliberately keeps identities, and the ticket that would call it is SONNY-196's.
+sessions and deliberately keeps identities. **No ticket owns a caller for it today.** This named
+SONNY-196, which closed without one: that ticket decided *not* to probe or delete at Supabase — a
+per-sign-in `/admin/*` call would need this key on every gateway serving sign-in, reversing the
+decision this paragraph records. SONNY-313 is where a caller would most likely arrive, as its
+option (a) — delete the provider-side user, which takes its sessions with it — and that choice has
+not been made.
 Requiring it would have made every gateway serving sign-in hold the project's most dangerous
 credential in order to use none of it. So startup does not ask for it, `deploy.sh local` does not
 forward it, and `deleteUser` throws `ServiceRoleKeyNotConfigured` at its own call site if a future

@@ -1,6 +1,10 @@
 import { pathToFileURL } from "node:url";
 import pg from "pg";
-import { owedRevocationCount, supersededProviderUserCount } from "./auth/revocation.js";
+import {
+  OWED_PREDICATE,
+  owedRevocationCount,
+  supersededProviderUserCount,
+} from "./auth/revocation.js";
 
 /**
  * `npm run revocations` — what provider-side revocation is still owed, and for which accounts.
@@ -53,14 +57,22 @@ export interface OwedByAccount {
 }
 
 export async function owedByAccount(client: pg.Client): Promise<readonly OwedByAccount[]> {
+  // **`OWED_PREDICATE` is imported rather than repeated** (PR #164 review, F4). This query used to
+  // carry a hand-written byte-identical copy of that clause, one file from the constant whose
+  // docstring said sharing it was what stopped the drain and the guard drifting — the constant was
+  // not exported, so this site could not have used it. It is exported now.
+  //
+  // **`DISTINCT pu.supabase_user_id`, matching `owedRevocationCount`** (F3): one drain call clears
+  // every row naming one provider-side user, so a row count and the noun beside it disagreed.
   const { rows } = await client.query<{ account_id: string; n: number; superseded: number }>(
     `SELECT i.account_id,
-            count(*)::int AS n,
-            count(*) FILTER (WHERE pu.superseded_at IS NOT NULL)::int AS superseded
+            count(DISTINCT pu.supabase_user_id)::int AS n,
+            count(DISTINCT pu.supabase_user_id)
+              FILTER (WHERE pu.superseded_at IS NOT NULL)::int AS superseded
        FROM sonny.identity_provider_user pu
        JOIN sonny.identity i ON i.id = pu.identity_id
       WHERE pu.provider_session_revoked_at IS NULL
-        AND (i.account_closed OR pu.superseded_at IS NOT NULL)
+        ${OWED_PREDICATE}
       GROUP BY i.account_id
       ORDER BY i.account_id`,
   );

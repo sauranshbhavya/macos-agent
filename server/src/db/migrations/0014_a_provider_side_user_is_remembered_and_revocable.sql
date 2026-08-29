@@ -25,6 +25,22 @@
 -- makes observing it structural, the way 0004 made `account_closed` follow the account rather than
 -- trusting every closer to set it.
 --
+-- **What it catches is any statement that NAMES the column, which is not the same as any writer**
+-- (PR #164 review, F5, correcting the wider claim this paragraph used to make). `AFTER … UPDATE OF
+-- supabase_user_id` keys on the SET list of the original statement rather than on what the row ends
+-- up holding. The reviewer measured six write shapes: a bulk `UPDATE` over many rows, an
+-- `UPDATE … FROM`, an `INSERT … ON CONFLICT … DO UPDATE`, and a write of the same value all fire;
+-- **a `BEFORE` trigger rewriting `NEW.supabase_user_id` on an UPDATE that does not name the column
+-- does not, and neither does anything under `SET session_replication_role = replica`.** Both leave
+-- exactly SONNY-230's state behind. Neither is reachable from application code — no `BEFORE` trigger
+-- on this table writes that column (`derive_identity_closed` writes `NEW.account_closed` only) and
+-- nothing in `server/` sets `session_replication_role` — but `replica` is what a logical-replication
+-- apply worker and `pg_restore --disable-triggers` set, so it is an operational concern for the
+-- first real remote deploy rather than a hypothetical one. `ALTER TABLE … ENABLE ALWAYS TRIGGER`
+-- would close that half and is deliberately not done here: it would also make the trigger fire on
+-- replicated changes at a subscriber, which is a replication-topology decision this migration has
+-- no standing to take. The other half is inherent to `UPDATE OF` and only needs saying.
+--
 -- **Revocation bookkeeping moves off `sonny.identity` and onto this table, wholly.** It has to: the
 -- thing a revocation is owed *for* is a provider-side user, not an identity — which the drain
 -- already conceded by stamping "every identity naming this provider-side user" rather than the row
@@ -51,9 +67,18 @@ CREATE TABLE sonny.identity_provider_user (
   -- gets that the provider re-keyed this subject.
   superseded_at               timestamptz,
 
-  -- Moved here from `sonny.identity` (0006, 0008). Same meaning, one level down: NULL means the
-  -- provider-side sessions of THIS user id have not been recorded as revoked. Written only after a
-  -- provider call returns, never optimistically.
+  -- Moved here from `sonny.identity` (0006, 0008), and **its meaning is narrower than the column
+  -- name suggests** (PR #164 review, F1). It does NOT mean "this id has been revoked at least
+  -- once". It means **"the revocation owed for this id's CURRENT EPISODE has been performed"** — an
+  -- episode beginning when the identity observes the id and ending when a provider call returns.
+  -- Written only after that call returns, never optimistically; **cleared by the trigger below the
+  -- moment the identity observes the id again**, because that starts a new episode and any sessions
+  -- minted in it are owed a fresh revocation.
+  --
+  -- The two readings are one letter apart in English and opposite in effect. `OWED_PREDICATE`
+  -- (`server/src/auth/revocation.ts`) reads this column as "has no outstanding revocation", so under
+  -- the log reading a single stamp would make an id permanently un-owed — through a come-back, a
+  -- reopen, and every close afterwards. That is the defect F1 reproduced end to end.
   provider_session_revoked_at timestamptz,
   revocation_claimed_at       timestamptz,
 
@@ -64,8 +89,11 @@ COMMENT ON TABLE sonny.identity_provider_user IS
   'Every provider-side (Supabase) user id an identity has ever named, and the revocation state of '
   'each. The identity''s own supabase_user_id is the CURRENT one and is what attribution reads; '
   'this table is the history, and a row with superseded_at set is owed a revocation whether or not '
-  'the account is closed. Maintained by the identity_records_its_provider_side_user trigger — never '
-  'written by application code (SONNY-196, SONNY-230).';
+  'the account is closed. provider_session_revoked_at means "the revocation owed for this id''s '
+  'CURRENT episode has been performed", not "this id has been revoked at least once" — observing '
+  'the id again starts a new episode and clears it. Maintained by the '
+  'identity_records_its_provider_side_user trigger — never written by application code '
+  '(SONNY-196, SONNY-230, PR #164 review F1).';
 
 COMMENT ON COLUMN sonny.identity_provider_user.superseded_at IS
   'When the identity stopped naming this provider-side user. This is the whole of SONNY-196''s '
@@ -87,6 +115,14 @@ CREATE INDEX identity_provider_user_supabase_user_idx
 -- Backfill. `linked_at` is the only timestamp the existing rows carry, and it is when we wrote the
 -- identity rather than when the provider minted the user — close enough to be useful and not
 -- pretended to be more: nothing reads these two columns for correctness, only for a support answer.
+--
+-- **`WHERE supabase_user_id IS NOT NULL` drops one representable state and it is unreachable**
+-- (PR #164 review, F8, and it is the only difference the reviewer's full apply-then-rollback data
+-- comparison found across seven seeded states). An identity with a NULL id that nonetheless carries
+-- a revocation stamp has nowhere to go here, and the `DROP COLUMN`s below then destroy the stamp.
+-- Pre-0014 the drain only ever stamped a row whose `supabase_user_id` was non-NULL, and
+-- `resolve()`'s `COALESCE` cannot clear one, so no such row can exist. Written down rather than
+-- guarded, because a guard against an unreachable state reads as evidence that it is reachable.
 INSERT INTO sonny.identity_provider_user
   (identity_id, supabase_user_id, first_seen_at, last_seen_at,
    provider_session_revoked_at, revocation_claimed_at)
@@ -113,11 +149,44 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- FROM` with `<>` SURVIVED against the test written from that reading, which is what a wrong
 -- explanation of a correct line costs: the test it produces guards nothing.
 --
--- **An id that comes back is current again.** `ON CONFLICT … SET superseded_at = NULL` is
--- deliberate: if the provider hands the same user id back for this subject, that id is once more
--- what the subject signs in as, and a revocation owed *because it was superseded* is no longer
--- owed. `provider_session_revoked_at` is left alone — a revocation that happened is a fact about
--- the past and is not unwound by the id returning.
+-- **An id observed again begins a new episode, and the `ON CONFLICT` arm is what says so.** If the
+-- provider hands the same user id back for this subject, that id is once more what the subject
+-- signs in as: it is no longer superseded, and — the half that took a review round to get right —
+-- **any revocation recorded against it is spent**, because the sessions it revoked are not the
+-- sessions the subject is minting now.
+--
+-- **This arm cleared `superseded_at` alone and left the revocation stamp, and the comment defending
+-- that was wrong** (PR #164 review, F1). It argued "a revocation that happened is a fact about the
+-- past and is not unwound by the id returning". The premise is true and the conclusion does not
+-- follow, because this column is not a log of a past event — `OWED_PREDICATE` reads it three lines
+-- of TypeScript away as "does this id still owe one". So from the first successful revocation the
+-- id was **permanently** not-owed, and a later close revoked nothing. Reproduced end to end through
+-- the real `resolve()` and `drainOwedRevocations()`, ending in an account that hard-deleted cleanly
+-- with live sessions never revoked.
+--
+-- **Clearing here closes a second route that predates this branch** (SONNY-358, authorised by the
+-- founder to be fixed here rather than split): close → drain → an operator reopens the account
+-- (`UPDATE sonny.account SET deleted_at = NULL`, which 0005's `mark_identities_closed` un-flags the
+-- identities for) → the user signs in again as the same id → they close again → nothing is owed.
+-- That route needs no supersession at all, and the reviewer measured it against `main` at `def8c3a`
+-- (`owed = 1` after the first close, `owed = 0` after the reopen and the second). It is the same
+-- root cause reached without this table, and it is closed here because rule 1's refresh names
+-- `supabase_user_id` on **every** sign-in, so the reopened user's next sign-in lands in this arm.
+--
+-- **`revocation_claimed_at` is cleared with it**, which also settles the review's F8 note that a
+-- stale lease survived a come-back: a row superseded → claimed by a drain that then died →
+-- un-superseded → superseded again was invisible to the claim query for up to
+-- `sonny.revocation_lease_seconds()`. A lease belongs to an episode too.
+--
+-- **Why clearing rather than a timestamp comparison.** The other shape on offer was
+-- `provider_session_revoked_at IS NULL OR provider_session_revoked_at < last_seen_at`. It closes
+-- the same two routes, and it decides them by comparing a `timestamptz` written by SQL `now()`
+-- against one written from a JavaScript `Date` — two clocks, microsecond and millisecond
+-- resolution — so a tie has to be broken by a `<` / `<=` choice where one direction silently drops
+-- a revocation and the other can hand a row back to the drain every lease period forever. Clearing
+-- needs no comparison and no tie: whichever of the two writes commits last is right on its own
+-- terms. A drain stamping after a sign-in really did revoke that sign-in's sessions; a sign-in
+-- clearing after a drain really does owe a new one.
 CREATE OR REPLACE FUNCTION sonny.record_provider_side_user() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -135,7 +204,10 @@ BEGIN
     INSERT INTO sonny.identity_provider_user (identity_id, supabase_user_id)
          VALUES (NEW.id, NEW.supabase_user_id)
     ON CONFLICT (identity_id, supabase_user_id) DO UPDATE
-       SET last_seen_at = now(), superseded_at = NULL;
+       SET last_seen_at = now(),
+           superseded_at = NULL,
+           provider_session_revoked_at = NULL,
+           revocation_claimed_at = NULL;
   END IF;
 
   RETURN NULL;
