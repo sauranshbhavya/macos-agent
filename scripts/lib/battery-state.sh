@@ -47,11 +47,23 @@ battery_record_field() {
 # process rather than merely naming one: a pid the kernel has handed to something else since is a
 # different process with a different start time, and no amount of matching on a command line can
 # tell those apart.
+#
+# `TZ=UTC` is load-bearing, not tidiness (PR #161's cycle 2, C1). `ps -o lstart=` renders in the
+# LOCAL zone, so one live process measured three ways at one instant gives three different strings —
+# `Sat Aug 29 17:31:36 2026` local, `21:31:36` in UTC, `Sun Aug 30 06:31:36` in Tokyo. A battery
+# whose lock is written before a DST transition and read after it would then compare a stored string
+# against one that has moved by an hour and read STALE, mid-run — which is fail-safe for the
+# abandoned check but switches off both consumers of `live`: SONNY-184's mutual refusal stops firing,
+# so `scripts/warnings` counts warnings over a deliberately mutated tree and stamps a SHA on the
+# result, and `acquire_lock` reports a running battery as a killed one, because a live battery
+# carries an in-flight record by construction. Twice a year, and it disables a guard rather than
+# degrading it. Forcing the zone here fixes both ends at once: every write and every read of this
+# field goes through this one function.
 battery_process_start() {
   case "$1" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1
+  TZ=UTC ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1
 }
 
 # Is this pid THIS battery? pid plus the start time recorded when the lock was taken, and both must

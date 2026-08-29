@@ -400,6 +400,20 @@ What this does and does not prevent:
       process, and it names the log to read.
     * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
       running batteries at once share nothing and are not refused.
+    * A LOCK WRITTEN BY A `scripts/mutate` OLDER THAN THIS ONE IS TREATED AS DEAD, even while the
+      battery holding it is still running. Those records carry no `lstart` field, and identity is
+      that field — the alternative was to keep the old command-line reading as a fallback, which is
+      the hole it replaced (PR #161, F1), so this is the deliberate trade and not an oversight. The
+      consequences are wider than "it gets reclaimed", and both were measured (cycle 2, C2):
+      `scripts/warnings` does NOT refuse beside such a battery, so SONNY-184's mutual guard is off
+      for that one lock; and `scripts/mutate unlock` reads the lock as stale and RESTORES THE FILE
+      UNDERNEATH THE RUNNING BATTERY — exit 0, "restored <file>", with the mutant taken out of a
+      tree that battery is still measuring.
+      The window is one merge wide: an old battery still running when the new scripts arrive in the
+      checkout. If that is you — `.git/mutate.lock/owner` exists and has no `lstart` line — let that
+      battery finish and take its own lock down, or kill it first and then run `unlock`. Do not run
+      `unlock` while it is running. Nothing that starts after the new scripts are in place can reach
+      this state.
     * The guards above check once, when the tool starts. A battery that begins AFTER the stop hook
       has checked, but during the ~1 minute its suite takes, still produces the false red SONNY-258
       is about. Same check-then-act window as the two tools refusing each other, and the same
@@ -835,6 +849,11 @@ EOF
   if ! mkdir -p "$aside" \
     || ! cp "$pristine" "$aside/pristine" \
     || { [[ -f "$LOCK_DIR/inflight/mutated" ]] && ! cp "$LOCK_DIR/inflight/mutated" "$aside/mutated"; }; then
+    # Leave nothing behind that the refusal below says was not made (cycle 2, C4). `mkdir -p`
+    # succeeds before the `cp` fails, so the old refusal left an empty directory in .git/ that
+    # nothing prunes — and a partly-filled one is worse, because the message says nothing was kept.
+    rm -f -- "$aside/pristine" "$aside/mutated" 2>/dev/null || true
+    rmdir "$aside" 2>/dev/null || true
     cat >&2 <<EOF
 $SCRIPT_NAME: NOT restoring $file, and NOT clearing the lock — the copies could not be kept.
 
@@ -854,7 +873,16 @@ EOF
     finish 1
   fi
   rm -rf -- "$LOCK_DIR"
-  cat >&2 <<EOF
+
+  # What this message may claim depends on what is actually in the aside, which is C3: F2 was filed
+  # for a message naming a file that was not written, and this — the branch where everything
+  # SUCCEEDS — still promised `mutated` when the record never had one. A record with no `mutated` is
+  # an ordinary state: the battery was killed between the `meta` write and `record_inflight_mutated`,
+  # a window that spans `apply_mutant`. The headline was wrong there too, and wrong in the direction
+  # that matters — "neither the mutant nor the original" is false when the file may well BE the
+  # mutant, unrecorded, because case 2 requires `mutated` to exist before it can recognise one.
+  if [[ -f "$aside/mutated" ]]; then
+    cat >&2 <<EOF
 $SCRIPT_NAME: NOT restoring $file — it is neither the mutant nor the original.
 
   mutant      : $id
@@ -872,6 +900,26 @@ Diff the file against both, decide which bytes are wanted, and put them back by 
 is cleared, so this command has nothing left to do — the next battery will refuse on the dirty tree
 until the file is settled.
 EOF
+  else
+    cat >&2 <<EOF
+$SCRIPT_NAME: NOT restoring $file — it does not match the original that battery saved.
+
+  mutant      : $id
+  file        : $file
+  measured at : $sha
+
+That battery was killed before it recorded what it had written, so there is no copy of the mutated
+file to compare against — which means this cannot tell a file still carrying mutant $id from one you
+have edited since. Restoring would destroy whichever it is, so nothing was written. The one copy
+that run did take is kept here:
+
+  $aside/pristine   the file as it was before the mutation
+
+Diff $file against it, decide which bytes are wanted, and put them back by hand. The run lock is
+cleared, so this command has nothing left to do — the next battery will refuse on the dirty tree
+until the file is settled.
+EOF
+  fi
   finish 1
 }
 
@@ -3218,8 +3266,70 @@ $kills_the_mutant" "$root/kill.plan"
   else
     st_fail "unlock wrote over a file it had just said it would not restore"
   fi
+  # cycle 2, C4: the refusal says nothing was kept, so it must not leave a directory suggesting
+  # otherwise. `mkdir -p` succeeds before the `cp` fails, and nothing prunes what it made.
+  if [[ -n "$(ls -d .git/mutate-abandoned-* 2>/dev/null)" ]]; then
+    st_fail "the refusal left a mutate-abandoned directory behind"
+  else
+    st_pass "and it left no empty mutate-abandoned directory behind"
+  fi
   rm -rf -- .git/mutate.lock .git/mutate-abandoned-*
   git checkout -- sample.swift
+
+  printf '\n==> unlock names only the copies it actually kept, on the path that succeeds (C3)\n'
+  # F2 was filed for a message naming a file that was not written, and the arm above watches only
+  # the failure path. This is the same defect in the branch where everything SUCCEEDS: a record with
+  # no `mutated` — the battery killed between the meta write and `record_inflight_mutated`, a window
+  # that spans apply_mutant — used to be kept aside and then described as two files. The headline was
+  # wrong in that state too: "neither the mutant nor the original" is false when the file may BE the
+  # mutant, unrecorded, since case 2 cannot recognise one without `mutated` to compare against.
+  mkdir -p .git/mutate.lock/inflight
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  { printf 'id M1\n'; printf 'file sample.swift\n'; printf 'sha deadbeef\n'
+    printf 'started 2026-01-01 00:00:00\n'; } >.git/mutate.lock/inflight/meta
+  cp sample.swift .git/mutate.lock/inflight/pristine
+  printf '// edited after the battery died\n' >>sample.swift
+  st_run "$always_pass" unlock
+  st_eq "unlock exits 1" "$ST_EXIT" "1"
+  st_contains "it says what it could not match against" "$ST_OUT" "does not match the original"
+  st_absent "and does not claim to know the file is not the mutant" "$ST_OUT" \
+    "neither the mutant nor the original"
+  st_absent "and does not name a copy it never made" "$ST_OUT" "the file as that battery left it"
+  local kept_dir
+  kept_dir="$(ls -d .git/mutate-abandoned-* 2>/dev/null | head -1)"
+  if [[ -n "$kept_dir" && -f "$kept_dir/pristine" ]]; then
+    st_pass "the copy it does name is on disk"
+  else
+    st_fail "the copy the message names is not there"
+  fi
+  if [[ -n "$kept_dir" && -e "$kept_dir/mutated" ]]; then
+    st_fail "a mutated copy appeared from a record that had none"
+  else
+    st_pass "and no second copy was invented"
+  fi
+  rm -rf -- .git/mutate.lock .git/mutate-abandoned-*
+  git checkout -- sample.swift
+
+  printf '\n==> A lock written in one timezone is still live when read in another (C1)\n'
+  # `ps -o lstart=` renders in the LOCAL zone, so one process at one instant gives three different
+  # strings — measured at cycle 2: `Sat Aug 29 17:31:36 2026` local, `21:31:36` UTC, `Sun Aug 30
+  # 06:31:36` Tokyo. A battery spanning a DST transition would compare a stored string against one
+  # that had moved by an hour and read STALE mid-run, which switches off SONNY-184's mutual refusal
+  # and makes acquire_lock report a running battery as a killed one. The stored field is forced to
+  # UTC at both ends, and both ends are this one function.
+  st_eq "the recorded start time does not depend on the reader's zone" \
+    "$(TZ=America/New_York battery_process_start $$)" "$(TZ=UTC battery_process_start $$)"
+  mkdir -p .git/mutate.lock
+  ( TZ=America/New_York; export TZ
+    battery_write_owner_record .git/mutate.lock plan live.plan head deadbeef )
+  ST_EXIT=0
+  ST_OUT="$(TZ=Asia/Tokyo MUTATE_TEST_CMD="$records_that_it_ran" "$SELF" "$root/kill.plan" 2>&1)" \
+    || ST_EXIT=$?
+  st_eq "a lock written in New York and read in Tokyo is refused, not reclaimed" "$ST_EXIT" "1"
+  st_contains "and it is the concurrency refusal" "$ST_OUT" "another battery already holds"
+  st_absent "the live owner is not read as a killed run" "$ST_OUT" "cleared a stale lock"
+  rm -rf -- .git/mutate.lock
 
   printf '\n==> A record that names no file is refused with everything kept (F5)\n'
   # `meta` present and empty — a kill, or an out-of-space, part way through writing it. This used to
