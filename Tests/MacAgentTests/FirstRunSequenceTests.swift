@@ -538,8 +538,10 @@ struct FirstRunSequenceTests {
             openedBy: "private var stepContent: some View {"
         )
         #expect(MacAgentSource.count(of: "isPresented: skipBinding", inText: stepContent) == 2)
-        // The deferral button is the second route and reaches the same call — three in the file, and
-        // no fourth way to decline that does something else.
+        // Two routes into that call in this file and no third: the binding both dialogs are handed,
+        // and the deferral button. (This comment said *three* beside the correct `== 2` — the count
+        // was right and the sentence beside it was not, which is the shape a reader trusts and a
+        // compiler cannot see. PR #159's cycle-2 review.)
         #expect(MacAgentSource.count(of: "coordinator.skipCurrentStep()", inText: sequence) == 2)
     }
 

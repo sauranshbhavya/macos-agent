@@ -19,18 +19,20 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let coordinator = AppWindowCoordinator(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
         let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         #expect(coordinator.viewModel === viewModel)
@@ -44,11 +46,13 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let delegate = AppDelegate(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         let menu = delegate.makeStatusMenu()
@@ -90,11 +94,13 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let delegate = AppDelegate(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         // A run already in flight makes `canUseVoice` false whether or not the test host happens to
@@ -313,11 +319,13 @@ struct ProductShellTests {
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
         let widget = FloatingWidgetView(viewModel: viewModel)
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let commandCenter = CommandCenterView(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         #expect(viewModel.usePointerCursors)
@@ -370,11 +378,13 @@ struct ProductShellTests {
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
         let widget = FloatingWidgetView(viewModel: viewModel)
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let commandCenter = CommandCenterView(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         #expect(viewModel.displayFullNames == false)
@@ -447,11 +457,13 @@ struct ProductShellTests {
         let originalActivationPolicy = application.activationPolicy()
         defer { _ = application.setActivationPolicy(originalActivationPolicy) }
         let viewModel = fixture.viewModel
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let coordinator = AppWindowCoordinator(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         coordinator.showCommandCenter()
@@ -2052,11 +2064,13 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskCount == 0)
 
         if let snapshotPath = ProcessInfo.processInfo.environment["SONNY_SHARED_TASK_SNAPSHOT"] {
+            let firstRunSuite = FirstRunDefaultsSuite()
+            defer { firstRunSuite.removeAtEndOfTest() }
             let coordinator = AppWindowCoordinator(
                 viewModel: viewModel,
                 accountModel: makeHermeticAccountModel(),
                 screenAccessModel: makeHermeticScreenAccessModel(),
-                firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+                firstRunCoordinator: firstRunSuite.makeCoordinator()
             )
             coordinator.showCommandCenter()
             let window = try #require(coordinator.commandCenterWindow)
@@ -3324,11 +3338,13 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let widget = FloatingWidgetView(viewModel: fixture.viewModel)
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
         let commandCenter = CommandCenterView(
             viewModel: fixture.viewModel,
             accountModel: makeHermeticAccountModel(),
             screenAccessModel: makeHermeticScreenAccessModel(),
-            firstRunCoordinator: makeNonWritingFirstRunCoordinator()
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
         try fixture.routineStore.save(

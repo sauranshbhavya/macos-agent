@@ -14,6 +14,22 @@ import MacAgentTestSupport
 /// branch edited: `ProductShellTests` writes `defer { userDefaults.removePersistentDomain(forName:
 /// suiteName) }` at four sites. `removeAtEndOfTest()` is that `defer`, in a place a caller cannot
 /// forget to reach for, because the fixture hands back the thing that owns it.
+///
+/// **There is one fixture, and that is the point** (PR #159's cycle-2 review). For one round there
+/// were two: this, and a `makeNonWritingFirstRunCoordinator()` for the nine `ProductShellTests`
+/// sites that construct a coordinator and never drive it, so nothing is written and there is no
+/// plist to remove. Its doc comment carried the rule — *a test that calls `begin`, `refresh` or
+/// `skipCurrentStep` must not use this* — and **nothing enforced it**, in either of the two
+/// directions that matter: a test could drive one of those coordinators directly, and, less
+/// obviously, a test could hand one to an `AppDelegate` and then await
+/// `decideFirstRunAfterRestoringTheSession()`, which calls `begin` from inside the product. No scan
+/// distinguishes that from the nine sites that do not. So the second fixture is gone rather than
+/// documented: every call site takes a suite it owns and defers its removal, the rule has nothing
+/// left to be broken, and the cost is two lines per site.
+///
+/// **`removeAtEndOfTest()` is safe on a suite nothing wrote to**, which is what makes the uniform
+/// treatment cheap — those nine sites remove a domain that was never created, and
+/// `removePersistentDomain` does not mind.
 @MainActor
 struct FirstRunDefaultsSuite {
     let suiteName: String
@@ -40,25 +56,6 @@ struct FirstRunDefaultsSuite {
     func removeAtEndOfTest() {
         userDefaults.removePersistentDomain(forName: suiteName)
     }
-}
-
-/// A `FirstRunCoordinator` over a suite of this test's own, for the call sites that never write one
-/// — `ProductShellTests`' nine `AppDelegate`/`CommandCenterView` fixtures, which construct the
-/// coordinator and never call `begin`, so nothing is persisted and there is no plist to remove.
-///
-/// **A test that calls `begin`, `refresh` or `skipCurrentStep` must not use this**: those write, and
-/// this hands back no way to clean up. Build a `FirstRunDefaultsSuite` and `defer` its
-/// `removeAtEndOfTest()` instead.
-///
-/// Everything here exists rather than `FirstRunStore(userDefaults: .standard)` for the reason
-/// `makeHermeticAccountModel` exists one store further in: `.standard` is the one domain every
-/// packaged build on this Mac shares, and the flag it holds is "first run is over" — a test that
-/// reached it would either put the founder back through first run or take it away from him, and
-/// neither shows up as a failing assertion anywhere. `FirstRunStore` has no default `userDefaults`
-/// parameter, so a fixture is the only way a test gets one at all.
-@MainActor
-func makeNonWritingFirstRunCoordinator() -> FirstRunCoordinator {
-    FirstRunDefaultsSuite().makeCoordinator()
 }
 
 /// A `ScreenAccessOnboardingModel` that reaches neither this Mac's TCC state nor its process.
