@@ -46,6 +46,8 @@ final class PrimaryWindowActivationManager {
 final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     let viewModel: AgentViewModel
     let accountModel: SonnyAccountModel
+    let screenAccessModel: ScreenAccessOnboardingModel
+    let firstRunCoordinator: FirstRunCoordinator
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
@@ -57,14 +59,20 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     /// **`accountModel` has no default**, for the reason `AppDelegate.init(viewModel:)` has none:
     /// a default resolving to the real Keychain is invisible at every call site that predates the
     /// parameter, which is SONNY-240's argument applied to the one store every packaged build on
-    /// this Mac shares.
+    /// this Mac shares. `screenAccessModel` and `firstRunCoordinator` carry the same rule through to
+    /// Command Center (SONNY-137), which is where first run is presented and where Settings ›
+    /// Security & Access reads the same screen-access model.
     init(
         viewModel: AgentViewModel,
         accountModel: SonnyAccountModel,
+        screenAccessModel: ScreenAccessOnboardingModel,
+        firstRunCoordinator: FirstRunCoordinator,
         activationManager: PrimaryWindowActivationManager = PrimaryWindowActivationManager()
     ) {
         self.viewModel = viewModel
         self.accountModel = accountModel
+        self.screenAccessModel = screenAccessModel
+        self.firstRunCoordinator = firstRunCoordinator
         self.activationManager = activationManager
         super.init()
     }
@@ -84,7 +92,12 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
 
     private func makeCommandCenterWindowController() -> NSWindowController {
         let hostingController = NSHostingController(
-            rootView: CommandCenterView(viewModel: viewModel, accountModel: accountModel)
+            rootView: CommandCenterView(
+                viewModel: viewModel,
+                accountModel: accountModel,
+                screenAccessModel: screenAccessModel,
+                firstRunCoordinator: firstRunCoordinator
+            )
         )
         let window = makeWindow(
             title: "Sonny",

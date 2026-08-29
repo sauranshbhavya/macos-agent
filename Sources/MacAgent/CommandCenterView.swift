@@ -38,6 +38,12 @@ struct CommandCenterView: View {
     // `SonnyAccountModel` for why. Command Center is where the account row is, so this is where it
     // is observed.
     @ObservedObject var accountModel: SonnyAccountModel
+    // First run's two collaborators, owned by `AppDelegate` and observed here because this is where
+    // the sequence is presented (SONNY-137). The screen-access model is the *same* instance Settings
+    // › Security & Access reads, so a Screen Recording request made in first run shows its relaunch
+    // guidance there too — one state path, per `.claude/rules/macagent-ui-conventions.md`.
+    @ObservedObject var screenAccessModel: ScreenAccessOnboardingModel
+    @ObservedObject var firstRunCoordinator: FirstRunCoordinator
     @State private var selection: CommandCenterDestination
     // Settings is no longer a sidebar destination (2026-07-18 direction, following the Claude
     // desktop app's pattern: a bottom-left account row opens a menu, whose one real item today
@@ -61,10 +67,14 @@ struct CommandCenterView: View {
     init(
         viewModel: AgentViewModel,
         accountModel: SonnyAccountModel,
+        screenAccessModel: ScreenAccessOnboardingModel,
+        firstRunCoordinator: FirstRunCoordinator,
         initialSelection: CommandCenterDestination = .tasks
     ) {
         self.viewModel = viewModel
         self.accountModel = accountModel
+        self.screenAccessModel = screenAccessModel
+        self.firstRunCoordinator = firstRunCoordinator
         _selection = State(initialValue: initialSelection)
     }
 
@@ -91,13 +101,38 @@ struct CommandCenterView: View {
             viewModel.refreshClipboardHistoryNotice()
         }
         .sheet(isPresented: $isSettingsPresented) {
-            SettingsDialogView(viewModel: viewModel, isPresented: $isSettingsPresented)
+            SettingsDialogView(
+                viewModel: viewModel,
+                screenAccessModel: screenAccessModel,
+                isPresented: $isSettingsPresented
+            )
         }
         .sheet(isPresented: $isProfilePresented) {
             ProfileDialogView(isPresented: $isProfilePresented)
         }
         .sheet(isPresented: $isSignInPresented) {
             SignInDialogView(model: accountModel, isPresented: $isSignInPresented)
+        }
+        // First run (SONNY-137). Presented here because Command Center is shown unconditionally on
+        // every launch, so the sequence has a host without a window of its own — and because the two
+        // steps are the same two dialogs this file already opens by hand, hosted rather than rebuilt.
+        //
+        // **`isPresented`, not `item:`.** An `item:` binding re-presents the sheet when the step
+        // changes, so a user who signs in would watch the panel dismiss and a second one appear;
+        // `presentedStep != nil` keeps one sheet up and swaps its content. Setting it false is the
+        // sheet's own dismissal — Escape, or a drag — and means the same thing the hosted dialog's
+        // close control means: skip this step.
+        .sheet(isPresented: Binding(
+            get: { firstRunCoordinator.presentedStep != nil },
+            set: { isPresented in
+                if !isPresented { firstRunCoordinator.skipCurrentStep() }
+            }
+        )) {
+            FirstRunSequenceView(
+                coordinator: firstRunCoordinator,
+                accountModel: accountModel,
+                screenAccessModel: screenAccessModel
+            )
         }
         // A task-detail request can arrive while any page is showing, so the navigation to Tasks
         // happens *here*, above the page switch, and not inside the page that answers it (PR #67
@@ -5341,6 +5376,9 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 /// row that opens this dialog, so a separate in-dialog Profile page would be redundant).
 struct SettingsDialogView: View {
     @ObservedObject var viewModel: AgentViewModel
+    /// Forwarded to Security & Access, which no longer builds its own — see that page for why
+    /// (SONNY-137).
+    @ObservedObject var screenAccessModel: ScreenAccessOnboardingModel
     @Binding var isPresented: Bool
     @State private var selection: SettingsSection = .preferences
 
@@ -5382,7 +5420,10 @@ struct SettingsDialogView: View {
                         case .usage:
                             SettingsUsagePage()
                         case .security:
-                            SettingsSecurityAccessPage(viewModel: viewModel)
+                            SettingsSecurityAccessPage(
+                                viewModel: viewModel,
+                                screenAccessModel: screenAccessModel
+                            )
                         case .data:
                             SettingsDataPage(viewModel: viewModel)
                         }
@@ -5557,7 +5598,12 @@ private struct SettingsPreferencesPage: View {
 
 private struct SettingsSecurityAccessPage: View {
     @ObservedObject var viewModel: AgentViewModel
-    @StateObject private var screenAccessModel = ScreenAccessOnboardingModel()
+    /// **Injected, not `@StateObject` here** (SONNY-137). It used to be built by this page, which
+    /// was fine while this page was the only door to screen access. First run is a second door, and
+    /// two instances would be two answers to `screenRecordingRequestedThisLaunch` — a user who
+    /// pressed Request access in first run would find this page showing no relaunch guidance for the
+    /// request it did not see, on the one step where a relaunch is the whole mechanic.
+    @ObservedObject var screenAccessModel: ScreenAccessOnboardingModel
     @State private var isScreenAccessSetupPresented = false
 
     var body: some View {
