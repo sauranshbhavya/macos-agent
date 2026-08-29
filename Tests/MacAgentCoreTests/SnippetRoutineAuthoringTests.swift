@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -29,7 +30,11 @@ struct SnippetRoutineAuthoringTests {
         let executor = AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
             routineStore: routineStore,
-            snippetStore: snippetStore
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: snippetStore,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: executor)
 
@@ -82,6 +87,7 @@ struct SnippetRoutineAuthoringTests {
         // And the snippet is now reachable the way snippets are reached — by typing the trigger.
         let resolver = InstantCommandResolver(
             snippetStore: snippetStore,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         )

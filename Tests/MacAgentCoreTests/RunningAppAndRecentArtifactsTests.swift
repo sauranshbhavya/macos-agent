@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -7,7 +8,12 @@ import Testing
 struct RunningAppAndRecentArtifactsTests {
     @Test
     func resolverBuildsRunningAppSwitchPlans() throws {
-        let resolver = InstantCommandResolver()
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let plan) = resolver.resolve(command: "switch to Notion") else {
             Issue.record("Expected running app switch command to resolve locally.")
@@ -30,7 +36,15 @@ struct RunningAppAndRecentArtifactsTests {
             RunningApp(displayName: "Notion", bundleIdentifier: "notion.id", processIdentifier: 100),
             RunningApp(displayName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode", processIdentifier: 101)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Switch to Notion.",
@@ -70,7 +84,15 @@ struct RunningAppAndRecentArtifactsTests {
         let switcher = FakeRunningAppSwitcher(apps: [
             RunningApp(displayName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode", processIdentifier: 100)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let scope = TaskWorkspaceScope.scoped(
             WorkspaceScope(workspace: StoredWorkspace(name: "Writing", apps: ["VS Code"], urls: []))
@@ -108,7 +130,15 @@ struct RunningAppAndRecentArtifactsTests {
         let switcher = FakeRunningAppSwitcher(apps: [
             RunningApp(displayName: "Google Chrome", bundleIdentifier: "com.google.Chrome", processIdentifier: 100)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let scope = TaskWorkspaceScope.scoped(
             WorkspaceScope(workspace: StoredWorkspace(name: "Work", apps: ["Chrome"], urls: []))
@@ -141,7 +171,15 @@ struct RunningAppAndRecentArtifactsTests {
         let switcher = FakeRunningAppSwitcher(apps: [
             RunningApp(displayName: "Notion", bundleIdentifier: "notion.id", processIdentifier: 100)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Switch to Not.",
@@ -173,7 +211,15 @@ struct RunningAppAndRecentArtifactsTests {
         let switcher = FakeRunningAppSwitcher(apps: [
             RunningApp(displayName: "Notion", bundleIdentifier: "notion.id", processIdentifier: 100)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Switch to Not.",
@@ -201,7 +247,15 @@ struct RunningAppAndRecentArtifactsTests {
         let switcher = FakeRunningAppSwitcher(apps: [
             RunningApp(displayName: "Xcode", bundleIdentifier: "com.apple.dt.Xcode", processIdentifier: 100)
         ])
-        let executor = AgentActionExecutor(runningAppSwitcher: switcher)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            runningAppSwitcher: switcher,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Switch to notion.",
@@ -299,7 +353,14 @@ struct RunningAppAndRecentArtifactsTests {
         let artifact = try writeFile(named: "research-note.md", in: root)
         try store.record(path: artifact.path)
 
-        let executor = AgentActionExecutor(recentArtifactStore: store)
+        let executor = AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: store,
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
             summary: "Search recent artifacts.",
@@ -334,7 +395,12 @@ struct RunningAppAndRecentArtifactsTests {
         let store = RecentArtifactStore(fileURL: root.appendingPathComponent("recent.json"))
         let artifact = try writeFile(named: "meeting-notes.md", in: root)
         try store.record(path: artifact.path)
-        let resolver = InstantCommandResolver(recentArtifactStore: store)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: store,
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let openPlan) = resolver.resolve(command: "open recent artifact meeting") else {
             Issue.record("Expected recent artifact open command to resolve locally.")
@@ -359,7 +425,12 @@ struct RunningAppAndRecentArtifactsTests {
         let output = root.appendingPathComponent("draft.md")
         let executor = AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
-            recentArtifactStore: store
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: store,
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
         let logStore = AgentLogStore()
         let runner = AgentRunner(

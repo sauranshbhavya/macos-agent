@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// The Tasks page's two empty states. Kept out of the SwiftUI body for the same reason as the delete
 /// copy: this repository has no view-rendering tests.

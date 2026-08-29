@@ -1,7 +1,7 @@
 import Combine
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgent
 @testable import MacAgentCore
 

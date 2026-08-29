@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// **The microphone row answers from its injected checker, not from this Mac** (SONNY-123).

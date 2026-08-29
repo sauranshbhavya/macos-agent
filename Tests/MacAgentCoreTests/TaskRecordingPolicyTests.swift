@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -78,8 +79,23 @@ struct TaskRecordingPolicyTests {
         #expect(!context.recordingPolicy.suppressesTraces)
 
         // The executor's default parameter, taken rather than passed.
-        #expect(!AgentActionExecutor().suppressesTracesForTests)
-        #expect(AgentActionExecutor(recordingPolicy: .suppressTraces).suppressesTracesForTests)
+        #expect(!AgentActionExecutor(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        ).suppressesTracesForTests)
+        #expect(AgentActionExecutor(
+            recordingPolicy: .suppressTraces,
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        ).suppressesTracesForTests)
     }
 
     /// **The leak pausing alone does not close, pinned as a regression.**

@@ -310,22 +310,26 @@ public struct ResumableTaskStore: @unchecked Sendable {
     /// above zero for the same shape of reason — a zero expiry would make every record vanish on the
     /// read that follows its own write, which is not a short lifetime but a broken store.
     public init(
-        fileURL: URL? = nil,
+        fileURL: URL,
         fileManager: FileManager = .default,
         encryption: LocalStorageEncryption = .shared,
         idleExpiry: TimeInterval = ResumableTaskStore.defaultIdleExpiry,
         maxTasks: Int = ResumableTaskStore.defaultMaxTasks
     ) {
+        self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
         self.idleExpiry = max(1, idleExpiry)
         self.maxTasks = max(1, maxTasks)
-        if let fileURL {
-            self.fileURL = fileURL
-        } else {
-            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
-                .appendingPathComponent("resumable-tasks.json")
-        }
+    }
+
+    /// Where the shipping app keeps this store.
+    ///
+    /// The rule that makes this a named call rather than an initializer default is on
+    /// `ClipboardHistoryStore.defaultDirectory` (SONNY-350).
+    public static func realFileURL(fileManager: FileManager = .default) -> URL {
+        ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
+            .appendingPathComponent("resumable-tasks.json")
     }
 
     /// Every unfinished task that has not gone idle, newest activity first.

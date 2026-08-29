@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 @Suite
@@ -1806,6 +1806,10 @@ struct AgentRunnerTests {
             permissionReadinessService: .deterministic(),
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
             capabilityRegistry: capabilityRegistry
         )
     }

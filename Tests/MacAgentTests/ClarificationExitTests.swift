@@ -1,8 +1,8 @@
 import Foundation
-import Testing
-import MacAgentTestSupport
-@testable import MacAgent
 import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
 
 /// SONNY-166 — a clarification can be abandoned.
 ///

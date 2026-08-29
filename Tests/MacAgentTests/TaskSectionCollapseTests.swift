@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 @Suite
 struct TaskSectionCollapseStateTests {

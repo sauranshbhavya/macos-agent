@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -7,7 +8,13 @@ import Testing
 struct ShortcutsBridgeTests {
     @Test
     func instantResolverBuildsShortcutPlanAndClarifiesUnknownNames() throws {
-        let resolver = InstantCommandResolver(shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"]))
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"])
+        )
 
         guard case .plan(let plan) = resolver.resolve(command: "run my Morning Routine shortcut") else {
             Issue.record("Expected known Shortcut command to resolve locally.")
@@ -37,6 +44,10 @@ struct ShortcutsBridgeTests {
     @Test
     func aShortcutNamedWithAPossessiveIsFoundByItsOwnName() throws {
         let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
             shortcutCatalog: FakeShortcutCatalog(names: ["Our Standup", "My Standup", "Standup"])
         )
 
@@ -62,7 +73,13 @@ struct ShortcutsBridgeTests {
     /// spelling, exactly as it did when that was the only candidate.
     @Test
     func aMissStillNamesTheStrippedSpellingInItsQuestion() throws {
-        let resolver = InstantCommandResolver(shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"]))
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            shortcutCatalog: FakeShortcutCatalog(names: ["Morning Routine"])
+        )
 
         guard case .clarify(let plan)? = resolver.resolve(command: "run my Missing shortcut") else {
             Issue.record("Expected an unknown Shortcut to ask a clarification.")
@@ -298,6 +315,11 @@ struct ShortcutsBridgeTests {
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             recordingPolicy: recordingPolicy,
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutCatalog: catalog,
             shortcutInvoker: invoker,
             shortcutRunHistoryStore: history

@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -22,7 +23,14 @@ struct UnattendedTrustAdvisoryTests {
                 steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
             )
         )
-        let executor = AgentActionExecutor(routineStore: routineStore)
+        let executor = AgentActionExecutor(
+            routineStore: routineStore,
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
 
         #expect(UnattendedTrustAdvisory.warning(forRoutineNamed: "Morning", executor: executor) == nil)
     }
@@ -50,7 +58,14 @@ struct UnattendedTrustAdvisoryTests {
                 ]
             )
         )
-        let executor = AgentActionExecutor(routineStore: routineStore, snippetStore: snippetStore)
+        let executor = AgentActionExecutor(
+            routineStore: routineStore,
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: snippetStore,
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+        )
 
         // Guard the premise rather than assuming it: if this stops being tier 3, the test below
         // would pass vacuously for the wrong reason.
@@ -84,7 +99,12 @@ struct UnattendedTrustAdvisoryTests {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = AgentActionExecutor(
-            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
         )
 
         #expect(UnattendedTrustAdvisory.warning(forRoutineNamed: "Ghost", executor: executor) == nil)
@@ -103,7 +123,12 @@ struct UnattendedTrustAdvisoryTests {
                 steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
             )
         )
-        let resolver = InstantCommandResolver(routineStore: routineStore)
+        let resolver = InstantCommandResolver(
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            routineStore: routineStore,
+            workspaceStore: UnreachableLocalStores.workspaces()
+        )
 
         guard case .plan(let resolved) = resolver.resolve(command: "run routine Morning") else {
             Issue.record("Expected the kind-prefixed form to resolve instantly.")

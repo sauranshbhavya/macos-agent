@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 import MacAgentTestSupport
+import Testing
 @testable import MacAgentCore
 
 /// A store file that will not decrypt, and the one mechanism that gets a user out of it (SONNY-239).

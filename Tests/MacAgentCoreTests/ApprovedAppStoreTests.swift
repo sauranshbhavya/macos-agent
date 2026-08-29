@@ -281,7 +281,7 @@ struct ApprovedAppStoreTests {
     /// and membership of the list the wipe actually uses. Those cannot go stale.
     @Test
     func theDefaultFileSitsBesideTheOtherStores() {
-        let store = ApprovedAppStore()
+        let store = ApprovedAppStore(fileURL: ApprovedAppStore.realFileURL())
 
         #expect(store.fileURL.lastPathComponent == "approved-apps.json")
         #expect(store.fileURL.deletingLastPathComponent().lastPathComponent == "Sonny")

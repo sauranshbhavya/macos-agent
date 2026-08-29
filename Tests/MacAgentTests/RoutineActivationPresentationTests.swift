@@ -1,7 +1,7 @@
 import Foundation
+import MacAgentCore
 import Testing
 @testable import MacAgent
-import MacAgentCore
 
 /// SONNY-46's user-visible half: the Routines row can no longer say the opposite of the truth.
 ///

@@ -1,8 +1,8 @@
 import Foundation
-import Testing
-import MacAgentTestSupport
-@testable import MacAgent
 import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
 
 /// How a run's planner is built, now that which *provider* serves it is the server's to decide
 /// (SONNY-132).
