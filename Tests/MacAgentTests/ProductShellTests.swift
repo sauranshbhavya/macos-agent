@@ -19,9 +19,21 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
-        let coordinator = AppWindowCoordinator(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let coordinator = AppWindowCoordinator(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
         let widget = FloatingWidgetView(viewModel: viewModel)
-        let commandCenter = CommandCenterView(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let commandCenter = CommandCenterView(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         #expect(coordinator.viewModel === viewModel)
         #expect(widget.viewModel === viewModel)
@@ -34,7 +46,14 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
-        let delegate = AppDelegate(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let delegate = AppDelegate(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         let menu = delegate.makeStatusMenu()
         #expect(menu.items.map(\.title) == ["New Task", "", "Open Sonny", "", "Quit Sonny"])
@@ -75,7 +94,14 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
-        let delegate = AppDelegate(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let delegate = AppDelegate(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         // A run already in flight makes `canUseVoice` false whether or not the test host happens to
         // have OPENAI_API_KEY exported, so `beginPushToTalkVoice()` returns before it can reach the
@@ -161,6 +187,99 @@ struct ProductShellTests {
         #expect(onChange.contains("focusTheFieldThatTakesInput()"))
     }
 
+    /// **The post-relaunch launch, end to end, on the value the Keychain actually held** (SONNY-137;
+    /// PR #159's review, F3).
+    ///
+    /// The worst bug this row can ship is a user who signs in, grants Screen Recording, watches the
+    /// app relaunch, and is handed a sign-in screen for the account they just signed into. Three
+    /// separate edits produce it and only one of them changes the statement order: moving `begin`
+    /// out of the task that awaits `restore()`, reading `isSignedIn` into a local *before* the
+    /// `await`, and passing a literal `false`. A source scan of the shape catches the first and
+    /// neither of the others — both survived a battery while that scan was the only pin.
+    ///
+    /// So this drives the real method. The Keychain is seeded before anything reads it, exactly as a
+    /// relaunch leaves it; the account model has not read it yet, which is what `isSignedIn == false`
+    /// before the call asserts; and afterwards the sequence must be at the step that is *left*.
+    /// Landing on `.signIn` is the bug, and every one of the three edits lands there.
+    ///
+    /// It lives in this file rather than beside the rest of SONNY-137's tests because it needs a
+    /// real `AgentViewModel`, and `makeProductShellFixture` is file-private here.
+    @Test
+    func theLaunchDecidesFirstRunOnTheSessionTheKeychainActuallyHeld() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
+
+        // What the process that comes back after the Screen Recording grant finds on disk.
+        let keychain = InMemoryKeychainSecretStore()
+        try KeychainAccountTokenStore(secretStore: keychain).saveTokens(SonnyAccountTokens(
+            accessToken: "restored-access",
+            refreshToken: "restored-refresh",
+            accessTokenExpiresAt: Date().addingTimeInterval(3_600),
+            refreshTokenExpiresAt: nil,
+            userID: "acct_7f3c",
+            emailAddress: "founder@example.com"
+        ))
+        let accountModel = makeHermeticAccountModel(keychain: keychain)
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let firstRunCoordinator = suite.makeCoordinator()
+        let delegate = AppDelegate(
+            viewModel: fixture.viewModel,
+            accountModel: accountModel,
+            // Screen Recording granted, Accessibility not: the state the relaunch leaves behind.
+            screenAccessModel: makeHermeticScreenAccessModel(
+                screenRecordingGranted: true,
+                accessibilityTrusted: false
+            ),
+            firstRunCoordinator: firstRunCoordinator
+        )
+
+        // Nothing has read the Keychain yet, so a decision taken now — or on a value captured now —
+        // would be taken against a signed-out account.
+        #expect(accountModel.isSignedIn == false)
+        #expect(firstRunCoordinator.presentedStep == nil)
+        #expect(firstRunCoordinator.hasBegun == false)
+
+        await delegate.decideFirstRunAfterRestoringTheSession()
+
+        #expect(accountModel.isSignedIn)
+        #expect(accountModel.signedInAddress == "founder@example.com")
+        #expect(firstRunCoordinator.hasBegun)
+        #expect(
+            firstRunCoordinator.presentedStep == .screenAccess,
+            "the relaunch must come back at the step that is left, not at sign-in"
+        )
+        #expect(firstRunCoordinator.presentedStep != .signIn)
+    }
+
+    /// The mirror, and the reason the test above is not merely asserting that `restore()` works: on
+    /// a Mac with nothing stored, the same call must land on sign-in. Without this, a mutant that
+    /// hard-coded `.screenAccess` would pass the test above.
+    @Test
+    func theSameLaunchOnAMacWithNoStoredSessionStartsAtSignIn() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
+
+        let suite = FirstRunDefaultsSuite()
+        defer { suite.removeAtEndOfTest() }
+        let firstRunCoordinator = suite.makeCoordinator()
+        let delegate = AppDelegate(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(
+                screenRecordingGranted: true,
+                accessibilityTrusted: false
+            ),
+            firstRunCoordinator: firstRunCoordinator
+        )
+
+        await delegate.decideFirstRunAfterRestoringTheSession()
+
+        #expect(firstRunCoordinator.presentedStep == .signIn)
+    }
+
     @Test
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
         // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,
@@ -200,7 +319,14 @@ struct ProductShellTests {
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
         let widget = FloatingWidgetView(viewModel: viewModel)
-        let commandCenter = CommandCenterView(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let commandCenter = CommandCenterView(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         #expect(viewModel.usePointerCursors)
 
@@ -252,7 +378,14 @@ struct ProductShellTests {
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
         let widget = FloatingWidgetView(viewModel: viewModel)
-        let commandCenter = CommandCenterView(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let commandCenter = CommandCenterView(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         #expect(viewModel.displayFullNames == false)
 
@@ -324,7 +457,14 @@ struct ProductShellTests {
         let originalActivationPolicy = application.activationPolicy()
         defer { _ = application.setActivationPolicy(originalActivationPolicy) }
         let viewModel = fixture.viewModel
-        let coordinator = AppWindowCoordinator(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let coordinator = AppWindowCoordinator(
+            viewModel: viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         coordinator.showCommandCenter()
         let commandCenterWindow = try #require(coordinator.commandCenterWindow)
@@ -1924,7 +2064,14 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskCount == 0)
 
         if let snapshotPath = ProcessInfo.processInfo.environment["SONNY_SHARED_TASK_SNAPSHOT"] {
-            let coordinator = AppWindowCoordinator(viewModel: viewModel, accountModel: makeHermeticAccountModel())
+            let firstRunSuite = FirstRunDefaultsSuite()
+            defer { firstRunSuite.removeAtEndOfTest() }
+            let coordinator = AppWindowCoordinator(
+                viewModel: viewModel,
+                accountModel: makeHermeticAccountModel(),
+                screenAccessModel: makeHermeticScreenAccessModel(),
+                firstRunCoordinator: firstRunSuite.makeCoordinator()
+            )
             coordinator.showCommandCenter()
             let window = try #require(coordinator.commandCenterWindow)
             try render(window: window, to: URL(fileURLWithPath: snapshotPath))
@@ -3191,7 +3338,14 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let widget = FloatingWidgetView(viewModel: fixture.viewModel)
-        let commandCenter = CommandCenterView(viewModel: fixture.viewModel, accountModel: makeHermeticAccountModel())
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let commandCenter = CommandCenterView(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
 
         try fixture.routineStore.save(
             StoredRoutine(

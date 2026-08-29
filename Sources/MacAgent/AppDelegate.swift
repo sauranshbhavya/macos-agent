@@ -8,9 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let viewModel: AgentViewModel
     private let accountModel: SonnyAccountModel
+    private let screenAccessModel: ScreenAccessOnboardingModel
+    private let firstRunCoordinator: FirstRunCoordinator
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
-        accountModel: accountModel
+        accountModel: accountModel,
+        screenAccessModel: screenAccessModel,
+        firstRunCoordinator: firstRunCoordinator
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -75,9 +79,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `accountModel` follows the same rule for the same reason, one store further out: its default
     /// would be the Keychain every packaged build on this Mac shares, and a test writing
     /// `AppDelegate(viewModel:)` would have read and deleted the founder's own session (SONNY-128).
-    init(viewModel: AgentViewModel, accountModel: SonnyAccountModel) {
+    /// `screenAccessModel` and `firstRunCoordinator` follow it (SONNY-137): the first reads this
+    /// machine's real TCC grants, the second writes two flags into the `UserDefaults` domain every
+    /// packaged build here shares — including "first run is over", which a fixture flipping it would
+    /// take away from the founder silently.
+    init(
+        viewModel: AgentViewModel,
+        accountModel: SonnyAccountModel,
+        screenAccessModel: ScreenAccessOnboardingModel,
+        firstRunCoordinator: FirstRunCoordinator
+    ) {
         self.viewModel = viewModel
         self.accountModel = accountModel
+        self.screenAccessModel = screenAccessModel
+        self.firstRunCoordinator = firstRunCoordinator
         super.init()
     }
 
@@ -118,10 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("Sonny could not register push-to-talk hotkey: \(error.localizedDescription)")
         }
 
-        // Reads the Keychain and touches no network, so the app comes back signed in on a relaunch
-        // with no connection — including the relaunch macOS forces after a Screen Recording grant,
-        // which is the case SONNY-128 exists for.
-        Task { await accountModel.restore() }
+        // The Keychain read and the first-run decision, in that order and in one place — see
+        // `decideFirstRunAfterRestoringTheSession()` for why they are one method.
+        Task { await decideFirstRunAfterRestoringTheSession() }
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
@@ -148,6 +162,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         widgetController.show()
 
         print("Sonny is running. Click the Sonny item in the macOS menu bar to open it.")
+    }
+
+    /// Reads the Keychain, then decides first run on what it found. **One method because the two
+    /// halves are one decision, and separating them is the failure this sequence exists to prevent.**
+    ///
+    /// `restore()` reads the Keychain and touches no network, so the app comes back signed in on a
+    /// relaunch with no connection — including the relaunch macOS forces after a Screen Recording
+    /// grant, which is the case SONNY-128 exists for.
+    ///
+    /// **What goes wrong if the order or the freshness slips** (SONNY-137). `restore()` is
+    /// asynchronous, and everything after the `Task` in `applicationDidFinishLaunching` runs before
+    /// it finishes. So a decision taken beside that task rather than inside it — or taken inside it
+    /// on a value read *before* the `await`, or on a literal — is taken against `isSignedIn ==
+    /// false` for every launch, including the one right after the Screen Recording grant, where it
+    /// hands a sign-in step to a user who signed in a minute ago. All three shapes produce the same
+    /// user-visible bug and only one of them changes the statement order, which is why this is
+    /// driven by a test rather than pinned by a scan of two lines
+    /// (`ProductShellTests.theLaunchDecidesFirstRunOnTheSessionTheKeychainActuallyHeld`; PR #159's
+    /// review, F3, where two mutants that kept the order and broke the value both survived).
+    ///
+    /// Internal rather than `private` so that test can drive it: `applicationDidFinishLaunching`
+    /// cannot be called in a test process, and this is the part of it that has to be right.
+    /// `FirstRunCoordinator.begin` decides once; every later change of state goes through `refresh`,
+    /// which does nothing until it has.
+    func decideFirstRunAfterRestoringTheSession() async {
+        await accountModel.restore()
+        firstRunCoordinator.begin(
+            isSignedIn: accountModel.isSignedIn,
+            screenRecordingGranted: screenAccessModel.screenRecordingGranted,
+            accessibilityTrusted: screenAccessModel.accessibilityTrusted
+        )
     }
 
     /// Only post a system notification when neither surface already showing the same state inline

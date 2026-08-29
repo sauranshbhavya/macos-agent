@@ -13,10 +13,20 @@ let app = NSApplication.shared
 // instance rather than building a second. Two clients would be two token caches and two
 // single-flight refresh guards, and the server reads a second rotation inside its ten-second overlap
 // as a stolen token and revokes the whole family (contract §3.3).
+// **First run's two collaborators are named here for the same reason** (SONNY-137).
+// `FirstRunStore` writes two flags into the one `UserDefaults` domain every packaged build on this
+// Mac shares, and `ScreenAccessOnboardingModel` reads this machine's real TCC grants — so both are
+// required parameters all the way down rather than defaults a fixture inherits by saying nothing.
+// The screen-access model is built once and shared by first run and Settings › Security & Access,
+// so a Screen Recording request made in one is visible as relaunch guidance in the other; two
+// instances would be two answers to "does this launch still owe a relaunch".
 let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
+let screenAccessModel = ScreenAccessOnboardingModel()
 let delegate = AppDelegate(
     viewModel: .atItsRealStoreLocations(backendClient: accountModel.backendClient),
-    accountModel: accountModel
+    accountModel: accountModel,
+    screenAccessModel: screenAccessModel,
+    firstRunCoordinator: FirstRunCoordinator(store: FirstRunStore(userDefaults: .standard))
 )
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
