@@ -223,13 +223,40 @@ npm run check:secrets       # refuse a credential in the repository
 
 `npm test` runs with **no external dependency** and skips the database tests, printing a warning
 that says it did so — a suite that quietly runs zero tests looks exactly like a suite that passed.
-To run them, supply a Postgres; `npm run test:db` defaults to the container below:
+To run them, supply a Postgres. **Name it and port it for your lane, never for the machine**: a
+container name and a host port are both machine-wide, this repository's throughput model is
+parallel lanes, and the setup that used to be documented here named one fixed pair
+(`--name sonny-gw-db -p 55433:5432`) which every lane following it would ask for at once
+(SONNY-355).
 
 ```
-docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
-cd server && npm run test:db
-docker rm -f sonny-gw-db
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+cd server && DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm run test:db
+docker rm -f "sonny-gw-db-$LANE"
 ```
+
+Nothing in that has to be chosen, which is the point — a placeholder a reader fills in by hand is a
+fixed pair again the second time somebody copies it without editing. `$LANE` is this worktree's own
+directory name, so the container name is unique by construction; `-p 0:5432` asks Docker for any
+free host port and `docker port` reads back which one it gave, so the port cannot collide either.
+Measured 2026-08-29 in worktree `lane-2` with another lane's `sonny-gw-db-358` already up on 55458:
+Docker handed this one 32768 and both ran side by side.
+
+`npm run test:db` falls back to `localhost:55433` when `DATABASE_URL` is unset. That is correct for
+a lone session and is exactly what goes wrong with two, so set it.
+
+**What a collision looks like, written down because the symptom names nothing on its own.** The
+second lane's `docker run` either fails on the name, or — if the first container had been removed
+and recreated — re-initialises the database underneath a run already using it. What that lane sees
+is a suite-wide connection failure with nothing in the test output pointing at a cause: observed
+between two lanes on 2026-08-29 as `Test Files 11 failed | 20 passed` with `Connection terminated
+unexpectedly`, and a fresh `initdb` in `docker logs` inside that run's window. **That combination is
+another lane's container, not a defect in the branch under test** — discard the run, start your own
+container as above, and re-run. The reverse is not ruled out and is worse: two lanes sharing one
+live database can produce a *pass* that depended on rows the other lane wrote, and nothing in the
+output would say so either.
 
 Migrations are `npm run migrate -- up | down | status`, need `DATABASE_URL` and a prior
 `npm run build`, and every migration file must carry a `-- @rollback` section or the runner refuses
