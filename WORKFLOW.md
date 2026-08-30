@@ -66,9 +66,14 @@ contract and the context handoff to a session that has never seen this conversat
 write it so that session needs nothing else. Every ticket carries:
 
 - **Branch** — the first line of the description: the exact git branch this ticket's work
-  lands on. Four prefixes are in use — `feature/`, `fix/`, `docs/` and `chore/`; this named
-  `feature/...` alone until SONNY-290 counted the merged population on 2026-08-26 (the count
-  and the command that produced it are in the changelog's second line). Sequential tickets
+  lands on. Five prefixes are in use — `feature/`, `fix/`, `docs/`, `chore/` and `refactor/`.
+  **A sixth exists on the mainline and is deliberately not one of the five: `hermes/`**, which is
+  PR #2 of 2026-07-03, the oldest merge there is, used once and not again in the 161 merges since.
+  It is history, not a convention, and it is named here so that five-against-161 does not read as a
+  count that lost one. This named `feature/...` alone until SONNY-290 counted the merged population
+  on 2026-08-26, and said four until SONNY-362 recounted it on 2026-08-30 (the counts, the
+  exclusion and the commands that produced them are in the changelog's second line). Sequential
+  tickets
   may share a branch; tickets running in parallel each get their own (git forbids one branch
   checked out in two worktrees).
 - **Context and goal** — who experiences what, and the user-visible outcome.
@@ -457,11 +462,24 @@ command, pointed at that invisible heading, had been answering a number nobody r
 merges (SONNY-329). **A misplaced entry raises no rebase conflict, because nobody else is
 editing that spot, so a clean merge is the tell** — five have been recorded that way.
 
-**This is named here, in the step that writes the entry, for the reason the check itself is not
-enough.** `CLAUDE.md`'s Non-obvious gotchas record what happened to SONNY-64's guard: a check
-people learn to skip has stopped existing. What keeps `scripts/warnings` and `scripts/mutate`
-alive is that step 5 names them as owed verification, not that they are good tools. So this one
-is owed by a named population too, and a session that writes an entry and does not report its
+**It also runs unasked, from the `.claude/` stop hook** (SONNY-361). Whenever the branch has
+touched the changelog — uncommitted, or committed since the merge-base with `main` — the hook runs
+it before it considers the Swift suite, and a finding blocks the turn. The committed half of that
+reading is the half that matters: step 7 has the entry written *and committed* before the PR opens,
+so on the last turn of the branch whose entry is at issue the tree is clean, and a
+dirty-file-only trigger would fire never. The hook does not fire on a branch that legitimately
+wrote its own entry — the check exempts the first entry and only the first — it skips during a live
+mutation battery and says so, and when it cannot run at all (the script missing, or the tool
+refusing to measure) it says that too rather than passing quietly.
+`.claude/hooks/verify-tests-before-stop-selftest.sh` re-proves every one of those arms.
+
+**Naming it here is still the load-bearing half, and the hook does not retire it.** `CLAUDE.md`'s
+Non-obvious gotchas record what happened to SONNY-64's guard: a check people learn to skip has
+stopped existing. What keeps `scripts/warnings` and `scripts/mutate` alive is that step 5 names
+them as owed verification, not that they are good tools. A hook fires inside one session's
+checkout and leaves nothing behind that a reviewer or a zero-context reader can check — it cannot
+be quoted, and a session whose hook never fired looks exactly like a session whose hook passed. So
+this is owed by a named population too, and a session that writes an entry and does not report its
 exit code has not finished step 7.
 
 **Not every branch owes one, and what decides it is what the branch recorded, not what it
