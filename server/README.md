@@ -59,6 +59,8 @@ sessions: `ProviderRejected` is recorded as done and any 4xx but 429 is `Provide
 mechanism answering 401 with every session alive writes the same stamp a real revocation writes.
 Nothing may rest on the stronger reading.
 
+**Where the classifier lies, 0015 corrects the stamp in some cases and not the ordinary one.** A wrong stamp is re-opened only when a *new* obligation arrives — a reopen and re-close, or a supersession. For a user who closes their account and never comes back, no transition ever fires again, `npm run revocations` reads 0 and a hard delete goes through, exactly as before. That case is closed by narrowing the classifier, which is SONNY-313's, not by this mechanism.
+
 Three things clear the stamp, and the first two are the ones that make the meaning hold: **the
 account closing**, **the id being superseded** — the two conditions that make a revocation owed in
 the first place — and, from 0014, the identity **observing the id again**. 0014 had only the third,

@@ -58,8 +58,13 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * **And a stamp implies only that the provider was ASKED.** It cannot imply the sessions are gone,
  * because `ProviderRejected` is recorded as done and any 4xx but 429 is `ProviderRejected` — so a
  * mechanism answering 401 or 403 with every session alive writes the same stamp a real revocation
- * writes. Nothing in this file may rest on the stronger reading; what 0015 buys is that a wrong
- * stamp lasts until the id is next owed rather than for ever.
+ * writes. Nothing in this file may rest on the stronger reading.
+ *
+ * **What 0015 buys against a wrong stamp is narrower than "not for ever", and the narrower statement
+ * is the honest one** (PR #167 review, F5). A wrong stamp is corrected only where a NEW obligation
+ * arrives — a reopen and re-close, or a supersession. For a user who closes their account and never
+ * comes back, no transition fires again, this function reads 0 and the hard delete goes through,
+ * exactly as before. That case is closed by narrowing the classifier, which is SONNY-313's.
  *
  * **The second disjunct does not require a closed account, and that is the point.** A supersession
  * on a *live* account is exactly the state SONNY-196 is about — Supabase re-keyed the subject

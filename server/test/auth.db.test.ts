@@ -126,6 +126,28 @@ describeDb("the auth endpoints", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
+    // **The schema is REBUILT, not inherited, and without this the file measures the wrong tree**
+    // (PR #167 review, F1). `up()` applies only *pending* migrations, so on a database that already
+    // has a schema it is a no-op — and this file then runs against whatever schema the previous
+    // invocation left behind rather than against the migration text in the working tree.
+    //
+    // That is the default workflow rather than a corner case. `npx vitest list --filesOnly` puts
+    // this file **first** of the twelve `.db.test.ts` files, and the only three that rebuild
+    // (`linking`, `migrate`, `supersession`) all run after it, so with one long-lived container and
+    // repeated `npm run test:db` it never once saw a current migration.
+    //
+    // Measured at `eb3d059` by the reviewer, same test, same mutant (0015's `CREATE TRIGGER`
+    // deleted), same command: `1 failed` on a dropped database and `1 passed` on a reused one, with
+    // `pg_trigger` showing the real trigger still installed under the mutant. What it cost was this
+    // branch's own battery — R1's verdict was right and named three tests in another file, while
+    // the door-A reproduction below, the one that mutant exists to be caught by, passed.
+    //
+    // **The same shape sits in eight other files and closing it there is not this branch's**
+    // (`for f in test/*.db.test.ts; do grep -q "DROP SCHEMA" "$f" || echo "$f"; done | wc -l` → 9
+    // before this change, 8 after). It is fixed here because this file is where a migration-
+    // dependent claim now lives; the general form is owed a ticket of its own.
+    await client.query("DROP SCHEMA IF EXISTS sonny CASCADE");
+    await client.query("DROP SCHEMA IF EXISTS sonny_meta CASCADE");
     await up(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
