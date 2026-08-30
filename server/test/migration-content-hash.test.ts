@@ -123,6 +123,27 @@ describe("executableSql", () => {
     expect(executableSql("SELECT E'it''s -- fine';")).toBe("SELECT E'it''s -- fine';");
   });
 
+  it("keeps an escape string holding BOTH quote forms in one piece", () => {
+    // **The simple case above cannot fail, and a battery is what said so** (SONNY-364 round 2, L3).
+    // Dropping the doubled-quote branch survived it: every byte is copied verbatim either way, so
+    // reading `''` as "close, then reopen" re-partitions `E'it''s -- fine'` into two literals whose
+    // bytes concatenate to exactly the same text. Nothing outside a literal moves, so nothing is
+    // stripped differently, so the assertion passes on the mutant.
+    //
+    // It takes both escape forms in one literal for the partitions to diverge: read correctly, this
+    // is ONE literal `E'a''b\'c'` (Postgres 17.11 returns `a'b'c`, length 5); read without the
+    // doubled-quote branch it becomes `E'a'` + `'b\'` + a bare `c` + a literal that opens at the
+    // last quote and never closes — which swallows the real comment below into it instead of
+    // stripping it. That is the difference this asserts.
+    expect(executableSql("SELECT E'a''b\\'c' , 1 -- x\nFROM t;")).toBe(
+      "SELECT E'a''b\\'c' , 1 FROM t;",
+    );
+  });
+
+  it("hashes two such literals differently when only their content differs", () => {
+    expect(hashOf("SELECT E'a''b\\'c' -- x\n;")).not.toBe(hashOf("SELECT E'a''b\\'d' -- x\n;"));
+  });
+
   it("does not read a trailing e of an identifier as an escape prefix", () => {
     // Postgres's scanner is flex and longest-match wins, so `code_e'…'` is an identifier followed by
     // an ORDINARY string — in which `\'` closes the literal. Reading the `e` as a prefix would run
