@@ -64,24 +64,32 @@ const databaseTestFiles = (): string[] =>
  * under its alias, which is the only way a scan can follow one.
  */
 function callsSomethingFromTheHelper(code: string): boolean {
-  // `[^;]` rather than `[\s\S]`: a lazy any-character clause starts matching at the file's FIRST
-  // `import` keyword and runs to this module's `from`, so it hands back every import above this one
-  // glued together, and the greedy brace extraction then reads names out of the wrong statement.
-  // That bug was in this function's first version and it is why the negative control for it did not
-  // fire — a file with the helper imported and its call deleted still passed, because `pg` and
-  // vitest's own bindings had been swept into the name list. A statement cannot contain a `;`, so
-  // excluding one is what keeps a clause inside its own statement. The identical bug was in
-  // `backstop.test.ts`'s vitest clause parser and is fixed there too.
-  const clauses = [...code.matchAll(/import\s+([^;]*?)\s+from\s+["']\.\/support\/schema\.js["']/g)]
-    .map((match) => match[1]!);
+  // **The clause must stay inside its own statement, and this took two goes to say correctly.** A
+  // lazy any-character clause starts matching at the file's FIRST `import` keyword and runs to this
+  // module's `from`, so it hands back every import above this one glued together and the greedy
+  // brace extraction reads names out of the wrong statement — which is why the negative control for
+  // this function did not fire: a file with the helper imported and its call deleted still passed,
+  // because `pg` and vitest's own bindings had been swept into the name list. `[^;]` fixed that and
+  // introduced a smaller one, a `;` inside a comment in the clause ending the match early. The
+  // boundary that is actually true of an import statement is that it contains no second `import`
+  // keyword, so that is what is excluded, and comments are stripped afterwards — safely, because an
+  // import clause holds no string literal a `/*` could hide in. `backstop.test.ts` carries the same
+  // parser and the same history; that edge was fail-safe here and fail-OPEN there, which is why it
+  // was found on that side (PR #172 cycle 2, F2).
+  const clauses =
+    [...code.matchAll(/import\s+((?:(?!\bimport\b)[\s\S])*?)\s+from\s+["']\.\/support\/schema\.js["']/g)]
+      .map((match) => match[1]!.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " "));
   const callables = clauses.flatMap((clause) => {
     // A namespace import binds every export under one name, so the call to look for is `ns.<name>(`.
     const namespace = /\*\s*as\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(clause);
     if (namespace) return [`${namespace[1]!}\\.[A-Za-z_$][A-Za-z0-9_$]*`];
     const named = /\{([^}]*)\}/.exec(clause);
     return (named?.[1] ?? "").split(",")
-      .map((specifier) => specifier.trim().split(/\s+as\s+/).pop()?.trim())
-      .filter((name): name is string => name !== undefined && name.length > 0);
+      // The quotes are stripped because ES2022 allows a string as the imported name, and the
+      // LOCAL name is what a call would use — `import { rebuildSchema as "x" }` is not legal, so
+      // the local half is always an identifier and this only ever trims a quoted imported name.
+      .map((specifier) => specifier.trim().split(/\s+as\s+/).pop()?.trim().replace(/^["']|["']$/g, ""))
+      .filter((name): name is string => name !== undefined && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name));
   });
   return callables.some((name) => new RegExp(`(?<![A-Za-z0-9_$.])${name}\\s*\\(`).test(code));
 }

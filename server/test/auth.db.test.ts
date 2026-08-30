@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import {
@@ -12,7 +12,7 @@ import { normalizeEmail } from "../src/auth/identity.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -123,7 +123,7 @@ describeDb("the auth endpoints", () => {
   let client: pg.Client;
   let provider: FakeProvider;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     // The schema is rebuilt rather than inherited, and `test/support/schema.ts` is where the
@@ -133,8 +133,8 @@ describeDb("the auth endpoints", () => {
     await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
-  afterAll(async () => { await pool.end(); await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await pool.end(); await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
     await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
     provider = new FakeProvider();

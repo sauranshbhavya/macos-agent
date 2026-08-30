@@ -1,8 +1,8 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { LinkError, linkExplicitly, normalizeEmail, resolve } from "../src/auth/identity.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The concurrency invariants of the account/identity model, under interleavings that are **forced
@@ -45,13 +45,13 @@ const describeDb = url ? describe : describe.skip;
 describeDb("concurrency invariants, under forced interleavings", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.identity, sonny.account RESTART IDENTITY CASCADE");
   });
 

@@ -1,7 +1,7 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import {
   claimKey,
   completeClaim,
@@ -124,15 +124,15 @@ describeDb("the metering event table", () => {
     expect(outcome.kind).toBe("claimed");
   };
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await client.end();
   });
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.metering_event");
     await client.query("TRUNCATE sonny.idempotency_key");
   });

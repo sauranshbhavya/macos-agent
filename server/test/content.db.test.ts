@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import {
   accountSupportView,
   contentForRequest,
@@ -37,7 +37,7 @@ import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, afterEachUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /** The gate verifies tokens locally, so no route driven here ever calls a provider. */
 class UnusedAuthProvider implements AuthProvider {
@@ -183,15 +183,15 @@ function meteringEvent(overrides: Partial<MeteringEvent> = {}): MeteringEvent {
 describeDb("the content store, its clocks, and what reaches training", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await client.end();
   });
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query(
       `TRUNCATE sonny.retained_content, sonny.training_snapshot,
                 sonny.training_snapshot_member, sonny.content_deletion,
@@ -375,7 +375,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         withConnection: async (work) => work(client),
       });
 
-    beforeEach(async () => {
+    beforeEachUnderHangBackstop(async () => {
       await client.query(
         `INSERT INTO sonny.identity (account_id, provider, subject, link_method, supabase_user_id)
          VALUES ($1, 'email', $2, 'primary', $3)`,
@@ -391,7 +391,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         ),
       );
     });
-    afterEach(() => {
+    afterEachUnderHangBackstop(async () => {
       vi.unstubAllGlobals();
     });
 
@@ -1065,7 +1065,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
     const SUPABASE_USER = "9f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a7799";
     const OTHER_SUPABASE_USER = "8f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a7788";
 
-    beforeEach(async () => {
+    beforeEachUnderHangBackstop(async () => {
       await client.query(
         `INSERT INTO sonny.identity (account_id, provider, subject, link_method, supabase_user_id)
          VALUES ($1, 'email', $2, 'primary', $3), ($4, 'email', $5, 'primary', $6)`,

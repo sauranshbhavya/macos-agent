@@ -101,6 +101,12 @@ export function settling(): Settling {
         for (const controller of live) controller.abort(new Error(ABANDONED));
         await Promise.all([...outstanding]);
       }
+      // **Clears nothing, today, and that is recorded rather than chased** (PR #172 cycle 2, F3).
+      // Every entry in `live` is removed by its own body's `.finally()`, and the loop above does
+      // not exit until every one of those has run — so deleting this line is an EQUIVALENT mutant
+      // and was confirmed as one by deleting it and watching all 9 tests pass. It stays as the
+      // statement that `live` is empty when this returns, which is a property a reader otherwise
+      // has to re-derive from two `.finally()` bodies twenty lines up.
       live.clear();
     },
   };

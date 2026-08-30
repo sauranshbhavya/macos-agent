@@ -1,12 +1,12 @@
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rateLimitEmailKey } from "../src/auth/identity.js";
 import { down, loadMigrations, up } from "../src/db/migrate.js";
 import { dropSchema } from "./support/schema.js";
-import { VITEST_TIMEOUT_MS, itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, afterEachUnderHangBackstop, beforeAllUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import { settling } from "./support/settling.js";
 
 /**
@@ -30,7 +30,7 @@ const describeDb = url ? describe : describe.skip;
 describeDb("migrations against a real Postgres", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     // Start from nothing so the run is repeatable rather than dependent on what ran before it.
@@ -51,17 +51,19 @@ describeDb("migrations against a real Postgres", () => {
    * one place that guarantee can be made. `test/support/settling.ts` holds the mechanism, the reason
    * a private connection was considered and rejected, and what is left over.
    *
-   * The explicit hook deadline is the same one `itUnderHangBackstop` gives the tests, rather than
-   * vitest's 10 s default for hooks, which is another number nobody chose (SONNY-354). Reaching it
-   * means Postgres stopped answering a single-statement rollback, which is a broken database rather
-   * than a slow test — and it fails loudly here, naming this file, instead of quietly downstream.
+   * The deadline is `afterEachUnderHangBackstop`'s, which is the one every hook and every test in
+   * this file waits under. Reaching it means Postgres stopped answering a single-statement
+   * rollback, which is a broken database rather than a slow test — and it fails loudly here,
+   * naming this file and in wording a battery is told not to read as a kill, instead of quietly
+   * downstream. It was a hand-written `VITEST_TIMEOUT_MS` on this one hook until PR #172's cycle 2
+   * (F4), which chose the number and left the message vitest's own.
    */
   const inFlight = settling();
-  afterEach(async () => {
+  afterEachUnderHangBackstop(async () => {
     await inFlight.settle();
-  }, VITEST_TIMEOUT_MS);
+  });
 
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await client.end();
   });
 

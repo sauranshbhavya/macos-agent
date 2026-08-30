@@ -1,4 +1,4 @@
-import { it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, it } from "vitest";
 
 /**
  * The deadline a server-suite test waits under when the thing it is waiting for is owned by
@@ -200,4 +200,49 @@ export function itUnderHangBackstop(name: string, body: () => Promise<void>): vo
   it(name, { timeout: VITEST_TIMEOUT_MS }, async () => {
     await underHangBackstop(name, body);
   });
+}
+
+/**
+ * The four hooks a database file uses, each under the same deadline and the same declared wording
+ * as `itUnderHangBackstop` (PR #172 cycle 2, F4).
+ *
+ * **A chosen hook deadline was still an undeclared one, and this branch is what made that
+ * reachable.** Cycle 1's F4 replaced vitest's inherited 10 s `hookTimeout` with 90 s, which fixed
+ * the number and not the message: a hook that reaches it fails with `Hook timed out in 90000ms.`,
+ * a wording every hook in this repository shares, so `scripts/mutate-untrusted-failures` cannot
+ * declare it without excusing a genuine mutant-induced hang in any hook anywhere — and undeclared
+ * means a battery counts it as a kill. That is SONNY-224's manufactured kill arriving through the
+ * hook path, and the path is one SONNY-366 widened by putting a ~230 ms schema rebuild into every
+ * `beforeAll` where seven files had a 4 ms no-op. The argument is the same one already made for the
+ * test population; the conclusion has to be too.
+ *
+ * So the hook body runs under ``underHangBackstop``, whose wording IS declared, and vitest's own
+ * ceiling is set above it exactly as it is for a test — the backstop speaks first, and the generic
+ * message is unreachable rather than merely unlikely. Measured by dropping ``HANG_BACKSTOP_MS`` to
+ * one second and hanging a `beforeAll`: the run carried `waited 1.0s for: a beforeAll hook` and the
+ * declared fragment, and `Hook timed out in` appeared nowhere in it.
+ *
+ * **What this drops, stated rather than discovered later:** vitest lets a `beforeAll`/`beforeEach`
+ * body return a cleanup function, which it calls afterwards. These wrappers return `void`, so that
+ * feature is not available through them. Nothing in this suite uses it; a file that needs it needs
+ * a wrapper that forwards it, not a raw hook.
+ *
+ * `aroundAll` and `aroundEach` are the two hooks vitest exports that have no wrapper here. They are
+ * unused, and `backstop.test.ts` refuses them in a database file for that reason — fail-closed, so
+ * the first file that wants one has to add a wrapper rather than quietly reopen this.
+ */
+export function beforeAllUnderHangBackstop(body: () => Promise<void>): void {
+  beforeAll(async () => { await underHangBackstop("a beforeAll hook", body); }, VITEST_TIMEOUT_MS);
+}
+
+export function beforeEachUnderHangBackstop(body: () => Promise<void>): void {
+  beforeEach(async () => { await underHangBackstop("a beforeEach hook", body); }, VITEST_TIMEOUT_MS);
+}
+
+export function afterAllUnderHangBackstop(body: () => Promise<void>): void {
+  afterAll(async () => { await underHangBackstop("an afterAll hook", body); }, VITEST_TIMEOUT_MS);
+}
+
+export function afterEachUnderHangBackstop(body: () => Promise<void>): void {
+  afterEach(async () => { await underHangBackstop("an afterEach hook", body); }, VITEST_TIMEOUT_MS);
 }

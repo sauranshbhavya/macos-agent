@@ -1,8 +1,8 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { IdentityConflict, LinkError, isRelayAddress, linkExplicitly, normalizeEmail, rateLimitEmailKey, resolve } from "../src/auth/identity.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The identity-linking rule, pinned. `docs/sonny-identity-linking-rule.md` is the reasoning.
@@ -17,13 +17,13 @@ const describeDb = url ? describe : describe.skip;
 describeDb("the identity-linking rule", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.identity, sonny.account RESTART IDENTITY CASCADE");
   });
 

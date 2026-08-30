@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, vi } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { WithConnection } from "../src/db/connection.js";
@@ -20,7 +20,7 @@ import {
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The SQL under contract §9.2, against a real Postgres (SONNY-300).
@@ -77,15 +77,15 @@ const response = (body: string, status = 200) => ({
 describeDb("the idempotency key store", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await client.end();
   });
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.idempotency_key");
   });
 
@@ -514,17 +514,17 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     async deleteUser() {}
   }
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await pool.end();
     await client.end();
   });
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.idempotency_key");
     // Every request in this block is on a metered route now (SONNY-133), so each leaves a metering
     // row behind. Truncated here rather than left to the line below, because `sonny.metering_event`

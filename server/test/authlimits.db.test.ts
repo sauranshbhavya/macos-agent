@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import {
   CODE_LIFETIME_SECONDS, FAILURE_DISCLOSURE_SECONDS, classifyFailure, consumeLatest,
   invalidateLive, recordIssue,
@@ -9,7 +9,7 @@ import {
   bucketKey, consume, sweep,
 } from "../src/auth/ratelimit.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -55,13 +55,13 @@ const NOW = new Date("2026-08-21T10:37:30Z");
 describeDb("rate limits and the code lifecycle", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
   });
 
