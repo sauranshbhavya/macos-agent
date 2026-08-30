@@ -79,6 +79,13 @@ CREATE TABLE sonny.identity_provider_user (
   -- (`server/src/auth/revocation.ts`) reads this column as "has no outstanding revocation", so under
   -- the log reading a single stamp would make an id permanently un-owed — through a come-back, a
   -- reopen, and every close afterwards. That is the defect F1 reproduced end to end.
+  --
+  -- **0015 widened what clears it and narrowed what it is allowed to imply** (SONNY-358). "Cleared
+  -- when the identity observes the id again" is only half of it now: the account closing and the id
+  -- being superseded each clear it too, because those are the events that create the obligation and
+  -- a user does not always come back through a door this gateway can see. And a stamp implies only
+  -- that the provider was asked, never that it complied. 0015 replaces the `COMMENT` below with one
+  -- that says so; this line is 0014's own record and is left as it was written.
   provider_session_revoked_at timestamptz,
   revocation_claimed_at       timestamptz,
 
@@ -188,6 +195,15 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- holds, a refresh after a real revocation 401s and the user must sign in, which reaches this arm
 -- derivatively. It fails wherever `ProviderRejected` records a revocation that did not happen —
 -- `revocation.ts`'s deliberate contract, on a classifier where any 4xx but 429 lands there.
+--
+-- **CLOSED BY 0015, and by refusing that premise rather than by repairing it** (SONNY-358). The
+-- refresh route was one of three routes on which a user does not come back through `resolve()` —
+-- the others are not coming back at all, and coming back as a different provider-side user — so
+-- 0015 clears the stamp on the two events that CREATE an obligation to revoke, which are
+-- `OWED_PREDICATE`'s own two disjuncts, instead of relying on the user turning up. Nothing below is
+-- withdrawn; this arm is still here and still does what it says. It is simply no longer what stands
+-- between a reopened account and unrevoked sessions, and a recorded revocation is now allowed to
+-- imply only that the provider was asked. 0015's header carries the decision and its cost.
 --
 -- **`revocation_claimed_at` is cleared with it**, which also settles the review's F8 note that a
 -- stale lease survived a come-back: a row superseded → claimed by a drain that then died →
