@@ -52,8 +52,41 @@ const named = (paths: string[]): string[] => paths.map((path) => relative(testTr
 const databaseTestFiles = (): string[] =>
   everyTestSource().filter((path) => path.endsWith(".db.test.ts"));
 
-/** Any mention of the shared helper module — an import, a call, an alias. */
-const REACHES_THE_HELPER = /support\/schema\.js|rebuildSchema|dropSchema/;
+/**
+ * **A file reaches the helper when it CALLS something the helper gave it, not when it mentions one**
+ * (PR #172, F5). This was `/support\/schema\.js|rebuildSchema|dropSchema/` — a mention — which an
+ * unused import satisfies, and an unused import is exactly what a half-finished new file has. It is
+ * the same defect as F1 one file over: a pattern that saw one spelling of a thing rather than the
+ * thing.
+ *
+ * So the import clause is parsed for the names it actually binds, `as` aliases included, and at
+ * least one of those *local* names has to appear as a call. An alias therefore has to be called
+ * under its alias, which is the only way a scan can follow one.
+ */
+function callsSomethingFromTheHelper(code: string): boolean {
+  // `[^;]` rather than `[\s\S]`: a lazy any-character clause starts matching at the file's FIRST
+  // `import` keyword and runs to this module's `from`, so it hands back every import above this one
+  // glued together, and the greedy brace extraction then reads names out of the wrong statement.
+  // That bug was in this function's first version and it is why the negative control for it did not
+  // fire — a file with the helper imported and its call deleted still passed, because `pg` and
+  // vitest's own bindings had been swept into the name list. A statement cannot contain a `;`, so
+  // excluding one is what keeps a clause inside its own statement. The identical bug was in
+  // `backstop.test.ts`'s vitest clause parser and is fixed there too.
+  const clauses = [...code.matchAll(/import\s+([^;]*?)\s+from\s+["']\.\/support\/schema\.js["']/g)]
+    .map((match) => match[1]!);
+  const callables = clauses.flatMap((clause) => {
+    // A namespace import binds every export under one name, so the call to look for is `ns.<name>(`.
+    const namespace = /\*\s*as\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(clause);
+    if (namespace) return [`${namespace[1]!}\\.[A-Za-z_$][A-Za-z0-9_$]*`];
+    const named = /\{([^}]*)\}/.exec(clause);
+    return (named?.[1] ?? "").split(",")
+      .map((specifier) => specifier.trim().split(/\s+as\s+/).pop()?.trim())
+      .filter((name): name is string => name !== undefined && name.length > 0);
+  });
+  return callables.some((name) => new RegExp(`(?<![A-Za-z0-9_$.])${name}\\s*\\(`).test(code));
+}
+
+const REACHES_THE_HELPER = { test: callsSomethingFromTheHelper };
 
 /** Any mention of the migration runner module, which is the door the helper exists to be. */
 const REACHES_THE_MIGRATION_RUNNER = /src\/db\/migrate\.js/;
@@ -115,6 +148,38 @@ describe("the shared schema rebuild", () => {
         .filter((path) => REACHES_THE_MIGRATION_RUNNER.test(codeOf(path))),
     );
     expect(bypassing).toEqual([]);
+  });
+
+  it("counts a CALL rather than a mention, so an unused import does not satisfy it", () => {
+    // The pattern is the guard, so the pattern is what gets tested — the same rule
+    // `backstop.test.ts` carries. Every "reaches" sample below imports the helper and calls
+    // something it bound; every "does not" mentions it and calls nothing.
+    const importLine = 'import { rebuildSchema } from "./support/schema.js";';
+    const aliased = 'import { rebuildSchema as build } from "./support/schema.js";';
+    const reaches = [
+      `${importLine}\nawait rebuildSchema(client);`,
+      `${importLine}\n  await rebuildSchema (client);`,
+      `${aliased}\nawait build(client);`,
+      'import { dropSchema, rebuildSchema } from "./support/schema.js";\nawait dropSchema(client);',
+    ];
+    const doesNot = [
+      importLine,                                                    // imported and never called
+      `${importLine}\nconst held = rebuildSchema;`,                  // referenced, never called
+      `${aliased}\nawait rebuildSchema(client);`,                    // aliased, called under the old name
+      'await rebuildSchema(client);',                                // called with no import of it
+      'const x = myRebuildSchema(client);',                          // a longer identifier
+      'await up(client);',
+      // The parser bug this arm exists to catch, in the shape every real file has: names belonging
+      // to a statement ABOVE this module's import must not be read as this one's, so an unused
+      // helper import beside a used `pg` is still an unused helper import.
+      `import pg from "pg";\n${importLine}\nnew pg.Client({});`,
+    ];
+    // A namespace import binds every export under one name, and calling through it is still calling.
+    const throughANamespace =
+      'import * as schema from "./support/schema.js";\nawait schema.rebuildSchema(client);';
+    expect(REACHES_THE_HELPER.test(throughANamespace)).toBe(true);
+    expect(reaches.filter((sample) => !REACHES_THE_HELPER.test(sample))).toEqual([]);
+    expect(doesNot.filter((sample) => REACHES_THE_HELPER.test(sample))).toEqual([]);
   });
 
   it("finds what it is looking for, so an empty answer above means something", () => {

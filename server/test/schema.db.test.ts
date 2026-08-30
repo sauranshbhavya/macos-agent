@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { up } from "../src/db/migrate.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { dropSchema, rebuildSchema } from "./support/schema.js";
@@ -36,6 +36,20 @@ describeDb("the shared schema rebuild, against a real Postgres", () => {
     await rebuildSchema(client);
   });
 
+  /**
+   * **Every test here starts from a rebuilt schema, and this hook is not a convenience** (PR #172,
+   * F2). Both tests below deliberately destroy the schema part way through, and both used to put it
+   * back with a trailing `rebuildSchema` — which runs only when the test reaches its last line. One
+   * failing assertion anywhere above that line left the schema dropped, and the next test failed
+   * with `relation "sonny_meta.schema_migration" does not exist`: a second red saying nothing about
+   * itself, blaming the wrong test, in the file added to prove this branch had removed exactly that
+   * coupling. A `beforeEach` runs whatever the test before it did, so the coupling is gone rather
+   * than made less likely, and the trailing calls are no longer load-bearing.
+   */
+  beforeEach(async () => {
+    await rebuildSchema(client);
+  });
+
   afterAll(async () => {
     // Left whole rather than as this file found it: every `.db.test.ts` file rebuilds in its own
     // `beforeAll` now, so what follows does not depend on this — but a file that ends by deleting a
@@ -65,7 +79,6 @@ describeDb("the shared schema rebuild, against a real Postgres", () => {
       "SELECT nspname FROM pg_namespace WHERE nspname IN ('sonny', 'sonny_meta') ORDER BY nspname",
     );
     expect(rows.map((r) => r.nspname)).toEqual([]);
-    await rebuildSchema(client);
   });
 
   itUnderHangBackstop("rebuilds a schema that disagrees with a full ledger, which `up()` alone cannot", async () => {
@@ -92,5 +105,14 @@ describeDb("the shared schema rebuild, against a real Postgres", () => {
     await rebuildSchema(client);
     expect(await identityTableExists()).toBe(true);
     expect(await ledgerCount()).toBe(shipped);
+  });
+
+  itUnderHangBackstop("starts from a whole schema however the test before it ended", async () => {
+    // The guard on the hook above, and the reason it is a test rather than a comment: the two tests
+    // before this one each end with the schema deliberately broken part way through, and this one
+    // asserts it arrives whole anyway. It fails if the `beforeEach` is removed, which is what makes
+    // the trailing rebuilds above genuinely not load-bearing rather than merely believed not to be.
+    expect(await identityTableExists()).toBe(true);
+    expect(await ledgerCount()).toBeGreaterThan(0);
   });
 });

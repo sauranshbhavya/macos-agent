@@ -11,8 +11,8 @@
  * whose messages point at the cause — and under a mutation battery that is SONNY-224's manufactured
  * kill reached through a timeout, a mutant recorded as caught by a test that only lost a race.
  *
- * **What this does.** `track` runs a body and remembers it. `settle` aborts whatever is tracked and
- * does not resolve until it has actually stopped. Called from an `afterEach`, which vitest runs
+ * **What this does.** `track` runs a body and remembers it. `settle` aborts everything tracked and
+ * does not resolve until all of it has actually stopped. Called from an `afterEach`, which vitest runs
  * after a timed-out test and awaits, that makes "no work is outstanding when the next test starts" a
  * property of the file rather than a hope. The body cooperates by calling `signal.throwIfAborted()`
  * at each step of a loop; a step already in flight is waited for rather than interrupted, which is
@@ -38,9 +38,10 @@ export interface Settling {
    */
   track<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T>;
   /**
-   * Aborts anything tracked and resolves once it has stopped, whether it stopped by finishing or by
-   * throwing. Never rejects: a body abandoned by a deadline has already failed its test, and its
-   * rejection belongs to nobody by the time this runs. Resolves immediately when nothing is tracked.
+   * Aborts **everything** tracked and resolves once all of it has stopped, whether each stopped by
+   * finishing or by throwing. Never rejects: a body abandoned by a deadline has already failed its
+   * test, and its rejection belongs to nobody by the time this runs. Resolves immediately when
+   * nothing is tracked.
    */
   settle(): Promise<void>;
 }
@@ -58,26 +59,49 @@ export const ABANDONED =
   "rather than left running against a client the next test uses";
 
 export function settling(): Settling {
-  let controller: AbortController | undefined;
-  let stopped: Promise<void> = Promise.resolve();
+  /**
+   * **Every outstanding body, not the most recent one** (PR #172, F3). The first version kept a
+   * single controller and a single `stopped` promise, so a second `track` overwrote both: the first
+   * body's controller was dropped, so `settle` never aborted it, and its promise was dropped, so
+   * `settle` resolved while it was still running. That is a hole in the middle of the one construct
+   * whose entire job is to guarantee nothing is still running — and it is silent, because `settle`
+   * returning is what the caller reads as the guarantee being met.
+   *
+   * A set closes it without needing a rule about how many times a test may call `track`, which is
+   * the right shape: the barrier should be correct under any usage rather than correct under the
+   * usage it happens to have today.
+   */
+  const live = new Set<AbortController>();
+  const outstanding = new Set<Promise<void>>();
 
   return {
     track(work) {
-      controller = new AbortController();
+      const controller = new AbortController();
+      live.add(controller);
       const running = work(controller.signal);
       // Two references to one promise, deliberately. The caller gets `running` and sees its
-      // rejection; `stopped` is the same promise with both outcomes flattened, so `settle` can wait
-      // for it without adopting a failure that is not its to report — and so an abandoned body's
-      // rejection is handled here rather than surfacing as an unhandled rejection inside whatever
-      // test happens to be running by then.
-      stopped = running.then(() => {}, () => {});
+      // rejection; the set holds the same promise with both outcomes flattened, so `settle` can
+      // wait for it without adopting a failure that is not its to report — and so an abandoned
+      // body's rejection is handled here rather than surfacing as an unhandled rejection inside
+      // whatever test happens to be running by then.
+      const stopped: Promise<void> = running.then(() => {}, () => {}).finally(() => {
+        outstanding.delete(stopped);
+        live.delete(controller);
+      });
+      outstanding.add(stopped);
       return running;
     },
     async settle() {
-      controller?.abort(new Error(ABANDONED));
-      await stopped;
-      controller = undefined;
-      stopped = Promise.resolve();
+      // A loop rather than one pass: a body that starts another body while this is waiting would
+      // otherwise be left live and un-awaited, which is the defect this method was just fixed for,
+      // one level in. Each awaited promise removes itself, so the set empties and this terminates
+      // for any body that does not spawn work forever — and one that does is a runaway test, which
+      // reaches the hook's own deadline and says so rather than being silently half-waited-for.
+      while (outstanding.size > 0) {
+        for (const controller of live) controller.abort(new Error(ABANDONED));
+        await Promise.all([...outstanding]);
+      }
+      live.clear();
     },
   };
 }

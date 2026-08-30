@@ -36,6 +36,18 @@ import { it } from "vitest";
  * the wait here is IO, not a poll queued behind hundreds of `@MainActor` jobs — and the two
  * populations the Swift floor separates simply are not two populations here.
  *
+ * **Half of that measurement has been reproduced independently and half has not** (PR #172's
+ * review, recorded rather than fixed). The tick-rate half held: three probes at one-minute load
+ * averages of 18, 20 and 33 came back **168.4, 177.1 and 173.7 ticks per second** against a nominal
+ * 200, which is the load-independence the rejection above turns on and is squarely inside the
+ * 167-178 measured here. The **query-slowdown** half did not: on that machine mean query time did
+ * not move under `pgbench` plus 40 spinners (**40.8 ms → 39.0 ms**), because Docker Desktop holds
+ * its own vCPUs there and the load never reached Postgres. So the 2527 ms figure below, and the
+ * "ten times its unloaded cost" it is quoted for, rest on one machine's measurement and should be
+ * read that way. The rejection does not depend on them — it depends on the event loop staying
+ * healthy, which is the half that reproduced — but a number nobody else has been able to see should
+ * say so where it is used.
+ *
  * **Nothing runs while the work runs, and that is the second thing this construct owes these two
  * tests.** The first version kept the probe at run time and printed its count in the message as
  * evidence for a reader. It was removed, because a periodic timer is the one part of a deadline
@@ -84,9 +96,12 @@ import { it } from "vitest";
  * slow.
  *
  * Chosen from measurement rather than feel — 24× the worst this suite has been observed to take
- * under deliberate load, and 12× the ~5000 ms the reported failures met — and it is the number two
- * tests in `auth.db.test.ts` and one in `races.db.test.ts` already carry by hand for the same
- * reason. It is not a timing assertion and nothing asserts a run stays under it.
+ * under deliberate load (see the caveat above on which half of that reproduced), and 12× the
+ * ~5000 ms the reported failures met. It is the number five tests across `auth.db.test.ts`,
+ * `entitlement.db.test.ts`, `races.db.test.ts` and `migrate.db.test.ts` had already reached for by
+ * hand for the same reason, each writing it as a raw `{ timeout: 60_000 }` that set vitest's
+ * ceiling and left its message generic; SONNY-354 folded all five in. It is not a timing assertion
+ * and nothing asserts a run stays under it.
  */
 export const HANG_BACKSTOP_MS = 60_000;
 

@@ -17,5 +17,29 @@ export default defineConfig({
     // longer exercise the schema names the migrations actually declare, which is most of what they
     // are for. The whole suite runs in well under a second, so serial costs nothing worth having.
     fileParallelism: false,
+
+    // **Both deadlines are chosen here rather than inherited, and the numbers are different because
+    // the two populations are** (SONNY-354, and PR #172's F4 for the hook half).
+    //
+    // `testTimeout` stays at vitest's own 5000 ms — the same number, now written down, so that a
+    // reader can see it was decided. It governs only the files that run *in process*: every
+    // `.db.test.ts` test is declared through `itUnderHangBackstop`, which sets its own, and
+    // `backstop.test.ts` fails the suite if one is not. The non-database files run at under 300 ms
+    // for a whole file, so their slowest single test has something like a 500x margin against a
+    // worst measured load-induced slowdown of 10x (`test/support/backstop.ts` carries that
+    // measurement). Five seconds is not tight for that population and a wider one would only make a
+    // genuine mutant-induced hang cost longer to catch — and a bare timeout there is still counted
+    // as a kill, deliberately, because in a pure-CPU test it is evidence.
+    //
+    // `hookTimeout` is raised from vitest's 10 s default because this branch put real work inside a
+    // `beforeAll`: SONNY-366 gave every database file a schema rebuild, about 230 ms of drop plus
+    // apply, where seven of them previously had a 4 ms no-op `up()`. Ten seconds is still ample and
+    // that is exactly the problem — it is ample by accident, chosen by vitest for a suite that is
+    // not this one. `VITEST_TIMEOUT_MS` is the number this suite already decided on for a wait
+    // whose cost it does not control, so the hooks get it too and there is one deadline to reason
+    // about instead of two. `backstop.test.ts` pins these two fields against that constant, so the
+    // config and the construct cannot drift apart.
+    testTimeout: 5_000,
+    hookTimeout: 90_000,
   },
 });
