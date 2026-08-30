@@ -81,8 +81,11 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * could not be imported. Nothing was wrong at runtime; what was wrong was a comment asserting a
  * structural guarantee the code did not provide, which is exactly the state 0009 was written about.
  *
- * Four query sites share it now: the drain's claim, the drain's mark-done, `owedRevocationCount`
- * here, and `owedByAccount` there. **The fifth copy is the delete guard's, inside migration 0014,
+ * Five query sites share it now (`grep -Fc '${OWED_PREDICATE}' src/auth/revocation.ts
+ * src/revocations.ts` → 4 and 1; use `-F`, or `$` is read as an anchor and both answer a clean
+ * zero): the drain's claim, the **snapshot beside it** that records which rows that call is about to
+ * discharge (SONNY-365 — it was four before this one), the drain's mark-done, `owedRevocationCount`
+ * here, and `owedByAccount` there. **The sixth copy is the delete guard's, inside migration 0014,
  * and it is unavoidable** — a trigger body cannot import TypeScript. It is the reason `0009` is
  * cited above rather than merely remembered, and it is the copy to change first when this changes.
  *
@@ -94,12 +97,21 @@ export const OWED_PREDICATE = "AND (i.account_closed OR pu.superseded_at IS NOT 
 
 export interface RevocationOutcome {
   /**
-   * Provider-side users whose sessions are now recorded as revoked by this call.
+   * Provider-side users this drain asked the provider about and got a returning answer for.
    *
    * **Counted per provider-side user, not per identity** — which is what it always meant, since one
    * `signOutAllForUser` takes every session of one user and the stamp below fans out to every row
    * naming it. Before 0014 the unit of the count and the unit of the table disagreed, which is the
    * mismatch SONNY-230 fell through.
+   *
+   * **It is not a count of rows stamped, and the difference is not new** (SONNY-365). The mark-done
+   * can decline to stamp what the call covered — because the row stopped being owed while the call
+   * was in flight, which `supersession.db.test.ts` has pinned since PR #164 at `revoked === 2`
+   * against one stamped row, or because a fresh obligation arrived, which is this ticket's. Either
+   * way the id stays owed and the next iteration claims it again. This said "whose sessions are now
+   * recorded as revoked by this call", which the older of those two cases already falsified.
+   * **`owedRevocationCount` is the number that says what is still outstanding**; this one says how
+   * much work the drain did.
    */
   readonly revoked: number;
   /** Attempted and still owed. Their rows keep `provider_session_revoked_at` NULL. */
@@ -108,8 +120,18 @@ export interface RevocationOutcome {
   readonly failures: readonly { readonly supabaseUserId: string; readonly reason: string }[];
 }
 
-interface Owed {
+/**
+ * One row the drain is about to discharge, with the episode it was in when the drain claimed.
+ *
+ * A claim takes **one** row and a discharge covers **every** owed row naming that provider-side
+ * user, so the set is read at claim time rather than at mark-done time — see `drainOwedRevocations`.
+ * `revocation_episode` is a `bigint` and comes back as a string, which is what `pg` does with `int8`
+ * and is left alone: it is only ever handed straight back to Postgres as `bigint[]`.
+ */
+interface ClaimedRow {
   readonly supabase_user_id: string;
+  readonly row_id: string;
+  readonly revocation_episode: string;
 }
 
 /**
@@ -139,6 +161,31 @@ interface Owed {
  * statement of what F3 bought is **"any provider call longer than 300 seconds"** rather than "the
  * entire provider call", and there is no timeout on `signOutAllForUser` to bound it further. A real
  * adapter should set one; whichever ticket lands it owns that.
+ *
+ * **A returning call discharges the obligation it CLAIMED and no other** (SONNY-365, migration
+ * 0016). The claim and the mark-done fan out to different things — one row is claimed, every owed
+ * row naming that provider-side user is discharged — so a lease alone could never carry the
+ * identity of what was being worked on. `revocation_episode` does: each row counts the obligations
+ * it has had, every event that creates one increments it, the claim reads the counter for the whole
+ * set it is about to discharge, and the mark-done stamps only rows still carrying what it read. A
+ * mismatch means an obligation arrived that this provider call cannot have covered, and the row
+ * stays owed instead of being silently written off.
+ *
+ * **The lease does not overlap with that and cannot substitute for it.** PR #167 measured that a
+ * reopen-and-re-close is fast enough that the first drain's lease is still live when the new
+ * obligation lands — so the window this fix closes is *inside* the lease window rather than past
+ * it, and a longer lease would have made it wider rather than narrower. What the obligation-creating
+ * triggers do to the lease is clear it, which is right for a different reason: a lease says
+ * "somebody is calling the provider about this right now", and the fresh obligation nobody has
+ * called about yet must be claimable immediately.
+ *
+ * **A refused stamp costs one extra provider call and is not reported as a distinct outcome.** The
+ * row keeps `provider_session_revoked_at` NULL and its claim was cleared by the trigger, so the
+ * next pass of this loop claims it and calls the provider again for the new obligation — the same
+ * within-one-run recovery `supersession.db.test.ts` already relies on, bounded by `limit`.
+ * `RevocationOutcome` grows no field for it: `revoked` counts provider calls and always did (see
+ * its own note), and what is still outstanding is `owedRevocationCount`, which is the number an
+ * operator acts on and the number `npm run revocations` prints.
  */
 export async function drainOwedRevocations(
   client: pg.Client,
@@ -164,30 +211,56 @@ export async function drainOwedRevocations(
     // choosing and claiming. No transaction is held across the network call, which is what the old
     // comment here was right to avoid, and a drain that dies mid-call leaves a lease that expires
     // rather than a claim nobody recorded.
-    const claim = await client.query<Owed>(
-      `UPDATE sonny.identity_provider_user SET revocation_claimed_at = $3::timestamptz
-        WHERE id = (
-          SELECT pu.id
-            FROM sonny.identity_provider_user pu
-            JOIN sonny.identity i ON i.id = pu.identity_id
-           WHERE pu.provider_session_revoked_at IS NULL
-             ${OWED_PREDICATE}
-             AND ($1::uuid IS NULL OR i.account_id = $1::uuid)
-             -- Both sides cast to text on purpose: supabase_user_id is a uuid column, and binding
-             -- this list as uuid[] turns any malformed element into a 22P02 raised by the database
-             -- rather than a value this function can see and refuse.
-             AND pu.supabase_user_id::text <> ALL($2::text[])
-             AND (pu.revocation_claimed_at IS NULL
-                  OR pu.revocation_claimed_at
-                       < $3::timestamptz - make_interval(secs => sonny.revocation_lease_seconds()))
-           ORDER BY pu.id
-           LIMIT 1
-           FOR UPDATE OF pu SKIP LOCKED
-        )
-        RETURNING supabase_user_id`,
+    //
+    // **And the same statement reads the episodes of everything it is about to discharge**
+    // (SONNY-365). The claim takes one row; the mark-done covers every owed row naming that
+    // provider-side user, because one `signOutAllForUser` ends every session of that user. Those
+    // two units are different, and that difference is where the episode identity used to be lost —
+    // the sibling rows were never claimed, so nothing about them recorded which obligation this
+    // call was answering.
+    //
+    // Reading them here rather than at mark-done time is the whole point: it must be the set and
+    // the episodes as they stood **before** the provider call, so that an obligation created during
+    // the call cannot be mistaken for one this call covered. Two statements would leave a window
+    // between choosing the set and recording its episodes, which is a smaller copy of the defect.
+    // One statement has one snapshot. The `claimed` CTE's own write is not visible to the SELECT
+    // beside it, which costs nothing here: a claim changes no episode and clears no stamp, so the
+    // claimed row satisfies the SELECT's predicate either way and is always in the result.
+    const claim = await client.query<ClaimedRow>(
+      `WITH claimed AS (
+         UPDATE sonny.identity_provider_user SET revocation_claimed_at = $3::timestamptz
+          WHERE id = (
+            SELECT pu.id
+              FROM sonny.identity_provider_user pu
+              JOIN sonny.identity i ON i.id = pu.identity_id
+             WHERE pu.provider_session_revoked_at IS NULL
+               ${OWED_PREDICATE}
+               AND ($1::uuid IS NULL OR i.account_id = $1::uuid)
+               -- Both sides cast to text on purpose: supabase_user_id is a uuid column, and binding
+               -- this list as uuid[] turns any malformed element into a 22P02 raised by the database
+               -- rather than a value this function can see and refuse.
+               AND pu.supabase_user_id::text <> ALL($2::text[])
+               AND (pu.revocation_claimed_at IS NULL
+                    OR pu.revocation_claimed_at
+                         < $3::timestamptz - make_interval(secs => sonny.revocation_lease_seconds()))
+             ORDER BY pu.id
+             LIMIT 1
+             FOR UPDATE OF pu SKIP LOCKED
+          )
+          RETURNING supabase_user_id
+       )
+       SELECT c.supabase_user_id,
+              pu.id AS row_id,
+              pu.revocation_episode::text AS revocation_episode
+         FROM claimed c
+         JOIN sonny.identity_provider_user pu ON pu.supabase_user_id = c.supabase_user_id
+         JOIN sonny.identity i ON i.id = pu.identity_id
+        WHERE pu.provider_session_revoked_at IS NULL
+          ${OWED_PREDICATE}`,
       [options.accountId ?? null, failures.map((f) => f.supabaseUserId), now],
     );
-    const owed = claim.rows[0];
+    const claimed = claim.rows;
+    const owed = claimed[0];
     if (!owed) break;
 
     try {
@@ -225,22 +298,43 @@ export async function drainOwedRevocations(
       // The provider has no such session. That is the state we wanted, so it is recorded as done.
     }
 
-    // **Every row naming this provider-side user**, not just the one that was claimed: one
+    // **Every row the claim snapshotted**, not just the one that was claimed: one
     // `signOutAllForUser` revokes all of that user's sessions, so marking one row would leave the
     // others owed forever and every drain would call the provider again for nothing.
+    //
+    // **And only in the episode the claim saw them in** (SONNY-365, migration 0016). This used to
+    // be `WHERE pu.supabase_user_id = $1`, which asks whether a row is owed **now** and never
+    // whether this provider call covers the obligation that exists **now**. Those come apart
+    // whenever an obligation is created between the call and this statement: the account is
+    // reopened, the user refreshes, the account is closed again, and 0015 correctly clears the
+    // stamp for the new obligation — which this statement then wrote straight back, discharging it
+    // with a call that predates it and leaving the reopen's sessions live on an account owed
+    // nothing. `revocation_episode` is incremented by each of the three events that start an
+    // episode, so a row whose obligation has moved on simply does not match and stays owed. The
+    // next iteration claims it again and calls the provider again, which is the point: a new
+    // obligation gets its own revocation rather than inheriting an older one's discharge.
     //
     // **Owed rows only, and the restriction is load-bearing.** A row naming this same user id that
     // is *current* on a *live* account is not owed anything; stamping it would mean that when that
     // account is later closed, the drain would consider its debt already paid — for sessions minted
-    // after this call returned. Same fragment as the claim, so the two cannot drift.
+    // after this call returned. Same fragment as the claim, so the two cannot drift. It is kept
+    // beside the episode check rather than replaced by it: they refuse different things — this one
+    // a row that stopped being owed, the episode one a row that is owed for a newer reason — and
+    // `supersession.db.test.ts`'s sign-in-during-the-call test rests on this one.
+    //
+    // **`$1` is the `now` captured before the loop, and that is informational.** Nothing reads this
+    // column's value; every predicate in this file reads only whether it is NULL. Which obligation
+    // a stamp discharged is `revocation_episode`, not the timestamp.
     await client.query(
       `UPDATE sonny.identity_provider_user pu
-          SET provider_session_revoked_at = $2
-        WHERE pu.supabase_user_id = $1
+          SET provider_session_revoked_at = $1
+         FROM unnest($2::uuid[], $3::bigint[]) AS claimed(row_id, episode)
+        WHERE pu.id = claimed.row_id
+          AND pu.revocation_episode = claimed.episode
           AND pu.provider_session_revoked_at IS NULL
           AND EXISTS (SELECT 1 FROM sonny.identity i
                        WHERE i.id = pu.identity_id ${OWED_PREDICATE})`,
-      [owed.supabase_user_id, now],
+      [now, claimed.map((row) => row.row_id), claimed.map((row) => row.revocation_episode)],
     );
     revoked += 1;
   }
