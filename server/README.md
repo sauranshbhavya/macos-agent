@@ -604,16 +604,17 @@ how long does the whole thing run* — a question about statements, not about ke
 **0017 is the worked example, and it was caught in review before it ever ran.** It backfilled a
 column across the whole of `sonny.sign_in_code_issue`, which
 `latestIssuance` reads on the **sign-in path**, and at 200,000 rows a concurrent read of that exact
-query blocked for **2424 ms** (6181 ms at 400,000 — worse than linear, and nothing prunes that
+query blocked for **1982 ms** (4191 ms at 400,000 — worse than linear, and nothing prunes that
 table). It was rewritten to do no row work at all: `ADD COLUMN … NOT NULL DEFAULT 0` is metadata-only
-from PostgreSQL 11, and the same measurement reads **212 ms** and **404 ms**, which is the index
+from PostgreSQL 11, and the same measurement reads **184 ms** and **470 ms**, which is the index
 build and nothing else.
 
 **What is left still grows with the table, and how fast depends on a setting.** `CREATE INDEX` sorts,
 and an index larger than `maintenance_work_mem` is built with an external merge sort rather than an
 in-memory one — a regime change, not a steeper line. On this repository's container (64 MB) the
-boundary falls between 1,000,000 rows (56 MB index, 1171 ms) and 2,000,000 (113 MB, 2023 ms), and at
-ten million the measurement is **11.1 s**. A number extrapolated from points on the near side of that
+boundary falls between 1,000,000 rows (56 MB index, 1299 ms) and 2,000,000 (113 MB, 2274 ms), and at
+ten million the measurement is **11.1 s** (PR #171's reviewer's; every other figure here is this
+repository's own container at `9cea6cf`). A number extrapolated from points on the near side of that
 boundary is not an extrapolation, which is how an earlier draft of 0017's header came to say "near
 eight seconds". `CREATE INDEX CONCURRENTLY` and a batched backfill are the standard escapes and
 **neither is available in this runner**, because both must run outside a transaction. So before
