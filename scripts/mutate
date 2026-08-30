@@ -580,15 +580,27 @@ Demonstrating layer 1 (the tee's ignore list), because no selftest arm does:
 
   The shipped script prints LAYER1-HELD; the copy prints LAYER1-GONE. Measured 5 runs of 5 each way.
 
-  THERE IS NO SELFTEST ARM FOR THIS, deliberately, and here is what is known about why. Packaged as
-  an arm it fires in some invocation environments and not others: foreground 5 of 5, backgrounded
-  without nohup 1 of 1, and NOT under `nohup` — 6 of 6 backgrounded under it, 1 of 1 in the
-  foreground under it — same file, same fixture, the target confirmed by `ps` to be the tee in both
-  directions. So `nohup` is the correlate and backgrounding is not. What is RULED OUT: `ps -ww`
-  (it fires without it), and the obvious explanation that nohup leaves SIGHUP inherited-ignored —
-  `trap -p HUP` under nohup reports no ignore here, and a python3 SIG_DFL-then-exec probe reports
-  default too. A flaky arm fails at random in every future selftest run, and a check that fails at
-  random is a check people learn to skip, so the reproduction above is the evidence instead.
+  RUN IT IN THE FOREGROUND. Under `nohup` there is nothing to demonstrate, and that is not a quirk
+  of the reproduction — it is the answer to why no selftest arm for this exists. `nohup` sets
+  SIGHUP to SIG_IGN and an ignored disposition survives fork AND exec, so the tee — which is not a
+  shell and never resets it — ignores HUP whatever this script traps. Measured with a real group
+  signal against a battery in a process group of its own, `kill -HUP -<pgid>` mid-mutant:
+
+    foreground   shipped: exit 129, lock released, tree clean, the interruption in the report (3/3)
+                 HUP dropped from the tee's list: exit 141, lock HELD, 23-line report, no
+                 interruption recorded (2/2)
+    under nohup  shipped AND the dropped-HUP build, INDISTINGUISHABLE: the tee survives, the
+                 battery is not interrupted at all and runs to completion, exit 2, 37-line
+                 report (2/2 each)
+
+  So layer 1 carries the foreground case and `nohup` covers the same ground for free — which means
+  a battery launched the way this project launches long ones is protected either way, and an arm
+  can only discriminate where `nohup` is absent. That is what defeated three attempts at a reliable
+  arm: it fired foreground 5 of 5 and never under `nohup`, 7 of 7. Two things this misled me about
+  and are now explained rather than merely ruled out: `trap -p HUP` under `nohup` reports no ignore,
+  and a python3 SIG_DFL-then-exec probe reports default — both are true of BASH, which resets it for
+  itself, and neither says anything about the `tee` it execs. `ps -ww` was never the cause; the arm
+  fires without it. SONNY-367 holds the arm work.
 
 Output:
   Every run writes into one directory of its own, .build/mutate/<sha>-<timestamp>-<pid>/, because
