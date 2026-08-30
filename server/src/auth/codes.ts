@@ -62,6 +62,15 @@ export async function recordIssue(
  * the wrong code verifies and the right one does not, and nothing records that two were candidates.
  * `issue_seq` is an identity column, and per mailbox it is exactly issuance order because
  * `issueCode` below holds an advisory lock on the mailbox across its invalidate-and-insert.
+ *
+ * **`issued_at DESC` is the second key and it is not belt-and-braces** (PR #171 cycle 2, F1). Every
+ * row written before 0017 carries the sentinel `issue_seq = 0`, so `issue_seq` alone leaves that
+ * whole population tied — and measured, the query then returns the **oldest** of them. Those rows
+ * mostly have distinct `issued_at` and were ordered correctly before 0017, so ordering on the
+ * sequence alone would have made this query *worse* for exactly the population the migration exists
+ * to fix. The second key costs nothing for post-migration rows, whose `issue_seq` is distinct and
+ * decides before it is ever consulted — the clock-rewind case included — and recovers the old
+ * answer for the inherited ones.
  */
 export async function consumeLatest(
   client: pg.Client,
@@ -74,7 +83,7 @@ export async function consumeLatest(
       WHERE id = (
         SELECT id FROM sonny.sign_in_code_issue
          WHERE mailbox_key = $1 AND consumed_at IS NULL AND expires_at > $2
-         ORDER BY issue_seq DESC LIMIT 1
+         ORDER BY issue_seq DESC, issued_at DESC LIMIT 1
         FOR UPDATE SKIP LOCKED
       )`,
     [mailboxKey, now],
@@ -185,11 +194,15 @@ interface Issuance {
  * instant could hand the disclosure gate the *other* issuance's source hash, and a caller who did
  * originate the live code could be told `auth.code_invalid` while the row that answered was one
  * they had nothing to do with.
+ *
+ * **Same two keys as `consumeLatest`, for the reason recorded there**, and it matters more here:
+ * this is the query that reads `source_hash`, so the pre-migration population reading as one tie
+ * would have handed the disclosure gate the oldest row's hash rather than the newest's.
  */
 async function latestIssuance(client: pg.Client, mailboxKey: string): Promise<Issuance | undefined> {
   const latest = await client.query<Issuance>(
     `SELECT consumed_at, expires_at, issued_at, source_hash FROM sonny.sign_in_code_issue
-      WHERE mailbox_key = $1 ORDER BY issue_seq DESC LIMIT 1`,
+      WHERE mailbox_key = $1 ORDER BY issue_seq DESC, issued_at DESC LIMIT 1`,
     [mailboxKey],
   );
   return latest.rows[0];

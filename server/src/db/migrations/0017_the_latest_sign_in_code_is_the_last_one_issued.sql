@@ -65,42 +65,93 @@
 -- default is then dropped and the identity attached, both catalog-only, and the identity's sequence
 -- starts at 1, so **no row written after this migration can ever read 0**.
 --
--- **What that costs, stated so it is not discovered later.** `ORDER BY issue_seq DESC` puts every
--- post-migration row above every pre-migration row, which is correct — all of them are newer. Among
--- pre-migration rows it is a tie, so their relative order is undefined. That is **exactly the state
--- this migration inherits** rather than a new defect: it is what `ORDER BY issued_at DESC` already
--- gave them. The window in which it can change an answer is narrow and closes on its own — a row is
--- only reachable for anything but "nothing is live here" while it is inside `CODE_LIFETIME_SECONDS`
--- or `FAILURE_DISCLOSURE_SECONDS`, so it is bounded by the codes issued in the twenty minutes before
--- the migration ran, and every code issued after it is ordered exactly.
+-- **So the queries order on `issue_seq DESC, issued_at DESC`, and the second key is required rather
+-- than defensive** (PR #171 cycle 2, F1). The sentinel puts every post-migration row above every
+-- pre-migration row, which is correct — all of them are newer. What it also does, on the sequence
+-- alone, is collapse the ENTIRE pre-migration population into one tie.
 --
--- **The residual cost is the index build, and it is the same KIND of cost — smaller, not different.**
--- The first draft of this paragraph said `CREATE INDEX` takes `SHARE`, so it blocks writes and not
--- reads. That is true of the statement and false of the migration, and measuring both probes rather
--- than one is what caught it: **the `ALTER TABLE` above already took `ACCESS EXCLUSIVE`, and a lock
--- is held to COMMIT, so every statement after it inherits a read stall whatever its own lock mode
--- says.** In every run below the worst read block and the worst write block are within 3 ms of each
--- other and both track the migration's total time. **The unit that matters is how long the
--- transaction runs, not which lock each statement takes** — which is why removing the backfill is
--- the whole fix and changing a lock mode would have been no fix at all.
+-- **An earlier draft of this paragraph claimed that tie was "exactly the state this migration
+-- inherits — what `ORDER BY issued_at DESC` already gave them". That was false, and false in the
+-- direction that hides a regression.** The old ordering was undefined only for rows sharing an exact
+-- `issued_at`; it was correct for every other pair, which is the ordinary case. Ordering on the
+-- sequence alone is undefined for **every** inherited row. Measured: three rows at 12:00, 12:05 and
+-- 12:09 return the newest on 20 of 20 runs before this migration, and the **oldest** after it. So
+-- the migration whose whole subject is what "latest" means would have made `latestIssuance` worse
+-- for exactly the population it exists to fix — on the query that reads `source_hash` and feeds the
+-- disclosure gate.
 --
--- Measured on this repository's own container (`postgres:17`), one reader running `latestIssuance`'s
--- exact query and one writer inserting, both polled as fast as they will go across the migration:
+-- With `issued_at DESC` behind it the inherited rows are ordered exactly as they were, the residual
+-- is once again only the exact-tie case, and post-migration rows are untouched: their `issue_seq` is
+-- distinct, so it decides before the second key is consulted — the clock-rewind case included.
 --
---     rows     version   migration   worst read block   worst write block
---     200,000  backfill     2427 ms            2424 ms             2423 ms
---     200,000  this          154 ms             153 ms              152 ms
---     400,000  backfill     6186 ms            6181 ms             6184 ms
---     400,000  this          309 ms             305 ms              304 ms
+-- **What that costs, stated so it is not discovered later.** Two things, both small and both real.
+-- First, the exact-tie case among inherited rows is still undefined, and that genuinely is the state
+-- this migration inherits. It closes on its own: a row is only reachable for anything but "nothing is
+-- live here" while it is inside `CODE_LIFETIME_SECONDS` or `FAILURE_DISCLOSURE_SECONDS`, so it is
+-- bounded by the codes issued in the twenty minutes before the migration ran, and every code issued
+-- after it is ordered exactly.
 --
--- The backfill grows worse than linearly (2.5x the time for 2x the rows); what is left grows
--- linearly, because it is the index build, and it is about 16x smaller at 200,000 and 20x at
--- 400,000. **It is still unbounded, and that is stated rather than left for the deploy to find**: at
--- ten million rows the same slope puts it near eight seconds. Closing it needs `CREATE INDEX
--- CONCURRENTLY`, which cannot run inside a transaction, and this runner gives every migration one —
--- so it needs a runner that can take a migration outside its transaction, which is **SONNY-370**'s
--- and not this file's. The number is here so that decision has one before a deploy rather than
--- after.
+-- **Second, a ROLLBACK-THEN-REAPPLY collapses order that had been recorded** (PR #171 cycle 2, F5).
+-- The rollback drops the column, so re-applying gives every row then in the table the sentinel —
+-- including rows that had carried real sequence numbers. Rows that were 4, 5, 6 come back 0, 0, 0.
+-- With the second key they fall back to `issued_at`, so nothing is wrong for the ordinary case; what
+-- is lost is the tie-breaking for rows sharing an instant, which had been recorded exactly and is
+-- now gone. This is a property of the round trip rather than of either direction alone, and the
+-- staging rule in `server/README.md` walks that path deliberately — so it belongs here rather than
+-- being found by whoever rolls back.
+--
+-- **Two separate things decide a migration's read stall, and an earlier draft of this paragraph
+-- collapsed them into one** (PR #171 cycle 2, F3):
+--
+--   * **The lock MODE decides WHETHER readers stall at all.** `ACCESS EXCLUSIVE` conflicts with
+--     `ACCESS SHARE`, so it stalls them; `SHARE`, which `CREATE INDEX` takes, does not. Measured
+--     by the reviewer on a `CREATE INDEX` alone in a transaction: **read 3 ms, write 284 ms.**
+--   * **The transaction decides HOW LONG.** A lock is held to COMMIT, so once any statement has
+--     taken a read-conflicting mode, the stall runs to the end of the migration rather than to the
+--     end of that statement.
+--
+-- The draft said "every statement after it inherits a read stall whatever its own lock mode says",
+-- which reads as *there is nothing to gain from a gentler lock mode*. That is exactly backwards: a
+-- gentler mode is what buys readers their freedom, and it is the only thing that can. The reason
+-- this migration stalls readers anyway is that it contains statements that take `ACCESS EXCLUSIVE` —
+-- and the fix that mattered was making the transaction SHORT, because it could not make the mode
+-- gentler.
+--
+-- **And do not use `ALTER TABLE` as the marker for "this migration stalls readers".** That proxy
+-- fails in both directions and the reviewer measured the interesting one: a migration containing a
+-- `DROP INDEX` and no `ALTER TABLE` at all blocked reads for **1005 ms of its 1007 ms**, because
+-- `DROP INDEX` takes `ACCESS EXCLUSIVE` too. This file contains one.
+--
+-- Measured on this repository's own container (`postgres:17.11`), one reader running
+-- `latestIssuance`'s exact query and one writer inserting, both polled as fast as they will go
+-- across the migration. `index` is what `CREATE INDEX` had to build and `external` is whether it
+-- exceeded `maintenance_work_mem` (64 MB here), which is the sort-regime boundary:
+--
+--     rows       version   index    external   migration   worst read   worst write
+--     200,000    backfill      —          —      2427 ms      2424 ms       2423 ms
+--     200,000    this      11 MB         no       213 ms       212 ms        211 ms
+--     400,000    backfill      —          —      6186 ms      6181 ms       6184 ms
+--     400,000    this      23 MB         no       409 ms       404 ms        410 ms
+--   1,000,000    this      56 MB         no      1177 ms      1171 ms       1170 ms
+--   2,000,000    this     113 MB        YES      2025 ms      2023 ms       2027 ms
+--
+-- (The `this` figures are higher than PR #171 cycle 1 recorded — 154 ms at 200,000 — because F1
+-- above added a third column to that index. Re-measured rather than carried.)
+--
+-- The backfill grew worse than linearly. What is left is the index build, and **it is still
+-- unbounded**. An earlier draft put ten million rows "near eight seconds" by extrapolating from the
+-- 200,000 and 400,000 points alone, and that number was wrong twice over (F2): those points sit
+-- where scheduling noise is a large fraction of the signal, and — the part that makes it not an
+-- extrapolation at all — **every one of them is an in-memory sort, while ten million rows is not.**
+-- The boundary is crossed between 1,000,000 and 2,000,000 rows here, and the rows at which it is
+-- crossed depend on `maintenance_work_mem`, which no document had said. The reviewer measured ten
+-- million directly: **11.1 s.** The measured point past the boundary above is this file's own; the
+-- ten-million figure is theirs and is cited rather than derived.
+--
+-- Closing it needs `CREATE INDEX CONCURRENTLY`, which cannot run inside a transaction, and this
+-- runner gives every migration one — so it needs a runner that can take a migration outside its
+-- transaction, which is **SONNY-370**'s and not this file's. The numbers are here so that decision
+-- has them before a deploy rather than after.
 
 ALTER TABLE sonny.sign_in_code_issue
   ADD COLUMN issue_seq bigint NOT NULL DEFAULT 0;
@@ -127,7 +178,7 @@ COMMENT ON COLUMN sonny.sign_in_code_issue.issue_seq IS
 -- query's ORDER BY, and its leading column is all `invalidateLive` ever needed, so the new index is
 -- a strict replacement rather than an addition.
 CREATE INDEX sign_in_code_issue_mailbox_seq_idx
-    ON sonny.sign_in_code_issue (mailbox_key, issue_seq DESC);
+    ON sonny.sign_in_code_issue (mailbox_key, issue_seq DESC, issued_at DESC);
 DROP INDEX sonny.sign_in_code_issue_email_idx;
 
 -- @rollback
