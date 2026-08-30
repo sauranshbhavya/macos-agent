@@ -592,11 +592,17 @@ in its turn** (cycle 2, F3):
   to COMMIT, so once any statement has taken a read-conflicting mode the stall runs to the end of the
   **migration**, not of that statement.
 
-**Do not use `ALTER TABLE` as the marker for "this one stalls readers".** `DROP INDEX` takes
-`ACCESS EXCLUSIVE` too: a migration with a `DROP INDEX` and no `ALTER TABLE` blocked reads for
-**1005 ms of its 1007 ms**, measured. So the question to ask of a migration is *does any statement
-take a read-conflicting lock, and if so how long does the whole thing run.* 0017 was written that way and was caught in review before it
-ever ran: it backfilled a column across the whole of `sonny.sign_in_code_issue`, which
+**Do not use `ALTER TABLE` as the marker for "this one stalls readers", in either direction.**
+`DROP INDEX` takes `ACCESS EXCLUSIVE` too — a migration with a `DROP INDEX` and no `ALTER TABLE`
+blocked reads for **1005 ms of its 1007 ms**, measured — and the converse is the ledger's own
+`ALTER TABLE … ADD COLUMN IF NOT EXISTS` further down this file, which reads as a no-op on every run
+after the first and takes `ACCESS EXCLUSIVE` anyway, because evaluating its own `IF NOT EXISTS`
+needs one (SONNY-364: **8.17 s** behind one writer, **0.15 s** with a catalog read in front of it).
+So the question to ask of a migration is *does any statement take a read-conflicting lock, and if so
+how long does the whole thing run* — a question about statements, not about keywords.
+
+**0017 is the worked example, and it was caught in review before it ever ran.** It backfilled a
+column across the whole of `sonny.sign_in_code_issue`, which
 `latestIssuance` reads on the **sign-in path**, and at 200,000 rows a concurrent read of that exact
 query blocked for **2424 ms** (6181 ms at 400,000 — worse than linear, and nothing prunes that
 table). It was rewritten to do no row work at all: `ADD COLUMN … NOT NULL DEFAULT 0` is metadata-only
@@ -613,10 +619,13 @@ eight seconds". `CREATE INDEX CONCURRENTLY` and a batched backfill are the stand
 **neither is available in this runner**, because both must run outside a transaction. So before
 writing a migration that touches rows, read 0017's header for what that costs and what the escape
 would take. **The general form — nothing checks any migration's lock profile — is SONNY-370**, filed
-after the same class was found in the ledger's `ALTER` on PR #169 the same day. Before **SONNY-126**'s first remote deploy, decide
-whether the runner should set one — a `lock_timeout` turns "every request stalls behind a long
-transaction" into "the migration fails and is retried", which is the better failure. It is a
-deployment decision rather than any one migration's, which is why it is recorded here.
+after the same class turned up in the ledger's `ALTER` on PR #169 the same day.
+
+**And the `lock_timeout` decision the top of this section opens with is still owed.** Before
+**SONNY-126**'s first remote deploy, decide whether the runner should set one: it turns "every
+request stalls behind a long transaction" into "the migration fails and is retried", which is the
+better failure. It is a deployment decision rather than any one migration's, which is why it is
+recorded here rather than in a migration.
 
 The runner supports this by construction: every migration file must carry a `-- @rollback` section
 or it is refused at load, each migration runs in its own transaction, and the suites pin the whole

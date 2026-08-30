@@ -125,6 +125,13 @@ const MAY_REACH_THE_MIGRATION_RUNNER = new Set([
   // `loadMigrations`, `driftedMigrations` and `migrationStates` directly with no database at all.
   // Both names say migrations, which is the property the paragraph above asks to be protected.
   "migration-content-hash.db.test.ts", "migration-content-hash.test.ts",
+  // SONNY-365/353's, added on PR #171's rebase and by the same criterion. Its two tests roll 0017
+  // and 0016 back and forward across rows that must survive the trip, and make a row predating
+  // `issue_seq` by writing one while the column does not exist — claims nobody can make without
+  // `down()` and `up()`. It is a file of its own precisely so that the name on this list says
+  // migrations: the ten tests it was split from live in `instance-identity.db.test.ts`, and an
+  // entry for THAT name is the "switched off one line at a time" case the paragraph above names.
+  "migration-round-trip.db.test.ts",
 ]);
 
 describe("the shared schema rebuild", () => {
