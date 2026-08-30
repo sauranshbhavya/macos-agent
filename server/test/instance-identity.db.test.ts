@@ -420,5 +420,58 @@ describeDb("an auth operation knows which instance it is acting on", () => {
         "SELECT DISTINCT revocation_episode::text AS n FROM sonny.identity_provider_user");
       expect(episodes.rows.map((r) => Number(r.n))).toEqual([1]);
     });
+
+    it("orders the rows it INHERITS by issued_at, which the sentinel alone would have reversed", async () => {
+      // **PR #171 cycle 2, F1 — the regression the sentinel introduced into this ticket's own
+      // subject.** Every pre-migration row carries `issue_seq = 0`, so ordering on the sequence
+      // alone collapses that whole population into one tie — and a tie is not what those rows had.
+      // `ORDER BY issued_at DESC` was undefined only for rows sharing an exact instant and correct
+      // for every other pair, which is the ordinary case. So the sequence alone made
+      // `latestIssuance` WORSE for exactly the population 0017 exists to fix, on the query that
+      // reads `source_hash` for the disclosure gate. `issued_at DESC` behind the sentinel recovers
+      // it.
+      //
+      // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
+      // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
+      // from the INSERT below.
+      expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
+      const at = (hhmm: string) => new Date(`2026-08-30T${hhmm}:00.000Z`);
+      const inherited = await client.query<{ id: string }>(
+        `INSERT INTO sonny.sign_in_code_issue (mailbox_key, issued_at, expires_at, source_hash)
+         VALUES ('inherited@example.com', $1, $4, 'hash-oldest'),
+                ('inherited@example.com', $2, $4, 'hash-middle'),
+                ('inherited@example.com', $3, $4, 'hash-newest')
+         RETURNING id`,
+        [at("12:00"), at("12:05"), at("12:09"), new Date("2099-01-01T00:00:00.000Z")]);
+      const newestId = inherited.rows[2]!.id;
+      expect(await up(client)).toEqual(["0017_the_latest_sign_in_code_is_the_last_one_issued"]);
+
+      // All three carry the sentinel, so `issue_seq` separates none of them and only the second key
+      // can answer. Without it the query returns the OLDEST of the three.
+      const seqs = await client.query<{ n: string }>(
+        "SELECT DISTINCT issue_seq::text AS n FROM sonny.sign_in_code_issue WHERE mailbox_key = 'inherited@example.com'");
+      expect(seqs.rows.map((r) => Number(r.n))).toEqual([0]);
+
+      const now = at("12:10");
+      // `latestIssuance`, through the disclosure gate that reads its `source_hash`.
+      expect(await callerOriginatedLatestCode(client, "inherited@example.com", now, "hash-newest")).toBe(true);
+      expect(await callerOriginatedLatestCode(client, "inherited@example.com", now, "hash-oldest")).toBe(false);
+      // And `consumeLatest`, which redeems by the same ordering.
+      expect(await consumeLatest(client, "inherited@example.com", now)).toBe(true);
+      const { rows: taken } = await client.query<{ id: string }>(
+        "SELECT id FROM sonny.sign_in_code_issue WHERE consumed_at IS NOT NULL");
+      expect(taken.map((r) => r.id)).toEqual([newestId]);
+
+      // A post-migration row still beats all three even with an EARLIER `issued_at`, so the second
+      // key has not displaced the first. 12:08 rather than something further back on purpose: the
+      // gate below also refuses anything older than `FAILURE_DISCLOSURE_SECONDS`, and a row back-
+      // dated past that answers false for a reason that has nothing to do with ordering — which is
+      // how the first draft of this assertion failed while the clause under test was working.
+      const fresh = await recordIssue(client, "inherited@example.com", "hash-fresh", at("12:08"));
+      expect(await callerOriginatedLatestCode(client, "inherited@example.com", now, "hash-fresh")).toBe(true);
+      const { rows: freshSeq } = await client.query<{ n: string }>(
+        "SELECT issue_seq::text AS n FROM sonny.sign_in_code_issue WHERE id = $1", [fresh.id]);
+      expect(Number(freshSeq[0]!.n)).toBe(1);
+    });
   });
 });
