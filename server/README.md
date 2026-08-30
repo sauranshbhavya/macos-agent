@@ -574,10 +574,26 @@ a rehearsal if production's rollback is the one staging walked.
 migrations take `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0006 and 0008 each carry an
 `ALTER TABLE`, 0014 carries two `DROP COLUMN`s, and 0005's `CREATE TRIGGER` takes
 `SHARE ROW EXCLUSIVE`. That table is what `accountForSupabaseUser` reads on **every authenticated
-request**. The statements themselves are metadata-only and each migration runs in one transaction,
-so the lock is held for microseconds; the risk is the **wait** for it, because a lock request queues
-every reader behind it. Against an idle database this is invisible, which is why it has never
-mattered: no migration has met real traffic yet. Before **SONNY-126**'s first remote deploy, decide
+request**. Those statements are metadata-only, so the lock is held for microseconds; the risk is the
+**wait** for it, because a lock request queues every reader behind it. Against an idle database this
+is invisible, which is why it has never mattered: no migration has met real traffic yet.
+
+**"Metadata-only, so microseconds" is a property of those migrations and not of the runner, and this
+paragraph used to state it as though it were the rule** (PR #171 review, F1). Each migration runs in
+**one transaction**, and a lock is held until that transaction commits — so a migration's read stall
+is **how long the whole migration runs**, whatever lock mode its individual statements take. Any
+migration that does real work on rows between its first `ALTER TABLE` and its `COMMIT` stalls every
+reader of that table for the duration. 0017 was written that way and was caught in review before it
+ever ran: it backfilled a column across the whole of `sonny.sign_in_code_issue`, which
+`latestIssuance` reads on the **sign-in path**, and at 200,000 rows a concurrent read of that exact
+query blocked for **2424 ms** (6181 ms at 400,000 — worse than linear, and nothing prunes that
+table). It was rewritten to do no row work at all: `ADD COLUMN … NOT NULL DEFAULT 0` is metadata-only
+from PostgreSQL 11, and the same measurement reads **153 ms** and **305 ms**, which is the index
+build and nothing else. `CREATE INDEX CONCURRENTLY` and a batched backfill are the standard escapes
+and **neither is available in this runner**, because both must run outside a transaction. So before
+writing a migration that touches rows, read 0017's header for what that costs and what the escape
+would take. **The general form — nothing checks any migration's lock profile — is SONNY-370**, filed
+after the same class was found in the ledger's `ALTER` on PR #169 the same day. Before **SONNY-126**'s first remote deploy, decide
 whether the runner should set one — a `lock_timeout` turns "every request stalls behind a long
 transaction" into "the migration fails and is retried", which is the better failure. It is a
 deployment decision rather than any one migration's, which is why it is recorded here.

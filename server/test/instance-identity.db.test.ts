@@ -353,12 +353,14 @@ describeDb("an auth operation knows which instance it is acting on", () => {
         [live]);
       const past = new Date("2026-08-30T11:00:00.000Z");
       const future = new Date("2099-01-01T00:00:00.000Z");
-      await client.query(
+      const seeded = await client.query<{ id: string }>(
         `INSERT INTO sonny.sign_in_code_issue (mailbox_key, issued_at, expires_at, source_hash, consumed_at)
          VALUES ('m@example.com', $1, $2, 'h', NULL),
                 ('m@example.com', $1, $2, 'h', $1),
-                ('m@example.com', $1, $1, 'h', NULL)`,
+                ('m@example.com', $1, $1, 'h', NULL)
+         RETURNING id`,
         [past, future]);
+      const seededIds = seeded.rows.map((r) => r.id);
       const before = await client.query<{ n: string }>(
         "SELECT count(*)::text AS n FROM sonny.identity_provider_user");
 
@@ -381,14 +383,37 @@ describeDb("an auth operation knows which instance it is acting on", () => {
         "0016_a_drain_discharges_the_obligation_it_claimed",
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
       ]);
-      // The backfill is dense and ordered, and the sequence continues past it rather than colliding.
-      const seqs = await client.query<{ issue_seq: string }>(
-        "SELECT issue_seq::text AS issue_seq FROM sonny.sign_in_code_issue ORDER BY issue_seq");
-      expect(seqs.rows.map((r) => Number(r.issue_seq))).toEqual([1, 2, 3]);
-      const fresh = await recordIssue(client, "m@example.com", "h", past);
-      const { rows: next } = await client.query<{ issue_seq: string }>(
-        "SELECT issue_seq::text AS issue_seq FROM sonny.sign_in_code_issue WHERE id = $1", [fresh.id]);
-      expect(Number(next[0]!.issue_seq)).toBe(4);
+      // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
+      // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
+      // and ordered and never **which row got which number** — it passed under the shipped
+      // ordering, under the uuid ordering this branch rejected, and under `ORDER BY random()`. The
+      // subject of SONNY-353 is which row is newest, so every assertion here names a row.
+      const seqOf = async (id: string) => {
+        const { rows } = await client.query<{ issue_seq: string }>(
+          "SELECT issue_seq::text AS issue_seq FROM sonny.sign_in_code_issue WHERE id = $1", [id]);
+        return Number(rows[0]!.issue_seq);
+      };
+
+      // Every pre-existing row reads the sentinel. 0 is what `NOT NULL DEFAULT 0` gave them without
+      // touching a row, and the identity starts at 1, so no later row can collide with it.
+      expect(await Promise.all(seededIds.map(seqOf))).toEqual([0, 0, 0]);
+
+      // Rows written after the migration carry real insertion order, by id and in order.
+      const one = await recordIssue(client, "m@example.com", "h-one", past);
+      const two = await recordIssue(client, "m@example.com", "h-two", past);
+      expect(await seqOf(one.id)).toBe(1);
+      expect(await seqOf(two.id)).toBe(2);
+
+      // And the ordering that follows from it, across the boundary the sentinel creates. All five
+      // rows at this mailbox share one `issued_at`, so `issued_at` can separate none of them: the
+      // last code issued wins over the one issued before it AND over the live pre-migration row,
+      // which is correct because every post-migration row is newer than every pre-migration one.
+      expect(await consumeLatest(client, "m@example.com", past)).toBe(true);
+      const { rows: consumed } = await client.query<{ id: string }>(
+        `SELECT id FROM sonny.sign_in_code_issue
+          WHERE mailbox_key = 'm@example.com' AND consumed_at IS NOT NULL AND id <> $1`,
+        [seededIds[1]]);   // the seeded row that was already consumed is not evidence of anything
+      expect(consumed.map((r) => r.id)).toEqual([two.id]);
       // Every provider-side user row comes back at episode 1, which is the honest answer: the
       // counter records obligations since the column existed, and the ones before it are unknown.
       const episodes = await client.query<{ n: string }>(
