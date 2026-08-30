@@ -1,7 +1,8 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { LinkError, linkExplicitly, normalizeEmail, resolve } from "../src/auth/identity.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The concurrency invariants of the account/identity model, under interleavings that are **forced
@@ -47,7 +48,7 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
   afterAll(async () => { await client.end(); });
   beforeEach(async () => {
@@ -100,7 +101,7 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   };
 
   describe("forced ordering A — the close reaches the row first", () => {
-    it("makes the resolver block, then land on a NEW account rather than the closing one", async () => {
+    itUnderHangBackstop("makes the resolver block, then land on a NEW account rather than the closing one", async () => {
       const victim = await resolve(client, emailAssertion("orderA@example.com"));
       const closer = await connect();
       const racer = await connect();
@@ -137,7 +138,7 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   });
 
   describe("forced ordering B — a writer holds the account before the close reaches it", () => {
-    it("makes the CLOSE block, and the identity it gains is still marked", async () => {
+    itUnderHangBackstop("makes the CLOSE block, and the identity it gains is still marked", async () => {
       // `linkExplicitly` takes `SELECT … FOR SHARE` on its target account, which conflicts with the
       // `FOR NO KEY UPDATE` a close takes. This is the mirror of ordering A: the same two statements,
       // the other one first, and an outcome that ordering A cannot produce.
@@ -189,7 +190,7 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   });
 
   describe("linkExplicitly's own account lock, called as a function", () => {
-    it("BLOCKS on a concurrent close rather than moving onto a closing account", async () => {
+    itUnderHangBackstop("BLOCKS on a concurrent close rather than moving onto a closing account", async () => {
       // **PR #87 fifth round, F5.** Deleting `resolve()`'s `FOR SHARE` was justified — and proved
       // correct by instrumentation — on the grounds that "the same lock, for the same reason, is
       // still taken by `linkExplicitly`". That concentrated the guarantee into one call site, and
@@ -238,7 +239,7 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   });
 
   describe("forced ordering C — an identity moves OFF a closed account", () => {
-    it("recomputes the flag, which the ad-hoc battery never once reached", async () => {
+    itUnderHangBackstop("recomputes the flag, which the ad-hoc battery never once reached", async () => {
       // **This is the state the previous round's battery could not produce.** Every path it drove
       // linked onto the *closing* account, and the account lock refuses those — so it re-proved the
       // lock and never touched the trigger this case is about. The direction that matters is a row
@@ -263,11 +264,13 @@ describeDb("concurrency invariants, under forced interleavings", () => {
   });
 
   describe("the randomized pass, which alternates by construction rather than by luck", () => {
-    // **An explicit timeout, and connections opened once rather than per round.** The first version
+    // **A chosen deadline, and connections opened once rather than per round.** The first version
     // opened two connections inside the loop and ran just under Vitest's 5s default — which is a
     // flaky test, and a flaky race test is worse than no race test: it teaches everyone to re-run.
-    // Connection setup dominated the round; the interleaving is what costs milliseconds.
-    it("holds every invariant across both orderings, and OBSERVES both", { timeout: 60_000 }, async () => {
+    // Connection setup dominated the round; the interleaving is what costs milliseconds. The
+    // deadline was a hand-written `{ timeout: 60_000 }` until SONNY-354; it is the backstop's now,
+    // which is the same sixty seconds with a message a battery is told not to read as a kill.
+    itUnderHangBackstop("holds every invariant across both orderings, and OBSERVES both", async () => {
       // The ad-hoc version left this to timing and got one ordering every time. Here the round
       // number decides who starts first, so both are reached by construction — and the assertion at
       // the end proves they were, which is what stops this becoming one-sided without anyone

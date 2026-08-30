@@ -1,7 +1,8 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { IdentityConflict, LinkError, isRelayAddress, linkExplicitly, normalizeEmail, rateLimitEmailKey, resolve } from "../src/auth/identity.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The identity-linking rule, pinned. `docs/sonny-identity-linking-rule.md` is the reasoning.
@@ -19,9 +20,7 @@ describeDb("the identity-linking rule", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await client.query("DROP SCHEMA IF EXISTS sonny CASCADE");
-    await client.query("DROP SCHEMA IF EXISTS sonny_meta CASCADE");
-    await up(client);
+    await rebuildSchema(client);
   });
   afterAll(async () => { await client.end(); });
   beforeEach(async () => {
@@ -37,7 +36,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("rule 1 — the identity key is (provider, subject)", () => {
-    it("lands the same subject on one account, twice", async () => {
+    itUnderHangBackstop("lands the same subject on one account, twice", async () => {
       const first = await resolve(client, emailAssertion("a@example.com"));
       const second = await resolve(client, emailAssertion("a@example.com"));
       expect(second.accountId).toBe(first.accountId);
@@ -46,7 +45,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].n).toBe(1);
     });
 
-    it("matches on subject even when the asserted address has changed", async () => {
+    itUnderHangBackstop("matches on subject even when the asserted address has changed", async () => {
       // The point of a stable subject: Apple's `sub` survives the user hiding or changing their
       // address, and rule 1 must not be fooled by the address moving.
       const sub = "apple-sub-stable-1";
@@ -60,7 +59,7 @@ describeDb("the identity-linking rule", () => {
       expect(second.created).toBe(false);
     });
 
-    it("treats the same subject under two providers as two identities", async () => {
+    itUnderHangBackstop("treats the same subject under two providers as two identities", async () => {
       // A Google `sub` and an Apple `sub` could collide as strings; they are different people's
       // identifiers in different namespaces and must never be matched across providers.
       const a = await resolve(client, { provider: "google", subject: "shared-123", email: undefined, emailVerified: false });
@@ -70,7 +69,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("rule 2 — a verified, non-relay email match FLAGS rather than links", () => {
-    it("does NOT merge the same verified address reached by two methods — it flags", async () => {
+    itUnderHangBackstop("does NOT merge the same verified address reached by two methods — it flags", async () => {
       // **This test asserted the opposite until the founder's decision of 2026-08-22** (PR #87
       // third round, F2), and it was the ticket's own first named acceptance criterion: "same email
       // by two methods lands on one account". That criterion is superseded, deliberately and on the
@@ -88,7 +87,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].n).toBe(2);
     });
 
-    it("does not merge two DIFFERENT humans when a mailbox is recycled", async () => {
+    itUnderHangBackstop("does not merge two DIFFERENT humans when a mailbox is recycled", async () => {
       // **The case that forced the decision, reproduced by the third review round.** Human A signs
       // in with Google and account X is created. The address is later reassigned — a departing
       // employee's mailbox reissued, a free provider recycling a handle — and Human B, who now
@@ -115,14 +114,14 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].n).toBe(1);
     });
 
-    it("flags only when there is something to flag", async () => {
+    itUnderHangBackstop("flags only when there is something to flag", async () => {
       // The hint has to be absent for an address nobody has seen, or it means nothing when present.
       const alone = await resolve(client, emailAssertion("nobody-else@example.com"));
       expect(alone.linkHint).toBeUndefined();
       expect(alone.created).toBe(true);
     });
 
-    it("does not flag on an UNVERIFIED assertion either", async () => {
+    itUnderHangBackstop("does not flag on an UNVERIFIED assertion either", async () => {
       // An unverified address is an attacker's claim. Flagging it would hand the attacker a signal
       // that the address is in use — the account-existence oracle this branch spends real effort
       // avoiding on `email/start`, reintroduced through the sign-in response.
@@ -133,7 +132,7 @@ describeDb("the identity-linking rule", () => {
       expect(guess.linkHint).toBeUndefined();
     });
 
-    it("REFUSES to link an unverified assertion, and makes its own account", async () => {
+    itUnderHangBackstop("REFUSES to link an unverified assertion, and makes its own account", async () => {
       // The takeover direction. An unverified address is an attacker's claim, not a fact, and
       // joining an account on it is the known pre-account-takeover pattern.
       const owner = await resolve(client, emailAssertion("victim@example.com"));
@@ -145,7 +144,7 @@ describeDb("the identity-linking rule", () => {
       expect(attacker.created).toBe(true);
     });
 
-    it("does not link to a deleted account", async () => {
+    itUnderHangBackstop("does not link to a deleted account", async () => {
       const gone = await resolve(client, emailAssertion("gone@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [gone.accountId]);
       const fresh = await resolve(client, {
@@ -158,7 +157,7 @@ describeDb("the identity-linking rule", () => {
       expect(fresh.linkHint).toBeUndefined();
     });
 
-    it("normalises case and whitespace when deciding whether to flag", async () => {
+    itUnderHangBackstop("normalises case and whitespace when deciding whether to flag", async () => {
       // The matching itself still normalises — it decides whether a hint is issued rather than
       // whether accounts merge, and a hint that missed `Case@Example.com` vs `case@example.com`
       // would be silent in exactly the case it exists for.
@@ -170,7 +169,7 @@ describeDb("the identity-linking rule", () => {
       expect(b.linkHint).toBe("verified_email_matches_existing_account");
     });
 
-    it("keeps plus-tags distinct, because merging is the failure being prevented", async () => {
+    itUnderHangBackstop("keeps plus-tags distinct, because merging is the failure being prevented", async () => {
       const plain = await resolve(client, emailAssertion("user@example.com"));
       const tagged = await resolve(client, emailAssertion("user+work@example.com"));
       expect(tagged.accountId).not.toBe(plain.accountId);
@@ -178,7 +177,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("Hide My Email — the case the obvious rule gets wrong", () => {
-    it("does not link a relay address, FLAGS it, and offers a link hint", async () => {
+    itUnderHangBackstop("does not link a relay address, FLAGS it, and offers a link hint", async () => {
       // The ticket's second named criterion: "an Apple relay address for a user who already has an
       // email account does not SILENTLY create a second one". It does create one — the server
       // cannot know the two are the same human — but it is detected, flagged and surfaced.
@@ -198,7 +197,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].email_is_relay).toBe(true);
     });
 
-    it("lands two Apple sign-ins with a relay address on ONE account", async () => {
+    itUnderHangBackstop("lands two Apple sign-ins with a relay address on ONE account", async () => {
       // Because the key is `sub`, not the address. This is what stops the relay case compounding
       // into a new account on every press of the button.
       const first = await resolve(client, {
@@ -211,7 +210,7 @@ describeDb("the identity-linking rule", () => {
       expect(second.linkHint).toBeUndefined();
     });
 
-    it("never sets a link hint when no account was created", async () => {
+    itUnderHangBackstop("never sets a link hint when no account was created", async () => {
       const first = await resolve(client, {
         provider: "apple", subject: "apple-sub-10", email: "bbb@privaterelay.appleid.com", emailVerified: true,
       });
@@ -222,7 +221,7 @@ describeDb("the identity-linking rule", () => {
       expect(again.linkHint).toBeUndefined();
     });
 
-    it("recognises the relay domains and nothing that merely resembles them", async () => {
+    itUnderHangBackstop("recognises the relay domains and nothing that merely resembles them", async () => {
       expect(isRelayAddress("a@privaterelay.appleid.com")).toBe(true);
       expect(isRelayAddress("a@PrivateRelay.AppleID.com")).toBe(true);
       // A lookalike domain an attacker controls must not be treated as a relay -- that would make
@@ -235,7 +234,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("rule 4 — explicit linking, the only path that joins two accounts", () => {
-    it("moves an identity onto the target account and records why", async () => {
+    itUnderHangBackstop("moves an identity onto the target account and records why", async () => {
       const primary = await resolve(client, emailAssertion("owner@example.com"));
       const viaApple = await resolve(client, {
         provider: "apple", subject: "apple-sub-link", email: "ccc@privaterelay.appleid.com", emailVerified: true,
@@ -255,14 +254,14 @@ describeDb("the identity-linking rule", () => {
       expect(again.accountId).toBe(primary.accountId);
     });
 
-    it("refuses to link onto a deleted account", async () => {
+    itUnderHangBackstop("refuses to link onto a deleted account", async () => {
       const dead = await resolve(client, emailAssertion("dead@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [dead.accountId]);
       const other = await resolve(client, emailAssertion("other@example.com"));
       await expect(linkExplicitly(client, other.identityId, dead.accountId, dead.accountId, other.identityId)).rejects.toThrow(LinkError);
     });
 
-    it("REFUSES when the caller's session is not on the target account", async () => {
+    itUnderHangBackstop("REFUSES when the caller's session is not on the target account", async () => {
       // The check the docstring and the rule document both claimed and the function did not make
       // (PR #87 F7). Without it this is a primitive for moving anyone's identity onto anyone's
       // account, and SONNY-129 would have routed it while reading the comment that promised the
@@ -279,7 +278,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_id).not.toBe(theirs.accountId);
     });
 
-    it("REFUSES to move an identity the caller did not just prove", async () => {
+    itUnderHangBackstop("REFUSES to move an identity the caller did not just prove", async () => {
       // PR #87 R2. F7 closed the target half and left this one open: authenticating the target says
       // the caller owns the destination and nothing about what is being moved there, so a caller
       // signed in on their own account could name a stranger's identity and take it.
@@ -298,7 +297,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_id).not.toBe(mine.accountId);
     });
 
-    it("refuses on the FLAG alone, when the account itself is not deleted", async () => {
+    itUnderHangBackstop("refuses on the FLAG alone, when the account itself is not deleted", async () => {
       // **PR #87 fifth round, F6.** The guard is two conditions — `AND NOT i.account_closed` and an
       // EXISTS on a live account — and the test above is named "because it checks BOTH" while
       // driving only the EXISTS half: it deletes the account and clears the flag by hand, so
@@ -326,7 +325,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_id).toBe(flagged.accountId);
     });
 
-    it("PINS that provenIdentityId is a consistency check and NOT proof of ownership", async () => {
+    itUnderHangBackstop("PINS that provenIdentityId is a consistency check and NOT proof of ownership", async () => {
       // **A characterization test: it asserts the unsafe behaviour on purpose** (PR #87 third
       // round, F3). The existing tests cover only the MISMATCHED case — caller names identity A and
       // moves identity B — which passes whether the check is proof or a tautology. The exploitable
@@ -360,14 +359,14 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_id).toBe(attacker.accountId);
     });
 
-    it("refuses to link an identity that does not exist", async () => {
+    itUnderHangBackstop("refuses to link an identity that does not exist", async () => {
       const target = await resolve(client, emailAssertion("target@example.com"));
       await expect(
         linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId, target.accountId, "00000000-0000-0000-0000-000000000000"),
       ).rejects.toThrow(LinkError);
     });
 
-    it("REFUSES to move an identity that a CLOSED account left behind", async () => {
+    itUnderHangBackstop("REFUSES to move an identity that a CLOSED account left behind", async () => {
       // PR #87 second round, F1b. This was the statement that produced the corrupt row: moving a
       // closed account's identity onto a live one resurrected, through a path that looks like a
       // link, exactly what closing the account took away. It is refused outright now — rule 1 will
@@ -390,7 +389,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_closed).toBe(true);
     });
 
-    it("refuses on the ACCOUNT alone, when the flag has been cleared by hand", async () => {
+    itUnderHangBackstop("refuses on the ACCOUNT alone, when the flag has been cleared by hand", async () => {
       // The guard is `NOT account_closed` **and** an EXISTS on a live account, and this is what the
       // second half is for. `account_closed` is denormalised, so a database that has ever been in a
       // state 0005 repairs — or a future statement nobody has written yet — can carry a false flag
@@ -410,7 +409,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("the flag follows the account, on every statement that can move either", () => {
-    it("RECOMPUTES account_closed when an identity moves to another account", async () => {
+    itUnderHangBackstop("RECOMPUTES account_closed when an identity moves to another account", async () => {
       // **PR #87 second round, F1a — the defect this migration exists for.** 0004 derived the flag
       // on INSERT and set it on close, and left the third way it can change: the identity moving.
       // Reproduced against a real database before the fix — the row below landed on a LIVE account
@@ -451,7 +450,7 @@ describeDb("the identity-linking rule", () => {
       expect(live_accounts.rows[0].n).toBe(1);
     });
 
-    it("CLEARS account_closed when an account is reopened", async () => {
+    itUnderHangBackstop("CLEARS account_closed when an account is reopened", async () => {
       // PR #87 second round, F10. The close trigger only ever set the flag, so undoing a mistaken
       // closure — `deleted_at = NULL`, the only way an account is ever reopened — left every
       // identity on it flagged closed. Rule 1 excludes those, so the reopened account's owner would
@@ -472,7 +471,7 @@ describeDb("the identity-linking rule", () => {
       expect(back.created).toBe(false);
     });
 
-    it("reports a missing account as a FOREIGN KEY violation, not a NOT NULL one", async () => {
+    itUnderHangBackstop("reports a missing account as a FOREIGN KEY violation, not a NOT NULL one", async () => {
       // PR #87 second round, F12. `SELECT … INTO` assigns NULL when nothing matches, so the derive
       // trigger turned "there is no such account" into `23502 not_null_violation` against a column
       // the caller never wrote — an error that sends the reader to the wrong table entirely. The
@@ -486,7 +485,7 @@ describeDb("the identity-linking rule", () => {
       expect(failure?.code).toBe("23503");
     });
 
-    it("keeps rule 2 in step with rule 1 about a closed identity", async () => {
+    itUnderHangBackstop("keeps rule 2 in step with rule 1 about a closed identity", async () => {
       // PR #87 second round, F1c. Rule 1 excludes a closed identity AND a closed account; rule 2
       // excluded only the account. Where they disagreed about the same row — which is precisely the
       // state F1's missing trigger produced — rule 1 would refuse to sign that identity in while
@@ -507,7 +506,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("the separation the whole design exists for", () => {
-    it("lets two identities on one account carry two different Supabase user ids", async () => {
+    itUnderHangBackstop("lets two identities on one account carry two different Supabase user ids", async () => {
       // Supabase creates a second `auth.users` for a relay address because it matches nothing. If
       // the account WERE the Supabase user, this case could not be represented at all — the person
       // would hold two accounts and one subscription.
@@ -527,7 +526,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("the rate-limit key normalises OPPOSITE to the identity key", () => {
-    it("merges plus-tags and casing, which the identity key must not", async () => {
+    itUnderHangBackstop("merges plus-tags and casing, which the identity key must not", async () => {
       // PR #87 F4. One mailbox, one budget: `a+1@x`, `a+2@x` and `A@X` all deliver to the same
       // inbox, so counting them separately means a 3-per-address cap that never binds. The identity
       // key must do the opposite, because merging two addresses joins two accounts.
@@ -539,19 +538,19 @@ describeDb("the identity-linking rule", () => {
       expect(normalizeEmail("a+1@example.com")).not.toBe(normalizeEmail("a@example.com"));
     });
 
-    it("does not fold dots, which would merge distinct mailboxes at most providers", () => {
+    itUnderHangBackstop("does not fold dots, which would merge distinct mailboxes at most providers", async () => {
       // Gmail folds them; nobody else does. Applying one provider's policy everywhere would put
       // two unrelated users on one budget, which is a denial of service against them.
       expect(rateLimitEmailKey("a.b@example.com")).toBe("a.b@example.com");
     });
 
-    it("leaves a malformed value alone rather than inventing structure", () => {
+    itUnderHangBackstop("leaves a malformed value alone rather than inventing structure", async () => {
       expect(rateLimitEmailKey("no-at-sign")).toBe("no-at-sign");
     });
   });
 
   describe("a closed account frees its address without giving up its identities", () => {
-    it("lets the same address sign up again, on a NEW account", async () => {
+    itUnderHangBackstop("lets the same address sign up again, on a NEW account", async () => {
       // Regression, and it was a livelock rather than a wrong answer. Rule 1 excludes identities on
       // a deleted account; the unique constraint on (provider, subject) did not. So the insert
       // conflicted, the resolver rolled back and retried, and hit the identical conflict forever.
@@ -576,7 +575,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_closed).toBe(true);
     });
 
-    it("keeps the closed account row, because it is the handle retained content hangs off", async () => {
+    itUnderHangBackstop("keeps the closed account row, because it is the handle retained content hangs off", async () => {
       const account = await resolve(client, emailAssertion("handle@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
       const { rows } = await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [account.accountId]);
@@ -586,7 +585,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("the retry branch, and the race that used to reach it", () => {
-    it("finds a planted identity through rule 1, without needing the retry branch at all", async () => {
+    itUnderHangBackstop("finds a planted identity through rule 1, without needing the retry branch at all", async () => {
       // **This test's name used to claim it ENTERED the retry branch, and its own body said it did
       // not** (PR #87 second round, F8). Planting the winner's row first means rule 1 finds it on
       // the first pass, so the `ON CONFLICT` is never reached — the same *answer* by a different
@@ -603,7 +602,7 @@ describeDb("the identity-linking rule", () => {
       expect(resolved.created).toBe(false);
     });
 
-    it("REALLY enters the ON CONFLICT retry, and the second pass resolves", async () => {
+    itUnderHangBackstop("REALLY enters the ON CONFLICT retry, and the second pass resolves", async () => {
       // PR #87 second round, F8. The branch is reachable and nothing reached it, so its bounded
       // retry was code nobody had executed. This forces it deterministically rather than hopefully:
       //
@@ -653,7 +652,7 @@ describeDb("the identity-linking rule", () => {
       }
     });
 
-    it("an identity inserted onto an ALREADY-closed account cannot occupy the address", async () => {
+    itUnderHangBackstop("an identity inserted onto an ALREADY-closed account cannot occupy the address", async () => {
       // This test used to assert the stuck state was merely *loud*: an identity on a closed account
       // was invisible to rule 1 and visible to the unique constraint, so the resolver failed with
       // IdentityConflict and the address stayed unusable. Under 0004 the state cannot arise —
@@ -676,7 +675,7 @@ describeDb("the identity-linking rule", () => {
       expect(fresh.created).toBe(true);
     });
 
-    it("survives a REAL two-connection race between resolve() and a close", async () => {
+    itUnderHangBackstop("survives a REAL two-connection race between resolve() and a close", async () => {
       // **The previous version of this test did not race** (PR #87 R10). Both halves ran on one
       // `pg.Client`, which serialises its queries, so they executed in sequence — and its only
       // assertion was `toBeTruthy()`, which cannot fail for a uuid. It would have passed against
@@ -733,7 +732,7 @@ describeDb("the identity-linking rule", () => {
       expect(live.rows[0].n).toBe(1);
     });
 
-    it("MARKS identities however the account was closed, keeping them and their audit trail", async () => {
+    itUnderHangBackstop("MARKS identities however the account was closed, keeping them and their audit trail", async () => {
       // The structural fix, and 0004's correction to it: 0003 DELETEd these rows, which broke the
       // close handler's own read of supabase_user_id and destroyed link_method. They are marked now.
       const account = await resolve(client, emailAssertion("sweeper@example.com"));
@@ -752,7 +751,7 @@ describeDb("the identity-linking rule", () => {
       expect(reused.created).toBe(true);
     });
 
-    it("marks identities on a SECOND deleted_at update too", async () => {
+    itUnderHangBackstop("marks identities on a SECOND deleted_at update too", async () => {
       // 0003 guarded on `OLD.deleted_at IS NULL`, so an operator correcting a timestamp, or a retry,
       // skipped the trigger and left identities live on a closed account.
       const account = await resolve(client, emailAssertion("twice@example.com"));
@@ -767,7 +766,7 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("training consent", () => {
-    it("defaults to not-consented", async () => {
+    itUnderHangBackstop("defaults to not-consented", async () => {
       const account = await resolve(client, emailAssertion("consent@example.com"));
       const { rows } = await client.query(
         "SELECT training_consent, training_consent_updated_at FROM sonny.account WHERE id = $1",
@@ -777,7 +776,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].training_consent_updated_at).toBeNull();
     });
 
-    it("cannot be null — there is no third state to mistake for consent", async () => {
+    itUnderHangBackstop("cannot be null — there is no third state to mistake for consent", async () => {
       const account = await resolve(client, emailAssertion("notnull@example.com"));
       await expect(
         client.query("UPDATE sonny.account SET training_consent = NULL WHERE id = $1", [account.accountId]),

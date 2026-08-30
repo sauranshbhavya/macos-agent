@@ -1,9 +1,9 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { WithConnection } from "../src/db/connection.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
 import {
   CLAIM_LEASE_SECONDS,
   type ClaimOutcome,
@@ -20,6 +20,7 @@ import {
 } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The SQL under contract §9.2, against a real Postgres (SONNY-300).
@@ -79,7 +80,7 @@ describeDb("the idempotency key store", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
   afterAll(async () => {
     await client.end();
@@ -98,7 +99,7 @@ describeDb("the idempotency key store", () => {
     );
   };
 
-  it("gives the key to the first request that asks", async () => {
+  itUnderHangBackstop("gives the key to the first request that asks", async () => {
     grantedTo(await claimKey(client, claim()));
 
     const { rows } = await client.query(
@@ -117,7 +118,7 @@ describeDb("the idempotency key store", () => {
     });
   });
 
-  it("refuses a second request while the first is still in flight, naming what remains of the lease", async () => {
+  itUnderHangBackstop("refuses a second request while the first is still in flight, naming what remains of the lease", async () => {
     await claimKey(client, claim());
     const second = await claimKey(client, claim());
 
@@ -129,7 +130,7 @@ describeDb("the idempotency key store", () => {
     expect(second.retryAfterSeconds).toBeLessThanOrEqual(CLAIM_LEASE_SECONDS);
   });
 
-  it("returns the stored response, byte for byte, to a repeat inside the window", async () => {
+  itUnderHangBackstop("returns the stored response, byte for byte, to a repeat inside the window", async () => {
     const token = grantedTo(await claimKey(client, claim()));
     await completeClaim(client, heldBy(token), response('{"output_text":"the answer"}'));
 
@@ -143,7 +144,7 @@ describeDb("the idempotency key store", () => {
     expect(repeat.response.requestId).toBe("original-request-id");
   });
 
-  it("starts the twenty-four hours at completion, not at the claim", async () => {
+  itUnderHangBackstop("starts the twenty-four hours at completion, not at the claim", async () => {
     const token = grantedTo(await claimKey(client, claim()));
     await completeClaim(client, heldBy(token), response("{}"));
 
@@ -158,7 +159,7 @@ describeDb("the idempotency key store", () => {
     expect(RESPONSE_TTL_SECONDS).toBe(86_400);
   });
 
-  it("stops replaying once the twenty-four hours have passed, and lets the key run again", async () => {
+  itUnderHangBackstop("stops replaying once the twenty-four hours have passed, and lets the key run again", async () => {
     const token = grantedTo(await claimKey(client, claim()));
     await completeClaim(client, heldBy(token), response("{}"));
     await backDate("response_expires_at", 1);
@@ -166,7 +167,7 @@ describeDb("the idempotency key store", () => {
     grantedTo(await claimKey(client, claim()));
   });
 
-  it("takes the key back from a holder that outlived its lease", async () => {
+  itUnderHangBackstop("takes the key back from a holder that outlived its lease", async () => {
     // A process killed mid-request would otherwise hold its key against every retry forever. Its row
     // is indistinguishable from a live one from any other process's side, so the lease is what
     // decides.
@@ -178,25 +179,25 @@ describeDb("the idempotency key store", () => {
 
   describe("a different body under the same key", () => {
     // §9.2's third guarantee does not depend on what state the row is in, so each state is asked.
-    it("conflicts while the first request is in flight", async () => {
+    itUnderHangBackstop("conflicts while the first request is in flight", async () => {
       await claimKey(client, claim());
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
-    it("conflicts against a stored response", async () => {
+    itUnderHangBackstop("conflicts against a stored response", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
-    it("conflicts against a released key, which is otherwise free", async () => {
+    itUnderHangBackstop("conflicts against a released key, which is otherwise free", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await releaseClaim(client, heldBy(token));
       // Free to the same body...
       expect(await claimKey(client, claim("POST /v1/plan\nsha256:bbb"))).toEqual({ kind: "conflict" });
     });
 
-    it("conflicts even after the response window has passed", async () => {
+    itUnderHangBackstop("conflicts even after the response window has passed", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
@@ -204,14 +205,14 @@ describeDb("the idempotency key store", () => {
     });
   });
 
-  it("gives a released key straight back to the same body", async () => {
+  itUnderHangBackstop("gives a released key straight back to the same body", async () => {
     const token = grantedTo(await claimKey(client, claim()));
     await releaseClaim(client, heldBy(token));
 
     grantedTo(await claimKey(client, claim()));
   });
 
-  it("keeps one account's key entirely separate from another's", async () => {
+  itUnderHangBackstop("keeps one account's key entirely separate from another's", async () => {
     const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
     await completeClaim(client, heldBy(mineToken, ACCOUNT), response('{"mine":true}'));
 
@@ -230,7 +231,7 @@ describeDb("the idempotency key store", () => {
     expect(theirs.response.body.toString("utf8")).toBe('{"theirs":true}');
   });
 
-  it("conflicts within a scope without conflicting across one", async () => {
+  itUnderHangBackstop("conflicts within a scope without conflicting across one", async () => {
     await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT));
     // A different body under the same key and the same account: the conflict §9.2 asks for.
     expect(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", ACCOUNT))).toEqual({
@@ -240,7 +241,7 @@ describeDb("the idempotency key store", () => {
     grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:zzz", OTHER_ACCOUNT)));
   });
 
-  it("holds an unauthenticated key in a scope no account can reach", async () => {
+  itUnderHangBackstop("holds an unauthenticated key in a scope no account can reach", async () => {
     await claimKey(client, claim("POST /v1/auth/email/start\nsha256:aaa", UNAUTHENTICATED_SCOPE));
     grantedTo(await claimKey(client, claim("POST /v1/auth/email/start\nsha256:aaa", ACCOUNT)));
   });
@@ -265,7 +266,7 @@ describeDb("the idempotency key store", () => {
       return { ghost, successor };
     };
 
-    it("cannot complete over a successor that has already completed", async () => {
+    itUnderHangBackstop("cannot complete over a successor that has already completed", async () => {
       const { ghost, successor } = await ghostAndSuccessor();
       await completeClaim(client, heldBy(successor), response('{"from":"the successor"}'));
 
@@ -276,7 +277,7 @@ describeDb("the idempotency key store", () => {
       expect(repeat.response.body.toString("utf8")).toBe('{"from":"the successor"}');
     });
 
-    it("cannot complete over a successor that is still in flight, discarding its real answer", async () => {
+    itUnderHangBackstop("cannot complete over a successor that is still in flight, discarding its real answer", async () => {
       // Direction B of the measured failure. Without the token the ghost's body is stored and
       // replayed for twenty-four hours, and the successor's own completion then matches nothing
       // because the row is no longer `in_flight` — its real answer is dropped silently.
@@ -301,7 +302,7 @@ describeDb("the idempotency key store", () => {
       expect(repeat.response.body.toString("utf8")).toBe('{"from":"the successor"}');
     });
 
-    it("cannot release a successor that is still in flight, freeing the key under it", async () => {
+    itUnderHangBackstop("cannot release a successor that is still in flight, freeing the key under it", async () => {
       // Direction A, and the one that defeats §9.2 bullet 4: without the token the ghost's release
       // frees the successor's claim, and a third request claims and calls the provider while the
       // successor is still running.
@@ -322,7 +323,7 @@ describeDb("the idempotency key store", () => {
   });
 
   describe("the metering claim — §9.2's second guarantee, which is the one that costs money", () => {
-    it("is given to exactly one caller, ever", async () => {
+    itUnderHangBackstop("is given to exactly one caller, ever", async () => {
       await claimKey(client, claim());
 
       expect(await claimMeteringEvent(client, at())).toBe(true);
@@ -330,7 +331,7 @@ describeDb("the idempotency key store", () => {
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
-    it("survives the release a retryable failure performs, so the re-attempt cannot bill again", async () => {
+    itUnderHangBackstop("survives the release a retryable failure performs, so the re-attempt cannot bill again", async () => {
       // **This is the whole reason `releaseClaim` does not clear `metering_claimed_at`.** The
       // founder decision of 2026-08-28 lets a retryable failure re-run; what keeps that from being a
       // double charge is that the second attempt finds the claim already taken.
@@ -343,7 +344,7 @@ describeDb("the idempotency key store", () => {
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
-    it("survives the response expiring, so a key reused after a day still cannot bill twice", async () => {
+    itUnderHangBackstop("survives the response expiring, so a key reused after a day still cannot bill twice", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await claimMeteringEvent(client, at());
       await completeClaim(client, heldBy(token), response("{}"));
@@ -353,7 +354,7 @@ describeDb("the idempotency key store", () => {
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
-    it("survives a lease being taken from a dead holder", async () => {
+    itUnderHangBackstop("survives a lease being taken from a dead holder", async () => {
       await claimKey(client, claim());
       await claimMeteringEvent(client, at());
       await backDate("lease_expires_at", 1);
@@ -362,7 +363,7 @@ describeDb("the idempotency key store", () => {
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
-    it("survives pruning, which clears payloads and never rows", async () => {
+    itUnderHangBackstop("survives pruning, which clears payloads and never rows", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await claimMeteringEvent(client, at());
       await completeClaim(client, heldBy(token), response("{}"));
@@ -373,7 +374,7 @@ describeDb("the idempotency key store", () => {
       expect(await claimMeteringEvent(client, at())).toBe(false);
     });
 
-    it("is given to exactly one of two callers racing for it", async () => {
+    itUnderHangBackstop("is given to exactly one of two callers racing for it", async () => {
       await claimKey(client, claim());
       const second = new pg.Client({ connectionString: url });
       await second.connect();
@@ -388,7 +389,7 @@ describeDb("the idempotency key store", () => {
       }
     });
 
-    it("reports three states apart, because a keyless request is not an already-metered one", async () => {
+    itUnderHangBackstop("reports three states apart, because a keyless request is not an already-metered one", async () => {
       // SONNY-133 must not read `false` as "already metered"; `null` is "no row for this key".
       expect(await meteringEventClaimed(client, at())).toBeNull();
       await claimKey(client, claim());
@@ -398,7 +399,7 @@ describeDb("the idempotency key store", () => {
     });
   });
 
-  it("gives the key to exactly one of two requests racing for a key nobody has used", async () => {
+  itUnderHangBackstop("gives the key to exactly one of two requests racing for a key nobody has used", async () => {
     // The reason the claim inserts before it selects: `SELECT … FOR UPDATE` locks nothing when there
     // is no row, so two first-attempts would both find nothing and one would fail on the primary
     // key. `INSERT … ON CONFLICT DO NOTHING` makes the loser wait and then read the winner's row.
@@ -417,7 +418,7 @@ describeDb("the idempotency key store", () => {
   });
 
   describe("pruning and account deletion", () => {
-    it("clears an expired payload and frees the key, leaving the row", async () => {
+    itUnderHangBackstop("clears an expired payload and frees the key, leaving the row", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
       await backDate("response_expires_at", 1);
@@ -438,7 +439,7 @@ describeDb("the idempotency key store", () => {
       });
     });
 
-    it("leaves a payload that is still inside its window", async () => {
+    itUnderHangBackstop("leaves a payload that is still inside its window", async () => {
       const token = grantedTo(await claimKey(client, claim()));
       await completeClaim(client, heldBy(token), response("{}"));
 
@@ -447,7 +448,7 @@ describeDb("the idempotency key store", () => {
       expect(repeat.kind).toBe("replay");
     });
 
-    it("drops one account's stored responses and keeps its metering claims", async () => {
+    itUnderHangBackstop("drops one account's stored responses and keeps its metering claims", async () => {
       const mineToken = grantedTo(await claimKey(client, claim("POST /v1/plan\nsha256:aaa", ACCOUNT)));
       await claimMeteringEvent(client, at(ACCOUNT));
       await completeClaim(
@@ -516,7 +517,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
   afterAll(async () => {
@@ -582,7 +583,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
       payload: planBody(text),
     });
 
-  it("returns the stored response to a repeat, and calls the provider once", async () => {
+  itUnderHangBackstop("returns the stored response to a repeat, and calls the provider once", async () => {
     const app = build();
 
     const first = await post(app, KEY);
@@ -597,7 +598,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     await app.close();
   });
 
-  it("answers 409 idempotency.conflict when the same key carries a different body", async () => {
+  itUnderHangBackstop("answers 409 idempotency.conflict when the same key carries a different body", async () => {
     const app = build();
 
     await post(app, KEY, "the first command");
@@ -610,7 +611,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     await app.close();
   });
 
-  it("writes at most one metering claim per key across a repeat and a re-run", async () => {
+  itUnderHangBackstop("writes at most one metering claim per key across a repeat and a re-run", async () => {
     // The store's own tests prove the claim is one-shot. This proves the key a *request* creates is
     // the key SONNY-133 finds — the two halves have to name the same row, and nothing else in this
     // suite would notice if the hook scoped or spelled it differently.
@@ -641,7 +642,7 @@ describeDb("contract §9.2 end to end, over a real Postgres", () => {
     await app.close();
   });
 
-  it("scopes the row to the signed-in account rather than to the request", async () => {
+  itUnderHangBackstop("scopes the row to the signed-in account rather than to the request", async () => {
     const app = build();
     await post(app, KEY);
 

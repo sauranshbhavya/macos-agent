@@ -1,11 +1,12 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { ProviderRejected, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The second half of the gate: attribution (SONNY-203).
@@ -65,7 +66,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
   afterAll(async () => { await pool.end(); await client.end(); });
@@ -85,7 +86,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
   };
   const bearer = (user: string) => ({ authorization: `Bearer ${accessTokenFor(user)}` });
 
-  it("acts for the account the sub resolves to, and for no other", async () => {
+  itUnderHangBackstop("acts for the account the sub resolves to, and for no other", async () => {
     const app = build();
     const mine = await signIn(app, "mine@example.com");
 
@@ -113,7 +114,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("IGNORES Sonny-Account-Id on a valid token — the victim survives, the caller's own account closes", async () => {
+  itUnderHangBackstop("IGNORES Sonny-Account-Id on a valid token — the victim survives, the caller's own account closes", async () => {
     // **F1 of PR #104's adversarial review: the branch's headline property had no test that could
     // fail.** Two tests sent `sonny-account-id`, and both sent a token that fails verification
     // (`Bearer anything`, `Bearer made-up-token`), so the gate refused before the line that picks
@@ -157,7 +158,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("IGNORES a Sonny-Account-Id naming nothing at all, rather than failing or acting on it", async () => {
+  itUnderHangBackstop("IGNORES a Sonny-Account-Id naming nothing at all, rather than failing or acting on it", async () => {
     // The other half of the same mutant. A header-reading gate that fell back to the token only
     // when the header was absent would still pass the test above if it refused an unknown id — this
     // one requires the header to be ignored outright, whatever it names. An account id that names
@@ -175,7 +176,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses a perfectly valid token whose sub names no identity here", async () => {
+  itUnderHangBackstop("refuses a perfectly valid token whose sub names no identity here", async () => {
     // Signed by this gateway's own secret, correct issuer, correct audience, unexpired — and it
     // still attributes nobody. A token is not a caller until the database says whose it is.
     const app = build();
@@ -189,7 +190,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses a token that OUTLIVED its account — the revoked-and-replayed case", async () => {
+  itUnderHangBackstop("refuses a token that OUTLIVED its account — the revoked-and-replayed case", async () => {
     // The property that matters most here, and the one the local-verification decision makes
     // load-bearing. The token below is minted before the deletion and is still inside its hour, so
     // it verifies perfectly afterwards; every protected route refuses it anyway, because the
@@ -214,7 +215,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses a token that names TWO live accounts rather than picking one", async () => {
+  itUnderHangBackstop("refuses a token that names TWO live accounts rather than picking one", async () => {
     // `supabase_user_id` carries no uniqueness constraint and never can. Two live accounts naming
     // one Supabase user is the identity rule having failed upstream, and a gate that tiebreaks
     // there acts for an account the caller may not be looking at.
@@ -237,7 +238,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses a token whose identity was released by a closed account", async () => {
+  itUnderHangBackstop("refuses a token whose identity was released by a closed account", async () => {
     // `account_closed` on the identity is the other half of the same exclusion: an identity a closed
     // account left behind attributes nobody, exactly as it signs nobody in. Set here directly so the
     // gate's own predicate is what is being tested rather than the deletion route's sequencing.
@@ -253,7 +254,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses on the ACCOUNT's deleted_at even when the identity's flag says otherwise", async () => {
+  itUnderHangBackstop("refuses on the ACCOUNT's deleted_at even when the identity's flag says otherwise", async () => {
     // **Half the attribution predicate was untested** (PR #104's adversarial review, F7). Dropping
     // `AND a.deleted_at IS NULL` while keeping `NOT i.account_closed` left the suite at 244 passed,
     // because the `account_close_marks_identities` trigger keeps the two in step along the one path
@@ -285,7 +286,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("does not consult the provider to verify — the seam stays off the request path", async () => {
+  itUnderHangBackstop("does not consult the provider to verify — the seam stays off the request path", async () => {
     // The founder decision is symmetric verification with the project's secret, which is a local
     // operation. `userFromAccessToken` throws in this fake precisely so that a middleware that
     // reached for it would fail loudly rather than quietly adding a network round trip, and its
@@ -297,7 +298,7 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
-  it("refuses an expired token before it ever reaches the database", async () => {
+  itUnderHangBackstop("refuses an expired token before it ever reaches the database", async () => {
     // Ordering, and it is a denial-of-service property as much as a correctness one: an
     // unauthenticated flood must cost an HMAC rather than a connection from the pool.
     const app = build();
