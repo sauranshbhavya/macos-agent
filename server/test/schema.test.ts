@@ -118,6 +118,13 @@ const NEEDS_NO_SCHEMA = new Set(["pool.db.test.ts"]);
  */
 const MAY_REACH_THE_MIGRATION_RUNNER = new Set([
   "migrate.db.test.ts", "migrate.load.test.ts", "schema.db.test.ts", "support/schema.ts",
+  // SONNY-364's two, added when they landed after this list was written. Both are tests OF the
+  // runner by the same criterion as the three above: `migration-content-hash.db.test.ts` drives
+  // `up`, `down` and `runCommand` against a real ledger to show a changed migration being refused,
+  // which is a claim nobody can make without the import, and `migration-content-hash.test.ts` calls
+  // `loadMigrations`, `driftedMigrations` and `migrationStates` directly with no database at all.
+  // Both names say migrations, which is the property the paragraph above asks to be protected.
+  "migration-content-hash.db.test.ts", "migration-content-hash.test.ts",
 ]);
 
 describe("the shared schema rebuild", () => {
