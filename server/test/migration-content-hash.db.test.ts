@@ -323,6 +323,34 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
+  it("treats a standard_conforming_strings it cannot read as unsafe, not as safe", async () => {
+    // **A surviving mutant found this** (SONNY-364 cycle 2): narrowing the guard from `!== "on"` to
+    // `=== "off"` passed the whole suite, because every test reaching it set the setting to exactly
+    // "off". The two readings differ only on an answer that is neither — an empty result, or a value
+    // from something between this runner and Postgres that is not the two-valued GUC it expects —
+    // and on those the narrowed form falls through and hashes anyway. Fail-open on a precondition is
+    // the one direction this guard must never take, so both are pinned.
+    const withShowAnswering = (rows: { standard_conforming_strings: string }[]): pg.Client =>
+      ({
+        query: (text: unknown, values?: unknown) =>
+          typeof text === "string" && text.includes("standard_conforming_strings")
+            ? Promise.resolve({ rows, rowCount: rows.length })
+            : (client as unknown as { query: (t: unknown, v?: unknown) => unknown }).query(text, values),
+      }) as unknown as pg.Client;
+
+    await expect(up(withShowAnswering([]), dir)).rejects.toThrow(UnsafeStringLexingError);
+    await expect(up(withShowAnswering([{ standard_conforming_strings: "" }]), dir)).rejects.toThrow(
+      UnsafeStringLexingError,
+    );
+    await expect(
+      up(withShowAnswering([{ standard_conforming_strings: "partial" }]), dir),
+    ).rejects.toThrow(UnsafeStringLexingError);
+    // ...and the value it does expect is still let through, so this is not a guard that refuses
+    // everything.
+    await expect(up(withShowAnswering([{ standard_conforming_strings: "on" }]), dir)).resolves.toBeDefined();
+    await reset();
+  });
+
   it("carries the hash column on a ledger created before this runner recorded one", async () => {
     // The `CREATE TABLE IF NOT EXISTS` in `LEDGER` does nothing to a table that already exists, so
     // an existing database gets the column from the `ALTER … ADD COLUMN IF NOT EXISTS` beside it and
