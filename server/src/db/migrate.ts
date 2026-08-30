@@ -85,8 +85,31 @@ const LEDGER = `
     id           text PRIMARY KEY,
     applied_at   timestamptz NOT NULL DEFAULT now(),
     content_hash text
-  );
-  ALTER TABLE sonny_meta.schema_migration ADD COLUMN IF NOT EXISTS content_hash text`;
+  )`;
+
+/**
+ * Whether the ledger already carries the hash column — asked before the `ALTER` rather than left to
+ * `ADD COLUMN IF NOT EXISTS`, because that form is not free when it does nothing (SONNY-364 review).
+ *
+ * `ALTER TABLE` takes `ACCESS EXCLUSIVE` on the table to evaluate its own `IF NOT EXISTS`, so on
+ * every run after the first it queued behind any open ledger writer and then released without
+ * changing anything. Re-measured here rather than carried from the review, against one writer
+ * holding a ten-second transaction, each runner timed on the same database: read-only `status`
+ * takes **0.15 s** with this check, **8.17 s** with the unconditional `ALTER`, and **0.13 s** on the
+ * pre-SONNY-364 ledger SQL — so the check restores what the ledger cost before this ticket. With no
+ * lock holder at all the three are 0.15 s, 0.13 s and 0.12 s, which is what says the 8.17 s is the
+ * lock and not the work. `status` is the command an operator runs to find out what is happening, so
+ * it is the last one that should block for eight seconds behind a writer. This catalog read takes
+ * `ACCESS SHARE` and conflicts with nothing that matters.
+ *
+ * The `IF NOT EXISTS` stays on the `ALTER` below even though this check makes it redundant: two
+ * runners starting at once can both read "absent", and the second one's bare `ADD COLUMN` would
+ * fail. The check removes the lock from the common path; the clause covers the race on the rare one.
+ */
+const HAS_CONTENT_HASH = `
+  SELECT 1 FROM information_schema.columns
+   WHERE table_schema = 'sonny_meta' AND table_name = 'schema_migration'
+     AND column_name = 'content_hash'`;
 
 /**
  * Every applied id, mapped to the content hash recorded when it was applied — or `null`.
@@ -107,6 +130,12 @@ const LEDGER = `
  */
 async function applied(client: pg.Client): Promise<Map<string, string | null>> {
   await client.query(LEDGER);
+  const { rowCount } = await client.query(HAS_CONTENT_HASH);
+  if (rowCount === 0) {
+    await client.query(
+      "ALTER TABLE sonny_meta.schema_migration ADD COLUMN IF NOT EXISTS content_hash text",
+    );
+  }
   const { rows } = await client.query<{ id: string; content_hash: string | null }>(
     "SELECT id, content_hash FROM sonny_meta.schema_migration",
   );
@@ -159,6 +188,15 @@ export function driftedMigrations(
  * above the message and four stack frames below it, which buries the one paragraph worth reading.
  */
 export class MigrationDriftError extends Error {
+  /**
+   * **Every clause of this message has to be true in every case that reaches it** (SONNY-364 review,
+   * F2). It used to end "Comments and layout are not hashed, so this is a change to the executable
+   * SQL", which is false for the one edit most likely to produce a surprising refusal: a line of
+   * prose inside a `$$ … $$` function body IS hashed, correctly, because Postgres stores it in
+   * `pg_proc.prosrc`. The refusal was right and the sentence beneath it sent the reader hunting for
+   * a schema change that was not there. This message is read exactly once, under pressure, by
+   * somebody whose deploy has just stopped.
+   */
   readonly drift: readonly MigrationDrift[];
   constructor(drift: readonly MigrationDrift[]) {
     const one = drift.length === 1;
@@ -171,8 +209,9 @@ export class MigrationDriftError extends Error {
         `This database was built by SQL ${one ? "that file no longer describes" : "those files no longer describe"}, ` +
         `so nothing further is applied or rolled back. Restore the file to the revision this ` +
         `environment ran (git), or — if the change is intended — ship it as a NEW migration, which ` +
-        `is the only way every environment gets it. Comments and layout are not hashed, so this is ` +
-        `a change to the executable SQL.`,
+        `is the only way every environment gets it. Comments and layout OUTSIDE string literals are ` +
+        `not hashed, so what moved is text Postgres keeps — a statement, or the body of a function, ` +
+        `where a comment line is stored in pg_proc.prosrc and counts as a change like any other.`,
     );
     this.name = "MigrationDriftError";
     this.drift = drift;
@@ -282,6 +321,91 @@ export async function down(client: pg.Client, dir?: string): Promise<string | un
  */
 const DATA_ERROR = 65;
 
+/**
+ * Where a command's writes go. Injected so the whole dispatch can be exercised from the suite — the
+ * alternative is spawning a built `dist/db/migrate.js`, which couples the tests to a prior
+ * `npm run build`.
+ */
+export interface CommandOutput {
+  readonly out: (text: string) => void;
+  readonly err: (text: string) => void;
+}
+
+/**
+ * Runs one command and returns the exit code, writing nothing to the process directly.
+ *
+ * **The exit codes are a documented contract** — `server/README.md`'s command table promises that
+ * all three exit 65 when an applied migration's file has changed — and until this was split out of
+ * `main` nothing in the suite could reach them: `main` is only callable by spawning the compiled
+ * runner. 55 lines of dispatch, including every one of those codes, were covered by a session
+ * running the command by hand and by nothing else (SONNY-364 review). What is left in `main` below
+ * is argv, the environment and the connection.
+ *
+ * `dir` exists for the same reason `up` and `down` already take one — a test needs a throwaway
+ * directory of its own — and the CLI never passes it, so the shipped path resolves migrations
+ * exactly as before.
+ */
+export async function runCommand(
+  command: string,
+  client: pg.Client,
+  io: CommandOutput,
+  dir?: string,
+): Promise<number> {
+  try {
+    if (command === "up") {
+      const ran = await up(client, dir);
+      io.out(ran.length ? `applied: ${ran.join(", ")}\n` : "nothing to apply\n");
+      return 0;
+    }
+    if (command === "down") {
+      const rolled = await down(client, dir);
+      io.out(rolled ? `rolled back: ${rolled}\n` : "nothing to roll back\n");
+      return 0;
+    }
+    if (command === "status") {
+      // **`status` reports and never refuses**, which is the opposite of `up` and `down` on purpose:
+      // it is the diagnostic an operator reaches for once one of those has refused, and a diagnostic
+      // that throws instead of describing the state is no use at the moment it is needed.
+      const states = migrationStates(await applied(client), await loadMigrations(dir));
+      const changed = states.filter((s) => s.state === "CHANGED").length;
+      const unverified = states.filter((s) => s.state === "unverified").length;
+      for (const { id, state } of states) io.out(`${state.padEnd(10)}  ${id}\n`);
+      if (changed > 0) {
+        // Names them, so the summary stands on its own the way `up`'s and `down`'s refusal does.
+        // The ids are in the listing on stdout too, and an operator who has redirected stdout — or
+        // is reading a CI log's stderr — would otherwise be told only that "1 migration" changed.
+        const names = states.filter((s) => s.state === "CHANGED").map((s) => s.id).join(", ");
+        io.err(
+          `\n${changed} applied migration${changed === 1 ? " has" : "s have"} changed since ` +
+            `${changed === 1 ? "it was" : "they were"} applied: ${names}. This database was built ` +
+            `by SQL its files no longer describe; \`up\` and \`down\` both refuse until the files ` +
+            `are restored (git) or the change ships as a new migration.\n`,
+        );
+      }
+      if (unverified > 0) {
+        io.err(
+          "\nSome migrations show `unverified`: they were applied before this runner recorded a " +
+            "content hash, so there is nothing to compare their files against. They are NOT known " +
+            "to match — no hash is invented for them, because a backfilled one would claim a " +
+            "comparison that never happened. A migration leaves that state the next time it is " +
+            "rolled back and re-applied.\n",
+        );
+      }
+      // A status that printed CHANGED and exited 0 is the clean zero this repository keeps
+      // recording: a check whose reassuring answer is indistinguishable from a real one.
+      return changed > 0 ? DATA_ERROR : 0;
+    }
+    io.err(`unknown command "${command}" -- expected up, down or status\n`);
+    return 2;
+  } catch (error) {
+    // The finding, not the fault: message alone, no stack. Anything else rethrows and keeps the
+    // trace, because a migration that failed mid-statement is a fault and the frames are the point.
+    if (!(error instanceof MigrationDriftError)) throw error;
+    io.err(`${error.message}\n`);
+    return DATA_ERROR;
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2] ?? "up";
   const url = process.env["DATABASE_URL"];
@@ -292,55 +416,10 @@ async function main(): Promise<void> {
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   try {
-    try {
-    if (command === "up") {
-      const ran = await up(client);
-      process.stdout.write(ran.length ? `applied: ${ran.join(", ")}\n` : "nothing to apply\n");
-    } else if (command === "down") {
-      const rolled = await down(client);
-      process.stdout.write(rolled ? `rolled back: ${rolled}\n` : "nothing to roll back\n");
-    } else if (command === "status") {
-      // **`status` reports and never refuses**, which is the opposite of `up` and `down` on purpose:
-      // it is the diagnostic an operator reaches for once one of those has refused, and a diagnostic
-      // that throws instead of describing the state is no use at the moment it is needed.
-      const states = migrationStates(await applied(client), await loadMigrations());
-      const changed = states.filter((s) => s.state === "CHANGED").length;
-      const unverified = states.filter((s) => s.state === "unverified").length;
-      for (const { id, state } of states) {
-        process.stdout.write(`${state.padEnd(10)}  ${id}\n`);
-      }
-      if (changed > 0) {
-        process.stderr.write(
-          `\n${changed} applied migration${changed === 1 ? " has" : "s have"} changed since ` +
-            `${changed === 1 ? "it was" : "they were"} applied. This database was built by SQL its ` +
-            `files no longer describe; \`up\` and \`down\` both refuse until the files are restored ` +
-            `(git) or the change ships as a new migration.\n`,
-        );
-        // A status that printed CHANGED and exited 0 is the clean zero this repository keeps
-        // recording: a check whose reassuring answer is indistinguishable from a real one.
-        process.exitCode = DATA_ERROR;
-      }
-      if (unverified > 0) {
-        process.stderr.write(
-          "\nSome migrations show `unverified`: they were applied before this runner recorded a " +
-            "content hash, so there is nothing to compare their files against. They are NOT known " +
-            "to match — no hash is invented for them, because a backfilled one would claim a " +
-            "comparison that never happened. A migration leaves that state the next time it is " +
-            "rolled back and re-applied.\n",
-        );
-      }
-    } else {
-      process.stderr.write(`unknown command "${command}" -- expected up, down or status\n`);
-      process.exit(2);
-    }
-    } catch (error) {
-      // The finding, not the fault: message alone, no stack. Anything else rethrows and keeps the
-      // trace, because a migration that failed mid-statement is a fault and the frames are the
-      // point.
-      if (!(error instanceof MigrationDriftError)) throw error;
-      process.stderr.write(`${error.message}\n`);
-      process.exitCode = DATA_ERROR;
-    }
+    process.exitCode = await runCommand(command, client, {
+      out: (text) => process.stdout.write(text),
+      err: (text) => process.stderr.write(text),
+    });
   } finally {
     await client.end();
   }

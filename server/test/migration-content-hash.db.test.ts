@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { MigrationDriftError, down, loadMigrations, up } from "../src/db/migrate.js";
+import { MigrationDriftError, down, loadMigrations, runCommand, up } from "../src/db/migrate.js";
 import { migrationContentHash } from "../src/db/migration-hash.js";
 
 /**
@@ -190,6 +190,95 @@ describeDb("an applied migration cannot change silently", () => {
     await writeProbe(upSql("id int"));
     await writeProbe(upSql("id uuid"));
     expect(await up(client, dir)).toContain(PROBE);
+    await reset();
+  });
+
+  // ---- The exit codes, which `server/README.md`'s command table promises (SONNY-364 review) ----
+
+  const runs = async (command: string): Promise<{ code: number; out: string; err: string }> => {
+    let out = "";
+    let err = "";
+    const code = await runCommand(
+      command,
+      client,
+      { out: (t) => (out += t), err: (t) => (err += t) },
+      dir,
+    );
+    return { code, out, err };
+  };
+
+  it("exits 65 from up, down and status when an applied migration's file has changed", async () => {
+    // The documented contract, and until `runCommand` was split out of `main` nothing in the suite
+    // could reach it — `main` is only callable by spawning the compiled runner.
+    await reset();
+    await writeProbe(upSql("id int"));
+    expect((await runs("up")).code).toBe(0);
+    await writeProbe(upSql("id uuid"));
+    for (const command of ["up", "down", "status"]) {
+      const run = await runs(command);
+      expect(run.code, `${command} should exit 65 on a changed applied migration`).toBe(65);
+    }
+  });
+
+  it("says which migration changed on stderr, not on stdout", async () => {
+    // The listing goes to stdout and the summary to stderr, and BOTH name the migration: an
+    // operator who has redirected stdout, or is reading a CI log's stderr, would otherwise be told
+    // only that "1 migration" changed and not which.
+    const run = await runs("status");
+    expect(run.err).toContain(PROBE);
+    expect(run.out).toContain(`CHANGED     ${PROBE}`);
+    expect(run.out).not.toContain("no longer describe");
+  });
+
+  it("does not claim the change was outside a string literal, because it may not have been", async () => {
+    // F2: the refusal used to end "Comments and layout are not hashed, so this is a change to the
+    // executable SQL", which is false when the edit is one line of prose inside a `$$ … $$` body —
+    // that text IS hashed, correctly, because Postgres stores it in pg_proc.prosrc. The refusal was
+    // right and the sentence sent the reader hunting for a schema change that was not there.
+    const fn = (note: string) =>
+      `CREATE FUNCTION public.sonny_hash_probe_fn() RETURNS int LANGUAGE plpgsql AS $$\nBEGIN\n  -- ${note}\n  RETURN 1;\nEND $$;`;
+    await reset();
+    await writeProbe(fn("first"), "DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn();");
+    expect((await runs("up")).code).toBe(0);
+    // One line of prose inside the body is the entire diff.
+    await writeProbe(fn("second"), "DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn();");
+    const run = await runs("up");
+    expect(run.code).toBe(65);
+    expect(run.err).not.toContain("Comments and layout are not hashed");
+    expect(run.err).toContain("pg_proc.prosrc");
+    await client.query("DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn()");
+    await reset();
+  });
+
+  it("exits 0 from status when nothing has changed, and 2 on an unknown command", async () => {
+    await writeProbe(upSql("id int"));
+    expect((await runs("up")).code).toBe(0);
+    const clean = await runs("status");
+    expect(clean.code).toBe(0);
+    expect(clean.out).toContain("applied");
+    const unknown = await runs("sideways");
+    expect(unknown.code).toBe(2);
+    expect(unknown.err).toContain("expected up, down or status");
+    await reset();
+  });
+
+  it("issues no ALTER on the ledger once the hash column is there", async () => {
+    // The lock regression (SONNY-364 review). `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes
+    // ACCESS EXCLUSIVE to evaluate its own IF NOT EXISTS, so on every run after the first it queued
+    // behind any open ledger writer: read-only `status` measured 8.17 s behind a ten-second writer
+    // against 0.13 s for the pre-ticket ledger SQL, and 0.15 s with the catalog check in front.
+    // A timing test would be flaky, so the mechanism is pinned instead: no ALTER is issued at all.
+    const issued: string[] = [];
+    const spy = {
+      query: (text: unknown, values?: unknown) => {
+        if (typeof text === "string") issued.push(text);
+        return (client as unknown as { query: (t: unknown, v?: unknown) => unknown }).query(text, values);
+      },
+    } as unknown as pg.Client;
+    await up(spy, dir);
+    expect(issued.some((q) => q.includes("ALTER TABLE sonny_meta.schema_migration"))).toBe(false);
+    // ...and the check that replaced it really did run, so this is not passing because nothing did.
+    expect(issued.some((q) => q.includes("information_schema.columns"))).toBe(true);
     await reset();
   });
 

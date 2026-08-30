@@ -612,7 +612,18 @@ it. So the hash is over what Postgres would actually run.
 functions inside `$$ … $$` and several of those bodies carry `--` lines of their own. Postgres does
 not discard them — they are stored verbatim in `pg_proc.prosrc`, which is why the migration suite's
 own schema fingerprint hashes `md5(p.prosrc)`. Editing one changes the database, so it changes the
-hash. `src/db/migration-hash.ts` is where the line is drawn and why.
+hash — **including when the edit is one line of prose and nothing else**, which is the one refusal
+most likely to look wrong and is not. The refusal message says so in those terms; it used to end
+"this is a change to the executable SQL", which was false in exactly that case and sent the reader
+hunting for a schema change that was not there.
+
+**`src/db/migration-hash.ts` enumerates every string form Postgres's scanner accepts** and says what
+the lexer does with each — `'…'`, `E'…'`, `U&'…'`, `U&"…"`, `B'…'`, `X'…'`, `$tag$…$tag$`, `"…"` —
+because the guard is the enumeration and not whichever form somebody last thought of. `E'…'` is the
+one that needs its own branch: backslash escapes are live in it, so `\'` does not end the literal,
+and reading it as an ordinary string truncated the text being hashed. Two `INSERT`s that Postgres
+17.11 accepts and that store different rows then normalised identically. It also assumes
+`standard_conforming_strings = on`, the default since 9.1 and unchanged anywhere under `server/`.
 
 **A migration applied before this existed reads `unverified`, and nothing invents a hash for it.**
 The column is nullable and an existing database gets it from an `ALTER … ADD COLUMN IF NOT EXISTS`,
@@ -630,6 +641,16 @@ that file. It says nothing about whether the schema still matches the migration 
 `ALTER TABLE` against production is invisible here, and always was. And an applied migration whose
 file has been *deleted* leaves nothing to hash, so nothing is compared; that is the same family of
 hazard, and it is recorded on SONNY-364 rather than half-built alongside this one.
+
+**The ledger's own `ALTER` is guarded by a catalog read, and that is a latency fix rather than
+tidiness.** `ALTER TABLE … ADD COLUMN IF NOT EXISTS` takes `ACCESS EXCLUSIVE` to evaluate its own
+`IF NOT EXISTS`, so run unconditionally it queued behind any open ledger writer on every run after
+the first and then changed nothing. Measured behind one writer holding a ten-second transaction:
+read-only `status` took **8.17 s** unconditional, **0.15 s** with the catalog check, and **0.13 s**
+on the pre-SONNY-364 ledger SQL; idle, the three are 0.15 / 0.13 / 0.12 s. `status` is what an
+operator runs to find out what is happening, so it is the last command that should block behind a
+writer. The `IF NOT EXISTS` stays on the `ALTER` for the two-runners-at-once race; the check keeps
+the lock off the common path.
 
 `test/migration-content-hash.test.ts` pins which edits move the hash and needs no database.
 `test/migration-content-hash.db.test.ts` is the selftest the repo's rule asks for — it applies a

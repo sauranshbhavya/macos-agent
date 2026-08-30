@@ -86,6 +86,89 @@ describe("executableSql", () => {
     expect(executableSql('SELECT "Id" FROM t;')).not.toBe(executableSql('SELECT "id" FROM t;'));
   });
 
+  // ---- Escape strings and the rest of Postgres's literal forms (SONNY-364 review, F1) ----
+  //
+  // The review's point was not that E'…' was missing, it was that the argument for skipping it
+  // rested on a test that did not exist: the changelog grepped the migrations, proved E' absent, and
+  // wrote down that the absence was exactly why the tests carry the case. So these are the forms
+  // §4.1.2 of the Postgres manual lists, each with a `--` inside it that must survive.
+
+  it("does not let a backslash-escaped quote end an escape string early", () => {
+    // The defect this closes. With E'…' lexed as an ordinary string, `\'` ended the literal, `b --
+    // two')` was lexed as CODE, and the `--` there was stripped as a comment — so two INSERTs
+    // storing different rows normalised to the same text.
+    expect(executableSql("INSERT INTO t VALUES (E'a\\' -- one');")).toBe(
+      "INSERT INTO t VALUES (E'a\\' -- one');",
+    );
+  });
+
+  it("hashes two escape strings differing only inside the literal differently", () => {
+    // The property underneath the lexing, stated as the collision it prevents.
+    expect(hashOf("INSERT INTO t VALUES (E'a\\' -- one');")).not.toBe(
+      hashOf("INSERT INTO t VALUES (E'a\\' -- two');"),
+    );
+  });
+
+  it("accepts a lower-case e as the escape prefix, which Postgres does too", () => {
+    expect(executableSql("SELECT e'a\\' -- x';")).toBe("SELECT e'a\\' -- x';");
+  });
+
+  it("treats a doubled backslash as a literal one, so the quote after it still closes", () => {
+    // `E'a\\'` is a complete literal holding `a\`. If the second backslash were read as escaping the
+    // quote, the literal would run on and swallow the statement after it.
+    expect(executableSql("SELECT E'a\\\\', 1 -- note\n;")).toBe("SELECT E'a\\\\', 1 ;");
+  });
+
+  it("still honours a doubled quote inside an escape string", () => {
+    expect(executableSql("SELECT E'it''s -- fine';")).toBe("SELECT E'it''s -- fine';");
+  });
+
+  it("does not read a trailing e of an identifier as an escape prefix", () => {
+    // Postgres's scanner is flex and longest-match wins, so `code_e'…'` is an identifier followed by
+    // an ORDINARY string — in which `\'` closes the literal. Reading the `e` as a prefix would run
+    // the literal past the quote that really closes it and swallow the comment below into it.
+    expect(executableSql("SELECT code_e'a\\', 1 -- note\n;")).toBe("SELECT code_e'a\\', 1 ;");
+  });
+
+  it("needs no special handling for a unicode escape string, and keeps a comment inside one", () => {
+    // U&'…' is deliberately NOT given a branch: its backslash introduces a unicode escape rather
+    // than escaping a quote, and quotes are still doubled — so the `U&` lexes as code and the quote
+    // opens a plain literal, which is what the scanner does as well.
+    expect(executableSql("SELECT U&'\\0441 -- inside';")).toBe("SELECT U&'\\0441 -- inside';");
+  });
+
+  it("needs no special handling for a unicode quoted identifier", () => {
+    expect(executableSql('SELECT U&"od -- d" FROM t;')).toBe('SELECT U&"od -- d" FROM t;');
+  });
+
+  it("needs no special handling for bit-string and hex-string constants", () => {
+    expect(executableSql("SELECT B'0101', X'1FF' -- note\n;")).toBe("SELECT B'0101', X'1FF' ;");
+  });
+
+  // ---- The dollar-quote tag rule, whose character classes a mutant walked through ----
+
+  it("reads a tag containing digits, which a tag after its first character may hold", () => {
+    // Pins TAG_REST. Narrowed to [A-Za-z_], `$fn1$` stops being recognised as a tag at all, the body
+    // is lexed as ordinary code, and every comment in that function body is stripped from the hash —
+    // silently loosening the guard over exactly the migrations that define functions.
+    const body = "AS $fn1$ BEGIN -- why\n RETURN 1; END $fn1$;";
+    expect(executableSql(body)).toBe(body);
+  });
+
+  it("reads a tag containing an underscore", () => {
+    const body = "AS $my_fn$ BEGIN -- why\n RETURN 1; END $my_fn$;";
+    expect(executableSql(body)).toBe(body);
+  });
+
+  it("does not let a tag BEGIN with a digit, which Postgres does not either", () => {
+    // Pins TAG_START. Widened to [A-Za-z0-9_], `$1$` reads as a dollar-quote opener whose closing
+    // tag never appears, so the rest of the file is copied verbatim as literal content — comments
+    // included. The bind-parameter test above does not catch that: `$1 ` is followed by a space, so
+    // the widened class still fails to find the closing `$`, and it takes a `$` right after the
+    // digits to tell the two apart.
+    expect(executableSql("SELECT $1$ -- note\n;")).toBe("SELECT $1$ ;");
+  });
+
   it("copies an unterminated literal to the end rather than throwing", () => {
     // The file is malformed and Postgres will say so in terms of the real problem. A normalizer that
     // threw first would replace that message with one about hashing.

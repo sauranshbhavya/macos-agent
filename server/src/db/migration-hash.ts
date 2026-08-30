@@ -34,6 +34,40 @@ import { createHash } from "node:crypto";
  * literal content, and a lexer that treated them as comments would not merely mis-hash the file, it
  * would corrupt the text it was hashing.
  *
+ * **Every string form Postgres's scanner accepts, enumerated — because the guard is the enumeration
+ * and not whichever form somebody happened to name** (SONNY-364 review, F1). The list is §4.1.2 of
+ * the Postgres manual, and each entry says what this lexer does with it:
+ *
+ *   - `'…'` — standard string constant. A doubled `''` is an escaped quote; a backslash is an
+ *     ordinary character. Handled by the plain-quote branch.
+ *   - `E'…'` / `e'…'` — **escape** string constant. Backslash escapes are live, so `\'` does NOT end
+ *     the literal, and `''` still does. This form had its own branch added after the review: without
+ *     it, `\'` ended the string early, everything after it was lexed as code, and a `--` in there was
+ *     stripped — so two `INSERT`s storing different rows normalised to the same text. That is exactly
+ *     the failure the paragraph above names as the reason this is a lexer and not a regex, arriving
+ *     through a form the lexer did not know. The `E` counts only at the start of a token: Postgres's
+ *     scanner is flex, longest-match wins, and `some_ident_e'x'` lexes as an identifier followed by
+ *     an ordinary string rather than as an escape string.
+ *   - `U&'…'` and `U&"…"` — unicode escape string and identifier. **No special handling, and that is
+ *     correct rather than an omission**: the backslash in these introduces a *unicode* escape
+ *     (`\0441`, `\+000441`), it does not escape a quote, and quotes are still doubled. `UESCAPE 'x'`
+ *     changes which character introduces the unicode escape and likewise cannot escape a quote. So
+ *     `U&` lexes as ordinary code and the `'` or `"` after it opens a plain literal, which is what
+ *     the scanner does too.
+ *   - `B'…'` and `X'…'` — bit-string and hex-string constants. Plain quote rules, no escapes; the
+ *     prefix letter lexes as code. No special handling needed, tested anyway.
+ *   - `$tag$…$tag$` — dollar-quoted. Its own branch; nothing inside is interpreted at all, which is
+ *     what keeps a function body's comments in the hash.
+ *   - `"…"` — quoted identifier, `""` doubles. Plain-quote branch.
+ *   - Adjacent constants split across lines (`'a'` newline `'b'`) are two literals to the scanner and
+ *     two literals here. Nothing to do.
+ *
+ * **The one assumption this makes is `standard_conforming_strings = on`**, which has been the default
+ * since Postgres 9.1 and which nothing under `server/` changes. With it off, a plain `'…'` would
+ * honour backslashes too and `'a\'` would not end where this lexer ends it. That is a server setting
+ * rather than a property of the files, so it is recorded here rather than guessed at; a migration
+ * that turned it off would need this list revisited.
+ *
  * **What this cannot do**, stated rather than implied: it compares a file against what an
  * environment recorded when it applied that file. It says nothing about whether the schema in the
  * database still matches the migration — a hand-run `ALTER TABLE` against production is invisible
@@ -50,14 +84,51 @@ const WHITESPACE = new Set([" ", "\t", "\n", "\r", "\f", "\v"]);
  * identifier, so `$1` — a bind parameter, which several migrations use — is not one: `1` cannot open
  * an identifier, so the optional body matches empty and the required closing `$` is not there.
  */
+const TAG_START = /[A-Za-z_]/;
+const TAG_REST = /[A-Za-z0-9_]/;
+
 function dollarTagAt(text: string, at: number): string | undefined {
   if (text[at] !== "$") return undefined;
   let end = at + 1;
-  if (end < text.length && /[A-Za-z_]/.test(text[end]!)) {
+  if (end < text.length && TAG_START.test(text[end]!)) {
     end += 1;
-    while (end < text.length && /[A-Za-z0-9_]/.test(text[end]!)) end += 1;
+    while (end < text.length && TAG_REST.test(text[end]!)) end += 1;
   }
   return text[end] === "$" ? text.slice(at, end + 1) : undefined;
+}
+
+/**
+ * Whether `ch` can appear inside an unquoted identifier, which is what decides whether an `E` before
+ * a quote is an escape-string prefix or just the last letter of a name.
+ */
+function isIdentifierChar(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
+}
+
+/**
+ * The index just past the closing quote of an escape string that opens at `quoteAt`.
+ *
+ * Both escapes are live here and they compose the way Postgres composes them: `\\` is a literal
+ * backslash and does not escape the quote after it, while `\'` and `''` each keep the literal open.
+ * An unterminated literal returns the end of the text, for the reason given on `executableSql`.
+ */
+function endOfEscapeString(text: string, quoteAt: number): number {
+  let j = quoteAt + 1;
+  while (j < text.length) {
+    if (text[j] === "\\") {
+      j += 2;
+      continue;
+    }
+    if (text[j] === "'") {
+      if (text[j + 1] === "'") {
+        j += 2;
+        continue;
+      }
+      return j + 1;
+    }
+    j += 1;
+  }
+  return text.length;
 }
 
 /**
@@ -122,6 +193,17 @@ export function executableSql(text: string): string {
       const stop = close === -1 ? text.length : close + tag.length;
       emit(text.slice(i, stop));
       i = stop;
+      continue;
+    }
+
+    // `E'…'` before the plain-quote branch, because the plain branch would stop at the first `\'`.
+    // The identifier check is Postgres's own longest-match behaviour, not caution: `code_e'x'` is an
+    // identifier and an ordinary string, and reading its `e` as a prefix would run the literal on
+    // past the quote that really closes it.
+    if ((ch === "E" || ch === "e") && text[i + 1] === "'" && !isIdentifierChar(text[i - 1])) {
+      const j = endOfEscapeString(text, i + 1);
+      emit(text.slice(i, j));
+      i = j;
       continue;
     }
 
