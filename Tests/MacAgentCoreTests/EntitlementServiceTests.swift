@@ -915,16 +915,25 @@ struct EntitlementServiceTests {
         gatewaySays.set(Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60))
         _ = try await service.refreshNow()
 
+        // **The mark is read here, before any decision is asked for, and the order is not cosmetic.**
+        // The bound is spent per response, so an exact figure is a statement about how many responses
+        // have happened — and `decision(for:)` starts a refresh of its own, which is a response this
+        // test did not write. Read at the one point where the count is fixed at two, the arithmetic
+        // is exact: the minute that really passed, plus what one response may carry.
+        let markAfterTheBadHeader = try #require(store.current?.observedServerTime)
+        #expect(
+            markAfterTheBadHeader
+                == Self.issuedAt.addingTimeInterval(60 + SonnyBackendClient.maximumUncorroboratedForwardJump)
+        )
+
         // **The year does reach the answer, once, and that is recorded rather than hidden.** §3.5's
         // offset is deliberately not bounded — see `recordServerClock` — so `serverNow()` carries the
         // bad header for exactly as long as it is the last one seen, and the decision it produces is
-        // fail-closed. What matters is that it is not written down.
+        // fail-closed. What matters is that nothing was written down.
         #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
-        let markAfterTheBadHeader = try #require(store.current?.observedServerTime)
-        #expect(
-            markAfterTheBadHeader.timeIntervalSince(Self.issuedAt)
-                <= 60 + SonnyBackendClient.maximumUncorroboratedForwardJump
-        )
+        // That refusal starts a refresh. Waiting for it is what keeps the rest of this deterministic
+        // rather than a race the suite's load decides.
+        await service.awaitPendingRefresh()
 
         // The next honest response ends it. Nothing was kept, so there is nothing to undo — which is
         // the whole of SONNY-344: on the tree this was found at, this last answer stayed `.lapsed`
@@ -932,11 +941,10 @@ struct EntitlementServiceTests {
         gatewaySays.set(Self.issuedAt.addingTimeInterval(60))
         _ = try await service.refreshNow()
         #expect(await service.decision(for: Self.capability) == .entitled)
+        // Stated as the property rather than as arithmetic, for the reason given above: by now the
+        // count of responses includes one this test did not write. A year is 31,536,000 seconds.
         let mark = try #require(store.current?.observedServerTime)
-        #expect(
-            mark.timeIntervalSince(Self.issuedAt)
-                <= 60 + SonnyBackendClient.maximumUncorroboratedForwardJump
-        )
+        #expect(mark.timeIntervalSince(Self.issuedAt) < 60 * 60)
     }
 
     @Test
