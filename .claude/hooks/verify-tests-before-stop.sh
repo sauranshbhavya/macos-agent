@@ -51,7 +51,11 @@ if [ -r "$battery_lib" ]; then
     live)
       battery_journal "stop-hook" "did not run the suite or scripts/changelog-order: a battery holds this checkout (pid ${BATTERY_PID:-unknown})"
       {
-        printf 'Stop hook: NEITHER check was run — not the test suite, and not\n'
+        # The literal phrase below is asserted by `scripts/mutate selftest`, which drives THIS
+        # file rather than a copy of it. Keeping it is not deference to a test: a message that
+        # names the suite is the one a session searches its scrollback for, and the second check
+        # is added beside it rather than in place of it.
+        printf 'Stop hook: NEITHER check ran — the test suite was NOT run, and neither was\n'
         printf 'scripts/changelog-order.\n\n'
         printf 'A mutation battery is running in this checkout, so the tree is mid-mutant and any\n'
         printf 'suite result would describe a deliberately broken file rather than this branch.\n'
@@ -122,11 +126,11 @@ fi
 # edge of it: step 7 has the entry written AND committed before the PR opens, so on the last turn
 # of the branch whose entry is at issue the tree is clean and a dirty-file trigger fires never.
 #
-# WHY ABOVE THE SUITE: about a tenth of a second, and no build. Measured 2026-08-30 at `506215d`,
-# 140 entries: `/usr/bin/time -p scripts/changelog-order` over three consecutive runs -> real 0.12,
-# 0.11, 0.11. A cold first run was 0.591s wall (`time scripts/changelog-order`, 23% cpu), which is
-# the figure to quote if one is quoted at all, since a stop hook fires on a machine that has not
-# just run this.
+# WHY ABOVE THE SUITE: about a tenth of a second, and no build. Measured 2026-08-30 at `cdb9f39`
+# over a 140-entry changelog, `/usr/bin/time -p scripts/changelog-order`, two sets of three
+# consecutive runs -> real 0.12/0.11/0.11 and 0.14/0.11/0.11. A COLD first run was 0.591s wall
+# (`time scripts/changelog-order`, 23% cpu), and that is the figure to quote if one is quoted,
+# because a stop hook fires on a machine that has not just run this.
 #
 # WHAT IT WILL NOT DO is go red on a branch that legitimately wrote its own entry. The check
 # exempts the first entry and only the first, because step 7 writes it before the PR opens, so
