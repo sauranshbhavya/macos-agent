@@ -179,6 +179,23 @@ LOCK_OWNED=""
 MUTATE_SCRATCH=""
 TEST_CMD_ISOLATION=""
 
+# Where this run's own copy of its report goes, and the tee that writes it (SONNY-356).
+#
+# A battery's report IS the battery. The tree is never at risk — every exit path restores it — but
+# the evidence was, because until this existed the report had exactly one sink, the caller's
+# stdout, and a caller redirecting two lanes to one path silently loses one of them. `>` truncates
+# without a word, so the lane that lost its run reads a short file and cannot tell truncation from
+# a run that printed little; the lane that found this re-ran a seven-mutant battery to recover it.
+# The lock is per-worktree on purpose, so two lanes running batteries at once is the intended
+# state — which is exactly what makes one shared output path a defect rather than a nuisance.
+#
+# So the run owns a copy that no caller can name: $logdir/report.log, inside the per-run directory
+# the per-mutant logs already go to, printed in the header before the first suite starts. A
+# caller's own redirect keeps working and is nobody's business; what changed is that it is no
+# longer the only copy.
+REPORT_PATH=""
+REPORT_TEE_PID=""
+
 # Set only by finish(), which is the one way this script is allowed to end. Everything else —
 # `set -u` on an unbound variable, `set -e` on a failed command, a syntax error on a path never
 # taken — reaches the EXIT trap with this still empty, and assert_intended_exit turns that into a
@@ -211,7 +228,10 @@ release_lock() {
 cleanup() {
   if [[ -n "$ACTIVE_FILE" && -f "$ACTIVE_BACKUP" ]]; then
     cp "$ACTIVE_BACKUP" "$ACTIVE_FILE" 2>/dev/null || true
-    printf '%s: interrupted mid-mutant — restored %s.\n' "$SCRIPT_NAME" "$ACTIVE_FILE" >&2
+    # `|| true` on every write from here down, because with SIGPIPE ignored a dead tee turns a
+    # printf into a failed command rather than a dead process — and under `set -e` a failed
+    # command in the EXIT trap would abandon the release below just as surely as the signal did.
+    printf '%s: interrupted mid-mutant — restored %s.\n' "$SCRIPT_NAME" "$ACTIVE_FILE" >&2 || true
     ACTIVE_FILE=""
   fi
   if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
@@ -223,15 +243,124 @@ cleanup() {
   release_lock
 }
 
+# Everything this run prints from here on goes to <path> as well as to wherever the caller pointed
+# stdout. Both streams, so a die() and the `set -u` sentinel below land in the report too — those
+# are the runs whose evidence is worth most and the ones a caller is least likely to have kept.
+#
+# ---------------------------------------------------------------------------------------------
+# THE SIGNAL PROBLEM, ENUMERATED. Read this before changing either trap below.
+#
+# Putting a tee between this shell and its own stdout introduces a hazard the script did not have:
+# the tee is a process, it sits in this script's process group, and if it dies first then every
+# subsequent write here goes to a pipe with no reader. That is not a failed write. It is SIGPIPE,
+# and its default action kills the process outright with no trap run at all — so the restore, the
+# lock release and the "this is not a battery result" warning all simply never happen.
+#
+# The first version of this trapped INT and TERM, which was arrived at by listing the cases that
+# had been measured. That is the wrong method and it missed the likeliest signal of the lot. What
+# follows is the enumeration instead: every route by which a signal reaches a background process in
+# this shell's group, and for each, whether the EXIT trap survives it.
+#
+#   INT   (Ctrl-C; kill -INT -pgid)      Bash already sets SIG_IGN on SIGINT for a background job
+#                                        of a non-interactive shell, so the tee survives with or
+#                                        without us. Trapped here anyway, so this does not depend
+#                                        on a shell behaviour nothing in the file asserts.
+#                                        EXIT trap survives.
+#   QUIT  (Ctrl-\; kill -QUIT -pgid)     Same POSIX SIG_IGN, same reasoning. EXIT trap survives.
+#   TERM  (kill -TERM -pgid; shutdown)   NOT ignored for background jobs. Trapped. Without the
+#                                        trap: measured exit 141. EXIT trap survives.
+#   HUP   (terminal closed, ssh dropped, NOT ignored for background jobs, and the likeliest way a
+#          session leader exits)         forty-minute battery actually ends. Trapped — and this is
+#                                        the one the first version missed. EXIT trap survives.
+#   TSTP / TTIN / TTOU (Ctrl-Z)          Default action is STOP, not terminate. The whole group
+#                                        stops and resumes together, the fifo is never closed, and
+#                                        nothing is lost. Deliberately not trapped: suspending a
+#                                        battery should suspend its report writer too.
+#   PIPE  (the CALLER closes its end:    Reaches the TEE, not this shell — `scripts/mutate <plan> |
+#          `| head`, a terminal that      head -3` kills the report writer through its own stdout,
+#          went away)                     which no signal aimed at the group is involved in at all.
+#                                         Ignored by the tee, so it keeps writing the report file
+#                                         after the caller has stopped reading. This row was missing
+#                                         from the first enumeration and the hole was real: measured
+#                                         at a 23-line report with no summary against 38 unpiped.
+#   any other catchable terminating      Reaches the tee and kills it. Not enumerable as a list
+#   signal sent to the group             worth trapping, which is the point below.
+#   KILL                                 Cannot be caught or ignored, by anyone, ever.
+#
+# The last two rows are why a longer ignore-list is not the answer: SIGKILL on the tee, or the
+# caller's own stdout going away underneath it, leaves this shell writing into a dead pipe no
+# matter what the tee ignores. **So the second layer is that this shell ignores SIGPIPE itself**,
+# armed at the end of report_begin. A dead tee then costs a failed write instead of the process,
+# the EXIT trap always runs, and the tree and the lock are always put back — the report simply
+# ends where the tee did.
+#
+# Measured on this script before that layer existed, with a stand-in that HUPs the tee and this
+# shell mid-mutant, three runs of three: exit 141, `.git/mutate.lock` still held, sample.swift
+# still carrying the mutant, and nothing printed anywhere. cleanup() was never entered — traced
+# with a marker written to a file rather than inferred. That is SONNY-347's own failure mode,
+# reached through the fix for SONNY-356, which is why the answer here is structural rather than
+# three more tokens.
+#
+# Ignoring SIGPIPE must not travel into the suite, or this harness would be changing what it
+# measures. run_suite resets it to the default in a subshell before exec'ing the command, which is
+# checked rather than assumed: `( trap - PIPE; exec perl -e '...' )` reports DEFAULT while the same
+# probe without the reset reports IGNORE.
+#
+# The fifo lives in WORKDIR, so cleanup() unlinking that directory is fine: both ends already hold
+# it open, and a POSIX unlink does not disturb an open file.
+# ---------------------------------------------------------------------------------------------
+report_begin() {
+  local path="$1" fifo
+  [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "internal error: no work directory for the report fifo"
+  require_command mkfifo
+  require_command tee
+  fifo="$WORKDIR/report.fifo"
+  rm -f "$fifo"
+  mkfifo "$fifo" || die "could not create the report fifo at $fifo"
+  : >"$path" || die "could not write this run's report at $path"
+  ( trap '' INT QUIT TERM HUP PIPE; exec tee -a "$path" ) <"$fifo" &
+  REPORT_TEE_PID=$!
+  # Exported so the suite command can see which process is writing this run's report — a
+  # replacement command that fans out signals can then leave it alone. The selftest reads it too,
+  # and that is worth stating: its signal arms used to LOCATE the tee with `ps | awk` over the
+  # harness's children, which is a search that can match nothing (an arm that signals nothing and
+  # passes) or match something else (an arm that signals the wrong process and passes). Both were
+  # observed on this branch — the second as a negative control that fired 5 runs of 5 and then did
+  # not fire on the 6th. An exact pid removes the search rather than tightening it.
+  export MUTATE_REPORT_TEE_PID="$REPORT_TEE_PID"
+  # Kept so the drain can put them back: restoring them is what closes the fifo's write end, which
+  # is the only thing that tells the tee the run is over.
+  exec 9>&1 8>&2
+  exec >"$fifo" 2>&1
+  # The second layer from the enumeration above, and the only one that covers a SIGKILLed tee. From
+  # here on a dead reader costs this shell a failed write rather than its life, so the EXIT trap
+  # runs whatever happens and the tree and the lock are always put back.
+  trap '' PIPE
+  REPORT_PATH="$path"
+}
+
+# Idempotent, and called from assert_intended_exit so it runs after cleanup on every exit path
+# — including the manufactured one below, whose two lines are the reader's only warning that the
+# output above them is not a battery result and therefore have to be in the report.
+report_drain() {
+  [[ -n "$REPORT_TEE_PID" ]] || return 0
+  exec 1>&9 2>&8
+  exec 9>&- 8>&-
+  wait "$REPORT_TEE_PID" 2>/dev/null || true
+  REPORT_TEE_PID=""
+}
+
 # Runs last in every EXIT trap, after the cleanup it must not pre-empt.
 assert_intended_exit() {
   if [[ -z "$MUTATE_EXIT_INTENDED" ]]; then
     printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     printf '%s: any output above this line is not a battery result. See the error above it.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
+    report_drain
     exit 1
   fi
+  report_drain
 }
 
 trap 'cleanup; assert_intended_exit' EXIT
@@ -400,6 +529,12 @@ What this does and does not prevent:
       process, and it names the log to read.
     * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
       running batteries at once share nothing and are not refused.
+    * THE REPORT THIS RUN KEEPS IS ITS OWN COPY, NOT A REPLACEMENT FOR YOURS. If you redirect the
+      run to a path another lane also redirects to, that copy is still truncated exactly as before
+      — nothing here can reach into a caller's shell. What is guaranteed is that a second copy
+      exists at a path no other run can name, and that the header says where. It also does not
+      keep a run's report forever: .build/ is yours to empty, and emptying it takes the reports
+      with it.
     * A LOCK WRITTEN BY A `scripts/mutate` OLDER THAN THIS ONE IS TREATED AS DEAD, even while the
       battery holding it is still running. Those records carry no `lstart` field, and identity is
       that field — the alternative was to keep the old command-line reading as a fallback, which is
@@ -431,10 +566,68 @@ Environment:
   MUTATE_SCRATCH    Exported by the harness, not set by you: the build directory private to this
                     run. A replacement suite command that builds with SwiftPM has to use it.
 
+Demonstrating layer 1 (the tee's ignore list), because no selftest arm does:
+  The report writer's pid is exported as $MUTATE_REPORT_TEE_PID, so a suite command can signal it.
+  Run this against any plan, IN THE FOREGROUND, once as-is and once against a copy with HUP taken
+  out of the tee's ignore list:
+
+    MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
+      ps -p "$MUTATE_REPORT_TEE_PID" >/dev/null 2>&1 && echo LAYER1-HELD || echo LAYER1-GONE
+      exit 1' scripts/mutate <plan>
+
+    sed "s/trap '' INT QUIT TERM HUP PIPE/trap '' INT QUIT TERM PIPE/" scripts/mutate > /tmp/m
+    chmod +x /tmp/m   # then the same MUTATE_TEST_CMD against /tmp/m
+
+  The shipped script prints LAYER1-HELD; the copy prints LAYER1-GONE. Measured 5 runs of 5 each way.
+
+  RUN IT IN THE FOREGROUND. Under `nohup` there is nothing to demonstrate, and that is not a quirk
+  of the reproduction — it is the answer to why no selftest arm for this exists. `nohup` sets
+  SIGHUP to SIG_IGN and an ignored disposition survives fork AND exec, so the tee — which is not a
+  shell and never resets it — ignores HUP whatever this script traps. Measured with a real group
+  signal against a battery in a process group of its own, `kill -HUP -<pgid>` mid-mutant:
+
+    foreground   shipped: exit 129, lock released, tree clean, the interruption in the report (3/3)
+                 HUP dropped from the tee's list: exit 141, lock HELD, 23-line report, no
+                 interruption recorded (2/2)
+    under nohup  shipped AND the dropped-HUP build, INDISTINGUISHABLE: the tee survives, the
+                 battery is not interrupted at all and runs to completion, exit 2, 37-line
+                 report (2/2 each)
+
+  So layer 1 carries the foreground case and `nohup` covers the same ground for free — which means
+  a battery launched the way this project launches long ones is protected either way, and an arm
+  can only discriminate where `nohup` is absent. That is what defeated three attempts at a reliable
+  arm: it fired foreground 5 of 5 and never under `nohup`, 7 of 7. Two things this misled me about
+  and are now explained rather than merely ruled out: `trap -p HUP` under `nohup` reports no ignore,
+  and a python3 SIG_DFL-then-exec probe reports default — both are true of BASH, which resets it for
+  itself, and neither says anything about the `tee` it execs. `ps -ww` was never the cause; the arm
+  fires without it. SONNY-367 holds the arm work.
+
 Output:
-  Per-mutant logs are written under .build/mutate/<sha>-<timestamp>/, because .build/ is
-  gitignored here and the harness must not dirty the tree it just insisted on. That is checked,
-  not assumed: a repository that does not ignore .build/ gets its logs in a temp directory.
+  Every run writes into one directory of its own, .build/mutate/<sha>-<timestamp>-<pid>/, because
+  .build/ is gitignored here and the harness must not dirty the tree it just insisted on. That is
+  checked, not assumed: a repository that does not ignore .build/ gets that directory in a temp
+  directory instead. It holds the per-mutant logs and baseline.log, and:
+
+    report.log      Everything this run printed, stdout and stderr both, from the header down.
+                    THIS RUN OWNS IT — no caller can name it and no other run writes it. The path
+                    is printed in the header, before the first suite starts, and again in the
+                    summary.
+
+  ONE BEHAVIOUR CHANGED, and it is worth knowing before you redirect: everything this run writes
+  now leaves on STDOUT. The tee is a single sink, so stderr is merged into stdout at the top of the
+  run and the caller's own stderr receives nothing at all — `2>` on this command captures an empty
+  file. That is the price of a report whose line order is the run's: two tees, one per stream,
+  would interleave into the report file in an order neither stream can predict, and a report you
+  cannot trust the order of is worse than one that arrives on the wrong fd. `1>` or `&>` capture
+  everything; `2>&1` is now redundant rather than wrong.
+
+  Redirect the run wherever you like as well; that has always worked and still does. What it is no
+  longer is the only copy. A report is a battery's entire product — tens of minutes of machine
+  time, and the tree is put back either way — and two lanes redirecting to one path, /tmp/mutate.log
+  being the obvious one, means the second `>` truncates the first without a word. The lane it
+  happened to could not tell a truncated report from a run that printed little, and re-ran a
+  seven-mutant battery to get its evidence back (SONNY-356). The lock is per-worktree precisely so
+  that two lanes CAN run batteries at once, which is what made one shared output path a defect.
 USAGE
 }
 
@@ -1096,7 +1289,12 @@ PY
 run_suite() {
   local log="$1"
   local code=0
-  bash -c "$TEST_CMD" >"$log" 2>&1 || code=$?
+  # `trap - PIPE` before the exec, because report_begin leaves SIGPIPE ignored in this shell and an
+  # ignored disposition is inherited across fork and exec. A suite running with SIGPIPE ignored is
+  # a suite in a different environment from the one a session runs by hand, and this script's whole
+  # claim is that isolating a battery does not change what it measures. Verified rather than
+  # assumed: the same probe reports DEFAULT with the reset and IGNORE without it.
+  ( trap - PIPE; exec bash -c "$TEST_CMD" ) >"$log" 2>&1 || code=$?
   return "$code"
 }
 
@@ -1591,6 +1789,29 @@ battery() {
     [[ ${#selected[@]} -gt 0 ]] || die "--only selected no mutants"
   fi
 
+  # This run's own directory, established before a single line is printed so that the report can
+  # carry the header that says which tree, which plan and which suite command produced it.
+  #
+  # Logs go under .build/, which this repository gitignores — writing them anywhere tracked would
+  # dirty the tree the script just insisted was clean, and abort its own next mutant. The property
+  # is checked rather than assumed, and a repository that does not ignore .build/ gets its logs
+  # outside the working tree instead.
+  #
+  # The pid is in the name as well as the timestamp, and that is not decoration: the stamp has
+  # one-second resolution, so two runs starting inside the same second in one checkout would
+  # otherwise share a directory and the second would append its report onto the first's. Rarer
+  # than the cross-lane case this ticket is about, and the same loss.
+  local stamp logdir logdir_note=""
+  stamp="$(date +%Y%m%dT%H%M%S)"
+  if git check-ignore -q ".build/mutate" 2>/dev/null; then
+    logdir=".build/mutate/${sha:0:7}-$stamp-$$"
+  else
+    logdir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-logs.XXXXXX")"
+    logdir_note="yes"
+  fi
+  mkdir -p "$logdir"
+  report_begin "$logdir/report.log"
+
   printf '==> %s\n' "$SCRIPT_NAME"
   printf '    repository : %s\n' "$root"
   printf '    HEAD       : %s (%s)\n' "$sha" "$branch"
@@ -1599,6 +1820,13 @@ battery() {
   printf '    tree       : clean\n'
   printf '    lock       : held by this run (pid %s) at %s\n' "$$" "$LOCK_DIR"
   printf '    build dir  : %s\n' "$TEST_CMD_ISOLATION"
+  printf '    report     : %s\n' "$REPORT_PATH"
+  printf '                 (this run'"'"'s own copy of everything below — read that, not a redirect\n'
+  printf '                  you share with another lane, which the next one truncates)\n'
+  printf '    logs       : %s\n' "$logdir"
+  if [[ -n "$logdir_note" ]]; then
+    printf '                 (.build/ is not gitignored here, so they go outside the tree)\n'
+  fi
   printf '\n'
 
   # Pre-flight before anything runs: every selected mutant must match exactly once. Reported for
@@ -1644,20 +1872,6 @@ battery() {
     printf '==> --check: every selected mutant matches. No tests were run, nothing was changed.\n'
     printf '    This is not a battery result. Re-run without --check to measure anything.\n'
     finish 0
-  fi
-
-  # Logs go under .build/, which this repository gitignores — writing them anywhere tracked
-  # would dirty the tree the script just insisted was clean, and abort its own next mutant. The
-  # property is checked rather than assumed, and a repository that does not ignore .build/ gets
-  # its logs outside the working tree instead.
-  local stamp logdir
-  stamp="$(date +%Y%m%dT%H%M%S)"
-  if git check-ignore -q ".build/mutate" 2>/dev/null; then
-    logdir=".build/mutate/${sha:0:7}-$stamp"
-    mkdir -p "$logdir"
-  else
-    logdir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-logs.XXXXXX")"
-    printf '==> .build/ is not gitignored here, so logs go outside the tree:\n    %s\n\n' "$logdir"
   fi
 
   # A red baseline makes every "kill" below meaningless — the tests were already failing. This is
@@ -1830,6 +2044,7 @@ battery() {
   printf '    %d mutant(s): %d killed, %d survived, %d unattributed\n' \
     "${#selected[@]}" "$killed" "$survived" "$unattributed"
   printf '    logs: %s\n' "$logdir"
+  printf '    this report, kept: %s\n' "$REPORT_PATH"
   printf '\n'
   for idx in "${selected[@]}"; do
     printf '    %-6s %-24s %s\n' "${M_ID[$idx]}" "${outcomes[$idx]}" "${M_NOTE[$idx]}"
@@ -1980,7 +2195,12 @@ SAMPLE
   # clean" assertion below still means what it says.
   mkdir -p scripts/lib
   cp "$BATTERY_STATE_LIB" scripts/lib/battery-state.sh
-  git add sample.swift scripts/lib/battery-state.sh
+  # `.build/` ignored from the seed, because that is the branch the real repository takes and an
+  # untested branch is the one that breaks. Without it every arm below fell into the temp-directory
+  # fallback, so the path that actually runs here — logs and this run's report under .build/ — was
+  # never the one the selftest exercised, and each arm leaked a mktemp directory nothing cleaned.
+  printf '.build/\n' >.gitignore
+  git add sample.swift .gitignore scripts/lib/battery-state.sh
   git commit -q -m "seed"
   cp sample.swift "$root/sample.pristine"
   local seeded_sha
@@ -2189,6 +2409,253 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   st_contains "the killing test is named" "$ST_OUT" "labelIsMorningBeforeNoon()"
   st_absent "a kill is not reported as a survivor" "$ST_OUT" "SURVIVED"
   st_contains "the report carries the SHA it measured at" "$ST_OUT" "$seeded_sha"
+
+  # --------------------------------------------------------------------------------------------
+  # The report this run keeps for itself (SONNY-356).
+  #
+  # The defect: a battery's report had exactly one sink, the caller's stdout, so two lanes
+  # redirecting to one path meant the second `>` truncated the first's evidence without a word.
+  # The tree was never at risk and the evidence always was, and the evidence is the whole product
+  # of a run.
+  # --------------------------------------------------------------------------------------------
+  printf '\n==> The run keeps its own report, at a path no caller chose\n'
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  local reported_path first_report
+  reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+  first_report="$reported_path"
+  if [[ -n "$reported_path" ]]; then
+    st_pass "the header names where the report is going"
+  else
+    st_fail "the header names no report path — a session has nowhere to look"
+  fi
+  # Named BEFORE the first suite runs, not only in the summary. A path printed at the end is no use
+  # to the reader of a run that died in the middle, which is the run whose evidence is worth most.
+  if [[ -n "$reported_path" ]] \
+    && [[ "$(printf '%s\n' "$ST_OUT" | grep -n 'report     :' | head -1 | cut -d: -f1)" \
+       -lt "$(printf '%s\n' "$ST_OUT" | grep -n '==> Baseline' | head -1 | cut -d: -f1)" ]]; then
+    st_pass "and names it before the first suite starts"
+  else
+    st_fail "the report path is not printed before the baseline"
+  fi
+  if [[ -n "$reported_path" && -s "$reported_path" ]]; then
+    st_pass "the file is there and is not empty"
+  else
+    st_fail "no report at [$reported_path]"
+  fi
+  st_contains "it carries the summary, so it is a whole run and not a truncated one" \
+    "$(cat "$reported_path" 2>/dev/null || true)" "Every mutant was killed"
+  st_contains "and the header, so the report says which tree and which plan produced it" \
+    "$(cat "$reported_path" 2>/dev/null || true)" "$seeded_sha"
+  st_contains "and the evidence: the test that killed the mutant" \
+    "$(cat "$reported_path" 2>/dev/null || true)" "labelIsMorningBeforeNoon()"
+  case "$reported_path" in
+    .build/mutate/*) st_pass "it lives under .build/, which this repository does not track" ;;
+    *) st_fail "the report is at [$reported_path], not under .build/" ;;
+  esac
+  # The directory name carries the run's pid as well as a timestamp, and the timestamp alone is not
+  # enough: it has one-second resolution, so two runs starting inside the same second in one
+  # checkout would share a directory and the second would append onto the first's report. Asserted
+  # against the pid the header itself printed rather than by running two batteries fast enough to
+  # collide — a race is not a check, and this one is decided by how long a stand-in suite happens
+  # to take.
+  local run_pid
+  run_pid="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    lock       : held by this run (pid \([0-9]*\)).*/\1/p' | head -1)"
+  if [[ -n "$run_pid" && "$reported_path" == *"-$run_pid/"* ]]; then
+    st_pass "and its directory is named for this run, pid included"
+  else
+    st_fail "[$reported_path] does not carry this run's pid [$run_pid]"
+  fi
+
+  printf '\n==> A second run does not write over the first one'"'"'s report\n'
+  # The cross-lane case is two worktrees, which share nothing by construction. This is the same
+  # loss reachable inside ONE checkout, and the arm that watches the fix for it.
+  local first_bytes
+  first_bytes="$(cat "$first_report" 2>/dev/null || true)"
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+  if [[ -n "$reported_path" && "$reported_path" != "$first_report" ]]; then
+    st_pass "the second run reports a different path"
+  else
+    st_fail "both runs reported [$reported_path] — one of them has lost its evidence"
+  fi
+  # Byte-for-byte against what it held before the second run, not merely non-empty: a shared path
+  # is REWRITTEN by the second run, and the second run's report is non-empty and says "Every
+  # mutant was killed" too. A check for either of those passes against the defect (measured — it
+  # did, against a build of this script with the report pointed at one fixed path).
+  if [[ "$(cat "$first_report" 2>/dev/null || true)" == "$first_bytes" ]]; then
+    st_pass "and the first run's report is untouched, byte for byte"
+  else
+    st_fail "the first run's report changed underneath it"
+  fi
+
+  printf '\n==> A run that is refused still leaves the report that says why\n'
+  st_run "$records_that_it_ran" "$root/nomatch.plan"
+  reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+  st_eq "the refused run still exits 1" "$ST_EXIT" "1"
+  st_contains "and its report holds the refusal" \
+    "$(cat "$reported_path" 2>/dev/null || true)" "0 matches — REFUSED"
+
+  # --------------------------------------------------------------------------------------------
+  # The signal enumeration above report_begin, watched firing. Three arms: one per catchable signal
+  # the tee ignores, and one for the case nothing can catch.
+  #
+  # Every stand-in finds the tee the way a group signal would reach it — it is a child of the
+  # harness — and signals it directly, because signalling this selftest's OWN process group would
+  # take the selftest down with it. `$1 != me` is not tidiness: the stand-in is itself a child of
+  # the harness and its own command line contains the word `tee`, so without it the first thing any
+  # of these arms does is signal itself.
+  # --------------------------------------------------------------------------------------------
+  # WHAT THE STAND-IN RECORDS, and why the arms assert on that rather than on what happened next.
+  #
+  # Three ways an arm of this kind lies, all three met on this branch. (1) It signals the tee and
+  # judges the guard by how the battery ended — but whether a dead tee reaches this shell before it
+  # next writes is an INTERLEAVING, so the downstream checks fire or do not fire on timing. (2) It
+  # LOCATES the tee with `ps | awk` and matches nothing: `kill` is a no-op, the battery finishes
+  # for the ordinary reason, and every check passes having signalled nothing. (3) The same search
+  # matches something else and signals the wrong process, which looks identical to (2) from the
+  # outside. PR #168's cycle 2 measured (1) and (2); (3) is what a negative control firing 5 runs
+  # of 5 and then not firing on the 6th looks like.
+  #
+  # So there is no search: `$MUTATE_REPORT_TEE_PID` is the pid the harness itself exported, and the
+  # stand-in records whether that exact process was still alive after being signalled. Liveness is
+  # the layer-1 property ITSELF — did the tee ignore the signal — with nothing racing it. A zombie
+  # counts as dead: the tee is a child of the harness, not of this stand-in, so a killed one can
+  # linger unreaped and `kill -0` would call it alive.
+  local tee_sentinel="$root/tee-pid-signalled"
+  local tee_alive="$root/tee-alive"
+  local signals_the_tee='  target="${MUTATE_REPORT_TEE_PID:?the harness exported no report-writer pid}"
+  printf "%s\n" "$target" >> "'"$tee_sentinel"'"'
+  local records_whether_it_survived='  waited=0
+  verdict=yes
+  while [ "$waited" -lt 30 ]; do
+    line="$(ps -p "$target" -o state=,command= 2>/dev/null)"
+    case "$line" in
+      ""|Z*|*" Z "*) verdict=no; break ;;
+    esac
+    case "$line" in
+      *"tee -a "*) : ;;
+      *) verdict="not-a-tee:$line"; break ;;
+    esac
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  printf "%s\n" "$verdict" >> "'"$tee_alive"'"'
+
+  printf '\n==> A signal aimed at the tee does not take the harness down with it\n'
+  # TERM only. **The SIGHUP arm that belongs beside it is deliberately NOT here**, and that absence
+  # is the honest half of this file rather than a gap somebody forgot.
+  #
+  # HUP is the signal layer 1 was added for, and the property IS demonstrated — the same fixture,
+  # run standalone against a build with HUP removed from the tee's ignore list, kills the report
+  # writer 5 runs of 5, and does not under the shipped script. `--help`'s "Demonstrating layer 1"
+  # section has the command. What could not be made to work is that check INSIDE this harness: it
+  # fires in some invocation environments and not others, cleanly split and not isolated (see
+  # `--help` for what was ruled out). A flaky arm is worse than a missing one — it fails at random
+  # in every future run, and a check that fails at random is a check people learn to skip, which is
+  # how SONNY-64's guard stopped existing. So it is out, and the reproduction is written down where
+  # a reader can run it.
+  #
+  # **The tee is signalled and this shell is NOT**, deliberately: an arm that signals both is
+  # betting on which of two deliveries bash processes first, and that bet loses under load — it
+  # did, twice, on a run sharing the machine with a server suite, reporting `expected [129],
+  # got [0]`. The tee's death is the whole discriminator either way.
+  for signal in TERM; do
+    local signals_the_report_writer='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+'"$signals_the_tee"'
+  kill -'"$signal"' "$target" 2>/dev/null || true
+'"$records_whether_it_survived"'
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+    rm -f "$tee_sentinel" "$tee_alive"
+    st_run "$signals_the_report_writer" "$root/kill.plan"
+    reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+    if [[ -s "$tee_sentinel" ]]; then
+      st_pass "SIG$signal: the report writer was found, so something was actually signalled"
+    else
+      st_fail "SIG$signal: nothing was signalled — every check below would pass vacuously"
+    fi
+    # The guard itself, asserted directly rather than through what the battery did afterwards.
+    st_eq "SIG$signal: the report writer ignored it and was still alive" \
+      "$(cat "$tee_alive" 2>/dev/null || true)" "yes"
+    st_eq "SIG$signal: the battery still finishes and exits 0" "$ST_EXIT" "0"
+    st_contains "SIG$signal: and the report is whole, not ending where the tee died" \
+      "$(cat "$reported_path" 2>/dev/null || true)" "Every mutant was killed"
+    st_eq "SIG$signal: the tree is back to what HEAD says" "$(git status --porcelain)" ""
+    if [[ -e ".git/mutate.lock" ]]; then
+      st_fail "SIG$signal: the lock was left held"
+    else
+      st_pass "SIG$signal: and the lock was released"
+    fi
+    # Put the fixture back before the next signal, AFTER the assertions have read it. An arm that
+    # fails leaves a mutant in the file and a lock in .git/, and every battery after it in this one
+    # repository then fails for that reason instead of its own — measured at 96 failures where 4
+    # were the finding.
+    git checkout -- sample.swift 2>/dev/null || true
+    rm -rf -- .git/mutate.lock
+  done
+
+  printf '\n==> A SIGKILLed report writer costs the report and nothing else\n'
+  # The case no ignore-list can reach, which is why the second layer is this shell ignoring SIGPIPE
+  # rather than the tee ignoring more signals. Nothing catches SIGKILL. What must survive it is the
+  # EXIT trap: the tree goes back and the lock comes off, and only the tail of the report is lost.
+  local kills_the_report_writer='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+'"$signals_the_tee"'
+  kill -9 "$target" 2>/dev/null || true
+  sleep 1
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+  rm -f "$tee_sentinel"
+  st_run "$kills_the_report_writer" "$root/kill.plan"
+  if [[ -s "$tee_sentinel" ]]; then
+    st_pass "the report writer was found, so there was something to kill"
+  else
+    st_fail "nothing was killed — every check below would pass vacuously"
+  fi
+  if [[ "$ST_EXIT" -eq 141 ]]; then
+    st_fail "the battery died on a broken pipe when the report writer was killed" \
+      "exit 141 — no EXIT trap ran at all"
+  else
+    st_pass "the battery did not die on a broken pipe (exit $ST_EXIT)"
+  fi
+  st_eq "the tree is back to what HEAD says" "$(git status --porcelain)" ""
+  if [[ -e ".git/mutate.lock" ]]; then
+    st_fail "the lock was left held after the report writer was killed"
+  else
+    st_pass "and the lock was released even though the report writer was killed"
+  fi
+  git checkout -- sample.swift 2>/dev/null || true
+  rm -rf -- .git/mutate.lock
+
+  printf '\n==> A caller that stops reading does not take the report with it\n'
+  # The hole the first two layers left, and the only one that reaches the tee through its own
+  # STDOUT rather than through a signal aimed at the group. `scripts/mutate <plan> | head -3`:
+  # head exits, the tee's write to the pipe raises SIGPIPE, the report writer dies, and the file
+  # `--help` says no caller can take away is left truncated. Measured before the fix at a 23-line
+  # report with no summary, against 38 unpiped.
+  rm -rf -- .build/mutate
+  local piped_code=0 piped_report
+  set +e
+  MUTATE_TEST_CMD="$kills_the_mutant" "$SELF" "$root/kill.plan" 2>&1 | head -3 >/dev/null
+  piped_code=${PIPESTATUS[0]}
+  set -e
+  st_eq "the battery still exits 0 with the caller no longer reading" "$piped_code" "0"
+  piped_report="$(ls -t .build/mutate/*/report.log 2>/dev/null | head -1)"
+  if [[ -n "$piped_report" ]]; then
+    st_pass "a report was still written"
+  else
+    st_fail "no report at all was written under a closed pipe"
+  fi
+  st_contains "and it is whole, summary and all" \
+    "$(cat "$piped_report" 2>/dev/null || true)" "Every mutant was killed"
+  rm -rf -- .build/mutate
 
   printf '\n==> A survivor is loud, distinguishable, and exits non-zero\n'
   st_run "$always_pass" "$root/kill.plan"

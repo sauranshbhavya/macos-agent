@@ -95,6 +95,18 @@ WORKDIR=""
 LOCK_DIR=""
 LOCK_OWNED=""
 
+# This run's own copy of its report, and the tee that writes it (SONNY-356). Same mechanism and the
+# same reasoning as scripts/mutate's — the two are deliberately kept as separate copies, exactly
+# like finish/cleanup/release_lock/assert_intended_exit above, because both files' whole value is
+# that their guards cannot be switched off by something going missing beside them; adding a second
+# required library adds a second thing to lose.
+#
+# This one runs for about 95s and prints a number a changelog entry will quote, which is precisely
+# the shape of tool a session sends to a file and reads later. Two lanes pointing that redirect at
+# one path — /tmp/warnings.log, say — and the second `>` truncates the first without a word.
+REPORT_PATH=""
+REPORT_TEE_PID=""
+
 # Manufactured, not preserved. On bash 3.2 — the shell this actually runs under — the presence of
 # an EXIT trap makes a `set -u` death exit 0, and the usual `rc=$?; trap - EXIT; exit $rc` remedy
 # does not help because $? is already 0 by the time the trap runs. scripts/mutate measured this
@@ -123,14 +135,67 @@ cleanup() {
   release_lock
 }
 
+# Everything this run prints from here on goes to <path> as well as to wherever the caller pointed
+# stdout — both streams, because this script deliberately splits them (progress to stderr, the
+# report to stdout) and a copy carrying only half of that is not the run.
+#
+# Two layers, and scripts/mutate carries the full enumeration behind them — every route by which a
+# signal reaches a background process in this shell's group, and whether the EXIT trap survives it.
+# The short version: the tee sits in this script's process group, so a signal aimed at the group
+# reaches it too, and the next write to a fifo whose reader is gone raises SIGPIPE, whose default
+# action kills the process outright with no trap run at all.
+#
+#   1. The tee ignores INT, QUIT, TERM and HUP. HUP is the one that matters most and the one an
+#      earlier version of this missed: a closing terminal or a dropped connection is how a 95s run
+#      most often ends early. Measured on this script with only HUP absent from that list: exit 141
+#      with the run lock still held, against exit 129 and a released lock on the version before the
+#      tee existed at all.
+#   2. This shell ignores SIGPIPE itself, from the end of report_begin. SIGKILL cannot be caught by
+#      anyone, so a longer ignore-list is not an answer; with this, a dead tee costs a failed write
+#      instead of the process, and the EXIT trap runs whatever happens.
+#
+# The build below resets SIGPIPE to the default for its own child, so nothing this script measures
+# runs in a different signal environment from a plain `swift build`.
+report_begin() {
+  local path="$1" fifo
+  [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "internal error: no work directory for the report fifo"
+  require_command mkfifo
+  require_command tee
+  fifo="$WORKDIR/report.fifo"
+  rm -f "$fifo"
+  mkfifo "$fifo" || die "could not create the report fifo at $fifo"
+  : >"$path" || die "could not write this run's report at $path"
+  ( trap '' INT QUIT TERM HUP PIPE; exec tee -a "$path" ) <"$fifo" &
+  REPORT_TEE_PID=$!
+  exec 9>&1 8>&2
+  exec >"$fifo" 2>&1
+  trap '' PIPE
+  REPORT_PATH="$path"
+}
+
+# Idempotent. Called from assert_intended_exit so it runs after cleanup on every exit path,
+# including the manufactured one below — whose two lines say the output above them is not a
+# warning report, and are therefore the last thing that should be missing from a report.
+report_drain() {
+  [[ -n "$REPORT_TEE_PID" ]] || return 0
+  exec 1>&9 2>&8
+  exec 9>&- 8>&-
+  wait "$REPORT_TEE_PID" 2>/dev/null || true
+  REPORT_TEE_PID=""
+}
+
 assert_intended_exit() {
   if [[ -z "$EXIT_INTENDED" ]]; then
+    # `|| true`: with SIGPIPE ignored a dead tee turns a printf into a failed command rather than
+    # a dead process, and under `set -e` a failed command here would skip the drain below.
     printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     printf '%s: any output above this line is not a warning report. See the error above it.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
+    report_drain
     exit 1
   fi
+  report_drain
 }
 
 trap 'cleanup; assert_intended_exit' EXIT
@@ -160,12 +225,29 @@ incremental build does not recompile an unchanged file, so it cannot report that
 and "zero warnings" read off one is a claim about nothing. The directory it empties is its own —
 .build/warnings-scratch, which lives inside .build/ but is not the .build/debug/ that swift build
 and swift test share — so running this costs you no incremental rebuild afterwards and disturbs no
-build running beside it. On a failed build it also writes .build/warnings-failed-build.log; those
-two paths are everything it puts in your tree, and both are gitignored.
+build running beside it. On a failed build it also writes .build/warnings-failed-build.log, and
+every run keeps its own copy of what it printed under .build/warnings-runs/<sha>-<stamp>-<pid>/;
+those three paths are everything it puts in your tree, and all of them are gitignored.
 
 It reports the SHA it measured at and how many files were uncommitted, so a count can be quoted
 with the tree it came from. It does not refuse a dirty tree — checking work you have not committed
 yet is what this is for.
+
+This run's own report, and why there is one (SONNY-356). It takes about 95s and prints a number a
+changelog entry will quote, so a session sends it to a file and reads it afterwards. Two lanes
+pointing that redirect at one path — /tmp/warnings.log is the obvious one — and the second `>`
+truncates the first without a word, leaving a short file that cannot be told from a run that
+printed little. So the run also writes a copy at a path no caller chose, both streams together
+(progress and report), named in the first lines it prints and again in the summary. Redirect it
+wherever you like as well; that still works. What it is no longer is the only copy.
+
+ONE BEHAVIOUR CHANGED WITH IT, and this script is the one where you will notice. It used to split
+its output — progress on stderr, the report on stdout — so `scripts/warnings > file` left the
+progress lines on your terminal. It no longer does: the tee is a single sink, stderr is merged into
+stdout at the top of the run, and `2>` on this command now captures an empty file. That is the
+price of a report whose line order is the run's; two tees, one per stream, would interleave into the
+report file in an order neither stream can predict. Use `1>` or `&>` to capture, and watch the run
+in the report file rather than on stderr.
 
 Exit codes
   0  built cleanly, no warnings from this repository's sources
@@ -214,6 +296,15 @@ What this does and does not prevent
   the reachable case: one started beside a run already under way. Neither can see a battery running
   in a *different* checkout, and neither needs to: worktrees have separate working trees and
   separate build directories.
+
+  The report it keeps is its own copy, not a replacement for yours. If you redirect a run to a path
+  another lane also redirects to, that copy is truncated exactly as before — nothing here can reach
+  into a caller's shell. What is guaranteed is that a second copy exists where no other run can
+  name it. Two things around it are deliberately left as they are, and both are per-worktree rather
+  than shared: .build/warnings-failed-build.log is one fixed path, so the NEXT run in this same
+  checkout replaces it — that is one lane overwriting its own file, not two lanes colliding — and
+  nothing prunes .build/warnings-runs/, because .build/ is yours to empty and emptying it takes the
+  reports with it.
 
   It does not check any tree but this one, on this machine, with this toolchain. A warning that
   needs a different SDK or a newer compiler is not visible here.
@@ -425,6 +516,33 @@ EOF
 # Building.
 # ---------------------------------------------------------------------------------------------
 
+# Where this run keeps its own copy of what it printed. A directory per run, named for the tree and
+# the run, so nothing another run — or another lane — writes can reach it (SONNY-356). .build/ is
+# gitignored here, so a directory inside it cannot dirty the tree, and a repository that does not
+# ignore .build/ gets one outside the working tree instead — the same check compute_scratch_path
+# below makes, for the same reason.
+#
+# NOT under SCRATCH, and that is the point rather than an accident: wipe_build_outputs empties that
+# directory at the start of every run, so a report kept there would be deleted by the next one. The
+# pid is in the name beside the timestamp because the timestamp has one-second resolution, and two
+# runs starting inside the same second would otherwise share a directory.
+#
+# The fallback is a temp directory rather than WORKDIR for the same reason: cleanup() deletes
+# WORKDIR on the way out, and a report the caller cannot open afterwards is not a report. Same
+# shape as scripts/mutate's log directory.
+compute_report_path() {
+  local sha stamp dir
+  sha="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  stamp="$(date +%Y%m%dT%H%M%S)"
+  if git check-ignore -q ".build/warnings-runs" 2>/dev/null; then
+    dir="$ROOT/.build/warnings-runs/$sha-$stamp-$$"
+  else
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/warnings-run.XXXXXX")"
+  fi
+  mkdir -p "$dir" || die "could not create this run's report directory at $dir"
+  printf '%s/report.log' "$dir"
+}
+
 # Same shape and the same reason as scripts/mutate's scratch path: .build/ is gitignored here, so a
 # directory inside it cannot dirty the tree, and a repository that does not ignore .build/ gets one
 # outside the working tree instead.
@@ -555,6 +673,8 @@ run_check() {
   acquire_lock
   WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/warnings.XXXXXX")"
   compute_scratch_path
+  # Before the first line is printed, so the report carries the whole run and not the tail of it.
+  report_begin "$(compute_report_path)"
 
   local log="$WORKDIR/build.log"
   local mine="$WORKDIR/mine" elsewhere="$WORKDIR/elsewhere" unaccounted="$WORKDIR/unaccounted"
@@ -562,14 +682,23 @@ run_check() {
   local tree
   tree="$(describe_tree)"
 
+  printf '%s: this run (pid %s) keeps its own copy of everything below at\n  %s\n' \
+    "$SCRIPT_NAME" "$$" "${REPORT_PATH#$ROOT/}" >&2
+  printf '%s: read that rather than a redirect shared with another lane, which the next one\n' \
+    "$SCRIPT_NAME" >&2
+  printf '  truncates without a word.\n' >&2
   printf '%s: emptying %s so every file is compiled...\n' "$SCRIPT_NAME" "${SCRATCH#$ROOT/}" >&2
   wipe_build_outputs
 
   printf '%s: building %s. Cold build; give it a minute or two.\n' "$SCRIPT_NAME" "$tree" >&2
   started="$(date +%s)"
   set +e
-  swift build --build-tests --scratch-path "$SCRATCH" \
-    -Xswiftc -F -Xswiftc "$TESTING_FRAMEWORKS_DIR" >"$log" 2>&1
+  # `trap - PIPE` before the exec: report_begin leaves SIGPIPE ignored in this shell, and an
+  # ignored disposition is inherited across fork and exec. The compiler must run in the same signal
+  # environment a plain `swift build` gives it, or this script is measuring something else.
+  ( trap - PIPE
+    exec swift build --build-tests --scratch-path "$SCRATCH" \
+      -Xswiftc -F -Xswiftc "$TESTING_FRAMEWORKS_DIR" ) >"$log" 2>&1
   status=$?
   set -e
   ended="$(date +%s)"
@@ -632,6 +761,7 @@ EOF
   printf '  compiled    : every file — the build directory was emptied first\n'
   printf '  config      : debug (release cannot build the test targets; see --help)\n'
   printf '  elapsed     : %ss\n' "$elapsed"
+  printf '  this report : %s\n' "${REPORT_PATH#$ROOT/}"
   printf '%s\n' "-------------------------------------------------------------------------------"
   printf '\n'
 
@@ -829,6 +959,136 @@ selftest() {
   set -e
   st_eq "this script, run again with nothing changed, still exits 2" "$status" "2"
   st_contains "and still names the warning" "$out" "neverRead"
+
+  # ------------------------------------------------------------------------------------------
+  # The run keeps its own report (SONNY-356). Two runs have just happened above with nothing
+  # changed between them, which is exactly the pair this needs: the second must not have written
+  # over the first's copy. `$out` still holds the second run's output.
+  # ------------------------------------------------------------------------------------------
+  printf '\n  the run keeps its own report, at a path no caller chose\n'
+  local report_rel report_abs run_pid
+  report_rel="$(printf '%s\n' "$out" | sed -n 's/^  this report : //p' | head -1)"
+  if [[ -n "$report_rel" ]]; then
+    st_pass "the summary names where the report went"
+  else
+    st_fail "the summary names no report path" "a session has nowhere to look"
+  fi
+  st_contains "and it is named in the first lines too, before the build starts" \
+    "$out" "keeps its own copy of everything below"
+  report_abs="$repo/$report_rel"
+  if [[ -n "$report_rel" && -s "$report_abs" ]]; then
+    st_pass "the file is there and is not empty"
+  else
+    st_fail "no report at [$report_abs]" "the path the run printed does not resolve to a file"
+  fi
+  st_contains "it carries the count, so it is a whole run and not a truncated one" \
+    "$(cat "$report_abs" 2>/dev/null || true)" "1 warning(s)"
+  st_contains "and the progress lines, which this script sends to stderr" \
+    "$(cat "$report_abs" 2>/dev/null || true)" "Cold build"
+  case "$report_rel" in
+    .build/warnings-runs/*) st_pass "it lives under .build/, which a package does not track" ;;
+    *) st_fail "the report is at [$report_rel]" "expected it under .build/warnings-runs/" ;;
+  esac
+  # The pid, asserted against the one the run itself reported, because the timestamp beside it has
+  # one-second resolution and two runs inside one second would otherwise share a directory. Taken
+  # from the line the run prints rather than by racing two runs together: a race is not a check.
+  run_pid="$(printf '%s\n' "$out" | sed -n 's/^scripts\/warnings: this run (pid \([0-9][0-9]*\)).*/\1/p' | head -1)"
+  if [[ -n "$run_pid" && "$report_rel" == *"-$run_pid/"* ]]; then
+    st_pass "and its directory is named for this run, pid included"
+  else
+    st_fail "[$report_rel] does not carry this run's pid [$run_pid]" \
+      "two runs starting in the same second would share it"
+  fi
+  # And the first of the two runs above, which had no reason to survive the second and must have.
+  # Counted rather than named: which of the two directories sorts first depends on whether the runs
+  # straddled a second boundary, and a check whose meaning depends on that is not a check.
+  local run_dirs kept_reports
+  run_dirs="$(cd "$repo" && ls -d .build/warnings-runs/*/ 2>/dev/null | grep -c '^' || true)"
+  kept_reports="$(cd "$repo" && find .build/warnings-runs -name report.log -size +0 2>/dev/null \
+    | grep -c '^' || true)"
+  st_eq "two runs left two report directories" "$run_dirs" "2"
+  st_eq "and two whole reports — neither run wrote over the other" "$kept_reports" "2"
+
+  # ------------------------------------------------------------------------------------------
+  # THE SIGHUP ARM THAT BELONGS HERE IS DELIBERATELY ABSENT, and the absence is honest rather than
+  # forgotten. HUP is the signal layer 1 exists for; the property is demonstrated standalone (5 runs
+  # of 5 against a build with HUP removed from the tee's ignore list, in `scripts/mutate --help`
+  # under "Demonstrating layer 1"), and could not be made to fire reliably inside a selftest — it
+  # depends on the invocation environment in a way that was characterised but not isolated. A flaky
+  # arm fails at random in every future run and teaches people to skip the whole selftest, so it is
+  # out. What remains below watches the second layer, which is the part no ignore-list can cover.
+  # ------------------------------------------------------------------------------------------
+  # And the second layer, which the arm above does not watch: with HUP restored to the tee's ignore
+  # list the run survives, so nothing in that arm can tell whether this shell also ignores SIGPIPE.
+  # SIGKILL is the case no ignore-list reaches — nothing catches it — so the report writer dies
+  # whatever the tee traps, and what has to survive is the EXIT trap: the lock must still come off.
+  # Measured: without `trap '' PIPE` in report_begin this arm is the only thing in this selftest
+  # that fails, which is the whole reason it exists.
+  printf '\n  a SIGKILLed report writer still leaves the run lock released\n'
+  ( cd "$repo"; exec "$SELF" ) >"$ST_ROOT/kill.out" 2>&1 &
+  local runner=$! teepid="" waited=0
+  while [[ $waited -lt 600 ]]; do
+    # `$3 == "tee"` rather than a substring anywhere in the line: this selftest's own stand-ins and
+    # command lines contain the word, and a search that can match the wrong process signals the
+    # wrong process and passes. scripts/mutate removed the search entirely by exporting the pid;
+    # there is no in-process channel to this arm, so it narrows the match instead and then asserts
+    # the process it signalled actually died or survived.
+    teepid="$(ps -A -ww -o pid=,ppid=,command= \
+      | awk -v p="$runner" '$2 == p && $3 == "tee" { print $1 }' | head -1)"
+    [[ -n "$teepid" ]] && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # Asserted, not assumed: an empty $teepid makes `kill -9 ""` a no-op, the run finishes normally,
+  # the lock comes off for the ordinary reason and this arm passes having tested nothing. It did
+  # exactly that on the first draft, and a vacuous pass reads the same as a real one.
+  if [[ -n "$teepid" ]]; then
+    st_pass "the report writer was found, so there is something to kill"
+  else
+    st_fail "no report writer to kill" "nothing under pid $runner looked like a tee"
+  fi
+  kill -9 "$teepid" 2>/dev/null || true
+  set +e
+  wait "$runner"
+  status=$?
+  set -e
+  # Two checks, and only the first is a reliable discriminator — said here because the other one's
+  # power was measured to vary. Without the SIGPIPE ignore this shell dies of a broken pipe at its
+  # next write, which is exit 141 every time. Whether the LOCK is also left held depends on where
+  # that write falls relative to release_lock, and cleanup() in this file writes nothing, so it
+  # sometimes falls after: the lock assertion failed on one control build and passed on another
+  # against the same defect. scripts/mutate's equivalent fails reliably, because its cleanup does
+  # write before releasing.
+  if [[ "$status" -eq 141 ]]; then
+    st_fail "the run died on a broken pipe when the report writer was killed" \
+      "exit 141 — no EXIT trap ran at all"
+  else
+    st_pass "the run did not die on a broken pipe (exit $status)"
+  fi
+  if [[ -e "$repo/.git/warnings.lock" ]]; then
+    st_fail "the run lock was left held after the report writer was killed" "exit was $status"
+    rm -rf -- "$repo/.git/warnings.lock"
+  else
+    st_pass "the run lock came off even though the report writer was killed"
+  fi
+
+  # The same hole through the caller's own stdout rather than through a group signal: `head` exits,
+  # the tee's write raises SIGPIPE, and the report this script promises no caller can take away is
+  # truncated. PIPE is in the tee's ignore list for that.
+  printf '\n  a caller that stops reading does not take the report with it\n'
+  rm -rf -- "$repo/.build/warnings-runs"
+  set +e
+  ( cd "$repo" && "$SELF" 2>&1 | head -3 >/dev/null )
+  set -e
+  local piped_report
+  piped_report="$(ls -t "$repo"/.build/warnings-runs/*/report.log 2>/dev/null | head -1)"
+  if [[ -n "$piped_report" ]]; then
+    st_pass "a report was still written under a closed pipe"
+  else
+    st_fail "no report at all was written under a closed pipe"
+  fi
+  st_contains "and it is whole, count and all" \
+    "$(cat "$piped_report" 2>/dev/null || true)" "1 warning(s)"
 
   printf '\n  a clean tree exits 0\n'
   st_write_package "$repo" clean

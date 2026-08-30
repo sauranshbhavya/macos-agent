@@ -325,20 +325,28 @@ something up.)
   full run is what the closing comment's count and SHA come from; the filtered runs are how
   you get there.
 - **Start a Postgres container only if the diff touches `server/`.** A Swift-only lane starts
-  none. **A server lane picks its own container name and port and sets `DATABASE_URL` to
-  match**, because the documented command names one fixed pair — `--name sonny-gw-db` and
-  `-p 55433:5432` — in all four places it is written down (`git grep -l 'docker run -d --name
-  sonny-gw-db' def8c3a | wc -l` → 4: `CLAUDE.md`, `server/README.md`, the manual-test
-  checklist, and the help text `server/test/global-setup.ts` prints). Two lanes that follow
-  the documentation collide on both, and a recreated container re-initialises the database
-  under a run already using it. **The symptom names nothing on its own, which is the reason
-  it is written down here**: a suite-wide connection failure — `Test Files 11 failed | 20
-  passed` with `Connection terminated unexpectedly`, and a fresh `initdb` in the container
-  log inside that run's window — is another lane's container, not a defect in the branch
-  under test. Observed between two lanes on 2026-08-29, and that run was discarded. The test
-  side is already down to one knob (`server/test/support/database.ts`, **SONNY-352**, landing
-  on PR #163, with a guard against a file naming the port directly); **SONNY-355** is what is
-  owed on the documentation.
+  none. **A server lane's container name and port are derived, not typed**, and the documented
+  setup now does that for you (SONNY-355 — `CLAUDE.md`'s server half, `server/README.md`, the
+  manual-test checklist, and the banner `server/test/global-setup.ts` prints all carry the same
+  block): `$LANE` is the worktree's own directory name, so the container name cannot
+  collide, and `-p 0:5432` asks Docker for any free host port which `docker port` then reads
+  back into `DATABASE_URL`. Nothing in it is a placeholder, deliberately — a name or a port a
+  reader is expected to fill in is one fixed pair again the first time it is pasted unedited,
+  which is what the setup here used to be (`--name sonny-gw-db`, `-p 55433:5432`, in every
+  place it was written down). **Wait for the database before you run anything against it**:
+  the documented setup does that with `pg_isready` because `docker run -d` returns long
+  before Postgres accepts a connection — 11 to 38 seconds of `initdb` on one Mac, measured
+  twice on 2026-08-29. **The symptom names nothing on its own, which is the reason it is still written
+  down here, and TWO different things produce it**: a suite-wide connection failure — `Test
+  Files 11 failed | 20 passed` with `Connection terminated unexpectedly`, and a fresh
+  `initdb` in a container log inside that run's window. Neither is a defect in the branch
+  under test. If the `initdb` is in *your own* container at the start of your run, the
+  database was still starting and you skipped the readiness wait; if it is in a container you
+  did not start, or appears in yours part-way through a run that had been working, it is
+  another lane's. Observed between two lanes on 2026-08-29, and that run was discarded. The test
+  side is one knob as well (`server/test/support/database.ts`, **SONNY-352**), and
+  `npm run test:db` still falls back to `localhost:55433` when `DATABASE_URL` is unset — right
+  for a lone session, and the collision itself the moment a second lane runs.
 - **Past about ninety minutes, stop at the next point where the tree is green and the work is
   coherent, and hand the rest back from there** — what is done, what is left, and what the
   remainder needs. **A lane cannot stop and report with a red tree**, so ninety minutes starts

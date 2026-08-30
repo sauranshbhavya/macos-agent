@@ -20,7 +20,7 @@ Run from `server/`.
 | `npm install` | Dependencies. |
 | `npm run build` | TypeScript → `dist/`, **and copies the `.sql` migrations beside the compiled runner** — tsc does not copy non-TS assets, and `npm run migrate` reads them from `dist`. |
 | `npm test` | Vitest. Database tests skip when `DATABASE_URL` is unset, announced by `test/global-setup.ts` before the reporter owns the terminal. |
-| `npm run test:db` | The full suite including migrations, against a throwaway Postgres. |
+| `npm run test:db` | The full suite including migrations, against a throwaway Postgres. **Start it under a name and port of your own** — see "The full suite needs a Postgres" below. |
 | `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
@@ -115,13 +115,43 @@ first, then delete.** Two things a sweep needs to know about it:
 - Soft-deleting (`deleted_at`) is unaffected and always was. The refusal is only about removing the
   row.
 
-The full suite needs a Postgres. One line, and it is thrown away afterwards:
+The full suite needs a Postgres. It is thrown away afterwards — but **give it a name and a port of
+your own**, because a container name and a host port are machine-wide and this repository runs
+several lanes at once (SONNY-355):
 
 ```sh
-docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
-DATABASE_URL="postgres://postgres:postgres@localhost:55433/postgres" npm test
-docker rm -f sonny-gw-db
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
+DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm test
+docker rm -f "sonny-gw-db-$LANE"
 ```
+
+Nothing there is yours to choose, deliberately: `$LANE` is the worktree's own directory name, and
+`-p 0:5432` asks Docker for any free host port, which `docker port` then reads back. A placeholder
+somebody is expected to edit becomes one fixed pair again the first time it is pasted unedited.
+
+**The two middle lines are load-bearing.** `docker run -d` returns when the container has *started*,
+not when Postgres accepts connections — `initdb` runs first, measured twice on one Mac 2026-08-29 at
+**38 seconds and 11 seconds** — so a suite launched immediately fails with `Connection terminated
+unexpectedly` and nothing else. And an empty `PORT` would leave `localhost:/postgres`, which
+Postgres reads as the default **5432**: a fixed port arriving by accident through the fix for fixed
+ports, so the guard fails instead.
+
+`npm run test:db` falls back to `localhost:55433` when `DATABASE_URL` is unset, which is right for a
+single session and is precisely what breaks with two.
+
+**Two different things produce the same failure, and neither is a defect in your branch.** Both look
+like a suite-wide connection failure — `Connection terminated unexpectedly`, most files red — with a
+fresh `initdb` in a container log inside the run's window. Tell them apart by whose container that
+`initdb` is in. Your own, at the start of your run: the database was still initialising, so wait for
+readiness and re-run. A container you did not start, or an `initdb` in yours part-way through a run
+that had been working: that is another lane, only reachable if one of you is using a fixed name and
+port rather than the derived ones above. `docker logs "sonny-gw-db-$LANE"` and `docker ps` answer
+which. The quiet direction is worse and is not ruled out: two lanes on one live database can produce
+a *pass* that leaned on rows the other lane wrote.
 
 ## Retention: what is kept, for how long, and how it goes (SONNY-134)
 

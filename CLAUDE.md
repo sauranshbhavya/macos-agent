@@ -223,13 +223,60 @@ npm run check:secrets       # refuse a credential in the repository
 
 `npm test` runs with **no external dependency** and skips the database tests, printing a warning
 that says it did so — a suite that quietly runs zero tests looks exactly like a suite that passed.
-To run them, supply a Postgres; `npm run test:db` defaults to the container below:
+To run them, supply a Postgres. **Name it and port it for your lane, never for the machine**: a
+container name and a host port are both machine-wide, this repository's throughput model is
+parallel lanes, and the setup that used to be documented here named one fixed pair
+(`--name sonny-gw-db -p 55433:5432`) which every lane following it would ask for at once
+(SONNY-355).
 
 ```
-docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
-cd server && npm run test:db
-docker rm -f sonny-gw-db
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
+cd server && DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm run test:db
+docker rm -f "sonny-gw-db-$LANE"
 ```
+
+Nothing in that has to be chosen, which is the point — a placeholder a reader fills in by hand is a
+fixed pair again the second time somebody copies it without editing. `$LANE` is this worktree's own
+directory name, so the container name is unique by construction; `-p 0:5432` asks Docker for any
+free host port and `docker port` reads back which one it gave, so the port cannot collide either.
+Measured 2026-08-29 in worktree `lane-2` with another lane's `sonny-gw-db-358` already up on 55458:
+Docker handed this one 32768 and both ran side by side.
+
+**The two lines in the middle are not ceremony, and skipping either produces the symptom below
+rather than an error that explains itself.** `pg_isready` is a readiness wait: `docker run -d`
+returns as soon as the container is *started*, and Postgres then runs `initdb` before it accepts a
+connection. Measured twice on one Mac, 2026-08-29: **38 seconds and 11 seconds** — so how wide the
+window is varies and that it exists does not. `npm run test:db` started inside it fails with
+`Connection terminated unexpectedly` and nothing else. The `${PORT:?...}`
+guard fails loudly instead of degrading: an empty `PORT` leaves `localhost:/postgres`, which
+Postgres reads as the default **5432** — a fixed port arriving by accident through the fix for
+fixed ports. (In a script the guard exits. Pasted line by line into an interactive shell it aborts
+only its own line, and the readiness loop below is then the second barrier, because a container
+that produced no port is not running for `docker exec` either.)
+
+`npm run test:db` falls back to `localhost:55433` when `DATABASE_URL` is unset. That is correct for
+a lone session and is exactly what goes wrong with two, so set it.
+
+**What that failure looks like, written down because the symptom names nothing on its own — and
+TWO different things produce it.** Both read as a suite-wide connection failure, `Connection
+terminated unexpectedly` with most files red, and a fresh `initdb` in a container log inside the
+run's window. Neither is a defect in the branch under test, and they are told apart by **whose**
+container the `initdb` is in:
+
+- **Your own container, at the very start of your run.** The database was still initialising. This
+  is the readiness wait above, skipped — 11 to 38 seconds of it, measured. Wait and re-run.
+- **A container you did not start, or an `initdb` in yours part-way through a run that had been
+  working.** That is another lane: its `docker run` failed on your name, or it removed and
+  recreated the container underneath you. Only reachable if one of you is using a fixed name and
+  port rather than the derived ones above. Discard the run, start your own container, re-run.
+
+`docker logs "sonny-gw-db-$LANE"` and `docker ps` answer which. The quiet direction is not ruled
+out and is worse than either: two lanes sharing one live database can produce a *pass* that
+depended on rows the other lane wrote, and nothing in the output would say so.
 
 Migrations are `npm run migrate -- up | down | status`, need `DATABASE_URL` and a prior
 `npm run build`, and every migration file must carry a `-- @rollback` section or the runner refuses
