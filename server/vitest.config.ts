@@ -36,9 +36,18 @@ export default defineConfig({
     // apply, where seven of them previously had a 4 ms no-op `up()`. Ten seconds is still ample and
     // that is exactly the problem — it is ample by accident, chosen by vitest for a suite that is
     // not this one. `VITEST_TIMEOUT_MS` is the number this suite already decided on for a wait
-    // whose cost it does not control, so the hooks get it too and there is one deadline to reason
-    // about instead of two. `backstop.test.ts` pins these two fields against that constant, so the
-    // config and the construct cannot drift apart.
+    // whose cost it does not control, so the hooks get it too. `backstop.test.ts` pins both fields
+    // against that constant, so the config and the construct cannot drift apart.
+    //
+    // **Ninety seconds is not derived, and the argument for it is a different one** (PR #172's
+    // cycle-2 review, which measured the cost and settled it here). It is a 390x margin on 230 ms
+    // of work, where the tests it borrows the number from get 24x on theirs. What it buys is that
+    // this suite has ONE deadline to reason about rather than two, and what it costs is bounded
+    // and only arrives when the database is already broken: a wedged hook burns 91 s in that file
+    // instead of 10, and the worst case — every file's `beforeAll` wedged — is about 20 minutes
+    // against about 2. A run in that state is not a measurement of anything either way. If the
+    // trade ever stops looking right, the thing to change is this number, not the constant: the
+    // constant is the tests' bound, derived from their own load measurements.
     testTimeout: 5_000,
     hookTimeout: 90_000,
   },

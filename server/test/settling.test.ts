@@ -87,6 +87,21 @@ describe("the settling barrier", () => {
   });
 
   /**
+   * **Draining the queues rather than waiting a while, and `setImmediate` rather than a handful of
+   * `Promise.resolve()`s.** Node exhausts the microtask queue before it runs a macrotask, so one
+   * turn through `setImmediate` flushes any finite promise chain — where three microtask hops flush
+   * only three, which is fewer than the `.then().finally()` chain inside the barrier needs to
+   * resolve. That is not a subtle distinction here: a shallow drain made these tests pass against
+   * two barriers that resolved a tick early, and it is what let the single-slot mutants survive the
+   * first version of them (PR #172, F3). Two turns, so a body released on the first still lands on
+   * the second. Nothing here depends on how fast the machine is.
+   */
+  const drain = async (): Promise<void> => {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  /**
    * Two bodies tracked before either finishes, released in a caller-chosen order, with `settle`
    * asserted not to resolve until the last of them has stopped.
    *
@@ -121,18 +136,6 @@ describe("the settling barrier", () => {
     let settled = false;
     const settling_ = barrier.settle().then(() => { settled = true; events.push("settled"); });
 
-    // **Draining the queues rather than waiting a while, and `setImmediate` rather than a handful
-    // of `Promise.resolve()`s.** Node exhausts the microtask queue before it runs a macrotask, so
-    // one turn through `setImmediate` flushes any finite promise chain — where three microtask hops
-    // flush only three, which is fewer than the `.then().finally()` chain inside the barrier needs
-    // to resolve. That is not a subtle distinction here: a shallow drain made this test pass
-    // against two barriers that resolved a tick early, and it is what let the single-slot mutants
-    // survive the first version of it. Two turns, so a body released on the first still lands on
-    // the second. Nothing here depends on how fast the machine is.
-    const drain = async (): Promise<void> => {
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
-    };
     await drain();
     events.push(settled ? "RESOLVED with both running" : "still waiting, both running");
 
@@ -175,6 +178,56 @@ describe("the settling barrier", () => {
       "still waiting, one running",
       "one saw the abort",
       "settled",
+    ]);
+  });
+
+  it("waits for a body that a tracked body starts after settle is already waiting", async () => {
+    // **The fourth ordering, and the one that makes `settle`'s loop load-bearing** (PR #172 cycle 2,
+    // F3, from the reviewer's probe). `while` versus a single `if` is invisible to the three
+    // orderings above, because all of them have every body already tracked before `settle` takes
+    // its snapshot of what is outstanding. This one does not: body two is started *by* body one,
+    // after that snapshot, so a single pass resolves without ever having seen it. The mutant
+    // `while (outstanding.size > 0)` → `if (outstanding.size > 0)` survived all eight of the
+    // earlier tests and is killed here.
+    //
+    // Nothing waits on a clock. Every step is a promise this test resolves itself.
+    const barrier = settling();
+    const events: string[] = [];
+    const one = deferred<void>();
+    const two = deferred<void>();
+    const oneStarted = deferred<void>();
+
+    const bodyOne = barrier.track(async () => {
+      oneStarted.resolve();
+      await one.promise;
+      // Started here, which is after `settle` below has already snapshotted and begun waiting.
+      const bodyTwo = barrier.track(async () => {
+        await two.promise;
+        events.push("two finished");
+      });
+      bodyTwo.catch(() => {});
+      events.push("one finished");
+    });
+    bodyOne.catch(() => {});
+    await oneStarted.promise;
+
+    let settled = false;
+    const settling_ = barrier.settle().then(() => { settled = true; });
+    await drain();
+    expect(settled).toBe(false);
+
+    one.resolve();
+    await drain();
+    events.push(settled
+      ? "RESOLVED with the second body still running"
+      : "still waiting for the second body");
+
+    two.resolve();
+    await settling_;
+    expect(events).toEqual([
+      "one finished",
+      "still waiting for the second body",
+      "two finished",
     ]);
   });
 

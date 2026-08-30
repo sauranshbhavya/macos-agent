@@ -1,12 +1,12 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { ProviderRejected, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { rebuildSchema } from "./support/schema.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The second half of the gate: attribution (SONNY-203).
@@ -63,14 +63,14 @@ describeDb("the gate, attributing a verified token to an account", () => {
   let client: pg.Client;
   let provider: SigningInProvider;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
-  afterAll(async () => { await pool.end(); await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await pool.end(); await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
     await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
     provider = new SigningInProvider();

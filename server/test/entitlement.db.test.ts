@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import {
   ACCOUNT_REQUESTS,
   CODE_REQUEST_PER_ADDRESS,
@@ -11,7 +11,7 @@ import {
   sweep as sweepRateLimitWindows,
 } from "../src/auth/ratelimit.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
   admitRequest,
@@ -70,18 +70,18 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
     return extra;
   };
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     await rebuildSchema(client);
   });
 
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     for (const extra of opened) await extra.end();
     await client.end();
   });
 
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query(
       "TRUNCATE sonny.usage_reservation, sonny.usage_period, sonny.entitlement, sonny.auth_rate_limit",
     );

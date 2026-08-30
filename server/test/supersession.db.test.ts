@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { accountForSupabaseUser } from "../src/auth/attribution.js";
 import { normalizeEmail, resolve } from "../src/auth/identity.js";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../src/auth/revocation.js";
 import { owedByAccount } from "../src/revocations.js";
 import { rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The identity lifecycle's provider-side half: what happens to a `supabase_user_id` that stops being
@@ -82,15 +82,15 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   let other: pg.Client;
   let provider: RecordingProvider;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     other = new pg.Client({ connectionString: url });
     await other.connect();
     await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); await other.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); await other.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.identity, sonny.account RESTART IDENTITY CASCADE");
     provider = new RecordingProvider();
   });

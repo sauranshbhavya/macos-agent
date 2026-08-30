@@ -1,9 +1,9 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { up } from "../src/db/migrate.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { dropSchema, rebuildSchema } from "./support/schema.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -30,7 +30,7 @@ const describeDb = url ? describe : describe.skip;
 describeDb("the shared schema rebuild, against a real Postgres", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: testDatabaseUrl() });
     await client.connect();
     await rebuildSchema(client);
@@ -46,11 +46,11 @@ describeDb("the shared schema rebuild, against a real Postgres", () => {
    * coupling. A `beforeEach` runs whatever the test before it did, so the coupling is gone rather
    * than made less likely, and the trailing calls are no longer load-bearing.
    */
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await rebuildSchema(client);
   });
 
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     // Left whole rather than as this file found it: every `.db.test.ts` file rebuilds in its own
     // `beforeAll` now, so what follows does not depend on this — but a file that ends by deleting a
     // schema is a file somebody will one day debug for an hour.
