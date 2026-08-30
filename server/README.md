@@ -70,6 +70,17 @@ that and each ended with a reopened-then-closed account owing nothing: the user 
 nobody coming back at all; or the user comes back as a *different* provider-side user, so the
 stamped id is superseded rather than observed.
 
+**A drain discharges the obligation it CLAIMED, not whatever is owed when it gets back** (migration
+0016, SONNY-365). Clearing the stamp is only half of it: the drain then writes one, and until 0016 it
+wrote one for "this provider-side user" rather than for the obligation it had actually worked on. So
+a drain still inside its provider call when the account was reopened and closed again stamped the
+*new* obligation too — reproduced against a real database, ending with nothing owed and the reopen's
+sessions still live. `sonny.identity_provider_user.revocation_episode` is a counter each of the three
+events above increments; the drain reads it for every row it is about to discharge in the same
+statement that takes its claim, and stamps only rows still carrying what it read. A row whose
+obligation has moved on stays owed, and the drain's next pass claims it and asks the provider again —
+so the new obligation gets its own call rather than inheriting an older one's answer.
+
 **Operationally that means a reopened account re-owes a revocation it has already had.** An account
 closed, drained, reopened and closed again asks the provider about the same id a second time, and
 `npm run revocations` reports it as owed until it does. That is intended: a redundant idempotent
@@ -563,13 +574,59 @@ a rehearsal if production's rollback is the one staging walked.
 migrations take `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0006 and 0008 each carry an
 `ALTER TABLE`, 0014 carries two `DROP COLUMN`s, and 0005's `CREATE TRIGGER` takes
 `SHARE ROW EXCLUSIVE`. That table is what `accountForSupabaseUser` reads on **every authenticated
-request**. The statements themselves are metadata-only and each migration runs in one transaction,
-so the lock is held for microseconds; the risk is the **wait** for it, because a lock request queues
-every reader behind it. Against an idle database this is invisible, which is why it has never
-mattered: no migration has met real traffic yet. Before **SONNY-126**'s first remote deploy, decide
-whether the runner should set one — a `lock_timeout` turns "every request stalls behind a long
-transaction" into "the migration fails and is retried", which is the better failure. It is a
-deployment decision rather than any one migration's, which is why it is recorded here.
+request**. Those statements are metadata-only, so the lock is held for microseconds; the risk is the
+**wait** for it, because a lock request queues every reader behind it. Against an idle database this
+is invisible, which is why it has never mattered: no migration has met real traffic yet.
+
+**"Metadata-only, so microseconds" is a property of those migrations and not of the runner, and this
+paragraph used to state it as though it were the rule** (PR #171 review, F1). **Two separate things
+decide a migration's read stall, and stating only the second is what made the first correction wrong
+in its turn** (cycle 2, F3):
+
+- **The lock MODE decides whether readers stall at all.** `ACCESS EXCLUSIVE` conflicts with the
+  `ACCESS SHARE` every reader takes; `SHARE`, which `CREATE INDEX` takes, does not. Measured on a
+  `CREATE INDEX` alone in a transaction: **read 3 ms, write 284 ms.** A gentler mode is the only
+  thing that buys readers their freedom, so "whatever lock mode its statements take" — which this
+  paragraph said for one round — is exactly backwards as advice.
+- **The transaction decides how long.** Each migration runs in **one** transaction and a lock is held
+  to COMMIT, so once any statement has taken a read-conflicting mode the stall runs to the end of the
+  **migration**, not of that statement.
+
+**Do not use `ALTER TABLE` as the marker for "this one stalls readers", in either direction.**
+`DROP INDEX` takes `ACCESS EXCLUSIVE` too — a migration with a `DROP INDEX` and no `ALTER TABLE`
+blocked reads for **1005 ms of its 1007 ms**, measured — and the converse is the ledger's own
+`ALTER TABLE … ADD COLUMN IF NOT EXISTS` further down this file, which reads as a no-op on every run
+after the first and takes `ACCESS EXCLUSIVE` anyway, because evaluating its own `IF NOT EXISTS`
+needs one (SONNY-364: **8.17 s** behind one writer, **0.15 s** with a catalog read in front of it).
+So the question to ask of a migration is *does any statement take a read-conflicting lock, and if so
+how long does the whole thing run* — a question about statements, not about keywords.
+
+**0017 is the worked example, and it was caught in review before it ever ran.** It backfilled a
+column across the whole of `sonny.sign_in_code_issue`, which
+`latestIssuance` reads on the **sign-in path**, and at 200,000 rows a concurrent read of that exact
+query blocked for **1982 ms** (4191 ms at 400,000 — worse than linear, and nothing prunes that
+table). It was rewritten to do no row work at all: `ADD COLUMN … NOT NULL DEFAULT 0` is metadata-only
+from PostgreSQL 11, and the same measurement reads **184 ms** and **470 ms**, which is the index
+build and nothing else.
+
+**What is left still grows with the table, and how fast depends on a setting.** `CREATE INDEX` sorts,
+and an index larger than `maintenance_work_mem` is built with an external merge sort rather than an
+in-memory one — a regime change, not a steeper line. On this repository's container (64 MB) the
+boundary falls between 1,000,000 rows (56 MB index, 1299 ms) and 2,000,000 (113 MB, 2274 ms), and at
+ten million the measurement is **11.1 s** (PR #171's reviewer's; every other figure here is this
+repository's own container at `9cea6cf`). A number extrapolated from points on the near side of that
+boundary is not an extrapolation, which is how an earlier draft of 0017's header came to say "near
+eight seconds". `CREATE INDEX CONCURRENTLY` and a batched backfill are the standard escapes and
+**neither is available in this runner**, because both must run outside a transaction. So before
+writing a migration that touches rows, read 0017's header for what that costs and what the escape
+would take. **The general form — nothing checks any migration's lock profile — is SONNY-370**, filed
+after the same class turned up in the ledger's `ALTER` on PR #169 the same day.
+
+**And the `lock_timeout` decision the top of this section opens with is still owed.** Before
+**SONNY-126**'s first remote deploy, decide whether the runner should set one: it turns "every
+request stalls behind a long transaction" into "the migration fails and is retried", which is the
+better failure. It is a deployment decision rather than any one migration's, which is why it is
+recorded here rather than in a migration.
 
 The runner supports this by construction: every migration file must carry a `-- @rollback` section
 or it is refused at load, each migration runs in its own transaction, and the suites pin the whole

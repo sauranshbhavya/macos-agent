@@ -311,8 +311,12 @@ describeDb("rate limits and the code lifecycle", () => {
           WHERE table_schema = 'sonny' AND table_name = 'sign_in_code_issue'`,
       );
       const names = rows.map((r) => r.column_name).sort();
+      // `issue_seq` is migration 0017's, and it is what decides which code at this mailbox is the
+      // latest one — `issued_at` is not unique, so two codes sharing an instant had no defined
+      // newest (SONNY-353). A bigint counter cannot carry a code, so this guard's claim is
+      // unchanged; the guard flagging it is the guard working.
       expect(names).toEqual(
-        ["consumed_at", "expires_at", "id", "issued_at", "mailbox_key", "source_hash"],
+        ["consumed_at", "expires_at", "id", "issue_seq", "issued_at", "mailbox_key", "source_hash"],
       );
     });
   });

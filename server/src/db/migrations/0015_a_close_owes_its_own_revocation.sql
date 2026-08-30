@@ -49,18 +49,25 @@
 -- the same door: whichever way the user did or did not return, the **close** that follows owes its
 -- own revocation.
 --
--- **That sentence is about the OBLIGATION and says nothing about the DISCHARGE, which is a fourth
--- shape and is not closed here** (PR #167 review, F3; SONNY-365). `drainOwedRevocations`' mark-done
--- re-checks whether a row is owed *now*; it never checks whether the provider call it just made
--- covers the obligation that exists *now*. So a drain still inside `signOutAllForUser` when the
--- account is reopened, refreshed and re-closed stamps the row on its way out and discharges an
--- obligation created after its own call — reproduced against a real database, ending `owed = 0`
--- with the sessions minted during the reopen never revoked. It is **not a regression**: 0014
--- behaves identically and this migration strictly narrows the window rather than opening it, and
--- the lease clear below is what makes recovery possible at all, since a second drain inside the
--- window does call the provider again. What is missing is an episode identity on the mark-done —
--- a claim token, or the claimed `revocation_claimed_at` carried into its predicate — and that is
--- SONNY-365's, sequenced with this ticket before SONNY-313.
+-- **That sentence was about the OBLIGATION and said nothing about the DISCHARGE, which is a fourth
+-- shape and was not closed here** (PR #167 review, F3; SONNY-365, **closed in migration 0016**).
+-- `drainOwedRevocations`' mark-done re-checked whether a row is owed *now*; it never checked whether
+-- the provider call it just made covers the obligation that exists *now*. So a drain still inside
+-- `signOutAllForUser` when the account is reopened, refreshed and re-closed stamped the row on its
+-- way out and discharged an obligation created after its own call — reproduced against a real
+-- database, ending `owed = 0` with the sessions minted during the reopen never revoked. It was
+-- **not a regression**: 0014 behaves identically and this migration strictly narrows the window
+-- rather than opening it, and the lease clear below is what makes recovery possible at all, since a
+-- second drain inside the window does call the provider again.
+--
+-- **So read the sentence above with 0016 beside it.** On its own — the mechanism as this migration
+-- left it — "the close that follows owes its own revocation" is true of the obligation being
+-- *created* and false of it *surviving*, because the drain wrote the stamp straight back. 0016 adds
+-- `revocation_episode`, a per-row counter every obligation-creating event increments, and makes the
+-- mark-done conditional on the row still being in the episode the drain claimed. With that in place
+-- the sentence holds as written and for both halves. It was a claim token or the claimed
+-- `revocation_claimed_at` that was expected to close this; neither could, because the claim is
+-- per-row and the discharge is per-provider-side-user, and 0016's header says why.
 --
 -- **The whole enumeration rests on one invariant, and it is stated here because nothing else states
 -- it** (PR #167 review). **An identity's CURRENT provider-side user id can never be a superseded

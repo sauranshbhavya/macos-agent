@@ -54,6 +54,23 @@ export async function recordIssue(
  * verifies of the same code produce one winner: the loser's update matches no row and it is told
  * `auth.code_used`. Doing this as a read-then-write would let both succeed and mint two sessions
  * from one code, which is the shape SONNY-125 measured going wrong against a spend cap.
+ *
+ * **"Most recent" is `issue_seq`, never `issued_at`** (SONNY-353, migration 0017). This ordered by
+ * `issued_at DESC` with no tie-break, and `issued_at` is not unique — so for two codes sharing an
+ * instant there was no defined newest and Postgres could return either, unstably across plans and
+ * versions. It decides which code a verify redeems, so the failure is silent in both directions:
+ * the wrong code verifies and the right one does not, and nothing records that two were candidates.
+ * `issue_seq` is an identity column, and per mailbox it is exactly issuance order because
+ * `issueCode` below holds an advisory lock on the mailbox across its invalidate-and-insert.
+ *
+ * **`issued_at DESC` is the second key and it is not belt-and-braces** (PR #171 cycle 2, F1). Every
+ * row written before 0017 carries the sentinel `issue_seq = 0`, so `issue_seq` alone leaves that
+ * whole population tied — and measured, the query then returns the **oldest** of them. Those rows
+ * mostly have distinct `issued_at` and were ordered correctly before 0017, so ordering on the
+ * sequence alone would have made this query *worse* for exactly the population the migration exists
+ * to fix. The second key costs nothing for post-migration rows, whose `issue_seq` is distinct and
+ * decides before it is ever consulted — the clock-rewind case included — and recovers the old
+ * answer for the inherited ones.
  */
 export async function consumeLatest(
   client: pg.Client,
@@ -66,7 +83,7 @@ export async function consumeLatest(
       WHERE id = (
         SELECT id FROM sonny.sign_in_code_issue
          WHERE mailbox_key = $1 AND consumed_at IS NULL AND expires_at > $2
-         ORDER BY issued_at DESC LIMIT 1
+         ORDER BY issue_seq DESC, issued_at DESC LIMIT 1
         FOR UPDATE SKIP LOCKED
       )`,
     [mailboxKey, now],
@@ -167,10 +184,25 @@ interface Issuance {
   readonly source_hash: string;
 }
 
+/**
+ * The mailbox's most recent issuance, whatever state it is in — consumed and expired rows included,
+ * because `classifyFailure` exists to tell those apart.
+ *
+ * **Ordered by `issue_seq`, never by `issued_at`** (SONNY-353, migration 0017), the same change and
+ * the same reason as `consumeLatest` above. This one decides which of the three distinct failures a
+ * caller is disclosed, and it reads `source_hash` — so under the old ordering two codes sharing an
+ * instant could hand the disclosure gate the *other* issuance's source hash, and a caller who did
+ * originate the live code could be told `auth.code_invalid` while the row that answered was one
+ * they had nothing to do with.
+ *
+ * **Same two keys as `consumeLatest`, for the reason recorded there**, and it matters more here:
+ * this is the query that reads `source_hash`, so the pre-migration population reading as one tie
+ * would have handed the disclosure gate the oldest row's hash rather than the newest's.
+ */
 async function latestIssuance(client: pg.Client, mailboxKey: string): Promise<Issuance | undefined> {
   const latest = await client.query<Issuance>(
     `SELECT consumed_at, expires_at, issued_at, source_hash FROM sonny.sign_in_code_issue
-      WHERE mailbox_key = $1 ORDER BY issued_at DESC LIMIT 1`,
+      WHERE mailbox_key = $1 ORDER BY issue_seq DESC, issued_at DESC LIMIT 1`,
     [mailboxKey],
   );
   return latest.rows[0];
