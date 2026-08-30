@@ -43,11 +43,28 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  *   said so: `resolve()`'s `COALESCE($5, supabase_user_id)` overwrote the column that named it, and
  *   `npm run revocations` was correct to report nothing while being wrong about the world.
  *
- * **Both disjuncts rest on `provider_session_revoked_at` meaning "the revocation owed for this id's
- * current episode has been performed", never "this id has been revoked at least once"** (PR #164
- * review, F1). Under the second reading one stamp makes an id un-owed forever, and every close
- * after it revokes nothing. Migration 0014's trigger is what keeps the first reading true: it
- * clears the stamp whenever the identity observes the id again, because that is a new episode.
+ * **Both disjuncts rest on `provider_session_revoked_at` meaning "no revocation is outstanding for
+ * this id", never "this id has been revoked at least once"** (PR #164 review, F1). Under the second
+ * reading one stamp makes an id un-owed forever, and every close after it revokes nothing.
+ *
+ * **What keeps the first reading true is that each of the two disjuncts clears the stamp when it
+ * becomes true** (SONNY-358, migration 0015). That is the whole mechanism, and it is deliberately
+ * the same two conditions rather than a third thing to keep in step: an account closing clears it
+ * (`identity_close_owes_a_revocation`), an id being superseded clears it, and 0014's earlier rule —
+ * the identity observing the id again — clears it as well. 0014 had only that last one, which is
+ * safe only while a revoked user can come back no way but signing in, and three routes falsify
+ * that: refreshing, not coming back at all, and coming back as a different provider-side user.
+ *
+ * **And a stamp implies only that the provider was ASKED.** It cannot imply the sessions are gone,
+ * because `ProviderRejected` is recorded as done and any 4xx but 429 is `ProviderRejected` — so a
+ * mechanism answering 401 or 403 with every session alive writes the same stamp a real revocation
+ * writes. Nothing in this file may rest on the stronger reading.
+ *
+ * **What 0015 buys against a wrong stamp is narrower than "not for ever", and the narrower statement
+ * is the honest one** (PR #167 review, F5). A wrong stamp is corrected only where a NEW obligation
+ * arrives — a reopen and re-close, or a supersession. For a user who closes their account and never
+ * comes back, no transition fires again, this function reads 0 and the hard delete goes through,
+ * exactly as before. That case is closed by narrowing the classifier, which is SONNY-313's.
  *
  * **The second disjunct does not require a closed account, and that is the point.** A supersession
  * on a *live* account is exactly the state SONNY-196 is about — Supabase re-keyed the subject
