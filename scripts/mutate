@@ -228,7 +228,10 @@ release_lock() {
 cleanup() {
   if [[ -n "$ACTIVE_FILE" && -f "$ACTIVE_BACKUP" ]]; then
     cp "$ACTIVE_BACKUP" "$ACTIVE_FILE" 2>/dev/null || true
-    printf '%s: interrupted mid-mutant — restored %s.\n' "$SCRIPT_NAME" "$ACTIVE_FILE" >&2
+    # `|| true` on every write from here down, because with SIGPIPE ignored a dead tee turns a
+    # printf into a failed command rather than a dead process — and under `set -e` a failed
+    # command in the EXIT trap would abandon the release below just as surely as the signal did.
+    printf '%s: interrupted mid-mutant — restored %s.\n' "$SCRIPT_NAME" "$ACTIVE_FILE" >&2 || true
     ACTIVE_FILE=""
   fi
   if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
@@ -244,23 +247,61 @@ cleanup() {
 # stdout. Both streams, so a die() and the `set -u` sentinel below land in the report too — those
 # are the runs whose evidence is worth most and the ones a caller is least likely to have kept.
 #
-# **The `trap '' INT TERM` around the tee is load-bearing.** The tee sits in this script's process
-# group, so a signal aimed at the group reaches it as well. Kill the tee and this shell's next
-# write to the fifo is a broken pipe, and SIGPIPE's default action kills the process outright —
-# including a write from inside the EXIT trap, which is where every restore, release and warning
-# in this file lives. Measured on this script with only that trap removed and a stand-in that
-# TERMs the tee mid-mutant: exit 141 instead of 0, and a report ending at the last line printed
-# before the kill with no summary under it. What did NOT go wrong in that measurement is worth
-# recording too, so nobody claims more for this trap than it does: cleanup() writes nothing on
-# that path, so the tree was restored and the lock released before assert_intended_exit's own
-# printf took the signal. The loss is the evidence and the exit code — a run that ended early with
-# nothing anywhere saying it had. A death landing between apply_mutant and the restore would cost
-# more, and this trap is what keeps that reachable only by SIGKILL, which is SONNY-347's case.
-# Ctrl-C alone happens to be survivable either way, because bash already ignores SIGINT in a
-# background job of a non-interactive shell — which is precisely why trusting that is not enough.
+# ---------------------------------------------------------------------------------------------
+# THE SIGNAL PROBLEM, ENUMERATED. Read this before changing either trap below.
+#
+# Putting a tee between this shell and its own stdout introduces a hazard the script did not have:
+# the tee is a process, it sits in this script's process group, and if it dies first then every
+# subsequent write here goes to a pipe with no reader. That is not a failed write. It is SIGPIPE,
+# and its default action kills the process outright with no trap run at all — so the restore, the
+# lock release and the "this is not a battery result" warning all simply never happen.
+#
+# The first version of this trapped INT and TERM, which was arrived at by listing the cases that
+# had been measured. That is the wrong method and it missed the likeliest signal of the lot. What
+# follows is the enumeration instead: every route by which a signal reaches a background process in
+# this shell's group, and for each, whether the EXIT trap survives it.
+#
+#   INT   (Ctrl-C; kill -INT -pgid)      Bash already sets SIG_IGN on SIGINT for a background job
+#                                        of a non-interactive shell, so the tee survives with or
+#                                        without us. Trapped here anyway, so this does not depend
+#                                        on a shell behaviour nothing in the file asserts.
+#                                        EXIT trap survives.
+#   QUIT  (Ctrl-\; kill -QUIT -pgid)     Same POSIX SIG_IGN, same reasoning. EXIT trap survives.
+#   TERM  (kill -TERM -pgid; shutdown)   NOT ignored for background jobs. Trapped. Without the
+#                                        trap: measured exit 141. EXIT trap survives.
+#   HUP   (terminal closed, ssh dropped, NOT ignored for background jobs, and the likeliest way a
+#          session leader exits)         forty-minute battery actually ends. Trapped — and this is
+#                                        the one the first version missed. EXIT trap survives.
+#   TSTP / TTIN / TTOU (Ctrl-Z)          Default action is STOP, not terminate. The whole group
+#                                        stops and resumes together, the fifo is never closed, and
+#                                        nothing is lost. Deliberately not trapped: suspending a
+#                                        battery should suspend its report writer too.
+#   any other catchable terminating      Reaches the tee and kills it. Not enumerable as a list
+#   signal sent to the group             worth trapping, which is the point below.
+#   KILL                                 Cannot be caught or ignored, by anyone, ever.
+#
+# The last two rows are why a longer ignore-list is not the answer: SIGKILL on the tee, or the
+# caller's own stdout going away underneath it, leaves this shell writing into a dead pipe no
+# matter what the tee ignores. **So the second layer is that this shell ignores SIGPIPE itself**,
+# armed at the end of report_begin. A dead tee then costs a failed write instead of the process,
+# the EXIT trap always runs, and the tree and the lock are always put back — the report simply
+# ends where the tee did.
+#
+# Measured on this script before that layer existed, with a stand-in that HUPs the tee and this
+# shell mid-mutant, three runs of three: exit 141, `.git/mutate.lock` still held, sample.swift
+# still carrying the mutant, and nothing printed anywhere. cleanup() was never entered — traced
+# with a marker written to a file rather than inferred. That is SONNY-347's own failure mode,
+# reached through the fix for SONNY-356, which is why the answer here is structural rather than
+# three more tokens.
+#
+# Ignoring SIGPIPE must not travel into the suite, or this harness would be changing what it
+# measures. run_suite resets it to the default in a subshell before exec'ing the command, which is
+# checked rather than assumed: `( trap - PIPE; exec perl -e '...' )` reports DEFAULT while the same
+# probe without the reset reports IGNORE.
 #
 # The fifo lives in WORKDIR, so cleanup() unlinking that directory is fine: both ends already hold
 # it open, and a POSIX unlink does not disturb an open file.
+# ---------------------------------------------------------------------------------------------
 report_begin() {
   local path="$1" fifo
   [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "internal error: no work directory for the report fifo"
@@ -270,12 +311,16 @@ report_begin() {
   rm -f "$fifo"
   mkfifo "$fifo" || die "could not create the report fifo at $fifo"
   : >"$path" || die "could not write this run's report at $path"
-  ( trap '' INT TERM; exec tee -a "$path" ) <"$fifo" &
+  ( trap '' INT QUIT TERM HUP; exec tee -a "$path" ) <"$fifo" &
   REPORT_TEE_PID=$!
   # Kept so the drain can put them back: restoring them is what closes the fifo's write end, which
   # is the only thing that tells the tee the run is over.
   exec 9>&1 8>&2
   exec >"$fifo" 2>&1
+  # The second layer from the enumeration above, and the only one that covers a SIGKILLed tee. From
+  # here on a dead reader costs this shell a failed write rather than its life, so the EXIT trap
+  # runs whatever happens and the tree and the lock are always put back.
+  trap '' PIPE
   REPORT_PATH="$path"
 }
 
@@ -294,9 +339,9 @@ report_drain() {
 assert_intended_exit() {
   if [[ -z "$MUTATE_EXIT_INTENDED" ]]; then
     printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     printf '%s: any output above this line is not a battery result. See the error above it.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     report_drain
     exit 1
   fi
@@ -516,6 +561,14 @@ Output:
                     THIS RUN OWNS IT — no caller can name it and no other run writes it. The path
                     is printed in the header, before the first suite starts, and again in the
                     summary.
+
+  ONE BEHAVIOUR CHANGED, and it is worth knowing before you redirect: everything this run writes
+  now leaves on STDOUT. The tee is a single sink, so stderr is merged into stdout at the top of the
+  run and the caller's own stderr receives nothing at all — `2>` on this command captures an empty
+  file. That is the price of a report whose line order is the run's: two tees, one per stream,
+  would interleave into the report file in an order neither stream can predict, and a report you
+  cannot trust the order of is worse than one that arrives on the wrong fd. `1>` or `&>` capture
+  everything; `2>&1` is now redundant rather than wrong.
 
   Redirect the run wherever you like as well; that has always worked and still does. What it is no
   longer is the only copy. A report is a battery's entire product — tens of minutes of machine
@@ -1185,7 +1238,12 @@ PY
 run_suite() {
   local log="$1"
   local code=0
-  bash -c "$TEST_CMD" >"$log" 2>&1 || code=$?
+  # `trap - PIPE` before the exec, because report_begin leaves SIGPIPE ignored in this shell and an
+  # ignored disposition is inherited across fork and exec. A suite running with SIGPIPE ignored is
+  # a suite in a different environment from the one a session runs by hand, and this script's whole
+  # claim is that isolating a battery does not change what it measures. Verified rather than
+  # assumed: the same probe reports DEFAULT with the reset and IGNORE without it.
+  ( trap - PIPE; exec bash -c "$TEST_CMD" ) >"$log" 2>&1 || code=$?
   return "$code"
 }
 
@@ -2387,34 +2445,32 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
     "$(cat "$reported_path" 2>/dev/null || true)" "0 matches — REFUSED"
 
   # --------------------------------------------------------------------------------------------
-  # And the hazard the report mechanism itself introduces, which is the one that would make this
-  # change a net loss if it were left open. The tee sits in this script's process group, so a
-  # signal aimed at the group reaches it too. Kill it and this shell's next write to the fifo is a
-  # broken pipe, and SIGPIPE's default action kills the process outright — including a write from
-  # inside the EXIT trap, which is where the whole safety net lives. `trap '' INT TERM` before the
-  # tee execs is what prevents that, and this arm is what watches it fire.
+  # The signal enumeration above report_begin, watched firing. Three arms: one per catchable signal
+  # the tee ignores, and one for the case nothing can catch.
   #
-  # WHICH TWO CHECKS CARRY THIS ARM, because the others hold either way and a check that cannot
-  # fail is worth saying so about rather than counting. Measured against this same script with only
-  # that trap removed: **the exit code** becomes 141 rather than 0, and **the report** ends at the
-  # last line printed before the kill with no summary under it — those two fail. The tree check
-  # below passes in both versions, because the death lands at the first write AFTER run_suite
-  # returns, which is one statement after the restore; it is kept as an invariant, not as this
-  # arm's evidence. So does a lock check, which is why there is not one: cleanup() writes nothing
-  # on this path, so release_lock runs and the lock is gone before assert_intended_exit's own
-  # printf takes the SIGPIPE — the process dies 141 with the tree and the lock both already tidy,
-  # and nothing whatsoever printed to say the run had ended early. That silence is the defect.
+  # Every stand-in finds the tee the way a group signal would reach it — it is a child of the
+  # harness — and signals it directly, because signalling this selftest's OWN process group would
+  # take the selftest down with it. `$1 != me` is not tidiness: the stand-in is itself a child of
+  # the harness and its own command line contains the word `tee`, so without it the first thing any
+  # of these arms does is signal itself.
   # --------------------------------------------------------------------------------------------
+  local finds_the_tee='for pid in $(ps -A -o pid=,ppid=,command= \
+    | awk -v p=$PPID -v me=$$ '"'"'$2 == p && $1 != me && $0 ~ /tee/ { print $1 }'"'"'); do'
+
   printf '\n==> A signal aimed at the tee does not take the harness down with it\n'
-  # Gated on the mutant being in the file, so the kill lands during a MUTANT's suite rather than
-  # during the baseline — the window where a death has something to leave behind. `$1 != me` is
-  # not tidiness either: this stand-in is itself a child of the harness and its own command line
-  # contains the word `tee`, so without it the arm's first act is to TERM itself.
-  local terms_the_report_writer='printf "◇  Test run started.\n"
+  # TERM and HUP, because the tee's ignore-list is what these watch and HUP is the one the first
+  # version of it missed. **The tee is signalled and this shell is NOT**, deliberately: an arm that
+  # signals both is betting on which of two deliveries bash processes first, and that bet loses
+  # under load — it did, twice, on a run sharing the machine with a server suite, reporting
+  # `expected [129], got [0]`. Nothing is lost by dropping the second signal, because the tee's
+  # death is the whole discriminator: with the signal ignored the battery finishes normally, and
+  # without it this shell takes SIGPIPE at its next write. The group-signal behaviour end to end is
+  # measured in the changelog, where a wall-clock race belongs and a selftest arm does not.
+  for signal in TERM HUP; do
+    local signals_the_report_writer='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  for pid in $(ps -A -o pid=,ppid=,command= \
-    | awk -v p=$PPID -v me=$$ '"'"'$2 == p && $1 != me && $0 ~ /tee/ { print $1 }'"'"'); do
-    kill -TERM "$pid" 2>/dev/null || true
+  '"$finds_the_tee"'
+    kill -'"$signal"' "$pid" 2>/dev/null || true
   done
   sleep 1
   printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
@@ -2422,13 +2478,55 @@ if grep -q "hour < 13" sample.swift; then
   exit 1
 fi
 printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
-  st_run "$terms_the_report_writer" "$root/kill.plan"
-  reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
-  st_eq "the battery still finishes and exits 0" "$ST_EXIT" "0"
-  st_contains "and the report is whole rather than ending where the tee died" \
-    "$(cat "$reported_path" 2>/dev/null || true)" "Every mutant was killed"
-  st_eq "the tree is back to what HEAD says (an invariant, not this arm's evidence)" \
-    "$(git status --porcelain)" ""
+    st_run "$signals_the_report_writer" "$root/kill.plan"
+    reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+    st_eq "SIG$signal: the battery still finishes and exits 0" "$ST_EXIT" "0"
+    st_contains "SIG$signal: and the report is whole, not ending where the tee died" \
+      "$(cat "$reported_path" 2>/dev/null || true)" "Every mutant was killed"
+    st_eq "SIG$signal: the tree is back to what HEAD says" "$(git status --porcelain)" ""
+    if [[ -e ".git/mutate.lock" ]]; then
+      st_fail "SIG$signal: the lock was left held"
+    else
+      st_pass "SIG$signal: and the lock was released"
+    fi
+    # Put the fixture back before the next signal, AFTER the assertions have read it. An arm that
+    # fails leaves a mutant in the file and a lock in .git/, and every battery after it in this one
+    # repository then fails for that reason instead of its own — measured at 96 failures where 4
+    # were the finding.
+    git checkout -- sample.swift 2>/dev/null || true
+    rm -rf -- .git/mutate.lock
+  done
+
+  printf '\n==> A SIGKILLed report writer costs the report and nothing else\n'
+  # The case no ignore-list can reach, which is why the second layer is this shell ignoring SIGPIPE
+  # rather than the tee ignoring more signals. Nothing catches SIGKILL. What must survive it is the
+  # EXIT trap: the tree goes back and the lock comes off, and only the tail of the report is lost.
+  local kills_the_report_writer='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  '"$finds_the_tee"'
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  sleep 1
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+  st_run "$kills_the_report_writer" "$root/kill.plan"
+  if [[ "$ST_EXIT" -eq 141 ]]; then
+    st_fail "the battery died on a broken pipe when the report writer was killed" \
+      "exit 141 — no EXIT trap ran at all"
+  else
+    st_pass "the battery did not die on a broken pipe (exit $ST_EXIT)"
+  fi
+  st_eq "the tree is back to what HEAD says" "$(git status --porcelain)" ""
+  if [[ -e ".git/mutate.lock" ]]; then
+    st_fail "the lock was left held after the report writer was killed"
+  else
+    st_pass "and the lock was released even though the report writer was killed"
+  fi
+  git checkout -- sample.swift 2>/dev/null || true
+  rm -rf -- .git/mutate.lock
 
   printf '\n==> A survivor is loud, distinguishable, and exits non-zero\n'
   st_run "$always_pass" "$root/kill.plan"

@@ -123,6 +123,8 @@ several lanes at once (SONNY-355):
 LANE="$(basename "$(git rev-parse --show-toplevel)")"
 docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
 PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+: "${PORT:?no host port — did the docker run above fail?}"
+until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
 DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm test
 docker rm -f "sonny-gw-db-$LANE"
 ```
@@ -131,13 +133,25 @@ Nothing there is yours to choose, deliberately: `$LANE` is the worktree's own di
 `-p 0:5432` asks Docker for any free host port, which `docker port` then reads back. A placeholder
 somebody is expected to edit becomes one fixed pair again the first time it is pasted unedited.
 
+**The two middle lines are load-bearing.** `docker run -d` returns when the container has *started*,
+not when Postgres accepts connections — `initdb` runs first, measured twice on one Mac 2026-08-29 at
+**38 seconds and 11 seconds** — so a suite launched immediately fails with `Connection terminated
+unexpectedly` and nothing else. And an empty `PORT` would leave `localhost:/postgres`, which
+Postgres reads as the default **5432**: a fixed port arriving by accident through the fix for fixed
+ports, so the guard fails instead.
+
 `npm run test:db` falls back to `localhost:55433` when `DATABASE_URL` is unset, which is right for a
-single session and is precisely what breaks with two. **What a collision looks like:** a suite-wide
-connection failure — `Connection terminated unexpectedly`, most files red — with a fresh `initdb`
-in `docker logs` inside that run's window, and nothing in the test output naming a cause. That is
-another lane's container, not a defect in your branch. Discard the run and re-run against your own.
-The quiet direction is worse and is not ruled out: two lanes on one live database can produce a
-*pass* that leaned on rows the other lane wrote.
+single session and is precisely what breaks with two.
+
+**Two different things produce the same failure, and neither is a defect in your branch.** Both look
+like a suite-wide connection failure — `Connection terminated unexpectedly`, most files red — with a
+fresh `initdb` in a container log inside the run's window. Tell them apart by whose container that
+`initdb` is in. Your own, at the start of your run: the database was still initialising, so wait for
+readiness and re-run. A container you did not start, or an `initdb` in yours part-way through a run
+that had been working: that is another lane, only reachable if one of you is using a fixed name and
+port rather than the derived ones above. `docker logs "sonny-gw-db-$LANE"` and `docker ps` answer
+which. The quiet direction is worse and is not ruled out: two lanes on one live database can produce
+a *pass* that leaned on rows the other lane wrote.
 
 ## Retention: what is kept, for how long, and how it goes (SONNY-134)
 
