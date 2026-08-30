@@ -1,6 +1,7 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { up } from "../src/db/migrate.js";
+import { describe, expect } from "vitest";
+import { rebuildSchema } from "./support/schema.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import {
   claimKey,
   completeClaim,
@@ -123,15 +124,15 @@ describeDb("the metering event table", () => {
     expect(outcome.kind).toBe("claimed");
   };
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     await client.end();
   });
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.metering_event");
     await client.query("TRUNCATE sonny.idempotency_key");
   });
@@ -152,7 +153,7 @@ describeDb("the metering event table", () => {
   };
 
   describe("the shape §11 asks for", () => {
-    it("holds no content column, and the whole column set is the assertion", async () => {
+    itUnderHangBackstop("holds no content column, and the whole column set is the assertion", async () => {
       // **§10.3's two clocks rest entirely on this.** Usage lives indefinitely and raw content lives
       // 30 days; a single content column here would put this table on the short clock by accident and
       // nothing would say so. The assertion is the *population* rather than a search for likely
@@ -194,7 +195,7 @@ describeDb("the metering event table", () => {
       ]);
     });
 
-    it("round-trips every field of an event", async () => {
+    itUnderHangBackstop("round-trips every field of an event", async () => {
       await insertMeteringEvent(client, event({ failedOver: ["openai", "cerebras"] }));
       const [row] = await rows();
       expect(row).toMatchObject({
@@ -228,7 +229,7 @@ describeDb("the metering event table", () => {
       expect(row!["occurred_at"]).toBeInstanceOf(Date);
     });
 
-    it("keeps a null token count as null rather than as zero", async () => {
+    itUnderHangBackstop("keeps a null token count as null rather than as zero", async () => {
       // The vision route's ordinary state — `model/vision.ts` reports nothing when the provider did
       // and estimates nothing — and the one a reader must be able to tell from a measured zero.
       await insertMeteringEvent(
@@ -240,7 +241,7 @@ describeDb("the metering event table", () => {
       expect(row!["token_source"]).toBeNull();
     });
 
-    it("refuses a route, an outcome, a token source or a retention the contract does not name", async () => {
+    itUnderHangBackstop("refuses a route, an outcome, a token source or a retention the contract does not name", async () => {
       // The CHECK constraints, which are what stop a typo from becoming a category nothing queries.
       const refusals: [keyof MeteringEvent, unknown][] = [
         ["route", "screen.analyse"],
@@ -257,7 +258,7 @@ describeDb("the metering event table", () => {
   });
 
   describe("at most once per idempotency key, ever", () => {
-    it("writes one event and refuses the second attempt under the same key", async () => {
+    itUnderHangBackstop("writes one event and refuses the second attempt under the same key", async () => {
       await takeKey();
       expect(await writeMeteringEvent(client, event(), KEY)).toBe("written");
       expect(await writeMeteringEvent(client, event({ requestId: "second" }), KEY)).toBe(
@@ -267,7 +268,7 @@ describeDb("the metering event table", () => {
       expect((await rows())[0]!["request_id"]).toBe("11111111-2222-4333-8444-555555555555");
     });
 
-    it("holds under concurrency, which is the only thing that makes it a guarantee", async () => {
+    itUnderHangBackstop("holds under concurrency, which is the only thing that makes it a guarantee", async () => {
       // **The claim is an `UPDATE … WHERE metering_claimed_at IS NULL`, and this is the property
       // that sentence rests on.** Ten connections race for one key; Postgres serialises the update
       // and nine of them match zero rows. A test on one connection cannot fail here, which is why
@@ -298,7 +299,7 @@ describeDb("the metering event table", () => {
       }
     });
 
-    it("scopes the claim to the account, so two accounts may use one key", async () => {
+    itUnderHangBackstop("scopes the claim to the account, so two accounts may use one key", async () => {
       // §9.2's keys are scoped so one account's cannot collide with — or replay — another's. A
       // global key space would let one account's request silence another's bill.
       await takeKey();
@@ -310,7 +311,7 @@ describeDb("the metering event table", () => {
       expect(await rows()).toHaveLength(2);
     });
 
-    it("meters every keyless write, because none of them has a guarantee to share", async () => {
+    itUnderHangBackstop("meters every keyless write, because none of them has a guarantee to share", async () => {
       // SONNY-300's trap avoided at the level below the hook: with no key there is no row and no
       // claim, and treating that as "already metered" would make every keyless call free.
       expect(await writeMeteringEvent(client, event({ idempotencyKey: null }), null)).toBe("written");
@@ -321,7 +322,7 @@ describeDb("the metering event table", () => {
       expect(await meteringEventClaimed(client, { accountScope: ACCOUNT, key: KEY })).toBeNull();
     });
 
-    it("gives the claim back when the insert fails, so the event is not lost with it", async () => {
+    itUnderHangBackstop("gives the claim back when the insert fails, so the event is not lost with it", async () => {
       // **The reason SONNY-300's read API takes the caller's own client.** Claim and insert are one
       // transaction: a failed insert must not leave a taken claim behind, because that key would
       // then be permanently unbillable while nothing had been recorded. Driven with a row the CHECK
@@ -337,7 +338,7 @@ describeDb("the metering event table", () => {
       expect(await rows()).toHaveLength(1);
     });
 
-    it("survives the key store releasing and re-claiming the key, which is what a retry does", async () => {
+    itUnderHangBackstop("survives the key store releasing and re-claiming the key, which is what a retry does", async () => {
       // §9.2's founder decision of 2026-08-28: a retryable failure releases the key so the retry
       // genuinely re-runs — and `releaseClaim` deliberately does not clear `metering_claimed_at`, so
       // the second run's usage goes unbilled. This is that sentence as two calls.
@@ -361,7 +362,7 @@ describeDb("the metering event table", () => {
       expect(await rows()).toHaveLength(1);
     });
 
-    it("records an event whose key names no row, rather than losing it to an ambiguous false", async () => {
+    itUnderHangBackstop("records an event whose key names no row, rather than losing it to an ambiguous false", async () => {
       // **SONNY-300's trap, driven rather than described.** `claimMeteringEvent` answers `false`
       // both for "already taken" and for "there is no row", and reading the second as the first
       // would serve a call for free with nothing anywhere saying so. Unreachable from the gateway —
@@ -377,7 +378,7 @@ describeDb("the metering event table", () => {
       expect(await rows()).toHaveLength(2);
     });
 
-    it("is the same guarantee through postgresMeteringStore", async () => {
+    itUnderHangBackstop("is the same guarantee through postgresMeteringStore", async () => {
       // The store the running gateway actually uses, over a connection it leases per call — so the
       // claim and the insert are one transaction on one connection rather than two on two.
       await takeKey();
@@ -389,7 +390,7 @@ describeDb("the metering event table", () => {
   });
 
   describe("the usage clock is not the content clock", () => {
-    it("keeps an event far older than the content retention window", async () => {
+    itUnderHangBackstop("keeps an event far older than the content retention window", async () => {
       // §10.3: raw content on the short clock (30 days), derived metrics and usage indefinitely.
       // Back-dated four hundred days, which is past every content window this project has named.
       await insertMeteringEvent(client, event());
@@ -403,7 +404,7 @@ describeDb("the metering event table", () => {
       expect(await screenControlSessionCosts(client)).toHaveLength(1);
     });
 
-    it("is untouched by every sweep this gateway has", async () => {
+    itUnderHangBackstop("is untouched by every sweep this gateway has", async () => {
       // **Enumerated rather than asserted in general**, because "nothing deletes it" is a negative
       // and the evidence for one lives everywhere you did not look. The gateway has exactly two
       // operations that remove data on a clock or on request, both in `idempotency/store.ts`, and
@@ -443,7 +444,7 @@ describeDb("the metering event table", () => {
   });
 
   describe("what a screen-control session cost", () => {
-    it("sums twelve iterations into one session, which is the figure SONNY-17 waits on", async () => {
+    itUnderHangBackstop("sums twelve iterations into one session, which is the figure SONNY-17 waits on", async () => {
       // A full session at the cap (`VisionSessionLimits.default.maximumIterations` is 12). The
       // gateway holds no session state, so this is the only shape the figure can take: a GROUP BY
       // over the events sharing one client-minted `session_id`.
@@ -471,7 +472,7 @@ describeDb("the metering event table", () => {
       expect(cost!.retentions).toEqual(["standard"]);
     });
 
-    it("counts the iterations a provider reported no tokens for, so a zero is never read as measured", async () => {
+    itUnderHangBackstop("counts the iterations a provider reported no tokens for, so a zero is never read as measured", async () => {
       // The number that stops the whole figure from being misread. Three iterations reported
       // nothing; the token sum is honestly lower, and `iterationsWithoutTokens` is what says the
       // difference is an absence rather than a cheap call.
@@ -489,7 +490,7 @@ describeDb("the metering event table", () => {
       expect(cost!.pixels).toBe(5 * 2406 * 1354);
     });
 
-    it("keeps reported and estimated tokens apart rather than summing them", async () => {
+    itUnderHangBackstop("keeps reported and estimated tokens apart rather than summing them", async () => {
       // §4.2's `usage.source` exists so a summary can say which numbers a provider measured, and one
       // sum would erase exactly that.
       for (const iteration of session("session-c", 4)) await insertMeteringEvent(client, iteration);
@@ -501,7 +502,7 @@ describeDb("the metering event table", () => {
       expect(cost!.estimatedTotalTokens).toBe(2 * 1940);
     });
 
-    it("includes an incognito session, and says that is what it was", async () => {
+    itUnderHangBackstop("includes an incognito session, and says that is what it was", async () => {
       // §10.1: metering runs either way. A per-session cost that quietly dropped these would make
       // exactly the runs a user asked not to store into free ones.
       for (const iteration of session("session-private", 3, { retention: "none" })) {
@@ -513,7 +514,7 @@ describeDb("the metering event table", () => {
       expect(cost!.reportedTotalTokens).toBe(3 * 1940);
     });
 
-    it("counts an iteration that failed and one the caller abandoned, both of which cost money", async () => {
+    itUnderHangBackstop("counts an iteration that failed and one the caller abandoned, both of which cost money", async () => {
       for (const iteration of session("session-d", 3)) await insertMeteringEvent(client, iteration);
       await client.query(
         "UPDATE sonny.metering_event SET outcome = 'provider_error' WHERE session_iteration = 2",
@@ -526,7 +527,7 @@ describeDb("the metering event table", () => {
       expect(cost!.iterations).toBe(3);
     });
 
-    it("separates two sessions and orders them newest first", async () => {
+    itUnderHangBackstop("separates two sessions and orders them newest first", async () => {
       for (const iteration of session("session-old", 2)) await insertMeteringEvent(client, iteration);
       await client.query("UPDATE sonny.metering_event SET occurred_at = now() - interval '2 days'");
       for (const iteration of session("session-new", 3)) await insertMeteringEvent(client, iteration);
@@ -536,7 +537,7 @@ describeDb("the metering event table", () => {
       expect(costs.map((cost) => cost.iterations)).toEqual([3, 2]);
     });
 
-    it("narrows to one account, one session and one time window", async () => {
+    itUnderHangBackstop("narrows to one account, one session and one time window", async () => {
       for (const iteration of session("session-mine", 2)) await insertMeteringEvent(client, iteration);
       for (const iteration of session("session-theirs", 2, { accountId: OTHER_ACCOUNT })) {
         await insertMeteringEvent(client, iteration);
@@ -554,7 +555,7 @@ describeDb("the metering event table", () => {
       ).toEqual([]);
     });
 
-    it("ignores a session id that somehow reached another route", async () => {
+    itUnderHangBackstop("ignores a session id that somehow reached another route", async () => {
       // §2.4 puts `session_id` on `/v1/screen/analyze` alone, so a row from another route carrying
       // one is a client bug — and it must not be able to inflate a screen-control figure.
       for (const iteration of session("session-e", 2)) await insertMeteringEvent(client, iteration);
@@ -575,7 +576,7 @@ describeDb("the metering event table", () => {
   });
 
   describe("what every route cost", () => {
-    it("totals each route separately, in §11's own order", async () => {
+    itUnderHangBackstop("totals each route separately, in §11's own order", async () => {
       const calls: [MeteredRoute, Partial<MeteringEvent>][] = [
         ["plan", { tokenSource: "estimated", imageBytes: null, sessionId: null, sessionIteration: null }],
         ["research.synthesize", { imageBytes: null, sessionId: null, sessionIteration: null }],
@@ -606,7 +607,7 @@ describeDb("the metering event table", () => {
   });
 
   describe("the founder command", () => {
-    it("answers the per-session screen-control question in one report", async () => {
+    itUnderHangBackstop("answers the per-session screen-control question in one report", async () => {
       // The ticket's own acceptance criterion, on real rows: "the query path answers the per-session
       // screen-control cost question". Asserted on the rendered text, because the text is what a
       // founder actually reads.
@@ -623,7 +624,7 @@ describeDb("the metering event table", () => {
       expect(report).toContain("SONNY-114");
     });
 
-    it("prints no price on any of the three reports, which is the never-touch list asserted", async () => {
+    itUnderHangBackstop("prints no price on any of the three reports, which is the never-touch list asserted", async () => {
       // **All three, not just `sessions`** (PR #147's review, F8 — this covered one and the PR body
       // generalised it). The ticket's never-touch list is one line: no price, no plan, no tier, no
       // credit weight, and no number that implies one. SONNY-17 turns these figures into money;
@@ -672,11 +673,11 @@ describeDb("the metering event table", () => {
       expect(reports.span).toContain("5 metering event(s)");
     });
 
-    it("says nothing rather than an empty table when the window holds no session", async () => {
+    itUnderHangBackstop("says nothing rather than an empty table when the window holds no session", async () => {
       expect(await reportSessions(client, {})).toBe("no screen-control sessions in this window\n");
     });
 
-    it("reports how far back usage goes, which is the two clocks made visible", async () => {
+    itUnderHangBackstop("reports how far back usage goes, which is the two clocks made visible", async () => {
       await insertMeteringEvent(client, event());
       await client.query("UPDATE sonny.metering_event SET occurred_at = now() - interval '400 days'");
       const report = await reportSpan(client, {});

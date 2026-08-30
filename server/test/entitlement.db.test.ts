@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import {
   ACCOUNT_REQUESTS,
   CODE_REQUEST_PER_ADDRESS,
@@ -10,7 +10,8 @@ import {
   staleWindowsBefore,
   sweep as sweepRateLimitWindows,
 } from "../src/auth/ratelimit.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
   admitRequest,
@@ -69,18 +70,18 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
     return extra;
   };
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
 
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     for (const extra of opened) await extra.end();
     await client.end();
   });
 
-  beforeEach(async () => {
+  beforeEachUnderHangBackstop(async () => {
     await client.query(
       "TRUNCATE sonny.usage_reservation, sonny.usage_period, sonny.entitlement, sonny.auth_rate_limit",
     );
@@ -129,7 +130,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
     reserve(on, { accountId, capUnits, amount: unitsForMeteredCall(), now: NOW });
 
   describe("two requests racing the cap", () => {
-    it("refuses the second when only one fits — the ordering forced, not hoped for", async () => {
+    itUnderHangBackstop("refuses the second when only one fits — the ordering forced, not hoped for", async () => {
       await openPeriod(ACCOUNT, 1);
 
       // The first racer, standing in for a reserve that has run its `UPDATE` and not yet committed.
@@ -172,7 +173,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(holds.rows[0].n).toBe(0);
     });
 
-    it("admits the second when the first rolls back — the outcome the other ordering cannot give", async () => {
+    itUnderHangBackstop("admits the second when the first rolls back — the outcome the other ordering cannot give", async () => {
       // The same setup and the same forced block, differing in one thing: the first racer's
       // transaction ends in ROLLBACK. If the second racer were deciding from its own start snapshot
       // it would answer the same either way; it does not, which is what the pair proves.
@@ -200,12 +201,16 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("many requests racing the cap", () => {
-    // **The timeout is a hang backstop and not a threshold this test races.** Fifty connections and
-    // fifty transactions serializing on one row take a few seconds on a laptop's container, which is
-    // comfortably inside this and comfortably outside vitest's 5-second default. Nothing here
-    // asserts an elapsed time; the only way to reach this bound is for the race never to finish,
-    // which `CLAUDE.md` calls the one wall-clock construct that is safe.
-    it("lets exactly as many through as fit, and lands on the cap", { timeout: 60_000 }, async () => {
+    // **The deadline is a hang backstop and not a threshold this test races.** Fifty connections
+    // and fifty transactions serializing on one row take a few seconds on a laptop's container,
+    // which is comfortably inside the backstop and comfortably outside vitest's 5-second default.
+    // Nothing here asserts an elapsed time; the only way to reach the bound is for the race never to
+    // finish, which `CLAUDE.md` calls the one wall-clock construct that is safe. This used to be a
+    // hand-written `{ timeout: 60_000 }`, which set vitest's ceiling and nothing else — so reaching
+    // it produced `Test timed out in 60000ms.`, a message every test in the repository shares and
+    // no declaration can safely cover, and a battery counted it as a kill. SONNY-354 moved it and
+    // every other database test onto `itUnderHangBackstop`, whose wording is declared.
+    itUnderHangBackstop("lets exactly as many through as fit, and lands on the cap", async () => {
       // Fifty concurrent reservations against a cap of ten. Every one of them runs the real
       // `reserve` on its own connection, which is what a burst of real requests is.
       const CONCURRENCY = 50;
@@ -233,7 +238,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
         .toBe(CAP);
     });
 
-    it("theNaiveReadThenWriteOverspends — the control, without which this proves nothing", async () => {
+    itUnderHangBackstop("theNaiveReadThenWriteOverspends — the control, without which this proves nothing", async () => {
       // §9.4: "a race test with no control passes whether or not the property holds." This is the
       // implementation the single statement replaced — read the counter, decide, write it back — run
       // as the same race against the same cap, on a table with no CHECK so the over-spend is
@@ -268,7 +273,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       await client.query("DROP TABLE naive");
     });
 
-    it("keeps the CHECK as a backstop that makes an over-spend structurally impossible", async () => {
+    itUnderHangBackstop("keeps the CHECK as a backstop that makes an over-spend structurally impossible", async () => {
       // §9.4's other half: the constraint is a real backstop and a bad interface. It is kept so that
       // a reserve rewritten badly cannot exceed the cap, and it is never what a caller meets —
       // `reserve` refuses cleanly before this can fire.
@@ -283,7 +288,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("settling a hold", () => {
-    it("moves a charged hold into spent, and leaves the total untouched", async () => {
+    itUnderHangBackstop("moves a charged hold into spent, and leaves the total untouched", async () => {
       await openPeriod(ACCOUNT, 10);
       const held = await reserveOne(client, ACCOUNT, 10);
       expect(held.kind).toBe("reserved");
@@ -297,7 +302,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect([after.spent, after.reserved]).toEqual([1, 0]);
     });
 
-    it("gives a released hold back, spending nothing", async () => {
+    itUnderHangBackstop("gives a released hold back, spending nothing", async () => {
       await openPeriod(ACCOUNT, 10);
       const held = await reserveOne(client, ACCOUNT, 10);
       await settle(client, (held as { reservationId: string }).reservationId, false);
@@ -305,7 +310,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect([after.spent, after.reserved]).toEqual([0, 0]);
     });
 
-    it("charges once when a settle is retried, which the response path can do", async () => {
+    itUnderHangBackstop("charges once when a settle is retried, which the response path can do", async () => {
       await openPeriod(ACCOUNT, 10);
       const held = await reserveOne(client, ACCOUNT, 10);
       const id = (held as { reservationId: string }).reservationId;
@@ -317,7 +322,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect([after.spent, after.reserved]).toEqual([1, 0]);
     });
 
-    it("cannot be pushed over the cap by a settle, in either direction", async () => {
+    itUnderHangBackstop("cannot be pushed over the cap by a settle, in either direction", async () => {
       // A charge moves a unit from `reserved` to `spent` and leaves the sum alone; a release lowers
       // `reserved`. Neither can trip the backstop, which is why `settle` needs no cap check.
       await openPeriod(ACCOUNT, 2);
@@ -334,7 +339,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("the sweep that reclaims orphaned holds", () => {
-    it("reclaims EVERY expired hold across several accounts, not one per period", async () => {
+    itUnderHangBackstop("reclaims EVERY expired hold across several accounts, not one per period", async () => {
       // **The multi-orphan shape deliberately**, because the single-orphan version it replaced passed
       // against the broken sweep. `UPDATE … FROM` is a join: without the per-period aggregation,
       // Postgres applies one source row per target row and discards the rest, marking every hold
@@ -374,14 +379,14 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect((await period(ACCOUNT)).reserved).toBe(10);
     });
 
-    it("leaves a hold that has not expired alone, so a running request keeps its reservation", async () => {
+    itUnderHangBackstop("leaves a hold that has not expired alone, so a running request keeps its reservation", async () => {
       await openPeriod(ACCOUNT, 10);
       await reserveOne(client, ACCOUNT, 10);
       expect(await sweepExpiredReservations(client, NOW)).toBe(0);
       expect((await period()).reserved).toBe(1);
     });
 
-    it("does not reclaim a hold twice", async () => {
+    itUnderHangBackstop("does not reclaim a hold twice", async () => {
       await openPeriod(ACCOUNT, 10);
       await reserve(client, {
         accountId: ACCOUNT,
@@ -396,7 +401,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("the sweep an operator schedules", () => {
-    it("clears stale rate-limit windows as well as expired holds, from one command", async () => {
+    itUnderHangBackstop("clears stale rate-limit windows as well as expired holds, from one command", async () => {
       // **F4's answer, asserted rather than described.** The rate-limit table's sweep had no caller
       // outside a test, and this branch multiplied what it holds — a row per account per minute
       // rather than one per sign-in attempt. Both sweeps run from `npm run entitlements -- sweep`,
@@ -430,7 +435,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(left.rows[0]!.window_start.getTime()).toBe(live.getTime());
     });
 
-    it("never deletes a window inside the longest limit's own span", () => {
+    itUnderHangBackstop("never deletes a window inside the longest limit's own span", async () => {
       // **Written out by name rather than read off `ALL_LIMITS`** (cycle 3's N3). The first version
       // computed the expected value from the same array the implementation reads, so both sides
       // moved together and a limit missing from the array was invisible — and the direction that
@@ -450,7 +455,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("the cap a period was opened with", () => {
-    it("is copied at the first reserve and not re-read when the account's cap changes", async () => {
+    itUnderHangBackstop("is copied at the first reserve and not re-read when the account's cap changes", async () => {
       // A cap that changed mid-period would retroactively re-decide every refusal already issued: a
       // user told at the ceiling that they were out would, after an operator raised it, have been
       // silently not-out at the time they were told.
@@ -476,7 +481,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect((await period()).capUnits).toBe(1);
     });
 
-    it("opens the next period at the new cap, which is what a period boundary is for", async () => {
+    itUnderHangBackstop("opens the next period at the new cap, which is what a period boundary is for", async () => {
       await openPeriod(ACCOUNT, 1);
       await reserveOne(client, ACCOUNT, 1);
       const nextMonth = new Date("2026-09-01T00:00:01Z");
@@ -492,11 +497,10 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
     });
 
     // The same hang backstop, and the same reason, as the fifty-way race above: two connections and
-    // two transactions contending for one row are well inside this and can exceed vitest's
-    // five-second default under the load a mutation battery puts on the machine — measured, in a
-    // battery where this timeout was read as a mutant being caught. Nothing here asserts an elapsed
-    // time.
-    it("opens a period safely when two requests reach it at once", { timeout: 60_000 }, async () => {
+    // two transactions contending for one row are well inside it and can exceed vitest's five-second
+    // default under the load a mutation battery puts on the machine — measured, in a battery where
+    // this timeout was read as a mutant being caught. Nothing here asserts an elapsed time.
+    itUnderHangBackstop("opens a period safely when two requests reach it at once", async () => {
       // Two racers, no period row, one cap. The `INSERT … ON CONFLICT DO NOTHING` is idempotent and
       // decides nothing; the conditional `UPDATE` beside it decides everything, and it runs as its
       // own statement so it takes a fresh snapshot in which the winner's row is committed.
@@ -512,7 +516,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
   });
 
   describe("what an account is allowed", () => {
-    it("reads an absent row as no plan, no capabilities and the deployment's cap", async () => {
+    itUnderHangBackstop("reads an absent row as no plan, no capabilities and the deployment's cap", async () => {
       const record = await readEntitlement(client, ACCOUNT);
       expect(record).toEqual({
         accountId: ACCOUNT,
@@ -523,7 +527,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       });
     });
 
-    it("round-trips a grant, and a revoke strips the capabilities a claim would carry", async () => {
+    itUnderHangBackstop("round-trips a grant, and a revoke strips the capabilities a claim would carry", async () => {
       await grant(client, {
         accountId: ACCOUNT,
         plan: "test-plan",
@@ -551,7 +555,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect((await readEntitlement(client, ACCOUNT)).revokedAt).toBeNull();
     });
 
-    it("reports a revoke against an account with no row rather than reporting success", async () => {
+    itUnderHangBackstop("reports a revoke against an account with no row rather than reporting success", async () => {
       expect(await setRevoked(client, OTHER, true)).toBe(false);
     });
   });
@@ -568,25 +572,25 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
         ...overrides,
       });
 
-    it("admits a metered request with a hold, using the deployment cap when the account names none", async () => {
+    itUnderHangBackstop("admits a metered request with a hold, using the deployment cap when the account names none", async () => {
       const outcome = await admit();
       expect(outcome.kind).toBe("admitted");
       expect((outcome as { reservationId: string }).reservationId).toBeDefined();
       expect((await period()).capUnits).toBe(10);
     });
 
-    it("prefers the account's own cap over the deployment's", async () => {
+    itUnderHangBackstop("prefers the account's own cap over the deployment's", async () => {
       await grant(client, { accountId: ACCOUNT, plan: "p", capabilities: [], capUnits: 3 });
       await admit();
       expect((await period()).capUnits).toBe(3);
     });
 
-    it("honours an account capped at zero, which is an answer and not an absence", async () => {
+    itUnderHangBackstop("honours an account capped at zero, which is an answer and not an absence", async () => {
       await grant(client, { accountId: ACCOUNT, plan: "p", capabilities: [], capUnits: 0 });
       expect(await admit()).toEqual({ kind: "over_cap", capUnits: 0 });
     });
 
-    it("refuses a gated capability the account does not hold, and takes no hold doing it", async () => {
+    itUnderHangBackstop("refuses a gated capability the account does not hold, and takes no hold doing it", async () => {
       await grant(client, { accountId: ACCOUNT, plan: "p", capabilities: ["cap.other"], capUnits: 10 });
       const outcome = await admit({ requiredCapability: "cap.gated" });
       expect(outcome).toEqual({ kind: "not_entitled", capability: "cap.gated" });
@@ -594,19 +598,19 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(await readPeriodUsage(client, ACCOUNT, NOW)).toBeUndefined();
     });
 
-    it("admits a gated capability the account does hold", async () => {
+    itUnderHangBackstop("admits a gated capability the account does hold", async () => {
       await grant(client, { accountId: ACCOUNT, plan: "p", capabilities: ["cap.gated"], capUnits: 10 });
       expect((await admit({ requiredCapability: "cap.gated" })).kind).toBe("admitted");
     });
 
-    it("refuses a revoked account's gated capability, which is how a cancellation takes effect", async () => {
+    itUnderHangBackstop("refuses a revoked account's gated capability, which is how a cancellation takes effect", async () => {
       await grant(client, { accountId: ACCOUNT, plan: "p", capabilities: ["cap.gated"], capUnits: 10 });
       await setRevoked(client, ACCOUNT, true);
       expect(await admit({ requiredCapability: "cap.gated" }))
         .toEqual({ kind: "not_entitled", capability: "cap.gated" });
     });
 
-    it("stops at the rate limit before it reads an entitlement or takes a hold", async () => {
+    itUnderHangBackstop("stops at the rate limit before it reads an entitlement or takes a hold", async () => {
       // The order is policy: the cheapest refusal first, and the one that bounds how fast everything
       // below it can be driven. Asserted by exhausting the limit and then checking that the request
       // after it neither opened a period nor took a hold.
@@ -623,7 +627,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(await readPeriodUsage(client, ACCOUNT, NOW)).toBeUndefined();
     });
 
-    it("does not read an entitlement row for a route that gates on nothing and spends nothing", async () => {
+    itUnderHangBackstop("does not read an entitlement row for a route that gates on nothing and spends nothing", async () => {
       // Every authenticated route is rate limited; only some are worth a second query. Asserted by
       // the absence of a period row and by the admission carrying no hold.
       const outcome = await admit({ metered: false, requiredCapability: undefined });
@@ -631,7 +635,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(await readPeriodUsage(client, ACCOUNT, NOW)).toBeUndefined();
     });
 
-    it("counts each admission against the rate limit exactly once", async () => {
+    itUnderHangBackstop("counts each admission against the rate limit exactly once", async () => {
       for (let index = 0; index < 3; index += 1) await admit({ metered: false });
       const counted = await client.query<{ count: number }>(
         "SELECT count FROM sonny.auth_rate_limit WHERE bucket = $1",
@@ -640,7 +644,7 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
       expect(counted.rows[0]!.count).toBe(3);
     });
 
-    it("keeps one account's rate limit and cap away from another's", async () => {
+    itUnderHangBackstop("keeps one account's rate limit and cap away from another's", async () => {
       await admit();
       await admitRequest(client, {
         accountId: OTHER,

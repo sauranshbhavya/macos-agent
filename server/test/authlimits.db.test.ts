@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import {
   CODE_LIFETIME_SECONDS, FAILURE_DISCLOSURE_SECONDS, classifyFailure, consumeLatest,
   invalidateLive, recordIssue,
@@ -8,7 +8,8 @@ import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_SOURCE,
   bucketKey, consume, sweep,
 } from "../src/auth/ratelimit.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -54,18 +55,18 @@ const NOW = new Date("2026-08-21T10:37:30Z");
 describeDb("rate limits and the code lifecycle", () => {
   let client: pg.Client;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
   });
 
   describe("rate limiting", () => {
-    it("allows up to the ceiling and refuses the one after it, with a Retry-After", async () => {
+    itUnderHangBackstop("allows up to the ceiling and refuses the one after it, with a Retry-After", async () => {
       const bucket = bucketKey("addr", "a@example.com", SALT);
       const verdicts = [];
       for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max + 1; i += 1) {
@@ -78,7 +79,7 @@ describeDb("rate limits and the code lifecycle", () => {
       expect(refused.retryAfterSeconds).toBeLessThanOrEqual(CODE_REQUEST_PER_ADDRESS.windowSeconds);
     });
 
-    it("never exceeds the ceiling under concurrency", async () => {
+    itUnderHangBackstop("never exceeds the ceiling under concurrency", async () => {
       // The property the single-statement increment exists for. A read-then-write here lets two
       // racing callers both see the old count and both write, which is how a limit of three becomes
       // a limit of "three, usually" — and an auth endpoint is where that would be probed on purpose.
@@ -93,7 +94,7 @@ describeDb("rate limits and the code lifecycle", () => {
       expect(rows[0]!.count).toBe(CODE_REQUEST_PER_ADDRESS.max);
     });
 
-    it("keeps address and source buckets independent", async () => {
+    itUnderHangBackstop("keeps address and source buckets independent", async () => {
       // One office behind one address must not lock out a second person there, and one caller must
       // not be able to spend another address's budget.
       const addr = bucketKey("addr", "indep@example.com", SALT);
@@ -105,7 +106,7 @@ describeDb("rate limits and the code lifecycle", () => {
       expect((await consume(client, src, CODE_REQUEST_PER_SOURCE, NOW)).allowed).toBe(true);
     });
 
-    it("starts a fresh budget in the next window", async () => {
+    itUnderHangBackstop("starts a fresh budget in the next window", async () => {
       // **The one test here that drives a turnover on purpose, and the pattern the rest now follow**
       // (SONNY-341): it passed an explicit clock from the day it was written and was the only test
       // in either rate-limit file immune to the defect this ticket fixes. It reads the shared
@@ -119,20 +120,20 @@ describeDb("rate limits and the code lifecycle", () => {
       expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, later)).allowed).toBe(true);
     });
 
-    it("stores no raw address or source, only a salted hash", async () => {
+    itUnderHangBackstop("stores no raw address or source, only a salted hash", async () => {
       await consume(client, bucketKey("addr", "private@example.com", SALT), CODE_REQUEST_PER_ADDRESS, NOW);
       const { rows } = await client.query<{ bucket: string }>("SELECT bucket FROM sonny.auth_rate_limit");
       expect(rows[0]!.bucket).not.toContain("private@example.com");
       expect(rows[0]!.bucket).toMatch(/^addr:[0-9a-f]{64}$/);
     });
 
-    it("produces different buckets for the same value under different salts", async () => {
+    itUnderHangBackstop("produces different buckets for the same value under different salts", async () => {
       // Without a salt an email hash is one rainbow-table lookup from the address.
       expect(bucketKey("addr", "x@example.com", "salt-a"))
         .not.toBe(bucketKey("addr", "x@example.com", "salt-b"));
     });
 
-    it("keeps email/start's and email/verify's SOURCE budgets in separate buckets", async () => {
+    itUnderHangBackstop("keeps email/start's and email/verify's SOURCE budgets in separate buckets", async () => {
       // **PR #87 sixth round: a stated property with no guard.** `ratelimit.ts` says in bold that
       // the verify source limit gets "its own bucket kind, not shared with `email/start`'s" —
       // because two ceilings counted against one counter is one limit, whichever is smaller. Nothing
@@ -157,11 +158,11 @@ describeDb("rate limits and the code lifecycle", () => {
       expect((await consume(client, verify, CODE_VERIFY_PER_SOURCE, NOW)).allowed).toBe(true);
     });
 
-    it("refuses to build a bucket with no salt configured", () => {
+    itUnderHangBackstop("refuses to build a bucket with no salt configured", async () => {
       expect(() => bucketKey("addr", "x@example.com", "")).toThrow(/salt/);
     });
 
-    it("sweeps windows that are past", async () => {
+    itUnderHangBackstop("sweeps windows that are past", async () => {
       const bucket = bucketKey("addr", "old@example.com", SALT);
       await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, new Date("2026-01-01T00:00:00Z"));
       expect(await sweep(client, new Date("2026-06-01T00:00:00Z"))).toBe(1);
@@ -174,31 +175,31 @@ describeDb("rate limits and the code lifecycle", () => {
     const OURS = "srchash";
     const THEIRS = "a-different-caller";
 
-    it("classifies a wrong code against a live issuance as invalid", async () => {
+    itUnderHangBackstop("classifies a wrong code against a live issuance as invalid", async () => {
       await recordIssue(client, address, OURS);
       expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_invalid");
     });
 
-    it("classifies an expired issuance as expired", async () => {
+    itUnderHangBackstop("classifies an expired issuance as expired", async () => {
       const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
       await recordIssue(client, address, OURS, past);
       expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_expired");
     });
 
-    it("classifies a consumed issuance as used", async () => {
+    itUnderHangBackstop("classifies a consumed issuance as used", async () => {
       await recordIssue(client, address, OURS);
       expect(await consumeLatest(client, address)).toBe(true);
       expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
     });
 
-    it("classifies an address that was never issued a code as invalid, not used", async () => {
+    itUnderHangBackstop("classifies an address that was never issued a code as invalid, not used", async () => {
       // An account-existence oracle would be the bug here: "used" for a known address and
       // "invalid" for an unknown one tells an attacker which addresses have accounts.
       expect(await classifyFailure(client, "never-seen@example.com", new Date(), OURS))
         .toBe("auth.code_invalid");
     });
 
-    it("prefers used over expired when a consumed code has also aged out", async () => {
+    itUnderHangBackstop("prefers used over expired when a consumed code has also aged out", async () => {
       const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
       const { id } = await recordIssue(client, address, OURS, past);
       await client.query("UPDATE sonny.sign_in_code_issue SET consumed_at = now() WHERE id = $1", [id]);
@@ -212,7 +213,7 @@ describeDb("rate limits and the code lifecycle", () => {
       // had asked and never used, and `auth.code_invalid` for addresses with nothing. Everything
       // below is that attack, at the level of the function that answered it.
 
-      it("tells a caller who did NOT originate the code nothing but code_invalid", async () => {
+      itUnderHangBackstop("tells a caller who did NOT originate the code nothing but code_invalid", async () => {
         // The used case, which is the one that names an account.
         await recordIssue(client, address, OURS);
         await consumeLatest(client, address);
@@ -220,7 +221,7 @@ describeDb("rate limits and the code lifecycle", () => {
         expect(await classifyFailure(client, address, new Date(), THEIRS)).toBe("auth.code_invalid");
       });
 
-      it("tells the same to a caller offering no source at all", async () => {
+      itUnderHangBackstop("tells the same to a caller offering no source at all", async () => {
         // Absent rather than wrong. `undefined === row.source_hash` must never be true, and the
         // parameter is optional so an omission is the safe answer rather than a type error.
         await recordIssue(client, address, OURS);
@@ -228,7 +229,7 @@ describeDb("rate limits and the code lifecycle", () => {
         expect(await classifyFailure(client, address, new Date())).toBe("auth.code_invalid");
       });
 
-      it("makes an unknown address and a known one INDISTINGUISHABLE to a stranger", async () => {
+      itUnderHangBackstop("makes an unknown address and a known one INDISTINGUISHABLE to a stranger", async () => {
         // The oracle stated as the property rather than as three separate cases: whatever the
         // mailbox's history, a caller who did not ask for the code gets the same answer.
         await recordIssue(client, "has-account@example.com", OURS);
@@ -243,7 +244,7 @@ describeDb("rate limits and the code lifecycle", () => {
         expect(answers).toEqual(["auth.code_invalid", "auth.code_invalid", "auth.code_invalid"]);
       });
 
-      it("stops disclosing once the issuance is old, even to the caller who made it", async () => {
+      itUnderHangBackstop("stops disclosing once the issuance is old, even to the caller who made it", async () => {
         // The signal has to decay: before this, an address that signed in once answered
         // `auth.code_used` 400 simulated days later, so having an account was a permanent fact
         // anyone could read. `FAILURE_DISCLOSURE_SECONDS` is one code lifetime past expiry.
@@ -259,7 +260,7 @@ describeDb("rate limits and the code lifecycle", () => {
         expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
       });
 
-      it("gives an attacker who calls email/start first nothing either", async () => {
+      itUnderHangBackstop("gives an attacker who calls email/start first nothing either", async () => {
         // The obvious way around a source check: ask for a code yourself so the row carries YOUR
         // source. It does not work, and the reason is the invalidate-then-record in `issueCode` —
         // the attacker's own request becomes the latest row, live and unconsumed, which classifies
@@ -272,7 +273,7 @@ describeDb("rate limits and the code lifecycle", () => {
       });
     });
 
-    it("consumes a code exactly once under concurrency", async () => {
+    itUnderHangBackstop("consumes a code exactly once under concurrency", async () => {
       // Replay, done properly: two verifies of the same code arriving together must mint one
       // session, not two. The single UPDATE with `consumed_at IS NULL` is the guarantee.
       await recordIssue(client, address, "srchash");
@@ -282,13 +283,13 @@ describeDb("rate limits and the code lifecycle", () => {
       expect(results.filter(Boolean)).toHaveLength(1);
     });
 
-    it("refuses to consume an expired issuance", async () => {
+    itUnderHangBackstop("refuses to consume an expired issuance", async () => {
       const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
       await recordIssue(client, address, "srchash", past);
       expect(await consumeLatest(client, address)).toBe(false);
     });
 
-    it("makes the newest code the only live one", async () => {
+    itUnderHangBackstop("makes the newest code the only live one", async () => {
       // The founder's own manual-test item: request a second code before using the first, and
       // confirm which one works. The answer is the newest, and it is decided here rather than by
       // whichever the provider happens to accept.
@@ -301,7 +302,7 @@ describeDb("rate limits and the code lifecycle", () => {
       expect(await consumeLatest(client, address)).toBe(false);
     });
 
-    it("stores no code value anywhere", async () => {
+    itUnderHangBackstop("stores no code value anywhere", async () => {
       // The gateway must never hold the secret it did not issue. Asserted structurally rather than
       // by inspection: the table has no column that could carry one.
       await recordIssue(client, address, "srchash");

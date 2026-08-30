@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import {
@@ -11,8 +11,8 @@ import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocatio
 import { normalizeEmail } from "../src/auth/identity.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -123,36 +123,18 @@ describeDb("the auth endpoints", () => {
   let client: pg.Client;
   let provider: FakeProvider;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    // **The schema is REBUILT, not inherited, and without this the file measures the wrong tree**
-    // (PR #167 review, F1). `up()` applies only *pending* migrations, so on a database that already
-    // has a schema it is a no-op — and this file then runs against whatever schema the previous
-    // invocation left behind rather than against the migration text in the working tree.
-    //
-    // That is the default workflow rather than a corner case. `npx vitest list --filesOnly` puts
-    // this file **first** of the twelve `.db.test.ts` files, and the only three that rebuild
-    // (`linking`, `migrate`, `supersession`) all run after it, so with one long-lived container and
-    // repeated `npm run test:db` it never once saw a current migration.
-    //
-    // Measured at `eb3d059` by the reviewer, same test, same mutant (0015's `CREATE TRIGGER`
-    // deleted), same command: `1 failed` on a dropped database and `1 passed` on a reused one, with
-    // `pg_trigger` showing the real trigger still installed under the mutant. What it cost was this
-    // branch's own battery — R1's verdict was right and named three tests in another file, while
-    // the door-A reproduction below, the one that mutant exists to be caught by, passed.
-    //
-    // **The same shape sits in eight other files and closing it there is not this branch's**
-    // (`for f in test/*.db.test.ts; do grep -q "DROP SCHEMA" "$f" || echo "$f"; done | wc -l` → 9
-    // before this change, 8 after). It is fixed here because this file is where a migration-
-    // dependent claim now lives; the general form is owed a ticket of its own.
-    await client.query("DROP SCHEMA IF EXISTS sonny CASCADE");
-    await client.query("DROP SCHEMA IF EXISTS sonny_meta CASCADE");
-    await up(client);
+    // The schema is rebuilt rather than inherited, and `test/support/schema.ts` is where the
+    // reason lives (PR #167 review, F1; generalised by SONNY-366). This file was the one that
+    // proved it — `npx vitest list --filesOnly` puts it first of the `.db.test.ts` files — and it
+    // is now one of ten calling the same helper rather than the only one carrying its own copy.
+    await rebuildSchema(client);
     pool = new pg.Pool({ connectionString: url, max: 8 });
   });
-  afterAll(async () => { await pool.end(); await client.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await pool.end(); await client.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
     await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
     provider = new FakeProvider();
@@ -175,7 +157,7 @@ describeDb("the auth endpoints", () => {
   const signedIn = (user: string = SESSION_USER) => ({ authorization: `Bearer ${accessTokenFor(user)}` });
 
   describe("POST /v1/auth/email/start", () => {
-    it("answers identically for an address with an account and one without", async () => {
+    itUnderHangBackstop("answers identically for an address with an account and one without", async () => {
       // Contract §3.6: an endpoint that answers differently is an account-existence oracle. This is
       // the assertion that keeps it from becoming one.
       const app = build();
@@ -188,7 +170,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("stays silent when the per-ADDRESS limit is hit — a 429 there is the oracle in slow motion", async () => {
+    itUnderHangBackstop("stays silent when the per-ADDRESS limit is hit — a 429 there is the oracle in slow motion", async () => {
       const app = build();
       const send = () => app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "quiet@example.com" } });
       for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max; i += 1) expect((await send()).statusCode).toBe(200);
@@ -199,7 +181,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("answers 429 with Retry-After when the per-SOURCE limit is hit", async () => {
+    itUnderHangBackstop("answers 429 with Retry-After when the per-SOURCE limit is hit", async () => {
       // A fact about the caller, not about any address, so telling them is not a leak — and not
       // telling them leaves them retrying against a wall with no signal.
       const app = build();
@@ -214,7 +196,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("returns the uniform response even when the provider fails to send", async () => {
+    itUnderHangBackstop("returns the uniform response even when the provider fails to send", async () => {
       const app = build();
       provider.sendEmailCode = async () => { throw new Error("smtp down"); };
       const response = await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "fails@example.com" } });
@@ -223,7 +205,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("rejects a malformed address with the contract's envelope", async () => {
+    itUnderHangBackstop("rejects a malformed address with the contract's envelope", async () => {
       const app = build();
       const response = await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "not-an-email" } });
       expect(response.statusCode).toBe(400);
@@ -317,7 +299,7 @@ describeDb("the auth endpoints", () => {
     const verify = (app: ReturnType<typeof build>, code = "123456", email = "v@example.com") =>
       app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email, code } });
 
-    it("returns the contract's token response and an account id", async () => {
+    itUnderHangBackstop("returns the contract's token response and an account id", async () => {
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "v@example.com" } });
       const response = await verify(app);
@@ -332,7 +314,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("theIdentityIsKeyedOnTheAddressTheCallerAsserted, never on the provider's own", async () => {
+    itUnderHangBackstop("theIdentityIsKeyedOnTheAddressTheCallerAsserted, never on the provider's own", async () => {
       // **The boundary Supabase's automatic identity linking sits behind, pinned where it is
       // decided** (PR #137 review, F7). Supabase may attach a newly verified address to an existing
       // `auth.users` row, so `session.email` is that row's PRIMARY address and not necessarily the
@@ -369,7 +351,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("two addresses one Supabase user covers stay two accounts here", async () => {
+    itUnderHangBackstop("two addresses one Supabase user covers stay two accounts here", async () => {
       // The consequence of the line above, stated as behaviour rather than as a column value. Both
       // sign-ins verify against the SAME provider-side user — which is exactly what automatic
       // linking produces — and must still resolve to two distinct Sonny accounts, because merging
@@ -396,7 +378,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("gives the three distinct failures the contract requires", async () => {
+    itUnderHangBackstop("gives the three distinct failures the contract requires", async () => {
       const app = build();
       // invalid: nothing was ever issued
       provider.accept = false;
@@ -418,7 +400,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("does not burn a live code on a wrong guess", async () => {
+    itUnderHangBackstop("does not burn a live code on a wrong guess", async () => {
       // A wrong guess must not cost the user their code — otherwise one attacker guessing locks
       // every real user out of the code they are holding.
       const app = build();
@@ -430,7 +412,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("refuses a replay of a successful verify", async () => {
+    itUnderHangBackstop("refuses a replay of a successful verify", async () => {
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "replay@example.com" } });
       expect((await verify(app, "123456", "replay@example.com")).statusCode).toBe(200);
@@ -441,7 +423,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("rate-limits guessing per address, and TELLS the caller who asked for the code", async () => {
+    itUnderHangBackstop("rate-limits guessing per address, and TELLS the caller who asked for the code", async () => {
       // The limit still binds; what changed is who is told (PR #87 sixth round). This caller asked
       // for the code from this source, so the 429 is about their own behaviour and withholding it
       // would leave them retrying against a wall.
@@ -456,7 +438,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("HIDES the per-address refusal from a caller who did not ask for the code", async () => {
+    itUnderHangBackstop("HIDES the per-address refusal from a caller who did not ask for the code", async () => {
       // **PR #87 sixth round.** Answering 429 to everyone made the attempt *count* readable: probe a
       // mailbox and see how many tries you get before the wall — 4 where the victim had verified
       // once, 5 for an untouched address. The attacker neither caused the victim's attempt nor could
@@ -518,7 +500,7 @@ describeDb("the auth endpoints", () => {
           payload: { email, code: "000000" },
         })).json().error.code;
 
-      it("answers IDENTICALLY for a mailbox with an account and one without", async () => {
+      itUnderHangBackstop("answers IDENTICALLY for a mailbox with an account and one without", async () => {
         perAddressOtp();
         const app = build();
         // The victim signs in normally, from their own source. The attacker causes none of this.
@@ -538,7 +520,7 @@ describeDb("the auth endpoints", () => {
         await app.close();
       });
 
-      it("still gives the CALLER who asked for the code all three distinct errors", async () => {
+      itUnderHangBackstop("still gives the CALLER who asked for the code all three distinct errors", async () => {
         // The other half, and the reason the fix is a disclosure gate rather than a collapse: the
         // contract requires three codes because SONNY-128 has to say three different things, and
         // the person entitled to hear them is the one who just asked. That person is unaffected.
@@ -560,19 +542,19 @@ describeDb("the auth endpoints", () => {
         await app.close();
       });
 
-      // **An explicit timeout on the two highest-request tests on this branch** (PR #87 sixth round).
-      // They issue 35 and 31 sequential `app.inject` calls — each a real HTTP round trip through the
-      // pool — against vitest's 5000ms default, where the previous worst on this branch was 11.
-      // Measured: 0 failures across ~30 idle runs, then 1 of 3 unforced while a cold Swift build ran
-      // alongside, and 3 of 8 under deliberate CPU load. So "zero flakes" was true of an idle
-      // machine and false as a property, and **a loaded machine is what CI is**.
+      // **The two highest-request tests on this branch** (PR #87 sixth round). They issue 35 and 31
+      // sequential `app.inject` calls — each a real HTTP round trip through the pool — where the
+      // previous worst on this branch was 11. Measured against vitest's 5000ms default: 0 failures
+      // across ~30 idle runs, then 1 of 3 unforced while a cold Swift build ran alongside, and 3 of
+      // 8 under deliberate CPU load. So "zero flakes" was true of an idle machine and false as a
+      // property, and **a loaded machine is what CI is**.
       //
-      // A timeout rather than fewer injects: the request count is not incidental here, it is derived
-      // from `CODE_VERIFY_PER_SOURCE.max` and it is the thing being measured. `races.db.test.ts`'s
-      // randomized pass already carries one for the same reason.
-      const LONG = { timeout: 60_000 };
+      // A wider deadline rather than fewer injects: the request count is not incidental here, it is
+      // derived from `CODE_VERIFY_PER_SOURCE.max` and it is the thing being measured. These two
+      // carried a hand-written `{ timeout: 60_000 }` until SONNY-354 put every database test under
+      // the backstop, which is the same bound with a message a battery is told not to read as a kill.
 
-      it("BINDS enumeration from one source, which nothing on this route did", LONG, async () => {
+      itUnderHangBackstop("BINDS enumeration from one source, which nothing on this route did", async () => {
         // The per-address limit is keyed on the address being probed, so it never binds when every
         // probe names a new one. Measured before the fix: 200 distinct addresses from one source, 0
         // refused — while `email/start` refused 192 of 200 in the same run from the same source.
@@ -598,7 +580,7 @@ describeDb("the auth endpoints", () => {
         await app.close();
       });
 
-      it("discloses the per-source refusal, because it is a fact about the caller", LONG, async () => {
+      itUnderHangBackstop("discloses the per-source refusal, because it is a fact about the caller", async () => {
         // Same asymmetry `email/start` already makes: a 429 about an ADDRESS is the oracle in slow
         // motion and is silent there; a 429 about the CALLER is their own behaviour, and hiding it
         // leaves them retrying against a wall.
@@ -616,7 +598,7 @@ describeDb("the auth endpoints", () => {
       });
     });
 
-    it("lands two sign-ins for one address on one account", async () => {
+    itUnderHangBackstop("lands two sign-ins for one address on one account", async () => {
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "same@example.com" } });
       const first = await verify(app, "123456", "same@example.com");
@@ -628,7 +610,7 @@ describeDb("the auth endpoints", () => {
   });
 
   describe("DELETE /v1/account", () => {
-    it("is MOUNTED unconditionally now, and refuses a caller it cannot verify", async () => {
+    itUnderHangBackstop("is MOUNTED unconditionally now, and refuses a caller it cannot verify", async () => {
       // **This test asserted 404 — "not mounted" — and the flag that produced it is gone**
       // (SONNY-203). `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE` kept the route off by default because
       // nothing verified a token: what it attributed a caller from was a seam with no adapter
@@ -652,7 +634,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("REFUSES cross-account deletion — the caller is the token's, never a header's", async () => {
+    itUnderHangBackstop("REFUSES cross-account deletion — the caller is the token's, never a header's", async () => {
       // The route must not become a way to delete someone else's account on the strength of a
       // header. It never reads one: `Sonny-Account-Id` below is ignored entirely, and the made-up
       // bearer token fails the signature check before the handler is reached.
@@ -670,7 +652,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("refuses without a bearer token", async () => {
+    itUnderHangBackstop("refuses without a bearer token", async () => {
       const app = build();
       const response = await app.inject({ method: "DELETE", url: "/v1/account" });
       expect(response.statusCode).toBe(401);
@@ -678,7 +660,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("SUCCEEDS for the account the token belongs to, and revokes every session on it", async () => {
+    itUnderHangBackstop("SUCCEEDS for the account the token belongs to, and revokes every session on it", async () => {
       // **There was no successful-delete test at all** (PR #87 R11), which is why R1 shipped green:
       // every case asserted a refusal, so nothing ever reached the revocation path.
       const app = build();
@@ -724,7 +706,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("REFUSES when the token names two live accounts, and deletes NEITHER", async () => {
+    itUnderHangBackstop("REFUSES when the token names two live accounts, and deletes NEITHER", async () => {
       // PR #87 second round, F6. The lookup ended in `ORDER BY … LIMIT 1`, so a token that named
       // two live accounts got one of them destroyed on the strength of a tiebreak — and the caller
       // would be told 204, which is the answer for the deletion they asked for, about the account
@@ -766,7 +748,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("does not let ONE provider failure strand every identity after it", async () => {
+    itUnderHangBackstop("does not let ONE provider failure strand every identity after it", async () => {
       // **PR #87 third round, F1, and this is the whole defect in one test.** The revocation loop
       // rethrew anything that was not `ProviderRejected`, so a single transient error aborted it:
       // every identity ordered after the failing one was never even attempted. Reproduced end to
@@ -832,7 +814,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("records a revocation as done when the provider says there is no such session", async () => {
+    itUnderHangBackstop("records a revocation as done when the provider says there is no such session", async () => {
       // `ProviderRejected` is the provider saying the thing we wanted is already true. Treating it
       // as owed would mean re-calling forever for a user that does not exist; treating a TIMEOUT the
       // same way would record an event that did not happen. The two are the same `catch` and they
@@ -849,7 +831,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("REFUSES to hard-delete an account while a provider-side revocation is owed", async () => {
+    itUnderHangBackstop("REFUSES to hard-delete an account while a provider-side revocation is owed", async () => {
       // **PR #87 fifth round, F2.** 0006's whole premise is that the residual is a durable,
       // queryable fact — and it was durable only as long as the identity row, which cascades away
       // with its account. Reproduced: two owed identities, one
@@ -883,7 +865,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("lets a LIVE account be hard-deleted, because it has never owed a revocation", async () => {
+    itUnderHangBackstop("lets a LIVE account be hard-deleted, because it has never owed a revocation", async () => {
       // **PR #87 sixth round.** 0008's trigger omitted `account_closed`, so it counted every
       // never-revoked identity — which is the ordinary state of every live account, since a live
       // account has never been closed and so has never owed anything. Every live account was
@@ -919,7 +901,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("lets a CLOSED and drained account be deleted, so the guard is not a blanket refusal", async () => {
+    itUnderHangBackstop("lets a CLOSED and drained account be deleted, so the guard is not a blanket refusal", async () => {
       // The other mirror case. A guard that refused every delete would pass the owed test above and
       // be useless, and these two together are what separate it from one.
       const app = build();
@@ -933,7 +915,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("does not call the provider TWICE when two drains overlap on one owed row", async () => {
+    itUnderHangBackstop("does not call the provider TWICE when two drains overlap on one owed row", async () => {
       // **PR #87 fifth round, F3.** The claim was `BEGIN; SELECT … FOR UPDATE SKIP LOCKED; COMMIT`
       // and the COMMIT released the lock *before* the provider call, so the lock covered one SELECT
       // rather than the work it claimed. Reproduced with a 300ms provider: two drains started 100ms
@@ -968,7 +950,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("revokes an identity that joins the account BETWEEN attribution and the close", async () => {
+    itUnderHangBackstop("revokes an identity that joins the account BETWEEN attribution and the close", async () => {
       // **PR #87 second round, F2 — and this is the test that tells the two orderings apart.**
       //
       // R1's fix moved the `supabase_user_id` read to before `BEGIN`, which was right against 0003
@@ -1033,7 +1015,7 @@ describeDb("the auth endpoints", () => {
   });
 
   describe("POST /v1/auth/refresh and /signout", () => {
-    it("returns a ROTATED token pair, and the OLD refresh token then stops working", async () => {
+    itUnderHangBackstop("returns a ROTATED token pair, and the OLD refresh token then stops working", async () => {
       // PR #87 R12: this AC claimed rotation was asserted and the test asserted the opposite, that
       // the response echoed the token it was given. Rotation means the new one differs.
       //
@@ -1060,7 +1042,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("emits refresh_expires_at when the provider reports one, and omits it when it does not", async () => {
+    itUnderHangBackstop("emits refresh_expires_at when the provider reports one, and omits it when it does not", async () => {
       // PR #87 second round, F7. R8 added the field and nothing ever looked at it, so a change that
       // dropped it, mistyped it, or derived it from the wrong instant would have gone through every
       // green run since. §3.2 lists it, and the branch is real: the value is the provider's, so
@@ -1084,7 +1066,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("REFUSES a refresh when the token names two live accounts, rather than picking one", async () => {
+    itUnderHangBackstop("REFUSES a refresh when the token names two live accounts, rather than picking one", async () => {
       // PR #87 second round, F6. `supabase_user_id` carries no uniqueness constraint, so the lookup
       // ended in `ORDER BY … LIMIT 1` — a tiebreak. A refresh that tiebreaks hands the client a
       // session for whichever account sorted first, and everything downstream (entitlements,
@@ -1110,7 +1092,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("REFUSES a refresh whose account has been closed", async () => {
+    itUnderHangBackstop("REFUSES a refresh whose account has been closed", async () => {
       // PR #87 R5. This answered 200 with `user.id: null` and a working token pair, so an account
       // the user had deleted went on minting sessions with nothing to signal it.
       const app = build();
@@ -1124,7 +1106,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("answers 401 auth.token_revoked when the provider refuses — reuse past the overlap", async () => {
+    itUnderHangBackstop("answers 401 auth.token_revoked when the provider refuses — reuse past the overlap", async () => {
       const app = build();
       provider.accept = false;
       const response = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "stale" } });
@@ -1133,7 +1115,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("requires a VERIFIED bearer token to sign out, and is idempotent once signed out", async () => {
+    itUnderHangBackstop("requires a VERIFIED bearer token to sign out, and is idempotent once signed out", async () => {
       // **The account has to exist now, which it did not before** (SONNY-203). This test used to
       // sign out without signing in: the route checked that the header started with `Bearer ` and
       // handed whatever followed to the provider. The gate verifies the token and attributes it to
@@ -1160,7 +1142,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("hands the provider the token the caller presented, not a rewritten one", async () => {
+    itUnderHangBackstop("hands the provider the token the caller presented, not a rewritten one", async () => {
       // The one legitimate use of the raw access token: giving it back to the provider that issued
       // it. `callerOf(request).accessToken` is the presented string, and this pins that it arrives
       // intact — a route that signed out some other session would be silent about it.
@@ -1175,7 +1157,7 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("owes a fresh revocation after a reopened account is closed again, even when the user came back by REFRESHING", async () => {
+    itUnderHangBackstop("owes a fresh revocation after a reopened account is closed again, even when the user came back by REFRESHING", async () => {
       // **SONNY-358, over real HTTP, on the route the ticket was filed for.**
       //
       // `POST /v1/auth/refresh` mints a full session and never calls `resolve()`, so it never names
