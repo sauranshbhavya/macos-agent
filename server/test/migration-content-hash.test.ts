@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { executableSql, migrationContentHash } from "../src/db/migration-hash.js";
-import { loadMigrations } from "../src/db/migrate.js";
+import { driftedMigrations, loadMigrations, migrationStates } from "../src/db/migrate.js";
 
 /**
  * What the migration content hash does and does not move for. Needs no database, so it runs on every
@@ -196,5 +196,89 @@ describe("migrationContentHash", () => {
     const tampered = real!.up.replace("sonny.identity_provider_user", "sonny.identity_provider_users");
     expect(tampered).not.toBe(real!.up);
     expect(migrationContentHash(tampered, real!.down)).not.toBe(real!.contentHash);
+  });
+});
+
+describe("what status reports", () => {
+  // `status` never refuses — it is the diagnostic reached for once `up` or `down` has — so what it
+  // is worth pinning is the classification, and above all that a changed migration is COUNTED. A
+  // status that printed the state and exited 0 anyway is the clean zero this repository keeps
+  // recording: a reassuring answer indistinguishable from a real one.
+  const migration = (id: string, up: string) => ({
+    id,
+    up,
+    down: "DROP TABLE t;",
+    contentHash: migrationContentHash(up, "DROP TABLE t;"),
+  });
+
+  const applied = migration("0001_a", "CREATE TABLE t (id int);");
+  const changed = migration("0002_b", "CREATE TABLE u (id int);");
+  const pending = migration("0003_c", "CREATE TABLE v (id int);");
+  const unverified = migration("0004_d", "CREATE TABLE w (id int);");
+  const all = [applied, changed, pending, unverified];
+
+  const ledger = new Map<string, string | null>([
+    [applied.id, applied.contentHash],
+    [changed.id, "a hash from the text this environment actually applied"],
+    [unverified.id, null],
+  ]);
+
+  it("names each of the four states, and never the wrong one", () => {
+    expect(migrationStates(ledger, all)).toEqual([
+      { id: "0001_a", state: "applied" },
+      { id: "0002_b", state: "CHANGED" },
+      { id: "0003_c", state: "pending" },
+      { id: "0004_d", state: "unverified" },
+    ]);
+  });
+
+  it("counts a changed migration, which is what sets the exit code", () => {
+    expect(migrationStates(ledger, all).filter((s) => s.state === "CHANGED")).toHaveLength(1);
+  });
+
+  it("reports nothing changed when every applied file still matches", () => {
+    const clean = new Map<string, string | null>([[applied.id, applied.contentHash]]);
+    expect(migrationStates(clean, all).filter((s) => s.state === "CHANGED")).toHaveLength(0);
+  });
+
+  it("reports the migrations in file order, so the list reads as a sequence", () => {
+    expect(migrationStates(ledger, all).map((s) => s.id)).toEqual(all.map((m) => m.id));
+  });
+});
+
+describe("driftedMigrations", () => {
+  const of = (id: string, up: string) => ({
+    id,
+    up,
+    down: "",
+    contentHash: migrationContentHash(up, ""),
+  });
+
+  it("reports both hashes, so the refusal can say what moved", () => {
+    const m = of("0001_a", "SELECT 1;");
+    const drift = driftedMigrations(new Map([["0001_a", "recorded-hash"]]), [m]);
+    expect(drift).toEqual([{ id: "0001_a", recorded: "recorded-hash", found: m.contentHash }]);
+  });
+
+  it("says nothing about a migration with no ledger row, because pending is not drift", () => {
+    expect(driftedMigrations(new Map(), [of("0001_a", "SELECT 1;")])).toEqual([]);
+  });
+
+  it("says nothing about an applied migration whose hash was never recorded", () => {
+    const m = of("0001_a", "SELECT 1;");
+    expect(driftedMigrations(new Map([["0001_a", null]]), [m])).toEqual([]);
+  });
+
+  it("says nothing about a ledger row whose file is not in the directory being run", () => {
+    // `up(client, someOtherDir)` is how three existing tests apply throwaway migrations against a
+    // database that also holds the real ones.
+    expect(driftedMigrations(new Map([["0099_gone", "hash"]]), [])).toEqual([]);
+  });
+
+  it("reports every drifted migration rather than stopping at the first", () => {
+    const a = of("0001_a", "SELECT 1;");
+    const b = of("0002_b", "SELECT 2;");
+    const stale = new Map([["0001_a", "x"], ["0002_b", "y"]]);
+    expect(driftedMigrations(stale, [a, b]).map((d) => d.id)).toEqual(["0001_a", "0002_b"]);
   });
 });
