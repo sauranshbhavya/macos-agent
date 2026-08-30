@@ -20,7 +20,7 @@ Run from `server/`.
 | `npm install` | Dependencies. |
 | `npm run build` | TypeScript → `dist/`, **and copies the `.sql` migrations beside the compiled runner** — tsc does not copy non-TS assets, and `npm run migrate` reads them from `dist`. |
 | `npm test` | Vitest. Database tests skip when `DATABASE_URL` is unset, announced by `test/global-setup.ts` before the reporter owns the terminal. |
-| `npm run test:db` | The full suite including migrations, against a throwaway Postgres. |
+| `npm run test:db` | The full suite including migrations, against a throwaway Postgres. **Start it under a name and port of your own** — see "The full suite needs a Postgres" below. |
 | `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
@@ -115,13 +115,29 @@ first, then delete.** Two things a sweep needs to know about it:
 - Soft-deleting (`deleted_at`) is unaffected and always was. The refusal is only about removing the
   row.
 
-The full suite needs a Postgres. One line, and it is thrown away afterwards:
+The full suite needs a Postgres. It is thrown away afterwards — but **give it a name and a port of
+your own**, because a container name and a host port are machine-wide and this repository runs
+several lanes at once (SONNY-355):
 
 ```sh
-docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
-DATABASE_URL="postgres://postgres:postgres@localhost:55433/postgres" npm test
-docker rm -f sonny-gw-db
+LANE="$(basename "$(git rev-parse --show-toplevel)")"
+docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm test
+docker rm -f "sonny-gw-db-$LANE"
 ```
+
+Nothing there is yours to choose, deliberately: `$LANE` is the worktree's own directory name, and
+`-p 0:5432` asks Docker for any free host port, which `docker port` then reads back. A placeholder
+somebody is expected to edit becomes one fixed pair again the first time it is pasted unedited.
+
+`npm run test:db` falls back to `localhost:55433` when `DATABASE_URL` is unset, which is right for a
+single session and is precisely what breaks with two. **What a collision looks like:** a suite-wide
+connection failure — `Connection terminated unexpectedly`, most files red — with a fresh `initdb`
+in `docker logs` inside that run's window, and nothing in the test output naming a cause. That is
+another lane's container, not a defect in your branch. Discard the run and re-run against your own.
+The quiet direction is worse and is not ruled out: two lanes on one live database can produce a
+*pass* that leaned on rows the other lane wrote.
 
 ## Retention: what is kept, for how long, and how it goes (SONNY-134)
 

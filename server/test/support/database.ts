@@ -20,7 +20,12 @@
  * to name a connection string may well be one that connects.
  */
 /**
- * The container `CLAUDE.md` documents, and the same default `npm run test:db` falls back to.
+ * What `npm run test:db` falls back to when `DATABASE_URL` is unset — one lane, one machine, no
+ * choices made. It is NOT what the documentation tells you to start any more: `CLAUDE.md`'s server
+ * half, `server/README.md` and the banner `global-setup.ts` prints all now derive a container name
+ * from the worktree and let Docker pick the host port, because a fixed name and a fixed port are
+ * both machine-wide and lanes here run in parallel (SONNY-355). This line stays because a session
+ * that sets nothing still has to land somewhere, and somewhere is better named here than guessed.
  *
  * **This file is the only place under `server/test/` allowed to name that port**, and
  * `database-url.test.ts` is what enforces it. The guard is narrow on purpose: several tests name a

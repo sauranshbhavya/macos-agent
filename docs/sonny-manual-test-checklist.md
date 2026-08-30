@@ -1127,14 +1127,20 @@ bottom-left account row → **Sign in**.
       said "placeholder values are fine" without that exception and would have failed as written.
       Same precondition the four sign-in rows carry, and here it is the only one.
 
-      Start one and apply the migrations first:
+      Start one and apply the migrations first. **Its name and port are derived, not typed** —
+      a container name and a host port are machine-wide, and a session's own test database may
+      well be up while you do this (SONNY-355):
       ```
-      docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
-      cd server && DATABASE_URL=postgres://postgres:postgres@localhost:55433/postgres \
+      LANE="$(basename "$(git rev-parse --show-toplevel)")"
+      docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
+      PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+      cd server && DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" \
         npm run build && npm run migrate -- up
-      export DATABASE_URL=postgres://postgres:postgres@host.docker.internal:55433/postgres
+      export DATABASE_URL="postgres://postgres:postgres@host.docker.internal:$PORT/postgres"
       ```
-      (`host.docker.internal` in the exported value, not `localhost` — the gateway is in a container
+      (`-p 0:5432` asks Docker for any free host port and `docker port` reads back which one, so
+      nothing here collides with a container already running. And `host.docker.internal` in the
+      exported value, not `localhost` — the gateway is in a container
       and `localhost` there is the container.) Then export the four Supabase names and
       `RATE_LIMIT_SALT` with any values you like, run `./scripts/deploy.sh local`, and:
       `curl -s -X POST http://localhost:8080/v1/auth/email/start -H 'Content-Type: application/json'
@@ -1147,7 +1153,7 @@ bottom-left account row → **Sign in**.
       `sign-in code send failed` line naming only an error type — that is the adapter reporting it
       could not reach a project that does not exist, and the 200 you got is the contract's
       deliberate uniform answer, not a failure to report. Finish with
-      `docker rm -f sonny-gateway-local sonny-gw-db`.
+      `docker rm -f sonny-gateway-local "sonny-gw-db-$LANE"`.
 
 - [ ] **(new 2026-08-26, SONNY-128)** Sign in with a real address: type it, press **Send code**,
       read the code out of the mail, type it, press **Sign in**. The dialog's title becomes
