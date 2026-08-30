@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import { pooledConnections } from "../src/db/pool.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * `pooledConnections` against a real `pg.Pool` and a real Postgres (PR #137 review, F6).
@@ -17,7 +18,7 @@ import { pooledConnections } from "../src/db/pool.js";
 const url = process.env["DATABASE_URL"];
 
 describe.skipIf(!url)("pooledConnections against a real Postgres", () => {
-  it("leases, returns a value, and gives the connection back", async () => {
+  itUnderHangBackstop("leases, returns a value, and gives the connection back", async () => {
     const wiring = pooledConnections(url!, { max: 1, connectionTimeoutMillis: 2_000 });
     try {
       const answer = await wiring.withConnection(async (client) => {
@@ -30,7 +31,7 @@ describe.skipIf(!url)("pooledConnections against a real Postgres", () => {
     }
   });
 
-  it("theOnlyConnectionComesBackAfterTheCallbackThrows — with max 1 a leak is the next lease failing", async () => {
+  itUnderHangBackstop("theOnlyConnectionComesBackAfterTheCallbackThrows — with max 1 a leak is the next lease failing", async () => {
     // The real cost of a missing `finally`, made observable. The pool holds exactly one connection
     // and `connectionTimeoutMillis` is two seconds, so if the failed callback keeps it the second
     // lease cannot be served and this test fails with a timeout instead of passing. Nothing here
@@ -51,7 +52,7 @@ describe.skipIf(!url)("pooledConnections against a real Postgres", () => {
     }
   });
 
-  it("gives each caller a connection nobody else is using, which is what makes a transaction one", async () => {
+  itUnderHangBackstop("gives each caller a connection nobody else is using, which is what makes a transaction one", async () => {
     // `db/connection.ts`'s whole argument: under a shared client `resolve()`'s BEGIN nests inside
     // whatever else is open on that connection and one COMMIT commits both. Two concurrent leases
     // from a pool of two must land on different backends.

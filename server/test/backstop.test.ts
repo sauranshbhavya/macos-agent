@@ -213,6 +213,62 @@ describe("the server suite's hang backstop", () => {
     expect(doesNot.filter((sample) => REACHES_THE_RAW_HELPER.test(sample))).toEqual([]);
   });
 
+  /**
+   * Every test in a `.db.test.ts` file, as vitest sees it: a call at the start of a line, so a
+   * mention inside a comment or a string is not one. `codeOf` has already dropped comment lines;
+   * this pattern is what keeps a sample list inside a test from counting as a declaration.
+   */
+  const DECLARES_A_TEST = /^\s*(it|itUnderHangBackstop)\(/gm;
+
+  it("puts every database test under the backstop, because that is the whole population that waits on Postgres", () => {
+    // **The rule, stated once: a test that waits on the database waits under the backstop; a test
+    // that does not keeps vitest's default** (SONNY-354). It is drawn from measurement rather than
+    // taste. A `.db.test.ts` test waits on work in another process whose cost this one does not
+    // control, and the thinnest margin measured in that population was `migrate.db.test.ts`'s
+    // rollback chain at 2483 ms of the 5000 ms default — a factor of two. Every other file in this
+    // tree runs in-process: the whole non-database suite is 33 files under 300 ms each, so the
+    // slowest single test in it has something like a 500x margin, against a worst measured
+    // load-induced slowdown of 10x (`support/backstop.ts` has that measurement).
+    //
+    // So the line is drawn at the file suffix and there are no exceptions. Four tests in these
+    // files are synchronous and touch no database; they are wrapped too, because an exemption list
+    // is the thing that rots and one `async` keyword is cheaper than maintaining one.
+    //
+    // What this costs is stated in `support/backstop.ts` and is now owed by 300 tests rather than
+    // 2: a mutant that makes one of them HANG and breaks nothing else comes back UNATTRIBUTED
+    // rather than KILLED, which exits 2 like a survivor and is reported rather than swallowed. What
+    // it does not cost is a mutant that makes one of them WRONG — `underHangBackstop` rethrows the
+    // body's own error untouched, which the test above pins on object identity.
+    const offenders = everyTestSource()
+      .filter((path) => path.endsWith(".db.test.ts"))
+      .map((path) => ({
+        file: relative(testTree, path),
+        bare: (codeOf(path).match(/^\s*it\(/gm) ?? []).length,
+      }))
+      .filter((entry) => entry.bare > 0);
+    // Named with counts rather than as a bare boolean: a failure should say which file and how many.
+    expect(offenders).toEqual([]);
+  });
+
+  it("finds database tests to check at all, so the arm above is not passing on an empty tree", () => {
+    // **The zero this arm has to refuse on its own terms.** `offenders` above is empty whenever the
+    // scan enumerates nothing — a renamed suffix, a moved directory, a `codeOf` that strips the
+    // file. `CLAUDE.md`: a search whose engine cannot see the bytes you mean answers a clean zero,
+    // and a clean zero is the one answer that looks like good news. So the population is asserted
+    // against a floor of its own rather than against anything that could move with it.
+    const files = everyTestSource().filter((path) => path.endsWith(".db.test.ts"));
+    expect(files.length).toBeGreaterThanOrEqual(1);
+    const declared = files.reduce(
+      (total, path) => total + (codeOf(path).match(DECLARES_A_TEST) ?? []).length, 0);
+    expect(declared).toBeGreaterThanOrEqual(1);
+    // And the pattern that hunts the offenders can produce a hit, or its empty answer is not a
+    // measurement: `it(` really is found where it legitimately lives.
+    const bareItSomewhere = everyTestSource()
+      .filter((path) => !path.endsWith(".db.test.ts"))
+      .some((path) => /^\s*it\(/m.test(codeOf(path)));
+    expect(bareItSomewhere).toBe(true);
+  });
+
   it("is reached through itUnderHangBackstop everywhere else, so the two bounds cannot drift", () => {
     const direct = everyTestSource()
       .filter((path) => !ALLOWED_TO_REACH_THE_RAW_HELPER.has(relative(testTree, path)))

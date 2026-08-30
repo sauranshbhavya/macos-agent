@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import {
   accountSupportView,
   contentForRequest,
@@ -24,7 +24,7 @@ import {
   snapshotsHoldingTask,
   SNAPSHOT_MEMBER_SELECT,
 } from "../src/content/snapshot.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
 import {
   claimKey,
   completeClaim,
@@ -37,6 +37,7 @@ import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 
 /** The gate verifies tokens locally, so no route driven here ever calls a provider. */
 class UnusedAuthProvider implements AuthProvider {
@@ -185,7 +186,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   beforeAll(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
-    await up(client);
+    await rebuildSchema(client);
   });
   afterAll(async () => {
     await client.end();
@@ -229,7 +230,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   };
 
   describe("the shape §10 asks for", () => {
-    it("stores every content kind, and names voice audio as its own column", async () => {
+    itUnderHangBackstop("stores every content kind, and names voice audio as its own column", async () => {
       // §10.3 requires voice audio to be named explicitly in what is stored. This asserts the
       // *column set*, so a redesign that folded the four kinds into one opaque blob fails here
       // rather than passing a review.
@@ -248,7 +249,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(names).toContain("provider_request_id");
     });
 
-    it("round-trips voice audio and a screenshot as bytes", async () => {
+    itUnderHangBackstop("round-trips voice audio and a screenshot as bytes", async () => {
       const recording = Buffer.from([0x00, 0x01, 0xff, 0x7f, 0x00]);
       await insertRetainedContent(
         client,
@@ -270,7 +271,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(row["voice_audio_filename"]).toBe("dictation.m4a");
     });
 
-    it("keeps a provider error body and the provider's own request id", async () => {
+    itUnderHangBackstop("keeps a provider error body and the provider's own request id", async () => {
       await insertRetainedContent(
         client,
         content({
@@ -284,7 +285,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(row["provider_request_id"]).toBe("req_openai_7781");
     });
 
-    it("writes one row per request id and never two", async () => {
+    itUnderHangBackstop("writes one row per request id and never two", async () => {
       const requestId = randomUUID();
       await insertRetainedContent(client, content({ requestId }));
       // The second writer in `content/hook.ts` losing its race, or a retry of the insert.
@@ -296,7 +297,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("an incognito run cannot be stored, whatever the caller believes", () => {
-    it("refuses a row that says retention none, at the database", async () => {
+    itUnderHangBackstop("refuses a row that says retention none, at the database", async () => {
       // **This is the guarantee, not a belt-and-braces check.** §10.1: "Enforced where the storing
       // happens, not at the call site." `content/hook.ts` refuses first; this is what is still true
       // when something above it is wrong, and it is the reason the redundant column exists.
@@ -311,7 +312,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(0);
     });
 
-    it("cannot be reached by a snapshot build with every filter removed", async () => {
+    itUnderHangBackstop("cannot be reached by a snapshot build with every filter removed", async () => {
       // **§10.1's second rule, driven rather than described**: "structurally excluded from training
       // snapshots, not filtered by a query. If an incognito run can reach a snapshot because
       // someone dropped a WHERE clause, the guarantee is not one."
@@ -421,7 +422,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       return rows[0]!.body === null ? null : rows[0]!.body.toString("utf8");
     };
 
-    it("keeps no response body for an incognito call, and keeps the row", async () => {
+    itUnderHangBackstop("keeps no response body for an incognito call, and keeps the row", async () => {
       // The measured defect, as a test. Before the fix this row's `response_body` held the model's
       // reply verbatim — outside the content clock, outside consent, and outside what a per-task
       // delete can reach.
@@ -441,7 +442,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(metered[0]!.count).toBe("1");
     });
 
-    it("keeps a standard call's response body, so the guard is not simply off", async () => {
+    itUnderHangBackstop("keeps a standard call's response body, so the guard is not simply off", async () => {
       const key = randomUUID();
       await plan("standard", key);
       expect(await storedBody(key)).toContain("THE-MODEL-REPLY");
@@ -449,7 +450,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("the retention CHECK is a backstop the production writer can actually trip", () => {
-    it("refuses an incognito row written through the real writer, not just a hand-written one", async () => {
+    itUnderHangBackstop("refuses an incognito row written through the real writer, not just a hand-written one", async () => {
       // **PR #148's F3.** The writer omitted the column, so every insert took the table's default
       // and the CHECK could only ever refuse a statement the gateway cannot emit. Now the declared
       // value is bound, so a wrong `isStorable` one layer up becomes a constraint violation.
@@ -459,7 +460,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(0);
     });
 
-    it("refuses a row that declared nothing, which must not be stored either", async () => {
+    itUnderHangBackstop("refuses a row that declared nothing, which must not be stored either", async () => {
       // §2.4.2 at the storage layer, as a constraint rather than only as a guard: an explicit NULL
       // against a NOT NULL column with no default.
       await expect(
@@ -468,12 +469,12 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(0);
     });
 
-    it("stores the declared value rather than a default, so the column is not decoration", async () => {
+    itUnderHangBackstop("stores the declared value rather than a default, so the column is not decoration", async () => {
       await insertRetainedContent(client, content());
       expect((await contentRows())[0]!["retention"]).toBe("standard");
     });
 
-    it("refuses an incognito insert the HOOK sends when the guard above it is wrong", async () => {
+    itUnderHangBackstop("refuses an incognito insert the HOOK sends when the guard above it is wrong", async () => {
       // **The hook-side half of F3's composite property** (PR #148's cycle-2, G3). The two tests
       // above drive the store directly and hold the store's half; this drives a real request through
       // the real app with `isStorable` forced true, which is the only way "if something above this
@@ -549,7 +550,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("training consent", () => {
-    it("takes only consenting accounts, and excludes one whose consent was never written", async () => {
+    itUnderHangBackstop("takes only consenting accounts, and excludes one whose consent was never written", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING, taskId: "yes" }));
       await insertRetainedContent(client, content({ accountId: DECLINED, taskId: "no" }));
       await insertRetainedContent(client, content({ accountId: NEVER_ASKED, taskId: "never" }));
@@ -562,7 +563,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows).toEqual([{ task_id: "yes", account_id: CONSENTING }]);
     });
 
-    it("refuses a member for a non-consenting account even when the join is gone", async () => {
+    itUnderHangBackstop("refuses a member for a non-consenting account even when the join is gone", async () => {
       // The second layer, and the reason there are two: training on the content of a user who did
       // not consent is not a defect that can be repaired afterwards, and one predicate in one
       // statement is a thin thing to rest that on.
@@ -581,7 +582,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       ).rejects.toThrow(/training consent/);
     });
 
-    it("excludes a closed account even though its consent still says granted", async () => {
+    itUnderHangBackstop("excludes a closed account even though its consent still says granted", async () => {
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [OTHER]);
       await insertRetainedContent(client, content({ accountId: OTHER, taskId: "closing" }));
       const built = await buildTrainingSnapshot(client, { label: "corpus-2" });
@@ -590,7 +591,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("the two clocks", () => {
-    it("deletes content past its window and leaves the usage for the same call", async () => {
+    itUnderHangBackstop("deletes content past its window and leaves the usage for the same call", async () => {
       // §10.3's whole point, as one test: the content goes, the record of what it cost does not.
       const requestId = randomUUID();
       await insertRetainedContent(client, content({ requestId }));
@@ -609,7 +610,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.count).toBe("1");
     });
 
-    it("leaves content that has not reached its window", async () => {
+    itUnderHangBackstop("leaves content that has not reached its window", async () => {
       // The other direction, so the sweep is not merely "deletes everything".
       await insertRetainedContent(client, content());
       await client.query("UPDATE sonny.retained_content SET occurred_at = now() - interval '29 days'");
@@ -617,7 +618,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(1);
     });
 
-    it("records what an expiry sweep took, which is what makes the clock observable", async () => {
+    itUnderHangBackstop("records what an expiry sweep took, which is what makes the clock observable", async () => {
       await insertRetainedContent(client, content());
       await client.query("UPDATE sonny.retained_content SET expires_at = now() - interval '1 day'");
       await expireContentBatch(client, 500);
@@ -630,7 +631,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(deletions[0]!.accountId).toBeNull();
     });
 
-    it("clears a stored response past its window, on the sweep this branch built", async () => {
+    itUnderHangBackstop("clears a stored response past its window, on the sweep this branch built", async () => {
       // **PR #148's F2.** `pruneExpiredResponses` had no production call site, so three sentences on
       // this branch claimed a residual was "bounded by that table's own twenty-four hours" while
       // nothing enforced the bound. Measured then: a body back-dated thirty days survived a full
@@ -671,7 +672,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.has_body).toBe(false);
     });
 
-    it("leaves a stored response still inside its window", async () => {
+    itUnderHangBackstop("leaves a stored response still inside its window", async () => {
       // The other direction, so the prune is not merely "clears everything it can reach".
       const key = "keep-me";
       const claimed = await claimKey(client, {
@@ -696,14 +697,14 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.has_body).toBe(true);
     });
 
-    it("writes no record for a sweep that found nothing", async () => {
+    itUnderHangBackstop("writes no record for a sweep that found nothing", async () => {
       // A timer that recorded every pass would bury the passes that did something under thousands
       // that did not, and the log line is where "the timer fired" is answered.
       expect(await expireContentBatch(client, 500)).toBe(0);
       expect(await recentContentDeletions(client, { limit: 10 })).toHaveLength(0);
     });
 
-    it("takes more than one batch when there is more than one batch to take", async () => {
+    itUnderHangBackstop("takes more than one batch when there is more than one batch to take", async () => {
       for (let index = 0; index < 3; index += 1) {
         await insertRetainedContent(client, content({ taskId: `task-${index}` }));
       }
@@ -717,7 +718,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(0);
     });
 
-    it("leaves a snapshot alone until it reaches a clock of its own", async () => {
+    itUnderHangBackstop("leaves a snapshot alone until it reaches a clock of its own", async () => {
       await insertRetainedContent(client, content());
       const built = await buildTrainingSnapshot(client, { label: "no-clock" });
       expect(built.memberCount).toBe(1);
@@ -739,7 +740,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("a snapshot holds a copy, not a pointer", () => {
-    it("survives the content it was built from expiring", async () => {
+    itUnderHangBackstop("survives the content it was built from expiring", async () => {
       // The reason a member copies rather than references, in one test. If this ever fails, the two
       // clocks have collapsed into one and a training corpus quietly empties at thirty days.
       const recording = Buffer.from("the-user-said-something");
@@ -763,7 +764,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.content_id).toMatch(/^[0-9a-f-]{36}$/);
     });
 
-    it("records the window and the routes that selected it", async () => {
+    itUnderHangBackstop("records the window and the routes that selected it", async () => {
       await insertRetainedContent(client, content({ route: "plan", taskId: "in-window" }));
       await insertRetainedContent(client, content({ route: "search", taskId: "wrong-route" }));
       const since = new Date(Date.now() - 60 * 60 * 1000);
@@ -779,7 +780,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows.map((row) => row.task_id)).toEqual(["in-window"]);
     });
 
-    it("honours the window's bounds rather than taking everything", async () => {
+    itUnderHangBackstop("honours the window's bounds rather than taking everything", async () => {
       await insertRetainedContent(client, content({ taskId: "old" }));
       await client.query("UPDATE sonny.retained_content SET occurred_at = now() - interval '10 days'");
       await insertRetainedContent(client, content({ taskId: "new" }));
@@ -796,7 +797,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("delete by task", () => {
-    it("removes the content, reaches the snapshots, and says which ones", async () => {
+    itUnderHangBackstop("removes the content, reaches the snapshots, and says which ones", async () => {
       await insertRetainedContent(client, content({ taskId: "doomed" }));
       await insertRetainedContent(client, content({ taskId: "kept" }));
       const built = await buildTrainingSnapshot(client, { label: "corpus-6" });
@@ -821,7 +822,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       );
     });
 
-    it("records the deletion with the snapshots it touched", async () => {
+    itUnderHangBackstop("records the deletion with the snapshots it touched", async () => {
       // §4.6's traceability, read back the way a founder would read it.
       await insertRetainedContent(client, content({ taskId: "doomed" }));
       const built = await buildTrainingSnapshot(client, { label: "corpus-7" });
@@ -834,7 +835,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(reportDeletions(deletions)).toContain(built.snapshotId);
     });
 
-    it("records a delete that found nothing, because that is a success", async () => {
+    itUnderHangBackstop("records a delete that found nothing, because that is a success", async () => {
       const outcome = await deleteContentForTask(client, {
         accountId: CONSENTING,
         taskId: "never-existed",
@@ -843,7 +844,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await recentContentDeletions(client, { limit: 10 })).toHaveLength(1);
     });
 
-    it("never reaches another account's rows even when a task id collides", async () => {
+    itUnderHangBackstop("never reaches another account's rows even when a task id collides", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING, taskId: "shared" }));
       await insertRetainedContent(client, content({ accountId: OTHER, taskId: "shared" }));
       const outcome = await deleteContentForTask(client, {
@@ -856,7 +857,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(remaining[0]!["account_id"]).toBe(OTHER);
     });
 
-    it("leaves the metering event, because usage is on the other clock", async () => {
+    itUnderHangBackstop("leaves the metering event, because usage is on the other clock", async () => {
       await insertRetainedContent(client, content({ taskId: "doomed" }));
       await insertMeteringEvent(client, meteringEvent({ taskId: "doomed" }));
       await deleteContentForTask(client, { accountId: CONSENTING, taskId: "doomed" });
@@ -868,7 +869,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("whose task is it", () => {
-    it("tells apart mine, somebody else's, and one nothing is known about", async () => {
+    itUnderHangBackstop("tells apart mine, somebody else's, and one nothing is known about", async () => {
       // §4.6 makes these three different answers and only one of them a 404. The middle case is the
       // one worth having a test for: an incognito task is *known* through its usage and holds no
       // content, and answering 404 for it would surface a delete that is already true as an error.
@@ -891,7 +892,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("account deletion reaches everything under the account", () => {
-    it("takes content, snapshot membership and the stored idempotency responses", async () => {
+    itUnderHangBackstop("takes content, snapshot membership and the stored idempotency responses", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING, taskId: "a" }));
       await insertRetainedContent(client, content({ accountId: CONSENTING, taskId: "b" }));
       await insertRetainedContent(client, content({ accountId: OTHER, taskId: "not-theirs" }));
@@ -936,7 +937,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(bodies.map((row) => row.account_scope)).toEqual([OTHER]);
     });
 
-    it("keeps the idempotency rows and their metering claims, which are billing and not content", async () => {
+    itUnderHangBackstop("keeps the idempotency rows and their metering claims, which are billing and not content", async () => {
       const key = "claim-survives";
       const claimed = await claimKey(client, {
         accountScope: CONSENTING,
@@ -966,7 +967,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]).toEqual({ has_body: false, claimed: true });
     });
 
-    it("keeps the usage history, which requirement 8 separates from content", async () => {
+    itUnderHangBackstop("keeps the usage history, which requirement 8 separates from content", async () => {
       await insertMeteringEvent(client, meteringEvent({ accountId: CONSENTING }));
       await insertRetainedContent(client, content({ accountId: CONSENTING }));
       await deleteContentForAccount(client, CONSENTING, 0);
@@ -979,7 +980,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("the sweep finishes an account deletion that could not finish itself", () => {
-    it("takes the content of a closed account, including one closed before this existed", async () => {
+    itUnderHangBackstop("takes the content of a closed account, including one closed before this existed", async () => {
       // The recovery path `routes/auth.ts` depends on: its wipe runs after a committed close and
       // cannot answer a failure with a 500, because the caller is no longer attributable. This is
       // what makes that safe, and it is also the only thing that reaches accounts closed while
@@ -995,7 +996,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(deletions[0]!.accountId).toBe(CONSENTING);
     });
 
-    it("takes an account whose only residue is a stored response body", async () => {
+    itUnderHangBackstop("takes an account whose only residue is a stored response body", async () => {
       // **PR #148's F4.** The selection asked only about `retained_content`, so an account closed
       // with all-incognito usage, or whose content had already expired, was never picked up by any
       // pass — and the recovery this exists to be held exactly when retained content happened to
@@ -1030,13 +1031,13 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.has_body).toBe(false);
     });
 
-    it("does nothing for an open account, however much content it holds", async () => {
+    itUnderHangBackstop("does nothing for an open account, however much content it holds", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING }));
       expect(await sweepClosedAccountContent(client, deleteStoredResponsesForAccount)).toBeUndefined();
       expect(await contentRows()).toHaveLength(1);
     });
 
-    it("is part of the ordinary sweep, not a separate thing to remember to run", async () => {
+    itUnderHangBackstop("is part of the ordinary sweep, not a separate thing to remember to run", async () => {
       await insertRetainedContent(client, content({ accountId: CONSENTING }));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [CONSENTING]);
       const result = await sweepExpiredContent(client);
@@ -1086,7 +1087,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         headers: { authorization: `Bearer ${accessTokenFor(user)}` },
       });
 
-    it("deletes this account's task and reports how many requests went", async () => {
+    itUnderHangBackstop("deletes this account's task and reports how many requests went", async () => {
       await insertRetainedContent(client, content({ taskId: "mine", accountId: CONSENTING }));
       await insertRetainedContent(client, content({ taskId: "mine", accountId: CONSENTING }));
       const response = await deleteTask("mine");
@@ -1097,7 +1098,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(0);
     });
 
-    it("answers 200 with nothing deleted for a task that stored nothing", async () => {
+    itUnderHangBackstop("answers 200 with nothing deleted for a task that stored nothing", async () => {
       // §4.6: "A task with nothing stored returns success, not 404 … a delete that is already true
       // must not surface as an error the user has to interpret." This is the incognito case and the
       // ran-before-sign-in case, and both are ordinary successes.
@@ -1106,7 +1107,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(JSON.parse(response.body).requests_deleted).toBe(0);
     });
 
-    it("answers 200 for an incognito task, which is metered and holds no content", async () => {
+    itUnderHangBackstop("answers 200 for an incognito task, which is metered and holds no content", async () => {
       await insertMeteringEvent(
         client,
         meteringEvent({ accountId: CONSENTING, taskId: "incognito", retention: "none" }),
@@ -1121,7 +1122,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(rows[0]!.count).toBe("1");
     });
 
-    it("answers 404 only for a task belonging to another account, and touches nothing", async () => {
+    itUnderHangBackstop("answers 404 only for a task belonging to another account, and touches nothing", async () => {
       await insertRetainedContent(client, content({ taskId: "theirs", accountId: OTHER }));
       const response = await deleteTask("theirs");
       expect(response.statusCode).toBe(404);
@@ -1129,7 +1130,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(1);
     });
 
-    it("closes an account and takes its content, its lineage and its stored responses with it", async () => {
+    itUnderHangBackstop("closes an account and takes its content, its lineage and its stored responses with it", async () => {
       // **Requirement 8 and SONNY-319 through the real route**, which is the only place their
       // ordering is real: the account is closed first (so nothing can arrive behind the wipe), the
       // revocation drain runs, and the wipe follows. A test of the store alone could not have shown
@@ -1192,7 +1193,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(deletions[0]!.snapshotsTouched).toEqual([built.snapshotId]);
     });
 
-    it("reaches the training snapshot the task's content had reached", async () => {
+    itUnderHangBackstop("reaches the training snapshot the task's content had reached", async () => {
       await insertRetainedContent(client, content({ taskId: "mine", accountId: CONSENTING }));
       const built = await buildTrainingSnapshot(client, { label: "corpus-route" });
       expect(built.memberCount).toBe(1);
@@ -1207,7 +1208,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
   });
 
   describe("the support lookup", () => {
-    it("shows account state, usage and how much content is held, and no content", async () => {
+    itUnderHangBackstop("shows account state, usage and how much content is held, and no content", async () => {
       await client.query(
         `INSERT INTO sonny.identity (account_id, provider, subject, link_method)
          VALUES ($1, 'email', $2, 'primary')`,
@@ -1251,7 +1252,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(report).toContain("SONNY-135");
     });
 
-    it("records every content lookup, including the ones that find nothing", async () => {
+    itUnderHangBackstop("records every content lookup, including the ones that find nothing", async () => {
       const requestId = randomUUID();
       await insertRetainedContent(client, content({ requestId, accountId: CONSENTING }));
 
@@ -1281,7 +1282,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(accesses[1]!.accountId).toBe(CONSENTING);
     });
 
-    it("prints a provider error body under the unseal, where §10.3 put it", async () => {
+    itUnderHangBackstop("prints a provider error body under the unseal, where §10.3 put it", async () => {
       const requestId = randomUUID();
       await insertRetainedContent(
         client,
@@ -1299,7 +1300,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(reportContent(view, requestId)).toContain("rejected prompt: open the invoice");
     });
 
-    it("says plainly that finding nothing is not necessarily a gap", async () => {
+    itUnderHangBackstop("says plainly that finding nothing is not necessarily a gap", async () => {
       // The report a founder reads after an incognito run, a deleted task, or a call older than
       // thirty days. All three are the system working, and a bare "not found" reads like a bug.
       const report = reportContent(undefined, "req-1");
