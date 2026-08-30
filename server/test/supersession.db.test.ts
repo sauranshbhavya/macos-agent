@@ -681,6 +681,48 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([]);
     });
 
+    it("does NOT re-owe when a CLOSED identity's row is written for some other reason", async () => {
+      // **The test the one above cannot be** (PR #167 review, F2), and the reason is worth the
+      // paragraph, because the branch shipped a changelog sentence claiming otherwise.
+      //
+      // The trigger is keyed on the TRANSITION — `WHEN (NEW.account_closed AND NOT
+      // OLD.account_closed)` — and the obvious mutant is to key it on the state instead,
+      // `WHEN (NEW.account_closed)`, which would re-owe a genuinely spent revocation on every later
+      // write to a closed identity. The re-close test above cannot separate the two: 0005's
+      // `mark_identities_closed` filters `AND NOT account_closed`, so a repeated close updates **no
+      // identity row at all** and NEITHER version fires. It passes under both, which is exactly the
+      // shape 0014's own `IS DISTINCT FROM` lesson is about — a correct line whose test guards
+      // nothing — and the reviewer's battery proved it by watching that mutant SURVIVE the whole
+      // suite.
+      //
+      // So this writes the closed identity for an ordinary reason instead. Nothing in application
+      // code does that today — `resolve()` and `linkExplicitly` both exclude closed identities, and
+      // `mark_identities_closed` filters in both directions — which is why there is no live defect
+      // and why the case has to be written by hand to exist at all. A support script or a future
+      // backfill touching a closed row is what it stands for.
+      const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
+      await close(accountId);
+      expect((await drainOwedRevocations(client, provider)).revoked).toBe(1);
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: true }]);
+
+      // An ordinary write to a row that is already closed. `account_closed` does not change, so no
+      // new obligation exists and the spent revocation must stay spent.
+      const written = await client.query(
+        "UPDATE sonny.identity SET email_hint = 'renamed@example.com' WHERE account_id = $1",
+        [accountId]);
+      // The write really happened — otherwise this test would pass for the same empty reason the
+      // re-close one does, which is the whole defect it was written to avoid.
+      expect(written.rowCount).toBe(1);
+
+      expect(await historyFor(accountId))
+        .toEqual([{ supabase_user_id: FIRST, superseded: false, revoked: true }]);
+      expect(await owedRevocationCount(client)).toBe(0);
+      provider.revokedUsers = [];
+      await drainOwedRevocations(client, provider);
+      expect(provider.revokedUsers).toEqual([]);
+    });
+
     it("does NOT re-owe a superseded id that was already drained when the account later closes", async () => {
       // The counterweight to route C, and the reason the close's clear is scoped to
       // `superseded_at IS NULL`. A close creates an obligation for the id the identity is CURRENTLY

@@ -49,6 +49,30 @@
 -- the same door: whichever way the user did or did not return, the **close** that follows owes its
 -- own revocation.
 --
+-- **That sentence is about the OBLIGATION and says nothing about the DISCHARGE, which is a fourth
+-- shape and is not closed here** (PR #167 review, F3; SONNY-365). `drainOwedRevocations`' mark-done
+-- re-checks whether a row is owed *now*; it never checks whether the provider call it just made
+-- covers the obligation that exists *now*. So a drain still inside `signOutAllForUser` when the
+-- account is reopened, refreshed and re-closed stamps the row on its way out and discharges an
+-- obligation created after its own call — reproduced against a real database, ending `owed = 0`
+-- with the sessions minted during the reopen never revoked. It is **not a regression**: 0014
+-- behaves identically and this migration strictly narrows the window rather than opening it, and
+-- the lease clear below is what makes recovery possible at all, since a second drain inside the
+-- window does call the provider again. What is missing is an episode identity on the mark-done —
+-- a claim token, or the claimed `revocation_claimed_at` carried into its predicate — and that is
+-- SONNY-365's, sequenced with this ticket before SONNY-313.
+--
+-- **The whole enumeration rests on one invariant, and it is stated here because nothing else states
+-- it** (PR #167 review). **An identity's CURRENT provider-side user id can never be a superseded
+-- row.** It holds by construction of 0014's trigger — the `ON CONFLICT` arm clears `superseded_at`
+-- for the id being named — and the reviewer measured 0 violations over 32 rows across 6 databases.
+-- Everything above depends on it: `accountForSupabaseUser` reads `sonny.identity.supabase_user_id`,
+-- so "a refresh succeeds" means "some live identity currently names this id", which under the
+-- invariant means that identity's row is current, not superseded, and therefore covered by the
+-- close's clear rather than skipped by its `superseded_at IS NULL` scoping. Break the invariant and
+-- the scoping silently starts skipping rows a refresh can still reach. An unstated invariant a
+-- mechanism rests on is what gets broken by someone who never knew it was load-bearing.
+--
 -- **And `POST /v1/auth/refresh` is deliberately left alone.** It creates no obligation to revoke —
 -- the account it serves is live, by construction, or `accountForSupabaseUser` would have refused it
 -- — so there is nothing for it to record. The route's own comment says so, pointing here.
@@ -62,7 +86,14 @@
 --
 -- **What it does not do**, so nobody reads it as more than it is. It does not make the stamp
 -- trustworthy — only SONNY-313's choice of mechanism, and a classifier narrowed to fit it, can do
--- that. It bounds how long a wrong stamp survives: until the id is next owed, rather than for ever.
+-- that. What it bounds is narrower than "how long a wrong stamp survives", and the difference is
+-- worth spelling out because the shorter phrasing reads as reassurance in the one shape where it
+-- delivers nothing (PR #167 review, F5). **A wrong stamp is corrected only where a NEW obligation
+-- arrives**: a reopen and re-close, or the id being superseded. For the ordinary case — a user
+-- closes their account and never comes back — no transition ever fires again, `owedRevocationCount`
+-- reads 0 and the hard delete goes through, exactly as before. So where the classifier lies, this
+-- migration reaches the reopen and supersession cases and leaves the never-return case untouched;
+-- that case is closed only by narrowing the classifier, which is SONNY-313's.
 -- And it says nothing about access tokens already minted, which are SONNY-237's, or about a
 -- provider-side refresh family that `deps.provider.refresh()` keeps rotating for an id this gateway
 -- then refuses to attribute — the same ticket's neighbourhood, and not this one's.
