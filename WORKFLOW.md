@@ -66,10 +66,14 @@ contract and the context handoff to a session that has never seen this conversat
 write it so that session needs nothing else. Every ticket carries:
 
 - **Branch** — the first line of the description: the exact git branch this ticket's work
-  lands on. Five prefixes are in use — `feature/`, `fix/`, `docs/`, `chore/` and `refactor/`;
-  this named `feature/...` alone until SONNY-290 counted the merged population on 2026-08-26,
-  and said four until SONNY-362 recounted it on 2026-08-30 (the counts and the commands that
-  produced them are in the changelog's second line). Sequential tickets
+  lands on. Five prefixes are in use — `feature/`, `fix/`, `docs/`, `chore/` and `refactor/`.
+  **A sixth exists on the mainline and is deliberately not one of the five: `hermes/`**, which is
+  PR #2 of 2026-07-03, the oldest merge there is, used once and not again in the 161 merges since.
+  It is history, not a convention, and it is named here so that five-against-161 does not read as a
+  count that lost one. This named `feature/...` alone until SONNY-290 counted the merged population
+  on 2026-08-26, and said four until SONNY-362 recounted it on 2026-08-30 (the counts, the
+  exclusion and the commands that produced them are in the changelog's second line). Sequential
+  tickets
   may share a branch; tickets running in parallel each get their own (git forbids one branch
   checked out in two worktrees).
 - **Context and goal** — who experiences what, and the user-visible outcome.
