@@ -54,6 +54,7 @@ describeDb("an applied migration cannot change silently", () => {
     await client.query("DELETE FROM sonny_meta.schema_migration WHERE id LIKE '0000_probe%'");
     await client.query("DROP TABLE IF EXISTS public.sonny_hash_probe");
     await client.query("DROP TABLE IF EXISTS public.sonny_hash_probe_b");
+    await client.query("DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn()");
     await client.end();
   });
 
@@ -71,10 +72,18 @@ describeDb("an applied migration cannot change silently", () => {
     return rows[0]?.content_hash;
   };
 
+  /**
+   * Removes everything this file can create, so no test here depends on the one before it having
+   * finished. **A mutation battery aborts tests mid-run by design**, and the first version of this
+   * left a function behind when it did: the next baseline then failed with `function
+   * "sonny_hash_probe_fn" already exists`, which reads as a defect in the branch and was leftover
+   * state from a killed mutant.
+   */
   const reset = async (): Promise<void> => {
     await client.query("DELETE FROM sonny_meta.schema_migration WHERE id LIKE '0000_probe%'");
     await client.query("DROP TABLE IF EXISTS public.sonny_hash_probe");
     await client.query("DROP TABLE IF EXISTS public.sonny_hash_probe_b");
+    await client.query("DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn()");
   };
 
   it("records the content hash in the same transaction as the SQL it describes", async () => {
@@ -246,7 +255,6 @@ describeDb("an applied migration cannot change silently", () => {
     expect(run.code).toBe(65);
     expect(run.err).not.toContain("Comments and layout are not hashed");
     expect(run.err).toContain("pg_proc.prosrc");
-    await client.query("DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn()");
     await reset();
   });
 
