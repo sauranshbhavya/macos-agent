@@ -44,7 +44,21 @@ describe("executableSql", () => {
     );
   });
 
-  it("keeps a doubled quote inside a string literal rather than ending the literal there", () => {
+  it("copies a plain string containing a doubled quote and a double dash through unchanged", () => {
+    // **Named for what it holds, which is less than it used to claim** (SONNY-364 cycle 2). It was
+    // called "keeps a doubled quote inside a string literal rather than ending the literal there",
+    // and it passes on a lexer with no doubled-quote handling at all — so the name asserted a
+    // property no assertion here can reach.
+    //
+    // The plain branch's `''` handling is an EQUIVALENT mutant, measured rather than guessed: a fuzz
+    // over 400k inputs found 462 divergences between the two readings, 100% of them containing an
+    // `E'`, and the plain twin diverges on ZERO of 12,093,234 exhaustive strings. The reason is
+    // provable — both readings consume quotes in pairs from the same index onto contiguous slices,
+    // and every byte is copied verbatim, so the emitted text is identical either way. The handling
+    // is kept because it is correct; it simply cannot be pinned.
+    //
+    // The escape-string twin IS observable, and `keeps an escape string holding BOTH quote forms in
+    // one piece` below is the test that pins it. That asymmetry is the whole point of both comments.
     expect(executableSql("SELECT 'it''s -- fine';")).toBe("SELECT 'it''s -- fine';");
   });
 
@@ -164,6 +178,45 @@ describe("executableSql", () => {
 
   it("needs no special handling for bit-string and hex-string constants", () => {
     expect(executableSql("SELECT B'0101', X'1FF' -- note\n;")).toBe("SELECT B'0101', X'1FF' ;");
+  });
+
+  it("collides on plain strings that only differ under standard_conforming_strings=off", () => {
+    // **This asserts the defect, on purpose, because it is what the runner's precondition check
+    // exists to prevent** (SONNY-364 cycle 2). With the setting off, a backslash escapes inside a
+    // plain '…' too, so these two INSERTs are both accepted and store DIFFERENT rows — measured on
+    // 17.11 under `SET standard_conforming_strings = off`: count(*) 2, count(DISTINCT v) 2, values
+    // `a' -- one` and `a' -- two`. This lexer does not honour backslashes there, which is correct
+    // for the default and wrong for that connection, so it truncates both at the same point and
+    // hands back one hash. That is F1 returning through the branch the lexer treats as safe.
+    //
+    // The lexer is NOT taught the off behaviour: it cannot know which setting produced a file, and
+    // guessing would break the default. `applied()` refuses such a connection instead, which is
+    // pinned in `migration-content-hash.db.test.ts`. This test is the reason that refusal exists,
+    // and it fails the moment anyone "fixes" the lexer without removing the guard.
+    expect(hashOf("INSERT INTO u VALUES ('a\\' -- one');")).toBe(
+      hashOf("INSERT INTO u VALUES ('a\\' -- two');"),
+    );
+  });
+
+  it("reads a doubled quote inside a bit-string, where Postgres rejects the statement", () => {
+    // The enumeration is the guarantee now, so its one inaccuracy is pinned rather than described:
+    // `''` does NOT double inside B'…' or X'…' — `SELECT B'01''01'` is `syntax error at or near
+    // "'01'"` on 17.11, where plain `'01''01'` is a five-character string. This lexer is more
+    // permissive there and reads it as one literal. Harmless, because the divergence is only
+    // reachable on text Postgres will not accept, so it cannot put two VALID migrations on one hash.
+    expect(executableSql("SELECT B'01''01';")).toBe("SELECT B'01''01';");
+  });
+
+  it("emits quote continuation as two literals, which is not what Postgres reads", () => {
+    // `'a'` newline `'b'` is ONE constant `ab` (length 2) to Postgres, and a comment can carry the
+    // newline. This lexer emits two literals with the whitespace collapsed, and `SELECT 'a' 'b'` on
+    // one line is a syntax error — so the normalised form is not valid SQL. That is safe because it
+    // is only ever hashed: two texts differing solely in that newline's presence cannot both be
+    // valid, so no two valid migrations are put on one hash by it.
+    expect(executableSql("SELECT 'a'\n'b';")).toBe("SELECT 'a' 'b';");
+    // Two valid texts that differ only by a comment carrying the newline normalise the same — and
+    // mean the same to Postgres, which is the intended behaviour rather than a collision.
+    expect(executableSql("SELECT 'a' -- c\n'b';")).toBe(executableSql("SELECT 'a'\n'b';"));
   });
 
   // ---- The dollar-quote tag rule, whose character classes a mutant walked through ----

@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { MigrationDriftError, down, loadMigrations, runCommand, up } from "../src/db/migrate.js";
+import {
+  MigrationDriftError,
+  UnsafeStringLexingError,
+  down,
+  loadMigrations,
+  runCommand,
+  up,
+} from "../src/db/migrate.js";
 import { migrationContentHash } from "../src/db/migration-hash.js";
 
 /**
@@ -287,6 +294,32 @@ describeDb("an applied migration cannot change silently", () => {
     expect(issued.some((q) => q.includes("ALTER TABLE sonny_meta.schema_migration"))).toBe(false);
     // ...and the check that replaced it really did run, so this is not passing because nothing did.
     expect(issued.some((q) => q.includes("information_schema.columns"))).toBe(true);
+    await reset();
+  });
+
+  it("refuses a connection whose standard_conforming_strings is off, before taking any lock", async () => {
+    // **The precondition, detected rather than assumed** (SONNY-364 cycle 2). `DATABASE_URL` alone
+    // falsifies it — `?options=-c%20standard_conforming_strings%3Doff` — with no file this
+    // repository controls changed, and with it off a backslash escapes inside a plain '…' as well,
+    // so two migrations storing different rows hash the same. `SET` on this connection is the same
+    // session state that connection string produces.
+    await reset();
+    await writeProbe(upSql("id int"));
+    await client.query("SET standard_conforming_strings = off");
+    try {
+      await expect(up(client, dir)).rejects.toThrow(UnsafeStringLexingError);
+      await expect(down(client, dir)).rejects.toThrow(/standard_conforming_strings/);
+      // EX_CONFIG, not EX_DATAERR: nothing is wrong with the ledger or the files.
+      const run = await runs("status");
+      expect(run.code).toBe(78);
+      expect(run.err).toContain("DATABASE_URL");
+    } finally {
+      await client.query("SET standard_conforming_strings = on");
+    }
+    // ...and the same connection works again the moment the setting is right, so the refusal is the
+    // setting rather than anything it left behind. `toContain` because the directory carries
+    // whatever earlier tests left in it, and what this asserts is that the connection is usable.
+    expect(await up(client, dir)).toContain(PROBE);
     await reset();
   });
 

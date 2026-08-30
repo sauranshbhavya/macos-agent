@@ -622,8 +622,17 @@ the lexer does with each — `'…'`, `E'…'`, `U&'…'`, `U&"…"`, `B'…'`, 
 because the guard is the enumeration and not whichever form somebody last thought of. `E'…'` is the
 one that needs its own branch: backslash escapes are live in it, so `\'` does not end the literal,
 and reading it as an ordinary string truncated the text being hashed. Two `INSERT`s that Postgres
-17.11 accepts and that store different rows then normalised identically. It also assumes
-`standard_conforming_strings = on`, the default since 9.1 and unchanged anywhere under `server/`.
+17.11 accepts and that store different rows then normalised identically.
+
+**`standard_conforming_strings = on` is checked on the connection, not assumed.** With it off a
+backslash escapes inside an ordinary `'…'` too, and the same collision returns through the branch
+the lexer treats as safe — measured: under `SET standard_conforming_strings = off`,
+`INSERT INTO u VALUES ('a\' -- one');` and `… -- two');` are both accepted and store two distinct
+rows, and this lexer hands back one hash for them. It is checked rather than noted because
+**`DATABASE_URL` alone falsifies it**, with no file this repository controls changed:
+`?options=-c%20standard_conforming_strings%3Doff`. All three commands exit **78** (`EX_CONFIG`, the
+same code a missing `DATABASE_URL` gets — the problem is in how the process was pointed at its
+database) and name the connection string in the message.
 
 **A migration applied before this existed reads `unverified`, and nothing invents a hash for it.**
 The column is nullable and an existing database gets it from an `ALTER … ADD COLUMN IF NOT EXISTS`,

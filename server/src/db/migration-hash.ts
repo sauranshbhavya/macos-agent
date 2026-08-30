@@ -40,7 +40,16 @@ import { createHash } from "node:crypto";
  *
  *   - `'…'` — standard string constant. A doubled `''` is an escaped quote; a backslash is an
  *     ordinary character. Handled by the plain-quote branch.
- *   - `E'…'` / `e'…'` — **escape** string constant. Backslash escapes are live, so `\'` does NOT end
+ *   - `E'…'` / `e'…'` — **escape** string constant. **The doubled-quote handling in this branch is
+ *     the only one of the two that is observable**, and that is measured rather than assumed
+ *     (cycle 2): a fuzz over 400k inputs found 462 divergences between the two readings of `''`,
+ *     100% of them containing an `E'`, while the plain-string twin diverges on **zero** of
+ *     12,093,234 exhaustive strings. The reason is provable — both readings consume quotes in pairs
+ *     from the same index onto contiguous slices, and every byte is copied verbatim, so the plain
+ *     branch's two readings emit identical text. The plain branch's `''` handling is therefore
+ *     correct and **unobservable**: it is kept because it is right, and no test can pin it. See
+ *     `migration-content-hash.test.ts` for which test holds what.
+ *     Backslash escapes are live, so `\'` does NOT end
  *     the literal, and `''` still does. This form had its own branch added after the review: without
  *     it, `\'` ended the string early, everything after it was lexed as code, and a `--` in there was
  *     stripped — so two `INSERT`s storing different rows normalised to the same text. That is exactly
@@ -54,19 +63,39 @@ import { createHash } from "node:crypto";
  *     changes which character introduces the unicode escape and likewise cannot escape a quote. So
  *     `U&` lexes as ordinary code and the `'` or `"` after it opens a plain literal, which is what
  *     the scanner does too.
- *   - `B'…'` and `X'…'` — bit-string and hex-string constants. Plain quote rules, no escapes; the
- *     prefix letter lexes as code. No special handling needed, tested anyway.
+ *   - `B'…'` and `X'…'` — bit-string and hex-string constants. The prefix letter lexes as code and
+ *     the literal after it needs no branch. **They are not quite "plain quote rules", and the
+ *     correction is worth keeping** (cycle 2): a doubled quote does **not** double inside them —
+ *     `SELECT B'01''01'` and `SELECT X'1F''F'` are both `syntax error at or near "'01'"` on 17.11,
+ *     where the plain `'01''01'` is a five-character string. So this lexer is more permissive there
+ *     than Postgres is, reading `''` as a doubled quote where Postgres rejects the statement
+ *     outright. That divergence is only reachable on text Postgres will not accept, so it cannot put
+ *     two *valid* migrations on one hash; it is recorded rather than fixed because narrowing it
+ *     would add a rule whose only effect is on files that can never be applied.
  *   - `$tag$…$tag$` — dollar-quoted. Its own branch; nothing inside is interpreted at all, which is
  *     what keeps a function body's comments in the hash.
  *   - `"…"` — quoted identifier, `""` doubles. Plain-quote branch.
- *   - Adjacent constants split across lines (`'a'` newline `'b'`) are two literals to the scanner and
- *     two literals here. Nothing to do.
+ *   - **Quote continuation** — `'a'` newline `'b'` is **one** constant, not two: Postgres joins two
+ *     string constants separated by whitespace containing at least one newline, so that expression
+ *     is `ab` with `length` 2, and a comment can carry the newline (`'a' -- c` newline `'b'` is `ab`
+ *     as well). All three measured on 17.11. This lexer does not model it: it emits two literals with
+ *     the whitespace between them collapsed to a single space, and `SELECT 'a' 'b'` on one line is a
+ *     `syntax error at or near "'b'"`. **That is safe for hashing and the reason is worth stating**,
+ *     because it is not obvious: the normalised form is never executed, only hashed, and two texts
+ *     can differ only in that newline's presence when one of them is invalid SQL — so no two valid
+ *     migrations are put on one hash by it. Two valid texts that differ only by a comment carrying
+ *     the newline normalise the same and mean the same, which is the intended behaviour anyway.
+ *     (The header said these were "two literals to the scanner", which was simply wrong.)
  *
- * **The one assumption this makes is `standard_conforming_strings = on`**, which has been the default
- * since Postgres 9.1 and which nothing under `server/` changes. With it off, a plain `'…'` would
- * honour backslashes too and `'a\'` would not end where this lexer ends it. That is a server setting
- * rather than a property of the files, so it is recorded here rather than guessed at; a migration
- * that turned it off would need this list revisited.
+ * **`standard_conforming_strings = on` is a precondition this runner DETECTS, not an assumption it
+ * records** (cycle 2). With it off, a backslash escapes inside a plain `'…'` as well, so `\'` would
+ * not end the literal where this lexer ends it — F1 returning through the branch the lexer treats as
+ * safe, with two `INSERT`s storing different rows collapsing onto one hash. It was a written note
+ * until it was pointed out that `DATABASE_URL` alone falsifies it, with no file this repository
+ * controls changed: `?options=-c%20standard_conforming_strings%3Doff`. A default since 9.1 that
+ * nothing here changes is a likelihood argument, and this design refuses those everywhere else it
+ * matters. `applied()` in `migrate.ts` now runs one `SHOW` and refuses the connection outright; see
+ * `UnsafeStringLexingError`.
  *
  * **What this cannot do**, stated rather than implied: it compares a file against what an
  * environment recorded when it applied that file. It says nothing about whether the schema in the

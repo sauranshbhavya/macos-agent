@@ -129,6 +129,13 @@ const HAS_CONTENT_HASH = `
  * would be indistinguishable in the ledger, which puts the guard back where it started.
  */
 async function applied(client: pg.Client): Promise<Map<string, string | null>> {
+  // First, and before any lock is taken: if this connection would not lex strings the way the
+  // hashes were computed, every comparison below is meaningless and the honest thing is to stop.
+  const { rows: settings } = await client.query<{ standard_conforming_strings: string }>(
+    "SHOW standard_conforming_strings",
+  );
+  const setting = settings[0]?.standard_conforming_strings;
+  if (setting !== "on") throw new UnsafeStringLexingError(setting ?? "unreadable");
   await client.query(LEDGER);
   const { rowCount } = await client.query(HAS_CONTENT_HASH);
   if (rowCount === 0) {
@@ -178,6 +185,48 @@ export function driftedMigrations(
 }
 
 /**
+ * The base for every refusal this runner raises about the state it found, as opposed to a fault.
+ *
+ * The CLI catches this and prints the message alone; anything else keeps its stack, because a
+ * migration that failed mid-statement is a fault and the frames are the point.
+ */
+export abstract class MigrationRefusal extends Error {}
+
+/**
+ * Thrown when the connection would not lex a migration's strings the way this runner hashes them.
+ *
+ * **A detected precondition rather than a written assumption** (SONNY-364 cycle 2). With
+ * `standard_conforming_strings = off`, a backslash escapes inside a **plain** `'…'` too — so `\'`
+ * does not end the literal, and the lexer, which correctly does not honour backslashes there, stops
+ * early exactly as it did for `E'…'` before cycle 1. That is F1 returning through the branch the
+ * lexer treats as safe: two `INSERT`s storing different rows collapse to one hash, which is the
+ * defect this whole ticket exists to close.
+ *
+ * **It needs detecting because `DATABASE_URL` alone falsifies it**, with no file this repository
+ * controls changed: `?options=-c%20standard_conforming_strings%3Doff` turns it off for the session.
+ * The setting has been on by default since Postgres 9.1 and nothing under `server/` sets it, and
+ * that is a likelihood argument — which this design refuses everywhere else it matters. The check
+ * is one `SHOW` in a function that already runs three queries, and it takes no lock.
+ *
+ * `EX_CONFIG` rather than `EX_DATAERR`: nothing is wrong with the ledger or the files. The
+ * connection is configured in a way this runner cannot work over, and the fix is in the connection.
+ */
+export class UnsafeStringLexingError extends MigrationRefusal {
+  constructor(setting: string) {
+    super(
+      `this connection has standard_conforming_strings = ${setting}, and every migration hash ` +
+        `assumes "on".\n` +
+        `With it off a backslash escapes inside an ordinary '…' string, so two migrations that ` +
+        `store different rows can hash the same and a changed migration would be applied in ` +
+        `silence — the exact failure the hash exists to catch.\n` +
+        `Nothing under server/ sets it, so look at DATABASE_URL: a connection string may carry ` +
+        `?options=-c%20standard_conforming_strings%3Doff. Remove it and re-run.`,
+    );
+    this.name = "UnsafeStringLexingError";
+  }
+}
+
+/**
  * What `up` and `down` throw when the files disagree with the ledger.
  *
  * A named type rather than a bare `Error` for one reason: the CLI below catches it and prints the
@@ -187,7 +236,7 @@ export function driftedMigrations(
  * not match its files. Left uncaught it arrived as a Node crash dump with the source line echoed
  * above the message and four stack frames below it, which buries the one paragraph worth reading.
  */
-export class MigrationDriftError extends Error {
+export class MigrationDriftError extends MigrationRefusal {
   /**
    * **Every clause of this message has to be true in every case that reaches it** (SONNY-364 review,
    * F2). It used to end "Comments and layout are not hashed, so this is a change to the executable
@@ -322,6 +371,13 @@ export async function down(client: pg.Client, dir?: string): Promise<string | un
 const DATA_ERROR = 65;
 
 /**
+ * `EX_CONFIG` from sysexits, already what this runner exits when `DATABASE_URL` is missing. It is
+ * also what an unsafe `standard_conforming_strings` exits with, and for the same reason: the
+ * problem is in how the process was pointed at its database, not in the database's contents.
+ */
+const CONFIG_ERROR = 78;
+
+/**
  * Where a command's writes go. Injected so the whole dispatch can be exercised from the suite — the
  * alternative is spawning a built `dist/db/migrate.js`, which couples the tests to a prior
  * `npm run build`.
@@ -400,9 +456,9 @@ export async function runCommand(
   } catch (error) {
     // The finding, not the fault: message alone, no stack. Anything else rethrows and keeps the
     // trace, because a migration that failed mid-statement is a fault and the frames are the point.
-    if (!(error instanceof MigrationDriftError)) throw error;
+    if (!(error instanceof MigrationRefusal)) throw error;
     io.err(`${error.message}\n`);
-    return DATA_ERROR;
+    return error instanceof UnsafeStringLexingError ? CONFIG_ERROR : DATA_ERROR;
   }
 }
 
