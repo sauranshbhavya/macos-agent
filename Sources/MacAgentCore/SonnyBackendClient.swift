@@ -699,9 +699,18 @@ public actor SonnyBackendClient {
         // refresh, and `recordServerClock` runs on every response including a failing one — whereas
         // capping the offset makes `serverNow()` stop meaning "the server's clock as last reported",
         // which is what token expiry is reasoned in and what
-        // `aServerSayingMoreTimeHasPassedIsBelievedOverThisMacsOwnClock` holds. The offset is a
-        // correction, re-derived from every response and **never written down**; the observation
-        // below is the one that is persisted, and that is the one that needed a bound.
+        // `aServerSayingMoreTimeHasPassedIsBelievedOverThisMacsOwnClock` holds.
+        //
+        // **The offset does reach the Keychain, and the sentence here used to deny it** (PR #173's
+        // review, finding 3). `refreshedSnapshot` writes `receivedAt: serverNow()`, and
+        // `WireTokenResponse.tokens(emailAddress:receivedAt:)` turns that into
+        // `accessTokenExpiresAt`, which the token store persists — so a header a year out is written
+        // down as a session that expires a year late. **What makes that non-permanent is not that it
+        // was never stored**, it is that the gateway is the other half of the check: a token this
+        // client believes is live is still refused as `401 auth.token_expired`, and §3.3's reactive
+        // refresh rewrites the record with an expiry derived from a fresh, correct `Date`. The
+        // entitlement mark has no such second party — nothing on the network disagrees with it —
+        // which is exactly why it needed the bound and the repair and this does not.
         serverClockOffset = serverDate.timeIntervalSince(now())
         // **Only ever forward.** A response that reports an earlier instant than one already seen —
         // a proxy with a slow clock, a replayed response — must not lower what this client will
@@ -726,8 +735,17 @@ public actor SonnyBackendClient {
     /// afterwards, only ahead; refusing every observation from it would freeze this client's
     /// observation permanently behind, because each later response is ahead of the same frozen
     /// projection. Capping absorbs `maximumUncorroboratedForwardJump` per response, so a real
-    /// correction of a few minutes is caught up in two or three responses while a year is never
-    /// caught up at all — which is the pair of behaviours wanted.
+    /// correction of a few minutes is caught up in two or three responses.
+    ///
+    /// **What the cap is spent in is responses, not seconds, and it compounds — so "a year can
+    /// never get in" is false and the true bound is worth writing down** (PR #173's review, finding
+    /// 2). Each response moves this observation up by at most 300 s beyond real time, so a year of
+    /// error is absorbed in 31_536_000 / 300 = **105,120 responses**, and the amount that actually
+    /// matters — enough to reach the end of a claim's own window, 24 h of life plus 72 h of grace
+    /// plus 300 s of tolerance — in 345_900 / 300 = **1,153**. Those are the numbers that make this
+    /// safe rather than an absolute refusal, and a client that made 1,153 requests against a gateway
+    /// stuck a year ahead would get there. What stops that from being permanent is not this bound
+    /// but `EntitlementService.markKeptOrReset`, which is the other half of the fix.
     ///
     /// **What it cannot do:** an anchor is needed to bound against, so the first observation of a
     /// process is accepted as reported. That residual is closed on the other side, where a claim the

@@ -718,8 +718,10 @@ struct EntitlementServiceTests {
         let clocks = MovableClocks(wall: Self.issuedAt)
         let first = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
         let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let network = Reachability()
         first.register { _ in
-            .reply(
+            guard network.isReachable else { return .failure(URLError(.notConnectedToInternet)) }
+            return .reply(
                 statusCode: 200,
                 headers: [
                     "Content-Type": "application/json",
@@ -736,8 +738,22 @@ struct EntitlementServiceTests {
             monotonicNow: clocks.monotonic
         )
         _ = try await live.refreshNow()
+        // **The network goes away before the refusal, and saying so is the point** (PR #173's
+        // review, finding 6). The refusal below starts a refresh, and a refresh that reached this
+        // stub would adopt a claim issued a hundred hours ago against a mark that has just passed
+        // its window — which is `markKeptOrReset`'s reset, and it would put the mark back at
+        // `issuedAt` and make the assertions below fail. It did not fail before this line was added,
+        // and only because the fixture's *default* one-hour session had expired a hundred hours ago
+        // by then, so the refresh died renewing it rather than being unable to adopt. Measured
+        // rather than reasoned: restoring the pre-fix shape and changing nothing but that default to
+        // `expiresIn: 400 * 24 * 60 * 60` fails both assertions below — `persisted` a flat `0.0`
+        // seconds past `issuedAt`, and the relaunch answering `.entitled`. This test is about a mark
+        // that survives **with no network**, so having no network is the state it should be
+        // asserting in rather than a thing it got away with.
+        network.goOffline()
         clocks.advance(by: 100 * 60 * 60)
         #expect(await live.decision(for: Self.capability) == .refused(.lapsed))
+        await live.awaitPendingRefresh()
         first.unregister()
 
         // The mark was written back during that decision, which is what the next launch inherits.
@@ -996,6 +1012,49 @@ struct EntitlementServiceTests {
         _ = try await service.refreshNow()
         let afterTwo = try #require(await fixture.client.lastObservedServerTime()).serverInstant
         #expect(afterTwo == gatewaySays.instant)
+    }
+
+    @Test
+    @MainActor
+    func theBoundaryOfTheResetIsTheLastHonouredInstant() async throws {
+        // **The reset's own boundary, pinned at the notch either side of which the answer inverts**
+        // (PR #173's review, finding 4; a mutant loosening `>` to `>=` survived the first battery).
+        // `judge` answers `.entitled` at exactly `honouredUntil`, so a mark sitting on that instant
+        // belongs to a claim that is still alive — and resetting there would roll the mark back by
+        // the claim's whole 96-hour window on a live entitlement, which is the one direction it must
+        // never move in. The identical boundary one function away is already pinned by name in
+        // `aStoredClaimTheMarkHasNotYetKilledStillOutranksAnOlderOne`; this is the other half.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        guard case .success(let claim) = EntitlementVerifier.verify(compact, against: signer.keys) else {
+            Issue.record("the fixture's own claim did not verify")
+            return
+        }
+        // 24 h of life, 72 h of grace and 300 s of tolerance, which is what the fixture's claim says.
+        let lastHonouredInstant = Self.issuedAt.addingTimeInterval(96 * 60 * 60 + 300)
+        #expect(claim.honouredUntil == lastHonouredInstant)
+
+        // Exactly on the boundary: the claim is still live, so the mark stays where it is.
+        let onTheBoundary = MemoryStore(StoredEntitlement(
+            compactClaim: compact,
+            observedServerTime: lastHonouredInstant
+        ))
+        try await EntitlementService(client: fixture.client, store: onTheBoundary, keys: signer.keys)
+            .adopt(claim, compact: compact, observedAt: lastHonouredInstant)
+        #expect(onTheBoundary.current?.observedServerTime == lastHonouredInstant)
+
+        // One second past it: the claim is dead, the mark is what killed it, and it goes back to the
+        // claim's own signed issue time.
+        let pastIt = lastHonouredInstant.addingTimeInterval(1)
+        let beyondTheBoundary = MemoryStore(StoredEntitlement(
+            compactClaim: compact,
+            observedServerTime: pastIt
+        ))
+        try await EntitlementService(client: fixture.client, store: beyondTheBoundary, keys: signer.keys)
+            .adopt(claim, compact: compact, observedAt: pastIt)
+        #expect(beyondTheBoundary.current?.observedServerTime == Self.issuedAt)
     }
 
     @Test
