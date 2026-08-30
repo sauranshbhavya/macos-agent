@@ -86,6 +86,98 @@ describe("the settling barrier", () => {
     expect(events).toEqual(["step 0", "settled"]);
   });
 
+  /**
+   * Two bodies tracked before either finishes, released in a caller-chosen order, with `settle`
+   * asserted not to resolve until the last of them has stopped.
+   *
+   * **Run in both orders, and that is not symmetry for its own sake.** A first version released the
+   * second body first and passed against a deliberately broken barrier that tracked only the
+   * *first* — because the body it was still waiting on happened to be the one that mutant kept.
+   * One ordering can only ever exercise one slot; the mutants that survived it are recorded on the
+   * two arms below.
+   */
+  async function settleWaitsForWhicheverFinishesLast(releaseFirstBodyFirst: boolean): Promise<string[]> {
+    const barrier = settling();
+    const events: string[] = [];
+    const one = deferred<void>();
+    const two = deferred<void>();
+    const bothStarted = deferred<void>();
+    let started = 0;
+    const reachedStart = (): void => { started += 1; if (started === 2) bothStarted.resolve(); };
+
+    const bodyOne = barrier.track(async (signal) => {
+      reachedStart();
+      await one.promise;
+      events.push(signal.aborted ? "one saw the abort" : "one did not see an abort");
+    });
+    const bodyTwo = barrier.track(async (signal) => {
+      reachedStart();
+      await two.promise;
+      events.push(signal.aborted ? "two saw the abort" : "two did not see an abort");
+    });
+    bodyOne.catch(() => {}); bodyTwo.catch(() => {});
+    await bothStarted.promise;
+
+    let settled = false;
+    const settling_ = barrier.settle().then(() => { settled = true; events.push("settled"); });
+
+    // **Draining the queues rather than waiting a while, and `setImmediate` rather than a handful
+    // of `Promise.resolve()`s.** Node exhausts the microtask queue before it runs a macrotask, so
+    // one turn through `setImmediate` flushes any finite promise chain — where three microtask hops
+    // flush only three, which is fewer than the `.then().finally()` chain inside the barrier needs
+    // to resolve. That is not a subtle distinction here: a shallow drain made this test pass
+    // against two barriers that resolved a tick early, and it is what let the single-slot mutants
+    // survive the first version of it. Two turns, so a body released on the first still lands on
+    // the second. Nothing here depends on how fast the machine is.
+    const drain = async (): Promise<void> => {
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    await drain();
+    events.push(settled ? "RESOLVED with both running" : "still waiting, both running");
+
+    const [firstReleased, lastReleased] = releaseFirstBodyFirst ? [one, two] : [two, one];
+    firstReleased.resolve();
+    await drain();
+    events.push(settled ? "RESOLVED with one still running" : "still waiting, one running");
+
+    lastReleased.resolve();
+    await settling_;
+    return events;
+  }
+
+  it("waits for EVERY outstanding body, releasing the first-tracked one first", async () => {
+    // **PR #172's F3.** The first version kept one controller and one promise, so a second `track`
+    // overwrote both — the first body was never aborted and never waited for, and `settle` resolved
+    // while it was still running. `settle` returning IS the guarantee, so a hole here is silent by
+    // construction: the caller reads a resolved promise as "nothing is outstanding".
+    //
+    // **This ordering is the one that catches a barrier keeping only the first body.** A mutant
+    // doing exactly that (`if (outstanding.size === 0) outstanding.add(stopped)`) SURVIVED the
+    // single-ordering version of this test and is killed here.
+    const events = await settleWaitsForWhicheverFinishesLast(true);
+    expect(events).toEqual([
+      "still waiting, both running",
+      "one saw the abort",
+      "still waiting, one running",
+      "two saw the abort",
+      "settled",
+    ]);
+  });
+
+  it("waits for EVERY outstanding body, releasing the second-tracked one first", async () => {
+    // The other slot: a barrier keeping only the most recent body — which is the defect as it
+    // actually shipped — is killed here and not by the arm above.
+    const events = await settleWaitsForWhicheverFinishesLast(false);
+    expect(events).toEqual([
+      "still waiting, both running",
+      "two saw the abort",
+      "still waiting, one running",
+      "one saw the abort",
+      "settled",
+    ]);
+  });
+
   it("stops an abandoned body with a message that says what happened", async () => {
     const barrier = settling();
     let message = "";

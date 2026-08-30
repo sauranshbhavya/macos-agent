@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import vitestConfig from "../vitest.config.js";
 import {
   HANG_BACKSTOP_DECLARED_FRAGMENT, HANG_BACKSTOP_MS, VITEST_TIMEOUT_MS,
   hangBackstopMessage, underHangBackstop,
@@ -214,11 +215,140 @@ describe("the server suite's hang backstop", () => {
   });
 
   /**
-   * Every test in a `.db.test.ts` file, as vitest sees it: a call at the start of a line, so a
-   * mention inside a comment or a string is not one. `codeOf` has already dropped comment lines;
-   * this pattern is what keeps a sample list inside a test from counting as a declaration.
+   * **The two names vitest binds a test declarator to, read off its own types rather than guessed**
+   * (PR #172, F1). `@vitest/runner` declares exactly two — `declare const test: TestAPI` and
+   * `declare const it: TestAPI` — and `vitest` re-exports both. Everything else about a declaration
+   * is a property chain hanging off one of those two.
+   *
+   * The chain is `ChainableTestAPI & ExtendedAPI & { extend }`, which in that same file is
+   * `"concurrent" | "sequential" | "only" | "skip" | "todo" | "fails"` plus `each` and `for` (chained
+   * as properties), plus `skipIf(cond)` and `runIf(cond)` (chained as *calls* that return the
+   * chainable again), plus `extend`, which returns a whole new `TestAPI` **under a name of the
+   * caller's choosing**. So the population is not a list of spellings and cannot be scanned for as
+   * one, which is what the arm this replaces tried to do: it counted `/^\s*it\(/` and required zero,
+   * so `test(`, `it.each(`, `it.skip(` and every other member of that surface walked straight past
+   * it, and a hanging `test(` came back as `Test timed out in 5000ms.` — the undeclared,
+   * repository-wide message this whole construct exists to replace.
    */
-  const DECLARES_A_TEST = /^\s*(it|itUnderHangBackstop)\(/gm;
+  const RAW_TEST_DECLARATORS = ["it", "test"];
+
+  /**
+   * A declaration-shaped *call*: one of those two names, as its own identifier, followed by any
+   * property chain — including one whose segments are themselves calls, which is what `skipIf` and
+   * `runIf` are — and then an opening `(` or a backtick, since ``it.each`table`(…)`` is a template
+   * tag rather than a call.
+   *
+   * The leading lookbehind is what keeps `itUnderHangBackstop(`, `testDatabaseUrl(` and
+   * `pattern.test(` out; measured against this whole tree, it matches **0** lines in any
+   * `.db.test.ts` file and finds `it(` in every file that legitimately declares one, which is the
+   * pair of facts that makes a zero here mean something.
+   */
+  const DECLARES_A_TEST_DIRECTLY =
+    /(?<![A-Za-z0-9_$.])(it|test)\s*(\.\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(\([^)]*\)\s*)?)*[(`]/;
+
+  /**
+   * Every `import … from "vitest"` clause in a file, as its raw text between `import` and `from`.
+   *
+   * **`[^;]` rather than `[\s\S]`, and the difference is a parser that reads the wrong statement.**
+   * A lazy `[\s\S]*?` starts matching at the file's FIRST `import` keyword and runs to the vitest
+   * `from`, so the clause it hands back is every import above the vitest one glued to part of it —
+   * and the brace extraction below, being greedy, then pulls names out of whichever of those
+   * happened to be there. Caught by watching a negative control not fire on the sibling scan in
+   * `schema.test.ts`, which had the identical bug. A statement cannot contain a `;`, so excluding
+   * one is what keeps a clause inside its own statement.
+   */
+  function vitestImportClauses(code: string): string[] {
+    return [...code.matchAll(/import\s+([^;]*?)\s+from\s+["']vitest["']/g)].map((m) => m[1]!);
+  }
+
+  /**
+   * How a file reaches a raw declarator, named rather than counted.
+   *
+   * **The import is the arm that actually closes this**, and the reason is one line up in
+   * `vitest.config.ts`: `globals` is not enabled, so a declarator has to be imported before it can
+   * be called, and every route into the file goes through a clause this reads. It matches the
+   * *imported* name rather than the local one, so `import { it as t }` is caught; and a namespace
+   * import is refused outright, because `import * as v from "vitest"` brings the whole surface in
+   * under one name no specifier list can see and nothing in this suite needs it.
+   */
+  function reachesARawDeclarator(code: string): string[] {
+    const found: string[] = [];
+    for (const clause of vitestImportClauses(code)) {
+      const namespace = /\*\s*as\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(clause);
+      if (namespace) { found.push(`namespace import \`* as ${namespace[1]}\``); continue; }
+      const named = /\{([^}]*)\}/.exec(clause);
+      for (const specifier of (named?.[1] ?? "").split(",")) {
+        const imported = specifier.trim().split(/\s+as\s+/)[0]?.trim();
+        if (imported !== undefined && RAW_TEST_DECLARATORS.includes(imported)) {
+          found.push(`imports \`${specifier.trim()}\``);
+        }
+      }
+    }
+    if (DECLARES_A_TEST_DIRECTLY.test(code)) found.push("calls a raw declarator");
+    return found;
+  }
+
+  it("knows every shape vitest accepts as a test declaration, and no shape it does not", () => {
+    // **The pattern is the guard, so the pattern is what gets tested** — the same rule the raw-helper
+    // scan below already carries (PR #156 review, F2), applied to a surface with far more spellings
+    // in it. Every entry here is a real member of `TestAPI` as its own types declare it.
+    const declares = [
+      'it("x", body);',
+      'test("x", body);',
+      'it.skip("x", body);',
+      'it.only("x", body);',
+      'it.todo("x");',
+      'it.fails("x", body);',
+      'it.concurrent("x", body);',
+      'it.sequential("x", body);',
+      'test.each([1, 2])("x %i", body);',
+      'it.for([1, 2])("x %i", body);',
+      'it.skip.each([1])("x", body);',
+      'it.skipIf(cond)("x", body);',
+      'test.runIf(cond)("x", body);',
+      'it.each`\n a \n`("x", body);',
+      'it ("x", body);',
+      '} else it("x", body);',
+    ];
+    const doesNot = [
+      'itUnderHangBackstop("x", body);',
+      'const url = testDatabaseUrl();',
+      'expect(PATTERN.test(sample)).toBe(true);',
+      'const latest = rows[0];',
+      'describe("x", body);',
+      'const t = myTest("x", body);',
+    ];
+    // Reported as the failing samples rather than as a bare boolean, so a failure says which shape
+    // moved. None carries the declared wording, so printing them is safe under this file's header.
+    expect(declares.filter((sample) => !DECLARES_A_TEST_DIRECTLY.test(sample))).toEqual([]);
+    expect(doesNot.filter((sample) => DECLARES_A_TEST_DIRECTLY.test(sample))).toEqual([]);
+  });
+
+  it("sees a raw declarator arriving through any import shape, aliased or namespaced", () => {
+    const reaches = [
+      'import { it } from "vitest";',
+      'import { test } from "vitest";',
+      'import { it as t } from "vitest";',
+      'import { afterAll, beforeAll, it, describe } from "vitest";',
+      'import {\n  describe,\n  test as check,\n} from "vitest";',
+      'import * as v from "vitest";',
+      "import { test } from 'vitest';",
+      // A vitest import that is not the file's first import, which is every real file's shape and
+      // the case the clause parser used to get wrong.
+      'import pg from "pg";\nimport { describe, it } from "vitest";',
+    ];
+    const doesNot = [
+      'import { afterAll, beforeAll, describe, expect } from "vitest";',
+      'import { itUnderHangBackstop } from "./support/backstop.js";',
+      'import { testDatabaseUrl } from "./support/database.js";',
+      'import { latest } from "./support/x.js";',
+      // The other direction of the same parser bug: names belonging to a DIFFERENT statement must
+      // not be read as this one's. Under the old any-character clause the `it` below was.
+      'import { it } from "./support/mine.js";\nimport { describe, expect } from "vitest";',
+    ];
+    expect(reaches.filter((sample) => reachesARawDeclarator(sample).length === 0)).toEqual([]);
+    expect(doesNot.filter((sample) => reachesARawDeclarator(sample).length > 0)).toEqual([]);
+  });
 
   it("puts every database test under the backstop, because that is the whole population that waits on Postgres", () => {
     // **The rule, stated once: a test that waits on the database waits under the backstop; a test
@@ -228,30 +358,49 @@ describe("the server suite's hang backstop", () => {
     // rollback chain at 2483 ms of the 5000 ms default — a factor of two. Every other file in this
     // tree runs in-process: the whole non-database suite is 33 files under 300 ms each, so the
     // slowest single test in it has something like a 500x margin, against a worst measured
-    // load-induced slowdown of 10x (`support/backstop.ts` has that measurement).
+    // load-induced slowdown of 10x (`support/backstop.ts` has that measurement, and the caveat on
+    // which half of it another machine could reproduce).
     //
     // So the line is drawn at the file suffix and there are no exceptions. Four tests in these
     // files are synchronous and touch no database; they are wrapped too, because an exemption list
     // is the thing that rots and one `async` keyword is cheaper than maintaining one.
     //
-    // What this costs is stated in `support/backstop.ts` and is now owed by 300 tests rather than
-    // 2: a mutant that makes one of them HANG and breaks nothing else comes back UNATTRIBUTED
-    // rather than KILLED, which exits 2 like a survivor and is reported rather than swallowed. What
-    // it does not cost is a mutant that makes one of them WRONG — `underHangBackstop` rethrows the
-    // body's own error untouched, which the test above pins on object identity.
+    // What this costs is stated in `support/backstop.ts` and is now owed by the whole database
+    // population rather than by 2 tests: a mutant that makes one of them HANG and breaks nothing
+    // else comes back UNATTRIBUTED rather than KILLED, which exits 2 like a survivor and is
+    // reported rather than swallowed. What it does not cost is a mutant that makes one of them
+    // WRONG — `underHangBackstop` rethrows the body's own error untouched, which the test above
+    // pins on object identity.
     const offenders = everyTestSource()
       .filter((path) => path.endsWith(".db.test.ts"))
-      .map((path) => ({
-        file: relative(testTree, path),
-        bare: (codeOf(path).match(/^\s*it\(/gm) ?? []).length,
-      }))
-      .filter((entry) => entry.bare > 0);
-    // Named with counts rather than as a bare boolean: a failure should say which file and how many.
+      .map((path) => ({ file: relative(testTree, path), how: reachesARawDeclarator(codeOf(path)) }))
+      .filter((entry) => entry.how.length > 0);
+    // Named with how, rather than as a bare boolean: a failure should say which file and which shape.
     expect(offenders).toEqual([]);
   });
 
-  it("finds database tests to check at all, so the arm above is not passing on an empty tree", () => {
-    // **The zero this arm has to refuse on its own terms.** `offenders` above is empty whenever the
+  it("rests on globals being off, which is what makes the import arm exhaustive", () => {
+    // Without `globals`, `it` and `test` are not in scope until a file imports them, so a clause
+    // scan sees every route to one. Turn `globals` on and that stops being true — the call arm still
+    // catches a direct call, but an alias assigned from a global would walk past both. This arm
+    // exists so that flipping the config fails here, with a reason, instead of quietly widening what
+    // the scan cannot see.
+    expect(vitestConfig.test?.globals ?? false).toBe(false);
+  });
+
+  it("gives hooks and in-process tests deadlines this suite chose, not vitest's defaults", () => {
+    // PR #172's F4. `beforeAll` ran on vitest's unchosen 10 s while SONNY-366 was putting a ~230 ms
+    // schema rebuild inside one, in files that previously had a 4 ms no-op there. The headroom was
+    // never the complaint; an inherited number was. Pinned against the constant rather than against
+    // a literal, so the config and the construct cannot drift.
+    expect(vitestConfig.test?.hookTimeout).toBe(VITEST_TIMEOUT_MS);
+    // And the in-process population's deadline is written down at the value it already had, so a
+    // future change to it is a decision somebody made rather than a default that moved.
+    expect(vitestConfig.test?.testTimeout).toBe(5_000);
+  });
+
+  it("finds database tests to check at all, so the arms above are not passing on an empty tree", () => {
+    // **The zero these arms have to refuse on their own terms.** `offenders` is empty whenever the
     // scan enumerates nothing — a renamed suffix, a moved directory, a `codeOf` that strips the
     // file. `CLAUDE.md`: a search whose engine cannot see the bytes you mean answers a clean zero,
     // and a clean zero is the one answer that looks like good news. So the population is asserted
@@ -259,14 +408,18 @@ describe("the server suite's hang backstop", () => {
     const files = everyTestSource().filter((path) => path.endsWith(".db.test.ts"));
     expect(files.length).toBeGreaterThanOrEqual(1);
     const declared = files.reduce(
-      (total, path) => total + (codeOf(path).match(DECLARES_A_TEST) ?? []).length, 0);
+      (total, path) => total + (codeOf(path).match(/^\s*itUnderHangBackstop\(/gm) ?? []).length, 0);
     expect(declared).toBeGreaterThanOrEqual(1);
-    // And the pattern that hunts the offenders can produce a hit, or its empty answer is not a
-    // measurement: `it(` really is found where it legitimately lives.
-    const bareItSomewhere = everyTestSource()
+    // And both halves of the offender check can produce a hit against real files, or their empty
+    // answer above is not a measurement: the non-database files both import and call a raw
+    // declarator, which is exactly what they are supposed to do.
+    const elsewhere = everyTestSource()
       .filter((path) => !path.endsWith(".db.test.ts"))
-      .some((path) => /^\s*it\(/m.test(codeOf(path)));
-    expect(bareItSomewhere).toBe(true);
+      .filter((path) => reachesARawDeclarator(codeOf(path)).length > 0);
+    expect(elsewhere.length).toBeGreaterThanOrEqual(1);
+    const callsOneSomewhere = everyTestSource()
+      .some((path) => DECLARES_A_TEST_DIRECTLY.test(codeOf(path)));
+    expect(callsOneSomewhere).toBe(true);
   });
 
   it("is reached through itUnderHangBackstop everywhere else, so the two bounds cannot drift", () => {
