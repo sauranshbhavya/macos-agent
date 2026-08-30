@@ -255,7 +255,7 @@ public actor EntitlementService {
         // there is nothing better and the mark is no worse than it was.
         let observedAt = await client.lastObservedServerTime()?.projected(to: monotonicNow())
         let fallback = await client.serverNow()
-        try adopt(claim, compact: envelope.entitlement, observedAt: observedAt ?? fallback)
+        try await adopt(claim, compact: envelope.entitlement, observedAt: observedAt ?? fallback)
         return claim
     }
 
@@ -268,12 +268,18 @@ public actor EntitlementService {
     /// write the Keychain directly, and nothing here could: they hold the refresh token in the same
     /// keychain, which is the larger asset. The bound on that case is the claim's own life plus its
     /// grace, which is the reason the lifetime is a day rather than a week.
-    func adopt(_ claim: EntitlementClaim, compact: String, observedAt: Date) throws {
+    func adopt(_ claim: EntitlementClaim, compact: String, observedAt: Date) async throws {
         let existing = ((try? store.load()) ?? nil)
         let highWater = [existing?.observedServerTime, observedAt].compactMap { $0 }.max()
         if let existing,
            case .success(let current) = EntitlementVerifier.verify(existing.compactClaim, against: keys),
-           current.issuedAt > claim.issuedAt {
+           current.issuedAt > claim.issuedAt,
+           // **And the stored claim is still one this Mac could honour** (SONNY-344). A claim the
+           // mark has already killed grants nothing, so preferring it over a live one protects
+           // nothing — and preferring it is the only thing that made a wrong mark permanent, because
+           // the mark that killed it then killed every claim the gateway signed afterwards. `nil`
+           // means no mark has ever been written, which cannot have killed anything.
+           highWater.map({ $0 <= current.honouredUntil }) ?? true {
             // **The claim is declined and the observation is kept** (PR #152's review, F1). This
             // branch used to return outright, throwing away a genuinely newer reading of server time
             // because the claim it arrived with was older — which is the one direction the mark must
@@ -285,7 +291,49 @@ public actor EntitlementService {
             }
             return
         }
-        try store.save(StoredEntitlement(compactClaim: compact, observedServerTime: highWater))
+        try store.save(StoredEntitlement(
+            compactClaim: compact,
+            observedServerTime: await markKeptOrReset(highWater, adopting: claim)
+        ))
+    }
+
+    /// The mark to store beside a claim being adopted — **reset rather than kept when it is already
+    /// past the end of that claim's own window** (SONNY-344).
+    ///
+    /// **What was wrong.** The mark had no ceiling. One `Date` header from a gateway whose clock was
+    /// a year out wrote a year into it, and because a high-water mark only ever rises, nothing in the
+    /// product could bring it back: after the gateway's clock was put right, every claim it signed
+    /// was judged against an instant a year later and answered `.lapsed`, for a year, and then
+    /// forever as the mark crept on with real time. No attacker is involved and the user is the
+    /// victim. `SonnyBackendClient.corroboratedInstant` now stops that header from being recorded at
+    /// all — but only when there is a previous observation to measure it against, so the first
+    /// response of a process is still taken at its word and the mark still needs a way back.
+    ///
+    /// **The way back, and why it is this one.** A mark past `honouredUntil` of the claim it is being
+    /// stored beside is a mark that kills that claim. That is a legitimate thing for it to have done
+    /// to the claim it *was* stored beside — that is its whole job — but the claim arriving here came
+    /// from the gateway just now, and a gateway does not sign a claim it already considers dead. So a
+    /// mark past this claim's window is not an instant this Mac ever saw a server report; it is the
+    /// wrong reading, and the claim's own `issuedAt` — signed, gateway-authored, and the newest
+    /// statement about that clock in existence — is what replaces it.
+    ///
+    /// **What it costs, stated rather than implied.** A response this Mac's owner can author can now
+    /// lower the mark: serve a captured, correctly signed claim old enough that the mark sits past
+    /// its window, and the mark is reset to that claim's issue time. That needs TLS to the gateway to
+    /// be broken from inside the Mac, which is the same person who can read and write the Keychain
+    /// this mark and the refresh token both live in — the bound `adopt` already records above and
+    /// does not widen. It is emphatically **not** the case the mark exists to stop, which is a
+    /// person moving their Mac's clock in System Settings: that moves `serverNow()`, which is
+    /// excluded from the mark, and it cannot on its own make a claim old enough for this to fire.
+    ///
+    /// **The observation goes with it**, or the repair does not survive the round trip: the client's
+    /// in-memory observation is where the bad instant entered, so leaving it in place would let it
+    /// re-establish the mark on the very next decision and defer the repair to the next launch.
+    private func markKeptOrReset(_ mark: Date?, adopting claim: EntitlementClaim) async -> Date? {
+        guard let mark, mark > claim.honouredUntil else { return mark }
+        await client.discardServerObservation()
+        trustedAnchor = (claim.issuedAt, monotonicNow())
+        return claim.issuedAt
     }
 
     /// Forget the cached claim on this Mac.
