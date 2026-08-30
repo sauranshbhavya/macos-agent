@@ -128,15 +128,18 @@
 -- exceeded `maintenance_work_mem` (64 MB here), which is the sort-regime boundary:
 --
 --     rows       version   index    external   migration   worst read   worst write
---     200,000    backfill      —          —      2427 ms      2424 ms       2423 ms
---     200,000    this      11 MB         no       213 ms       212 ms        211 ms
---     400,000    backfill      —          —      6186 ms      6181 ms       6184 ms
---     400,000    this      23 MB         no       409 ms       404 ms        410 ms
---   1,000,000    this      56 MB         no      1177 ms      1171 ms       1170 ms
---   2,000,000    this     113 MB        YES      2025 ms      2023 ms       2027 ms
+--     200,000    backfill  11 MB         no      1985 ms      1982 ms       1984 ms
+--     200,000    this      11 MB         no       186 ms       184 ms        185 ms
+--     400,000    backfill  23 MB         no      4194 ms      4191 ms       4193 ms
+--     400,000    this      23 MB         no       475 ms       470 ms        469 ms
+--   1,000,000    this      56 MB         no      1309 ms      1299 ms       1303 ms
+--   2,000,000    this     113 MB        YES      2289 ms      2274 ms       2275 ms
 --
--- (The `this` figures are higher than PR #171 cycle 1 recorded — 154 ms at 200,000 — because F1
--- above added a third column to that index. Re-measured rather than carried.)
+-- (Every row re-measured at `9cea6cf` after this branch rebased onto `969b138`. Nothing is carried:
+-- `server/` moved twice under this branch, and the earlier readings — 2427/2424 and 213/212 at
+-- 200,000 — were taken at heads a rebase has since orphaned. The `backfill` rows are the rejected
+-- design, run here from its own commit's copy of this file so the comparison is against the same
+-- tree as the row above it rather than against a memory of one.)
 --
 -- The backfill grew worse than linearly. What is left is the index build, and **it is still
 -- unbounded**. An earlier draft put ten million rows "near eight seconds" by extrapolating from the
