@@ -81,9 +81,16 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * could not be imported. Nothing was wrong at runtime; what was wrong was a comment asserting a
  * structural guarantee the code did not provide, which is exactly the state 0009 was written about.
  *
- * Five query sites share it now (`grep -Fc '${OWED_PREDICATE}' src/auth/revocation.ts
- * src/revocations.ts` → 4 and 1; use `-F`, or `$` is read as an anchor and both answer a clean
- * zero): the drain's claim, the **snapshot beside it** that records which rows that call is about to
+ * Five query sites share it now — `grep -cE '^[^*]*[$][{]OWED_PREDICATE[}]' src/auth/revocation.ts
+ * src/revocations.ts` → 4 and 1 at `e28d4fa`. **Two things about that command, both of which cost a
+ * wrong number first.** A plain `grep -c '${OWED_PREDICATE}'` answers a clean zero on both files:
+ * BRE reads `$` as an end-of-line anchor, so the pattern can never match, which is the false-zero
+ * shape `CLAUDE.md` names three times. And `grep -Fc`, the obvious repair, answers **5** here — it
+ * matches this sentence, because the citation for a count is itself an occurrence of what is being
+ * counted. That is `CLAUDE.md`'s own warning about a parenthesis written while writing a
+ * parenthesis, and it was live in this docstring for one commit. `^[^*]*` requires the match to
+ * reach the start of the line with no `*` in between, which excludes a doc-comment line and no
+ * query. The sites: the drain's claim, the **snapshot beside it** that records which rows that call is about to
  * discharge (SONNY-365 — it was four before this one), the drain's mark-done, `owedRevocationCount`
  * here, and `owedByAccount` there. **The sixth copy is the delete guard's, inside migration 0014,
  * and it is unavoidable** — a trigger body cannot import TypeScript. It is the reason `0009` is
