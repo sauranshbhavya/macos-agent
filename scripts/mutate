@@ -276,6 +276,13 @@ cleanup() {
 #                                        stops and resumes together, the fifo is never closed, and
 #                                        nothing is lost. Deliberately not trapped: suspending a
 #                                        battery should suspend its report writer too.
+#   PIPE  (the CALLER closes its end:    Reaches the TEE, not this shell — `scripts/mutate <plan> |
+#          `| head`, a terminal that      head -3` kills the report writer through its own stdout,
+#          went away)                     which no signal aimed at the group is involved in at all.
+#                                         Ignored by the tee, so it keeps writing the report file
+#                                         after the caller has stopped reading. This row was missing
+#                                         from the first enumeration and the hole was real: measured
+#                                         at a 23-line report with no summary against 38 unpiped.
 #   any other catchable terminating      Reaches the tee and kills it. Not enumerable as a list
 #   signal sent to the group             worth trapping, which is the point below.
 #   KILL                                 Cannot be caught or ignored, by anyone, ever.
@@ -311,8 +318,16 @@ report_begin() {
   rm -f "$fifo"
   mkfifo "$fifo" || die "could not create the report fifo at $fifo"
   : >"$path" || die "could not write this run's report at $path"
-  ( trap '' INT QUIT TERM HUP; exec tee -a "$path" ) <"$fifo" &
+  ( trap '' INT QUIT TERM HUP PIPE; exec tee -a "$path" ) <"$fifo" &
   REPORT_TEE_PID=$!
+  # Exported so the suite command can see which process is writing this run's report — a
+  # replacement command that fans out signals can then leave it alone. The selftest reads it too,
+  # and that is worth stating: its signal arms used to LOCATE the tee with `ps | awk` over the
+  # harness's children, which is a search that can match nothing (an arm that signals nothing and
+  # passes) or match something else (an arm that signals the wrong process and passes). Both were
+  # observed on this branch — the second as a negative control that fired 5 runs of 5 and then did
+  # not fire on the 6th. An exact pid removes the search rather than tightening it.
+  export MUTATE_REPORT_TEE_PID="$REPORT_TEE_PID"
   # Kept so the drain can put them back: restoring them is what closes the fifo's write end, which
   # is the only thing that tells the tee the run is over.
   exec 9>&1 8>&2
@@ -550,6 +565,30 @@ Environment:
                     misrepresent what was measured.
   MUTATE_SCRATCH    Exported by the harness, not set by you: the build directory private to this
                     run. A replacement suite command that builds with SwiftPM has to use it.
+
+Demonstrating layer 1 (the tee's ignore list), because no selftest arm does:
+  The report writer's pid is exported as $MUTATE_REPORT_TEE_PID, so a suite command can signal it.
+  Run this against any plan, IN THE FOREGROUND, once as-is and once against a copy with HUP taken
+  out of the tee's ignore list:
+
+    MUTATE_TEST_CMD='kill -HUP "$MUTATE_REPORT_TEE_PID"; sleep 1
+      ps -p "$MUTATE_REPORT_TEE_PID" >/dev/null 2>&1 && echo LAYER1-HELD || echo LAYER1-GONE
+      exit 1' scripts/mutate <plan>
+
+    sed "s/trap '' INT QUIT TERM HUP PIPE/trap '' INT QUIT TERM PIPE/" scripts/mutate > /tmp/m
+    chmod +x /tmp/m   # then the same MUTATE_TEST_CMD against /tmp/m
+
+  The shipped script prints LAYER1-HELD; the copy prints LAYER1-GONE. Measured 5 runs of 5 each way.
+
+  THERE IS NO SELFTEST ARM FOR THIS, deliberately, and here is what is known about why. Packaged as
+  an arm it fires in some invocation environments and not others: foreground 5 of 5, backgrounded
+  without nohup 1 of 1, and NOT under `nohup` — 6 of 6 backgrounded under it, 1 of 1 in the
+  foreground under it — same file, same fixture, the target confirmed by `ps` to be the tee in both
+  directions. So `nohup` is the correlate and backgrounding is not. What is RULED OUT: `ps -ww`
+  (it fires without it), and the obvious explanation that nohup leaves SIGHUP inherited-ignored —
+  `trap -p HUP` under nohup reports no ignore here, and a python3 SIG_DFL-then-exec probe reports
+  default too. A flaky arm fails at random in every future selftest run, and a check that fails at
+  random is a check people learn to skip, so the reproduction above is the evidence instead.
 
 Output:
   Every run writes into one directory of its own, .build/mutate/<sha>-<timestamp>-<pid>/, because
@@ -2454,32 +2493,82 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   # the harness and its own command line contains the word `tee`, so without it the first thing any
   # of these arms does is signal itself.
   # --------------------------------------------------------------------------------------------
-  local finds_the_tee='for pid in $(ps -A -o pid=,ppid=,command= \
-    | awk -v p=$PPID -v me=$$ '"'"'$2 == p && $1 != me && $0 ~ /tee/ { print $1 }'"'"'); do'
+  # WHAT THE STAND-IN RECORDS, and why the arms assert on that rather than on what happened next.
+  #
+  # Three ways an arm of this kind lies, all three met on this branch. (1) It signals the tee and
+  # judges the guard by how the battery ended — but whether a dead tee reaches this shell before it
+  # next writes is an INTERLEAVING, so the downstream checks fire or do not fire on timing. (2) It
+  # LOCATES the tee with `ps | awk` and matches nothing: `kill` is a no-op, the battery finishes
+  # for the ordinary reason, and every check passes having signalled nothing. (3) The same search
+  # matches something else and signals the wrong process, which looks identical to (2) from the
+  # outside. PR #168's cycle 2 measured (1) and (2); (3) is what a negative control firing 5 runs
+  # of 5 and then not firing on the 6th looks like.
+  #
+  # So there is no search: `$MUTATE_REPORT_TEE_PID` is the pid the harness itself exported, and the
+  # stand-in records whether that exact process was still alive after being signalled. Liveness is
+  # the layer-1 property ITSELF — did the tee ignore the signal — with nothing racing it. A zombie
+  # counts as dead: the tee is a child of the harness, not of this stand-in, so a killed one can
+  # linger unreaped and `kill -0` would call it alive.
+  local tee_sentinel="$root/tee-pid-signalled"
+  local tee_alive="$root/tee-alive"
+  local signals_the_tee='  target="${MUTATE_REPORT_TEE_PID:?the harness exported no report-writer pid}"
+  printf "%s\n" "$target" >> "'"$tee_sentinel"'"'
+  local records_whether_it_survived='  waited=0
+  verdict=yes
+  while [ "$waited" -lt 30 ]; do
+    line="$(ps -p "$target" -o state=,command= 2>/dev/null)"
+    case "$line" in
+      ""|Z*|*" Z "*) verdict=no; break ;;
+    esac
+    case "$line" in
+      *"tee -a "*) : ;;
+      *) verdict="not-a-tee:$line"; break ;;
+    esac
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  printf "%s\n" "$verdict" >> "'"$tee_alive"'"'
 
   printf '\n==> A signal aimed at the tee does not take the harness down with it\n'
-  # TERM and HUP, because the tee's ignore-list is what these watch and HUP is the one the first
-  # version of it missed. **The tee is signalled and this shell is NOT**, deliberately: an arm that
-  # signals both is betting on which of two deliveries bash processes first, and that bet loses
-  # under load — it did, twice, on a run sharing the machine with a server suite, reporting
-  # `expected [129], got [0]`. Nothing is lost by dropping the second signal, because the tee's
-  # death is the whole discriminator: with the signal ignored the battery finishes normally, and
-  # without it this shell takes SIGPIPE at its next write. The group-signal behaviour end to end is
-  # measured in the changelog, where a wall-clock race belongs and a selftest arm does not.
-  for signal in TERM HUP; do
+  # TERM only. **The SIGHUP arm that belongs beside it is deliberately NOT here**, and that absence
+  # is the honest half of this file rather than a gap somebody forgot.
+  #
+  # HUP is the signal layer 1 was added for, and the property IS demonstrated — the same fixture,
+  # run standalone against a build with HUP removed from the tee's ignore list, kills the report
+  # writer 5 runs of 5, and does not under the shipped script. `--help`'s "Demonstrating layer 1"
+  # section has the command. What could not be made to work is that check INSIDE this harness: it
+  # fires in some invocation environments and not others, cleanly split and not isolated (see
+  # `--help` for what was ruled out). A flaky arm is worse than a missing one — it fails at random
+  # in every future run, and a check that fails at random is a check people learn to skip, which is
+  # how SONNY-64's guard stopped existing. So it is out, and the reproduction is written down where
+  # a reader can run it.
+  #
+  # **The tee is signalled and this shell is NOT**, deliberately: an arm that signals both is
+  # betting on which of two deliveries bash processes first, and that bet loses under load — it
+  # did, twice, on a run sharing the machine with a server suite, reporting `expected [129],
+  # got [0]`. The tee's death is the whole discriminator either way.
+  for signal in TERM; do
     local signals_the_report_writer='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  '"$finds_the_tee"'
-    kill -'"$signal"' "$pid" 2>/dev/null || true
-  done
-  sleep 1
+'"$signals_the_tee"'
+  kill -'"$signal"' "$target" 2>/dev/null || true
+'"$records_whether_it_survived"'
   printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
   printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
 printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+    rm -f "$tee_sentinel" "$tee_alive"
     st_run "$signals_the_report_writer" "$root/kill.plan"
     reported_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    report     : //p' | head -1)"
+    if [[ -s "$tee_sentinel" ]]; then
+      st_pass "SIG$signal: the report writer was found, so something was actually signalled"
+    else
+      st_fail "SIG$signal: nothing was signalled — every check below would pass vacuously"
+    fi
+    # The guard itself, asserted directly rather than through what the battery did afterwards.
+    st_eq "SIG$signal: the report writer ignored it and was still alive" \
+      "$(cat "$tee_alive" 2>/dev/null || true)" "yes"
     st_eq "SIG$signal: the battery still finishes and exits 0" "$ST_EXIT" "0"
     st_contains "SIG$signal: and the report is whole, not ending where the tee died" \
       "$(cat "$reported_path" 2>/dev/null || true)" "Every mutant was killed"
@@ -2503,16 +2592,21 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   # EXIT trap: the tree goes back and the lock comes off, and only the tail of the report is lost.
   local kills_the_report_writer='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  '"$finds_the_tee"'
-    kill -9 "$pid" 2>/dev/null || true
-  done
+'"$signals_the_tee"'
+  kill -9 "$target" 2>/dev/null || true
   sleep 1
   printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
   printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
 printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+  rm -f "$tee_sentinel"
   st_run "$kills_the_report_writer" "$root/kill.plan"
+  if [[ -s "$tee_sentinel" ]]; then
+    st_pass "the report writer was found, so there was something to kill"
+  else
+    st_fail "nothing was killed — every check below would pass vacuously"
+  fi
   if [[ "$ST_EXIT" -eq 141 ]]; then
     st_fail "the battery died on a broken pipe when the report writer was killed" \
       "exit 141 — no EXIT trap ran at all"
@@ -2527,6 +2621,29 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   fi
   git checkout -- sample.swift 2>/dev/null || true
   rm -rf -- .git/mutate.lock
+
+  printf '\n==> A caller that stops reading does not take the report with it\n'
+  # The hole the first two layers left, and the only one that reaches the tee through its own
+  # STDOUT rather than through a signal aimed at the group. `scripts/mutate <plan> | head -3`:
+  # head exits, the tee's write to the pipe raises SIGPIPE, the report writer dies, and the file
+  # `--help` says no caller can take away is left truncated. Measured before the fix at a 23-line
+  # report with no summary, against 38 unpiped.
+  rm -rf -- .build/mutate
+  local piped_code=0 piped_report
+  set +e
+  MUTATE_TEST_CMD="$kills_the_mutant" "$SELF" "$root/kill.plan" 2>&1 | head -3 >/dev/null
+  piped_code=${PIPESTATUS[0]}
+  set -e
+  st_eq "the battery still exits 0 with the caller no longer reading" "$piped_code" "0"
+  piped_report="$(ls -t .build/mutate/*/report.log 2>/dev/null | head -1)"
+  if [[ -n "$piped_report" ]]; then
+    st_pass "a report was still written"
+  else
+    st_fail "no report at all was written under a closed pipe"
+  fi
+  st_contains "and it is whole, summary and all" \
+    "$(cat "$piped_report" 2>/dev/null || true)" "Every mutant was killed"
+  rm -rf -- .build/mutate
 
   printf '\n==> A survivor is loud, distinguishable, and exits non-zero\n'
   st_run "$always_pass" "$root/kill.plan"
