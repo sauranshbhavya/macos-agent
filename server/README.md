@@ -23,7 +23,7 @@ Run from `server/`.
 | `npm run test:db` | The full suite including migrations, against a throwaway Postgres. **Start it under a name and port of your own** — see "The full suite needs a Postgres" below. |
 | `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
-| `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
+| `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. All three exit **65** when an applied migration's file has changed — see "An applied migration cannot change silently" below. |
 | `npm run revocations` | What provider-side revocation is still owed — on closed accounts, and on live ones whose provider-side user id was superseded. Exit 1 when any is. See "Owed revocations" below. |
 | `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
@@ -555,6 +555,10 @@ Staging exists precisely for this, so the rule is stated rather than implied:
 3. Apply on staging **again**, so what production receives is a path that has been walked twice.
 4. Only then apply on production.
 
+**Do not edit the file between steps.** Both halves are hashed when the migration is applied, so a
+`down` reworded after step 2 makes step 3 refuse — which is the guard working: the rehearsal is only
+a rehearsal if production's rollback is the one staging walked.
+
 **No `lock_timeout` is set, and step 4 is where that matters** (PR #164 review, F8). Several
 migrations take `ACCESS EXCLUSIVE` on `sonny.identity` — 0004, 0006 and 0008 each carry an
 `ALTER TABLE`, 0014 carries two `DROP COLUMN`s, and 0005's `CREATE TRIGGER` takes
@@ -574,6 +578,93 @@ lot. They are split on purpose — `test/migrate.load.test.ts` needs no database
 skipped on every run of the documented command; `test/migrate.db.test.ts` needs one and pins apply →
 roll back → re-apply, a half-failed migration leaving neither schema nor ledger row, and the ledger's
 schema.
+
+### An applied migration cannot change silently
+
+**Every applied migration is recorded with a hash of its executable SQL, and a later run refuses to
+go past a file that has changed** (SONNY-364). The ledger used to hold the id and an `applied_at`
+and nothing else, so "0014 applied" was true and said nothing about *which* 0014: a migration's file
+could be edited after it had been applied somewhere and no environment would ever say so. Two
+deployments both reporting the same ids could hold different schemas, and `status` called them
+identical. Development, beta and v1 receive the same image at different times
+(`docs/sonny-row-12-host-decision.md` §12.2), so an edit landing between two of their deploys puts
+them permanently out of step on the one thing that defines the database.
+
+`up` and `down` both refuse before touching anything — a schema built by SQL the files no longer
+describe is not a base to apply the next migration on, and it is not a schema whose `down` half can
+be trusted either, since that half is edited text too. `status` never refuses: it is the diagnostic
+you reach for once one of those has, so it prints a state per migration (`applied`, `pending`,
+`CHANGED`, `unverified`) and sets the exit code.
+
+**The way out is to restore the file**, which git can do and the runner cannot. If the change was
+intended, it ships as a *new* migration — which is the only form of it every environment gets.
+
+**Comments and layout are not hashed, and that is the design rather than a shortcut.** This project
+writes long explanatory comments into its migrations on purpose: 0014's header is about fifty lines
+arguing why the migration is shaped the way it is, and PR #167 later edited that header — an already
+applied migration — to record that 0015 changed what one of its columns may imply. That edit was
+deliberate and correct, and a whole-file hash would have turned it into a hard failure on every
+environment that had already run 0014. A guard that made annotating an applied migration an outage
+is a guard that gets deleted the first week it fires, and it would take the annotation practice with
+it. So the hash is over what Postgres would actually run.
+
+**A comment inside a string literal is not a comment and is kept.** Eight migrations define plpgsql
+functions inside `$$ … $$` and several of those bodies carry `--` lines of their own. Postgres does
+not discard them — they are stored verbatim in `pg_proc.prosrc`, which is why the migration suite's
+own schema fingerprint hashes `md5(p.prosrc)`. Editing one changes the database, so it changes the
+hash — **including when the edit is one line of prose and nothing else**, which is the one refusal
+most likely to look wrong and is not. The refusal message says so in those terms; it used to end
+"this is a change to the executable SQL", which was false in exactly that case and sent the reader
+hunting for a schema change that was not there.
+
+**`src/db/migration-hash.ts` enumerates every string form Postgres's scanner accepts** and says what
+the lexer does with each — `'…'`, `E'…'`, `U&'…'`, `U&"…"`, `B'…'`, `X'…'`, `$tag$…$tag$`, `"…"` —
+because the guard is the enumeration and not whichever form somebody last thought of. `E'…'` is the
+one that needs its own branch: backslash escapes are live in it, so `\'` does not end the literal,
+and reading it as an ordinary string truncated the text being hashed. Two `INSERT`s that Postgres
+17.11 accepts and that store different rows then normalised identically.
+
+**`standard_conforming_strings = on` is checked on the connection, not assumed.** With it off a
+backslash escapes inside an ordinary `'…'` too, and the same collision returns through the branch
+the lexer treats as safe — measured: under `SET standard_conforming_strings = off`,
+`INSERT INTO u VALUES ('a\' -- one');` and `… -- two');` are both accepted and store two distinct
+rows, and this lexer hands back one hash for them. It is checked rather than noted because
+**`DATABASE_URL` alone falsifies it**, with no file this repository controls changed:
+`?options=-c%20standard_conforming_strings%3Doff`. All three commands exit **78** (`EX_CONFIG`, the
+same code a missing `DATABASE_URL` gets — the problem is in how the process was pointed at its
+database) and name the connection string in the message.
+
+**A migration applied before this existed reads `unverified`, and nothing invents a hash for it.**
+The column is nullable and an existing database gets it from an `ALTER … ADD COLUMN IF NOT EXISTS`,
+so every row written by the old runner carries no hash. Backfilling those from today's files was the
+alternative and it is a lie about when the measurement was taken: it would write the current text's
+hash against a row recording an apply that happened long before, and the guard would then report a
+match on a comparison it never made. So an absent hash is carried as unknown, compared against
+nothing, and reported as unknown. A row leaves that state the next time its migration is rolled back
+and re-applied, and there is no `adopt` command to stamp one on an operator's say-so — an adopted
+hash and an observed one would be indistinguishable in the ledger, which puts the guard back where
+it started.
+
+**What it does not cover.** It compares a file against what an environment recorded when it applied
+that file. It says nothing about whether the schema still matches the migration — a hand-run
+`ALTER TABLE` against production is invisible here, and always was. And an applied migration whose
+file has been *deleted* leaves nothing to hash, so nothing is compared; that is the same family of
+hazard, and it is recorded on SONNY-364 rather than half-built alongside this one.
+
+**The ledger's own `ALTER` is guarded by a catalog read, and that is a latency fix rather than
+tidiness.** `ALTER TABLE … ADD COLUMN IF NOT EXISTS` takes `ACCESS EXCLUSIVE` to evaluate its own
+`IF NOT EXISTS`, so run unconditionally it queued behind any open ledger writer on every run after
+the first and then changed nothing. Measured behind one writer holding a ten-second transaction:
+read-only `status` took **8.17 s** unconditional, **0.15 s** with the catalog check, and **0.13 s**
+on the pre-SONNY-364 ledger SQL; idle, the three are 0.15 / 0.13 / 0.12 s. `status` is what an
+operator runs to find out what is happening, so it is the last command that should block behind a
+writer. The `IF NOT EXISTS` stays on the `ALTER` for the two-runners-at-once race; the check keeps
+the lock off the common path.
+
+`test/migration-content-hash.test.ts` pins which edits move the hash and needs no database.
+`test/migration-content-hash.db.test.ts` is the selftest the repo's rule asks for — it applies a
+migration, alters its file, runs again and watches the runner refuse, and pins the other direction
+too: a comment-only edit still goes through.
 
 **The ledger lives in `sonny_meta`, not `public` and not `sonny`.** Not `public`, because that is
 the schema Supabase exposes over HTTP through PostgREST, and a table there without row-level security
