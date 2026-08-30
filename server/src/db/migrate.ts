@@ -192,6 +192,35 @@ function refuseOnDrift(drift: readonly MigrationDrift[]): void {
   throw new MigrationDriftError(drift);
 }
 
+/** What `status` says about one migration. `CHANGED` is upper-case because it is the one that acts. */
+export type MigrationState = "applied" | "pending" | "CHANGED" | "unverified";
+
+/**
+ * What `status` reports, as data rather than as writes to stdout.
+ *
+ * Split out of the CLI so the classification can be tested at all: `main` is only reachable by
+ * spawning a built `dist/db/migrate.js`, and a suite that runs from source cannot do that without
+ * making itself depend on a prior `npm run build`. The one line this leaves untestable is the
+ * `process.exitCode` assignment, which is why the count comes back rather than a boolean — a
+ * `changed` of zero on a drifted ledger is the failure worth catching, and it is catchable here.
+ */
+export function migrationStates(
+  recorded: ReadonlyMap<string, string | null>,
+  migrations: readonly Migration[],
+): readonly { readonly id: string; readonly state: MigrationState }[] {
+  const drifted = new Set(driftedMigrations(recorded, migrations).map((d) => d.id));
+  return migrations.map((migration) => ({
+    id: migration.id,
+    state: !recorded.has(migration.id)
+      ? "pending"
+      : drifted.has(migration.id)
+        ? "CHANGED"
+        : recorded.get(migration.id) === null
+          ? "unverified"
+          : "applied",
+  }));
+}
+
 /** Applies every migration not yet recorded, oldest first. Returns the ids it applied. */
 export async function up(client: pg.Client, dir?: string): Promise<readonly string[]> {
   const recorded = await applied(client);
@@ -274,22 +303,11 @@ async function main(): Promise<void> {
       // **`status` reports and never refuses**, which is the opposite of `up` and `down` on purpose:
       // it is the diagnostic an operator reaches for once one of those has refused, and a diagnostic
       // that throws instead of describing the state is no use at the moment it is needed.
-      const recorded = await applied(client);
-      const migrations = await loadMigrations();
-      const drifted = new Set(driftedMigrations(recorded, migrations).map((d) => d.id));
-      let changed = 0;
-      let unverified = 0;
-      for (const migration of migrations) {
-        const state = !recorded.has(migration.id)
-          ? "pending"
-          : drifted.has(migration.id)
-            ? "CHANGED"
-            : recorded.get(migration.id) === null
-              ? "unverified"
-              : "applied";
-        if (state === "CHANGED") changed += 1;
-        if (state === "unverified") unverified += 1;
-        process.stdout.write(`${state.padEnd(10)}  ${migration.id}\n`);
+      const states = migrationStates(await applied(client), await loadMigrations());
+      const changed = states.filter((s) => s.state === "CHANGED").length;
+      const unverified = states.filter((s) => s.state === "unverified").length;
+      for (const { id, state } of states) {
+        process.stdout.write(`${state.padEnd(10)}  ${id}\n`);
       }
       if (changed > 0) {
         process.stderr.write(
