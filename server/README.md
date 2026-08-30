@@ -70,6 +70,17 @@ that and each ended with a reopened-then-closed account owing nothing: the user 
 nobody coming back at all; or the user comes back as a *different* provider-side user, so the
 stamped id is superseded rather than observed.
 
+**A drain discharges the obligation it CLAIMED, not whatever is owed when it gets back** (migration
+0016, SONNY-365). Clearing the stamp is only half of it: the drain then writes one, and until 0016 it
+wrote one for "this provider-side user" rather than for the obligation it had actually worked on. So
+a drain still inside its provider call when the account was reopened and closed again stamped the
+*new* obligation too — reproduced against a real database, ending with nothing owed and the reopen's
+sessions still live. `sonny.identity_provider_user.revocation_episode` is a counter each of the three
+events above increments; the drain reads it for every row it is about to discharge in the same
+statement that takes its claim, and stamps only rows still carrying what it read. A row whose
+obligation has moved on stays owed, and the drain's next pass claims it and asks the provider again —
+so the new obligation gets its own call rather than inheriting an older one's answer.
+
 **Operationally that means a reopened account re-owes a revocation it has already had.** An account
 closed, drained, reopened and closed again asks the provider about the same id a second time, and
 `npm run revocations` reports it as owed until it does. That is intended: a redundant idempotent
