@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""scripts/changelog-order — prove the changelog's entries are in merge order, and that each
+one is an entry rather than a fragment of one.
+
+Run it from anywhere inside the repository:
+
+    scripts/changelog-order              # check the working tree's changelog
+    scripts/changelog-order check <path> # check some other copy of it — a `git show` of an
+                                         # older tree, say, which is how a finding count is
+                                         # quoted as evidence and re-derived by a reviewer
+    scripts/changelog-order selftest     # re-prove every arm still fires
+
+Exit 0 clean, 2 findings, 1 when no trustworthy measurement was made — a run that cannot
+resolve `main`, cannot find `## Entries`, or maps no entry at all reports that rather than
+printing a reassuring zero. A search whose engine cannot see the bytes you mean answers a
+clean zero, and a clean zero is the one answer that looks like good news (CLAUDE.md, Claims
+and evidence).
+
+WHY THIS EXISTS. An entry written into the wrong place raises no rebase conflict — nobody
+else is editing that spot — so the clean merge is the tell, and five misplaced entries were
+recorded before anything checked. Three more defects at the same boundary were found by hand
+on 2026-08-29 (SONNY-329) and none of them is an ordering defect at all, which is why the
+structural arm is here beside the ordering one: a heading glued to the end of the previous
+entry's last line by a lost newline, a bodiless second copy of that same heading added two
+positions away by a later branch, and a figure in prose that no command had ever answered.
+
+THE TWO ERAS. The file is newest-first from `feature/vision-actions` (PR #50) upward and
+oldest-first from PR #3 up to PR #49 below it, the two runs meeting exactly at that entry.
+That is deliberate and documented in the changelog's own Entry Template preamble; moving the
+older run would create a defect rather than fix one. So the boundary is named here, and its
+entry's absence is itself a finding — a check that silently loses its boundary would pass a
+file it can no longer read.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+CHANGELOG = "docs/sonny-v1-implementation-changelog.md"
+ENTRIES_MARKER = "## Entries"
+HEADING = "### Branch: "
+STATUS = "Status:"
+
+# The entry where the file's two eras meet. Everything at or above it is newest-first;
+# everything below it is oldest-first. See the changelog's Entry Template preamble.
+ERA_BOUNDARY = "feature/vision-actions"
+
+MERGE_RE = re.compile(r"^Merge pull request #(\d+) from [^/]+/(.+)$")
+
+
+class Unmeasurable(Exception):
+    """Raised when the run cannot produce a trustworthy answer. Never a silent zero."""
+
+
+def repo_root() -> str:
+    out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        raise Unmeasurable("not inside a git repository: " + out.stderr.strip())
+    return out.stdout.strip()
+
+
+def merge_index(ref: str, cwd: str) -> dict[str, tuple[int, int]]:
+    """branch name -> (index on the mainline oldest-first, PR number).
+
+    A branch that merged more than once keeps its latest merge, which is the position the
+    entry describes.
+    """
+    resolved = None
+    for candidate in ([ref] if ref else ["main", "origin/main"]):
+        probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", candidate + "^{commit}"],
+                               capture_output=True, text=True, cwd=cwd)
+        if probe.returncode == 0:
+            resolved = candidate
+            break
+    if resolved is None:
+        raise Unmeasurable("no mainline ref resolves (tried: %s)" %
+                           (ref or "main, origin/main"))
+
+    out = subprocess.run(["git", "log", "--first-parent", "--merges", "--format=%s", resolved],
+                         capture_output=True, text=True, cwd=cwd)
+    if out.returncode != 0:
+        raise Unmeasurable("git log failed on %s: %s" % (resolved, out.stderr.strip()))
+
+    subjects = list(reversed(out.stdout.splitlines()))  # oldest first
+    index: dict[str, tuple[int, int]] = {}
+    for position, subject in enumerate(subjects):
+        m = MERGE_RE.match(subject)
+        if m:
+            index[m.group(2)] = (position, int(m.group(1)))
+    if not index:
+        raise Unmeasurable("parsed no 'Merge pull request #N from <ns>/<branch>' subject "
+                           "out of %d merge commits on %s" % (len(subjects), resolved))
+    return index
+
+
+def entries(text: str) -> list[tuple[int, str, list[str]]]:
+    """(1-based heading line, branch name, the lines of its body) for each entry under
+    `## Entries`, in file order."""
+    lines = text.split("\n")
+    try:
+        start = next(i for i, l in enumerate(lines) if l.rstrip() == ENTRIES_MARKER)
+    except StopIteration:
+        raise Unmeasurable("no %r line in the changelog — the template's own example heading "
+                           "sits above it, so without this marker every check would be "
+                           "measuring the template too" % ENTRIES_MARKER)
+    heads = [i for i in range(start + 1, len(lines)) if lines[i].startswith(HEADING)]
+    if not heads:
+        raise Unmeasurable("no %r heading under %r" % (HEADING, ENTRIES_MARKER))
+    out = []
+    for n, i in enumerate(heads):
+        end = heads[n + 1] if n + 1 < len(heads) else len(lines)
+        out.append((i + 1, lines[i][len(HEADING):].strip(), lines[i + 1:end]))
+    return out
+
+
+def check(path: str, cwd: str, ref: str = "") -> list[str]:
+    # Findings name the file that was read, never the constant — in the selftest they are
+    # different files, and a finding that names a file nobody checked is not evidence.
+    where = os.path.relpath(path, cwd) if path.startswith(cwd) else path
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    found = entries(text)
+    index = merge_index(ref, cwd)
+    findings: list[str] = []
+
+    # Arm 1 — structure. Exactly one Status: line between one heading and the next. Zero is a
+    # heading with no entry under it; two is an entry whose own heading no line-anchored
+    # search can see, because a lost newline glued it to the line above.
+    for line, branch, body in found:
+        n = sum(1 for l in body if l.startswith(STATUS))
+        if n != 1:
+            findings.append(
+                "%s:%d: entry %r has %d %r lines between its heading and the next, expected 1 — "
+                "%s" % (where, line, branch, n, STATUS,
+                        "a heading with no entry beneath it" if n == 0 else
+                        "an entry whose heading is not at the start of its own line, or a "
+                        "duplicated heading"))
+
+    # Arm 2 — resolvable. An entry naming a branch that never merged is a finding of its own:
+    # it may be a typo, or an entry written for a branch that has not landed.
+    # The one entry allowed to name no merge is the first, and only the first: step 7 has the
+    # branch write its entry before the PR opens, so on the branch under review the newest
+    # entry is by construction not on the mainline yet. Any other unmatched entry is a typo, a
+    # renamed branch, or an entry for work that never landed. Without this exemption the check
+    # would be red on every branch that writes an entry, which is how a check becomes one
+    # people learn to skip — the failure this tool exists to avoid (CLAUDE.md, SONNY-64).
+    positioned = []
+    for n, (line, branch, _) in enumerate(found):
+        if branch not in index:
+            if n == 0:
+                continue
+            findings.append(
+                "%s:%d: entry %r matches no 'Merge pull request #N from <ns>/%s' on the "
+                "mainline, and it is not the first entry — only the newest may be unmerged, "
+                "because step 7 writes it before the PR opens"
+                % (where, line, branch, branch))
+        else:
+            positioned.append((line, branch) + index[branch])
+
+    # Arm 3 — order, per era.
+    boundary = [i for i, e in enumerate(positioned) if e[1] == ERA_BOUNDARY]
+    if not boundary:
+        findings.append(
+            "%s: the era boundary %r has no entry, so the two eras cannot be told apart — "
+            "this check cannot run over this file until that is resolved (see the "
+            "changelog's Entry Template preamble)" % (where, ERA_BOUNDARY))
+        return findings
+    split = boundary[0]
+    newest_first = positioned[:split + 1]
+    oldest_first = positioned[split + 1:]
+
+    for a, b in zip(newest_first, newest_first[1:]):
+        if not a[2] > b[2]:
+            findings.append(
+                "%s:%d: PR #%d (mainline position %d) is above PR #%d (position %d), and this "
+                "run of the file is newest-first — %r belongs above %r"
+                % (where, a[0], a[3], a[2], b[3], b[2], b[1], a[1]))
+    # The oldest-first run is a closed historical range: it ends where the boundary entry
+    # begins, so every entry in it merged before the boundary did. Without this, an entry
+    # appended at the file's end — the exact mistake five entries have made, and a quiet one
+    # because nobody else writes there and it raises no rebase conflict — lands at the bottom
+    # of that run with the highest index of all and satisfies "increasing" perfectly. The
+    # selftest found that hole in this check's first draft rather than a reader finding it in
+    # a year (SONNY-329).
+    for line, branch, position, pr in oldest_first:
+        if position > newest_first[-1][2]:
+            findings.append(
+                "%s:%d: PR #%d (mainline position %d) sits below %r, in the run that ends at "
+                "PR #%d — an entry that merged after the boundary belongs in the newest-first "
+                "run at the top of the file, not appended at its end"
+                % (where, line, pr, position, ERA_BOUNDARY, newest_first[-1][3]))
+    for a, b in zip(oldest_first, oldest_first[1:]):
+        if not a[2] < b[2]:
+            findings.append(
+                "%s:%d: PR #%d (mainline position %d) is above PR #%d (position %d), and the "
+                "run below %r is oldest-first — %r belongs above %r"
+                % (where, a[0], a[3], a[2], b[3], b[2], ERA_BOUNDARY, b[1], a[1]))
+    return findings
+
+
+# --------------------------------------------------------------------------------------
+# selftest
+# --------------------------------------------------------------------------------------
+
+GOOD_ENTRY = "### Branch: %s\nStatus: complete\nDate: 2026-01-01\n\nbody\n"
+
+
+def _git(cwd: str, *args: str) -> None:
+    r = subprocess.run(("git",) + args, cwd=cwd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("selftest: git %s failed: %s" % (" ".join(args), r.stderr.strip()))
+
+
+def _fixture_repo(tmp: str, merges: list[tuple[int, str]]) -> str:
+    """A repository whose mainline holds one merge per (PR number, branch), in list order."""
+    _git(tmp, "init", "-q", "-b", "main")
+    _git(tmp, "config", "user.email", "selftest@example.invalid")
+    _git(tmp, "config", "user.name", "selftest")
+    open(os.path.join(tmp, "seed"), "w").write("seed\n")
+    _git(tmp, "add", "seed")
+    _git(tmp, "commit", "-q", "-m", "seed")
+    for pr, branch in merges:
+        _git(tmp, "checkout", "-q", "-b", branch)
+        open(os.path.join(tmp, branch.replace("/", "_")), "w").write("x\n")
+        _git(tmp, "add", "-A")
+        _git(tmp, "commit", "-q", "-m", "work on " + branch)
+        _git(tmp, "checkout", "-q", "main")
+        _git(tmp, "merge", "-q", "--no-ff", "-m",
+             "Merge pull request #%d from ns/%s" % (pr, branch), branch)
+    return tmp
+
+
+def _write(tmp: str, entry_branches: list[str], mangle=None) -> str:
+    body = ENTRIES_MARKER + "\n\n" + "\n".join(GOOD_ENTRY % b for b in entry_branches)
+    if mangle:
+        body = mangle(body)
+    path = os.path.join(tmp, "changelog.md")
+    open(path, "w", encoding="utf-8").write("# fixture\n\n" + body)
+    return path
+
+
+def selftest() -> int:
+    # Mainline order: PR #3 .. #5 (the oldest-first era), then the boundary, then #51 .. #53.
+    merges = [(3, "old/a"), (4, "old/b"), (5, "old/c"), (50, ERA_BOUNDARY),
+              (51, "new/a"), (52, "new/b"), (53, "new/c")]
+    # In-file order: newest-first down to the boundary, then oldest-first below it.
+    good = ["new/c", "new/b", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"]
+
+    cases: list[tuple[str, object, object, str]] = []
+
+    def case(name, entry_branches, mangle, expect):
+        cases.append((name, entry_branches, mangle, expect))
+
+    case("a file in order passes", good, None, "")
+    case("a newest-first entry out of order is caught",
+         ["new/b", "new/c", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"], None,
+         "belongs above")
+    case("an oldest-first entry out of order is caught",
+         ["new/c", "new/b", "new/a", ERA_BOUNDARY, "old/b", "old/a", "old/c"], None,
+         "oldest-first")
+    case("an entry appended at the file's end is caught",
+         ["new/c", "new/b", ERA_BOUNDARY, "old/a", "old/b", "old/c", "new/a"], None,
+         "not appended at its end")
+    case("the branch's own unmerged entry, written first, passes",
+         ["this/branch"] + good, None, "")
+    case("an unmerged entry that is not the first is caught",
+         good + ["never/merged"], None, "matches no 'Merge pull request")
+    case("a bodiless heading is caught", good,
+         lambda b: b.replace("### Branch: new/b", "### Branch: stray/heading\n\n### Branch: new/b"),
+         "has 0 'Status:' lines")
+    case("a heading glued to the previous line by a lost newline is caught", good,
+         lambda b: b.replace("body\n\n### Branch: new/b", "body### Branch: new/b"),
+         "has 2 'Status:' lines")
+    case("the era boundary going missing stops the check rather than passing it",
+         [b for b in good if b != ERA_BOUNDARY], None,
+         "era boundary")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _fixture_repo(os.path.join(tmp, "repo") if os.makedirs(
+            os.path.join(tmp, "repo"), exist_ok=True) is None else tmp, merges)
+        failures = 0
+        for name, entry_branches, mangle, expect in cases:
+            path = _write(tmp, entry_branches, mangle)
+            try:
+                findings = check(path, repo)
+            except Unmeasurable as exc:
+                print("  FAIL  %s — the check refused to measure: %s" % (name, exc))
+                failures += 1
+                continue
+            if expect == "":
+                ok = not findings
+            else:
+                ok = any(expect in f for f in findings)
+            print("  %s  %s" % ("ok  " if ok else "FAIL", name))
+            if not ok:
+                failures += 1
+                for f in findings:
+                    print("        got: " + f)
+                if expect:
+                    print("        expected a finding containing: " + expect)
+
+        # `check <path>` must actually read that path. An argument silently ignored would
+        # check the repository's own changelog, find it clean, and exit 0 — a finding count
+        # quoted as evidence would then be a measurement of the wrong file, in the
+        # reassuring direction. Run through the real command line, not through check().
+        bad = _write(tmp, ["new/b", "new/c", "new/a", ERA_BOUNDARY, "old/a", "old/b", "old/c"])
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), "check", bad],
+                              capture_output=True, text=True, cwd=os.getcwd())
+        # The fixture's branch names exist in the fixture repository, not in this one, so what
+        # the real merge log makes of them is "no such merge" rather than an ordering finding.
+        # Either way the proof is the same and is the only one that matters: the findings name
+        # the fixture's own file and its own entries, so the path was read.
+        # Not "new/b": that is the fixture's first entry, which this check deliberately exempts
+        # from needing a merge. Assert on one it does report.
+        named = os.path.basename(bad) in proc.stdout and "new/c" in proc.stdout
+        if proc.returncode == 2 and named:
+            print("  ok    `check <path>` reads the path it is given")
+        else:
+            print("  FAIL  `check <path>` did not read the path it is given "
+                  "(exit %d, named=%s)" % (proc.returncode, named))
+            failures += 1
+
+        # A refusal rather than a clean zero, proved rather than asserted.
+        empty = os.path.join(tmp, "empty.md")
+        open(empty, "w").write("# nothing here\n")
+        for name, path, cwd in (("a file with no '## Entries' refuses", empty, repo),
+                                ("a directory that is not a repository refuses",
+                                 _write(tmp, good), tempfile.gettempdir())):
+            try:
+                check(path, cwd)
+            except Unmeasurable as exc:
+                print("  ok    %s (%s)" % (name, str(exc).split("\n")[0][:60]))
+            else:
+                print("  FAIL  %s — it returned an answer instead" % name)
+                failures += 1
+
+    print("selftest: %d case(s), %d failure(s)" % (len(cases) + 3, failures))
+    return 0 if failures == 0 else 2
+
+
+def main(argv: list[str]) -> int:
+    args = [a for a in argv[1:] if not a.startswith("-")]
+    if args and args[0] == "selftest":
+        return selftest()
+    if args and args[0] not in ("check",):
+        print(__doc__)
+        return 0 if args[0] in ("help", "--help") else 1
+    try:
+        root = repo_root()
+        # `check <path>` reads some other copy of the file — an older tree written out with
+        # `git show`, most usefully — against this repository's merge log. The default is the
+        # working tree's own. Ordering is a property of the file *and* the mainline, so the
+        # log always comes from the repository this is run in.
+        path = os.path.abspath(args[1]) if len(args) > 1 else os.path.join(root, CHANGELOG)
+        findings = check(path, root)
+    except Unmeasurable as exc:
+        print("changelog-order: no measurement was made — %s" % exc, file=sys.stderr)
+        return 1
+    if findings:
+        for f in findings:
+            print(f)
+        print("\n%d finding(s). The changelog's Entry Template preamble states where an entry "
+              "goes and why the file has two eras." % len(findings), file=sys.stderr)
+        return 2
+    shown = os.path.relpath(path, root) if path.startswith(root) else path
+    print("changelog-order: %s is in merge order, %d entries, both eras."
+          % (shown, len(entries(open(path, encoding='utf-8').read()))))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
