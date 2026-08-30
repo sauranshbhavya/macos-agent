@@ -218,7 +218,15 @@ describeDb("an auth operation knows which instance it is acting on", () => {
         await reopen(other, sibling);
         await close(other, sibling);
       };
-      await drainOwedRevocations(client, provider, { limit: 1 });
+      // **`accountId` decides WHICH row is claimed, and without it this test is a coin flip.** The
+      // claim's inner select orders by `pu.id`, a random uuid, so which of the two rows it takes is
+      // arbitrary — and this test only means anything when the claimed row is the one whose account
+      // does NOT move. Scoping the claim to the first account fixes that and leaves the fan-out
+      // alone: `accountId` filters the claim and nothing else, so the mark-done still reaches every
+      // owed row naming FIRST, which is the whole shape under test. Found by the battery: the
+      // mutant that restores the close trigger's guard was killed by the episode-counter test and
+      // not by this one, because that run happened to claim the sibling.
+      await drainOwedRevocations(client, provider, { accountId, limit: 1 });
 
       // The claimed row's obligation is discharged; the sibling's fresh one is not.
       expect(await stampedRows(FIRST)).toBe(1);
