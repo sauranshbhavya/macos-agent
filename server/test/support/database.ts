@@ -1,8 +1,10 @@
 /**
  * Where every test in this suite gets its database URL (SONNY-352).
  *
- * **One knob, and it used to be three.** `npm run test:db` sets `DATABASE_URL`, defaulting to the
- * container `CLAUDE.md` documents. Two test files ignored it and named that port as a literal —
+ * **One knob, and it used to be three.** `npm run test:db` sets `DATABASE_URL`, falling back to
+ * `localhost:55433` when nothing else set it — which is a fallback for a lone session and is no
+ * longer what any document tells you to start (SONNY-355; the constant below says what is).
+ * Two test files ignored the variable and named that port as a literal —
  * `authdeps.test.ts` and `entitlement.test.ts` — so the variable was configurable for most of the
  * suite and inert for those two. That only shows up with two lanes running at once, which is why it
  * survived: a second lane that finds 55433 busy and starts a container on another port gets what
@@ -20,7 +22,12 @@
  * to name a connection string may well be one that connects.
  */
 /**
- * The container `CLAUDE.md` documents, and the same default `npm run test:db` falls back to.
+ * What `npm run test:db` falls back to when `DATABASE_URL` is unset — one lane, one machine, no
+ * choices made. It is NOT what the documentation tells you to start any more: `CLAUDE.md`'s server
+ * half, `server/README.md` and the banner `global-setup.ts` prints all now derive a container name
+ * from the worktree and let Docker pick the host port, because a fixed name and a fixed port are
+ * both machine-wide and lanes here run in parallel (SONNY-355). This line stays because a session
+ * that sets nothing still has to land somewhere, and somewhere is better named here than guessed.
  *
  * **This file is the only place under `server/test/` allowed to name that port**, and
  * `database-url.test.ts` is what enforces it. The guard is narrow on purpose: several tests name a
