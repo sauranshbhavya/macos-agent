@@ -2,7 +2,13 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
+import {
+  afterAllUnderHangBackstop,
+  beforeAllUnderHangBackstop,
+  itUnderHangBackstop,
+} from "./support/backstop.js";
+import { dropSchema } from "./support/schema.js";
 import {
   MigrationDriftError,
   UnsafeStringLexingError,
@@ -23,11 +29,20 @@ import { migrationContentHash } from "../src/db/migration-hash.js";
  * comment-only edit must still be waved through, or this guard quietly ends the practice of
  * annotating migrations that this repository relies on.
  *
- * **Everything here works in a throwaway directory of its own, under ids that sort before `0001`.**
- * The `*.db.test.ts` files share one database and run serially (`vitest.config.ts`), and
- * `migrate.db.test.ts` reaches for `ORDER BY id DESC LIMIT 1` to find "the newest migration" — so a
- * probe row of ours sorting after the real ones would become that, and this file would break a
- * neighbour it never touched. `0000_` cannot, and `afterAll` removes the rows regardless.
+ * **Everything here works in a throwaway directory of its own, under `0000_probe`-prefixed ids —
+ * and the reason is no longer the one it was chosen for.** It was chosen to sort before `0001`:
+ * the `*.db.test.ts` files shared one database, `migrate.db.test.ts` reaches for `ORDER BY id DESC
+ * LIMIT 1` to find "the newest migration", and a probe row sorting after the real ones would have
+ * become that and broken a neighbour this file never touched. **SONNY-366 ended that**: every
+ * database file now starts from its own schema, so nothing here reaches a neighbour's run at all,
+ * and this file has zero executable dependency on sort order of its own.
+ *
+ * The prefix stays because it turned out to be load-bearing for something it never claimed:
+ * `reset()` and the teardown remove exactly this file's rows with `DELETE … WHERE id LIKE
+ * '0000_probe%'`, and that `LIKE` is what makes "exactly this file's" true rather than "everything
+ * in the ledger". What it needs is to be *distinctive*, not to be low-sorting. The old reason is
+ * recorded here rather than deleted, because a precaution removed when its neighbour changed is the
+ * kind of thing somebody re-adds later without knowing why it went.
  */
 const url = process.env["DATABASE_URL"];
 const describeDb = url ? describe : describe.skip;
@@ -44,18 +59,27 @@ describeDb("an applied migration cannot change silently", () => {
   let client: pg.Client;
   let dir: string;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     dir = await mkdtemp(join(tmpdir(), "sonny-hash-probe-"));
-    // Bootstraps the ledger against a database that may be brand new: `up` is what creates
-    // `sonny_meta.schema_migration`, and an empty directory makes it create that and apply nothing.
-    // Without this the first `reset()` below queries a table that does not exist yet, and every
-    // assertion after it is reasoning about a state the run never reached.
+    // **`dropSchema` rather than `rebuildSchema`, and this file is the second of the two that may
+    // say that** (SONNY-366; `migrate.db.test.ts` is the first, for the same reason in different
+    // words). What this file is about is the ledger's own lifecycle — applied then edited, applied
+    // before hashes existed, a ledger predating the hash column — and `rebuildSchema` would apply
+    // all sixteen migrations and record a hash for every one of them before each test, which is the
+    // state in which every one of those questions has already been answered. An empty database is
+    // what makes them questions.
+    await dropSchema(client);
+    // Then the ledger, and nothing else: `up` over an empty directory creates
+    // `sonny_meta.schema_migration` and applies no migration. Without it the first `reset()` below
+    // queries a table that does not exist and every assertion after it reasons about a state the
+    // run never reached — which is how this file's first version failed, eight cascading reds from
+    // one missing bootstrap.
     await up(client, await mkdtemp(join(tmpdir(), "sonny-hash-bootstrap-")));
   });
 
-  afterAll(async () => {
+  afterAllUnderHangBackstop(async () => {
     // Leaves the shared database as it was found. A probe row surviving this file would sit in the
     // ledger naming a migration no directory contains, which is a state nothing else here expects.
     await client.query("DELETE FROM sonny_meta.schema_migration WHERE id LIKE '0000_probe%'");
@@ -93,7 +117,7 @@ describeDb("an applied migration cannot change silently", () => {
     await client.query("DROP FUNCTION IF EXISTS public.sonny_hash_probe_fn()");
   };
 
-  it("records the content hash in the same transaction as the SQL it describes", async () => {
+  itUnderHangBackstop("records the content hash in the same transaction as the SQL it describes", async () => {
     await reset();
     const expected = await writeProbe(upSql("id int"));
     expect(await up(client, dir)).toEqual([PROBE]);
@@ -101,7 +125,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(await ledgerHash()).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("refuses to apply anything once an applied migration's SQL has changed", async () => {
+  itUnderHangBackstop("refuses to apply anything once an applied migration's SQL has changed", async () => {
     // **The selftest arm.** Applied above; now the file changes behaviourally, and a second run must
     // stop rather than build the next migration on a schema no other environment has.
     await writeProbe(upSql("id uuid"));
@@ -124,7 +148,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(tables).toHaveLength(0);
   });
 
-  it("refuses to roll back over the same drift, because the rollback is edited text too", async () => {
+  itUnderHangBackstop("refuses to roll back over the same drift, because the rollback is edited text too", async () => {
     // `down` is the half a later edit is most likely to touch, and running a `down` that was never
     // paired with the `up` this database ran is how the README's staging rehearsal stops being one.
     await expect(down(client, dir)).rejects.toThrow(MigrationDriftError);
@@ -135,21 +159,21 @@ describeDb("an applied migration cannot change silently", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("proceeds again once the file is restored, which is the only way out it offers", async () => {
+  itUnderHangBackstop("proceeds again once the file is restored, which is the only way out it offers", async () => {
     // The refusal names restoring the file (git) as the remedy. If restoring it did not clear the
     // refusal, the remedy would be wrong and the runner would be a dead end.
     await writeProbe(upSql("id int"));
     expect(await up(client, dir)).toEqual([NEXT]);
   });
 
-  it("refuses on a changed ROLLBACK half alone, with the up half untouched", async () => {
+  itUnderHangBackstop("refuses on a changed ROLLBACK half alone, with the up half untouched", async () => {
     await writeProbe(upSql("id int"), "DROP TABLE public.sonny_hash_probe;");
     await expect(up(client, dir)).rejects.toThrow(MigrationDriftError);
     await writeProbe(upSql("id int"));
     expect(await up(client, dir)).toEqual([]);
   });
 
-  it("waves through a comment-only edit — the decision the whole design rests on", async () => {
+  itUnderHangBackstop("waves through a comment-only edit — the decision the whole design rests on", async () => {
     // PR #167 edited an already-applied 0014 to record that 0015 changed what its column may imply.
     // That edit was deliberate and correct. A whole-file hash would have turned it into a hard
     // failure on every environment that had already run 0014, and this is the arm that says it does
@@ -166,7 +190,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(await up(client, dir)).toEqual([NEXT]);
   });
 
-  it("treats an absent recorded hash as unknown and compares it against nothing", async () => {
+  itUnderHangBackstop("treats an absent recorded hash as unknown and compares it against nothing", async () => {
     // What a database applied before this runner existed carries. Backfilling those rows from
     // today's files was the alternative and would be a lie about when the hash was taken — so the
     // honest state is "unknown", and unknown must neither match nor refuse. Here the file has
@@ -182,7 +206,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(await ledgerHash()).toBeNull();
   });
 
-  it("re-applying is what clears the unknown state, and it is the only thing that does", async () => {
+  itUnderHangBackstop("re-applying is what clears the unknown state, and it is the only thing that does", async () => {
     expect(await down(client, dir)).toBe(NEXT);
     expect(await down(client, dir)).toBe(PROBE);
     const expected = await writeProbe(upSql("id int"));
@@ -190,7 +214,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(await ledgerHash()).toBe(expected);
   });
 
-  it("compares only migrations whose file is present, so a foreign directory still runs", async () => {
+  itUnderHangBackstop("compares only migrations whose file is present, so a foreign directory still runs", async () => {
     // `up(client, someOtherDir)` is how three existing tests apply throwaway migrations against a
     // database that also holds the real ones. A guard that refused on every applied id it could not
     // find a file for would break all of them — and would be refusing on the different hazard of a
@@ -201,7 +225,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(await up(client, empty)).toEqual([]);
   });
 
-  it("does not refuse over a PENDING migration whose file changed, because pending is what up is for", async () => {
+  itUnderHangBackstop("does not refuse over a PENDING migration whose file changed, because pending is what up is for", async () => {
     await reset();
     await writeProbe(upSql("id int"));
     await writeProbe(upSql("id uuid"));
@@ -223,7 +247,7 @@ describeDb("an applied migration cannot change silently", () => {
     return { code, out, err };
   };
 
-  it("exits 65 from up, down and status when an applied migration's file has changed", async () => {
+  itUnderHangBackstop("exits 65 from up, down and status when an applied migration's file has changed", async () => {
     // The documented contract, and until `runCommand` was split out of `main` nothing in the suite
     // could reach it — `main` is only callable by spawning the compiled runner.
     await reset();
@@ -236,7 +260,7 @@ describeDb("an applied migration cannot change silently", () => {
     }
   });
 
-  it("says which migration changed on stderr, not on stdout", async () => {
+  itUnderHangBackstop("says which migration changed on stderr, not on stdout", async () => {
     // The listing goes to stdout and the summary to stderr, and BOTH name the migration: an
     // operator who has redirected stdout, or is reading a CI log's stderr, would otherwise be told
     // only that "1 migration" changed and not which.
@@ -246,7 +270,7 @@ describeDb("an applied migration cannot change silently", () => {
     expect(run.out).not.toContain("no longer describe");
   });
 
-  it("does not claim the change was outside a string literal, because it may not have been", async () => {
+  itUnderHangBackstop("does not claim the change was outside a string literal, because it may not have been", async () => {
     // F2: the refusal used to end "Comments and layout are not hashed, so this is a change to the
     // executable SQL", which is false when the edit is one line of prose inside a `$$ … $$` body —
     // that text IS hashed, correctly, because Postgres stores it in pg_proc.prosrc. The refusal was
@@ -265,7 +289,7 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
-  it("exits 0 from status when nothing has changed, and 2 on an unknown command", async () => {
+  itUnderHangBackstop("exits 0 from status when nothing has changed, and 2 on an unknown command", async () => {
     await writeProbe(upSql("id int"));
     expect((await runs("up")).code).toBe(0);
     const clean = await runs("status");
@@ -277,7 +301,7 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
-  it("issues no ALTER on the ledger once the hash column is there", async () => {
+  itUnderHangBackstop("issues no ALTER on the ledger once the hash column is there", async () => {
     // The lock regression (SONNY-364 review). `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` takes
     // ACCESS EXCLUSIVE to evaluate its own IF NOT EXISTS, so on every run after the first it queued
     // behind any open ledger writer: read-only `status` measured 8.17 s behind a ten-second writer
@@ -297,7 +321,7 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
-  it("refuses a connection whose standard_conforming_strings is off, before taking any lock", async () => {
+  itUnderHangBackstop("refuses a connection whose standard_conforming_strings is off, before taking any lock", async () => {
     // **The precondition, detected rather than assumed** (SONNY-364 cycle 2). `DATABASE_URL` alone
     // falsifies it — `?options=-c%20standard_conforming_strings%3Doff` — with no file this
     // repository controls changed, and with it off a backslash escapes inside a plain '…' as well,
@@ -323,7 +347,7 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
-  it("treats a standard_conforming_strings it cannot read as unsafe, not as safe", async () => {
+  itUnderHangBackstop("treats a standard_conforming_strings it cannot read as unsafe, not as safe", async () => {
     // **A surviving mutant found this** (SONNY-364 cycle 2): narrowing the guard from `!== "on"` to
     // `=== "off"` passed the whole suite, because every test reaching it set the setting to exactly
     // "off". The two readings differ only on an answer that is neither — an empty result, or a value
@@ -351,7 +375,7 @@ describeDb("an applied migration cannot change silently", () => {
     await reset();
   });
 
-  it("carries the hash column on a ledger created before this runner recorded one", async () => {
+  itUnderHangBackstop("carries the hash column on a ledger created before this runner recorded one", async () => {
     // The `CREATE TABLE IF NOT EXISTS` in `LEDGER` does nothing to a table that already exists, so
     // an existing database gets the column from the `ALTER … ADD COLUMN IF NOT EXISTS` beside it and
     // from nothing else. Dropping the column is the only way to exercise that path, so the rows'
