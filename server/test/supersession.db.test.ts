@@ -1,5 +1,5 @@
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import { accountForSupabaseUser } from "../src/auth/attribution.js";
 import { normalizeEmail, resolve } from "../src/auth/identity.js";
 import {
@@ -14,7 +14,8 @@ import {
   supersededProviderUserCount,
 } from "../src/auth/revocation.js";
 import { owedByAccount } from "../src/revocations.js";
-import { up } from "../src/db/migrate.js";
+import { rebuildSchema } from "./support/schema.js";
+import { afterAllUnderHangBackstop, beforeAllUnderHangBackstop, beforeEachUnderHangBackstop, itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * The identity lifecycle's provider-side half: what happens to a `supabase_user_id` that stops being
@@ -81,17 +82,15 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   let other: pg.Client;
   let provider: RecordingProvider;
 
-  beforeAll(async () => {
+  beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
     await client.connect();
     other = new pg.Client({ connectionString: url });
     await other.connect();
-    await client.query("DROP SCHEMA IF EXISTS sonny CASCADE");
-    await client.query("DROP SCHEMA IF EXISTS sonny_meta CASCADE");
-    await up(client);
+    await rebuildSchema(client);
   });
-  afterAll(async () => { await client.end(); await other.end(); });
-  beforeEach(async () => {
+  afterAllUnderHangBackstop(async () => { await client.end(); await other.end(); });
+  beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.identity, sonny.account RESTART IDENTITY CASCADE");
     provider = new RecordingProvider();
   });
@@ -127,7 +126,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [accountId]);
 
   describe("SONNY-230 — the id that was overwritten", () => {
-    it("keeps the first provider-side user id when the second one arrives", async () => {
+    itUnderHangBackstop("keeps the first provider-side user id when the second one arrives", async () => {
       // **The defect, from the reviewer's own reproduction.** `resolve()`'s rule 1 refreshes with
       // `supabase_user_id = COALESCE($5, supabase_user_id)`, which overwrites — so before 0014 the
       // first id existed nowhere at all the instant the second one landed.
@@ -145,7 +144,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(rows[0]!.supabase_user_id).toBe(SECOND);
     });
 
-    it("owes a revocation for the superseded id on a LIVE account, without waiting for a close", async () => {
+    itUnderHangBackstop("owes a revocation for the superseded id on a LIVE account, without waiting for a close", async () => {
       // **The widening, and the security answer.** A superseded provider-side user may still hold
       // live sessions at Supabase. Before 0014 nothing was owed until the account closed — and the
       // superseded id would not have been in that set either, because it had been overwritten. So
@@ -163,7 +162,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       ]);
     });
 
-    it("drains the superseded id, and the drain asks the provider about THAT id", async () => {
+    itUnderHangBackstop("drains the superseded id, and the drain asks the provider about THAT id", async () => {
       const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
       await resolve(client, assertion("a@example.com", SECOND));
 
@@ -179,7 +178,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       ]);
     });
 
-    it("revokes BOTH ids when the account is closed — the reviewer's reproduction, inverted", async () => {
+    itUnderHangBackstop("revokes BOTH ids when the account is closed — the reviewer's reproduction, inverted", async () => {
       // Verbatim from SONNY-230: "resolve twice for one subject with two different provider user
       // ids, close the account, drain — only the newer id is revoked, and the older one appears in
       // no owed query, because the column that named it is gone."
@@ -194,7 +193,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await owedRevocationCount(client)).toBe(0);
     });
 
-    it("keeps every id in a chain of three, not just the last two", async () => {
+    itUnderHangBackstop("keeps every id in a chain of three, not just the last two", async () => {
       // A supersession is not a single-slot memory. Two supersessions in a row have to leave two
       // superseded rows, or the mechanism is a rename of the defect.
       const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
@@ -210,7 +209,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   });
 
   describe("the id that stops being named must stop working", () => {
-    it("does not attribute a superseded provider-side user to the account", async () => {
+    itUnderHangBackstop("does not attribute a superseded provider-side user to the account", async () => {
       // **This is the property both tickets protect**, and it is the one an access token minted for
       // the old provider-side user would exercise: `auth/gate.ts` attributes every protected request
       // through `accountForSupabaseUser`, so an id that resolves to no live identity is a 401.
@@ -223,7 +222,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await accountForSupabaseUser(client, FIRST)).toEqual({ ambiguous: false });
     });
 
-    it("still attributes an id that is superseded on one identity and current on another", async () => {
+    itUnderHangBackstop("still attributes an id that is superseded on one identity and current on another", async () => {
       // One Supabase user can legitimately be named by two identities — that separation is the
       // whole reason `sonny.account` is not `auth.users`. So "superseded" is a fact about one
       // identity's history, never a global ban on the id, and a fix that denylisted the value would
@@ -251,7 +250,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   });
 
   describe("SONNY-196 — what a supersession says about Supabase", () => {
-    it("reports superseded ids separately from a closed account's debt", async () => {
+    itUnderHangBackstop("reports superseded ids separately from a closed account's debt", async () => {
       // The two are owed for different reasons and mean different things to an operator: a closed
       // account's debt is expected and drains away, while a supersession on a live account is
       // Supabase re-keying a subject underneath this deployment — which is what removing an
@@ -270,7 +269,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
         .toEqual({ accountId: closed.accountId, providerUsers: 1, superseded: 0 });
     });
 
-    it("records nothing new when the same id is presented again", async () => {
+    itUnderHangBackstop("records nothing new when the same id is presented again", async () => {
       // The ordinary case, and the one that must stay silent: a subject signing in repeatedly with
       // the same Supabase user has not diverged from anything. A trigger that recorded a
       // supersession on every refresh would turn every sign-in into an owed revocation, which is a
@@ -285,7 +284,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await supersededProviderUserCount(client)).toBe(0);
     });
 
-    it("makes an id current again when the provider hands it back", async () => {
+    itUnderHangBackstop("makes an id current again when the provider hands it back", async () => {
       // Supabase re-keying a subject twice, ending where it started. The returned id is what the
       // subject signs in as now, so it is no longer owed a revocation *for being superseded* — and
       // the one it displaced is.
@@ -301,7 +300,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await supersededProviderUserCount(client)).toBe(1);
     });
 
-    it("records a supersession written by something that is not resolve()", async () => {
+    itUnderHangBackstop("records a supersession written by something that is not resolve()", async () => {
       // **Why the record is a trigger and not two statements in `resolve()`.** The event is the
       // column changing; anything that changes it — a backfill, a support script, a future link
       // path — has to be recorded, or the mechanism is only as good as the next writer's memory.
@@ -316,7 +315,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       ]);
     });
 
-    it("records the first id an identity acquires after having none", async () => {
+    itUnderHangBackstop("records the first id an identity acquires after having none", async () => {
       // `supabase_user_id` is nullable — 0002 says an identity can exist before its Supabase user
       // does, and until it has one there is nothing to remember. This is the INSERT branch of the
       // trigger, reached with no supersession to consider.
@@ -332,7 +331,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await owedRevocationCount(client)).toBe(0);
     });
 
-    it("supersedes an id that is CLEARED rather than replaced", async () => {
+    itUnderHangBackstop("supersedes an id that is CLEARED rather than replaced", async () => {
       // **This test exists because a mutant survived and the comment explaining the line was
       // wrong.** The trigger's supersession branch reads `OLD.supabase_user_id IS DISTINCT FROM
       // NEW.supabase_user_id`, and both that migration's comment and the test above claimed `<>`
@@ -368,7 +367,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     // nothing. The trigger now clears the stamp whenever the identity observes the id again,
     // because that starts a new episode whose sessions nothing has revoked.
 
-    it("owes a fresh revocation after a revoked id comes back and the account is closed", async () => {
+    itUnderHangBackstop("owes a fresh revocation after a revoked id comes back and the account is closed", async () => {
       // Route one, which this branch introduced: the `ON CONFLICT … SET superseded_at = NULL` arm
       // un-supersedes an id and used to leave the revocation stamp behind.
       const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
@@ -393,7 +392,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect([...provider.revokedUsers].sort()).toEqual([FIRST, SECOND]);
     });
 
-    it("owes a fresh revocation after a close, a drain, a reopen and a second close", async () => {
+    itUnderHangBackstop("owes a fresh revocation after a close, a drain, a reopen and a second close", async () => {
       // **Route two, and it needs no supersession at all — it predates this branch** (SONNY-358,
       // authorised by the founder to be fixed here rather than split across two branches, because
       // it is one root cause). The reviewer measured this same sequence against `main` at `def8c3a`
@@ -425,7 +424,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
-    it("does not un-spend a revocation the identity never observed again", async () => {
+    itUnderHangBackstop("does not un-spend a revocation the identity never observed again", async () => {
       // **What this test does and does not establish, corrected** (PR #164 cycle 2, C-F2). The fix
       // round called it "the direction that must not clear" and said it stopped the fix being
       // "clear it always". **It cannot.** Nothing fires the trigger after the drain stamps here, so
@@ -449,7 +448,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([SECOND]);
     });
 
-    it("does not un-spend a superseded id when an ordinary repeat sign-in names the current one", async () => {
+    itUnderHangBackstop("does not un-spend a superseded id when an ordinary repeat sign-in names the current one", async () => {
       // **The reviewer's test, taken verbatim in substance** (PR #164 cycle 2, C-F2), and the gap it
       // fills was found by a **surviving mutant** rather than by reading the test above and
       // believing its description. That is the sentence worth keeping: a test whose stated
@@ -491,7 +490,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([SECOND]);
     });
 
-    it("leaves a row un-stamped rather than wrongly stamped when a sign-in lands DURING the provider call", async () => {
+    itUnderHangBackstop("leaves a row un-stamped rather than wrongly stamped when a sign-in lands DURING the provider call", async () => {
       // **The reviewer's test, taken as offered** (PR #164 cycle 2, C-F4). It is what turns the
       // ordering argument recorded at the `ON CONFLICT` arm from a trace into a property the suite
       // holds: the fix clears a stamp on re-observation and the drain writes one, so the question
@@ -546,7 +545,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
-    it("clears a dead drain's lease when the id comes back", async () => {
+    itUnderHangBackstop("clears a dead drain's lease when the id comes back", async () => {
       // The review's F8 note, closed by the same two lines: a row superseded, claimed by a drain
       // that then died, un-superseded and superseded again used to be invisible to the claim query
       // for up to `sonny.revocation_lease_seconds()`. A lease belongs to an episode too.
@@ -588,7 +587,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     // disjuncts) rather than by the user turning up. The migration's header has the decision in
     // full.
 
-    it("owes a fresh revocation after a reopen and a second close with NO sign-in and no refresh at all", async () => {
+    itUnderHangBackstop("owes a fresh revocation after a reopen and a second close with NO sign-in and no refresh at all", async () => {
       // **Route B, and it is the one no route-level fix could have closed**: there is no request to
       // hang one on. Measured before 0015 on this same sequence, the last assertion read 0.
       const { accountId } = await resolve(client, assertion("a@example.com", FIRST));
@@ -614,7 +613,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
-    it("owes a fresh revocation for a stamped id that a later sign-in SUPERSEDES", async () => {
+    itUnderHangBackstop("owes a fresh revocation for a stamped id that a later sign-in SUPERSEDES", async () => {
       // **Route C.** The user comes back as a different provider-side user, so the stamped id is
       // superseded rather than observed and 0014's `ON CONFLICT` arm never touches it. Before 0015
       // the history here read `{FIRST, superseded: true, revoked: true}` and the account owed 0 — an
@@ -637,7 +636,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
-    it("hands a stamped row back to the drain even while a dead lease is on it", async () => {
+    itUnderHangBackstop("hands a stamped row back to the drain even while a dead lease is on it", async () => {
       // The lease belongs to the episode too — 0014 settled that for the come-back arm and this is
       // the same rule on the close. A drain that claimed a row and died leaves
       // `revocation_claimed_at` set; without clearing it here, the revocation the second close owes
@@ -660,7 +659,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([FIRST]);
     });
 
-    it("does NOT re-owe anything when an already-closed account is closed again", async () => {
+    itUnderHangBackstop("does NOT re-owe anything when an already-closed account is closed again", async () => {
       // The counterweight to route B, and the direction that says the trigger fires on the
       // TRANSITION rather than on the state. `sonny.mark_identities_closed` (0005) updates only
       // identities that are `NOT account_closed`, so a repeated close touches no identity row and
@@ -681,7 +680,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([]);
     });
 
-    it("does NOT re-owe when a CLOSED identity's row is written for some other reason", async () => {
+    itUnderHangBackstop("does NOT re-owe when a CLOSED identity's row is written for some other reason", async () => {
       // **The test the one above cannot be** (PR #167 review, F2), and the reason is worth the
       // paragraph, because the branch shipped a changelog sentence claiming otherwise.
       //
@@ -723,7 +722,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([]);
     });
 
-    it("does NOT re-owe a superseded id that was already drained when the account later closes", async () => {
+    itUnderHangBackstop("does NOT re-owe a superseded id that was already drained when the account later closes", async () => {
       // The counterweight to route C, and the reason the close's clear is scoped to
       // `superseded_at IS NULL`. A close creates an obligation for the id the identity is CURRENTLY
       // naming; an id it stopped naming had its obligation created once, by the supersession, and
@@ -748,7 +747,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(provider.revokedUsers).toEqual([SECOND]);
     });
 
-    it("owes a revocation for an identity MOVED onto a closed account, which names no column at all", async () => {
+    itUnderHangBackstop("owes a revocation for an identity MOVED onto a closed account, which names no column at all", async () => {
       // **The `UPDATE OF` trap, from the other side** (0005's third statement, and 0014's F5). The
       // close trigger compares OLD to NEW rather than keying on a SET list, because
       // `sonny.derive_identity_closed` is a BEFORE trigger that writes `NEW.account_closed` on an
@@ -772,7 +771,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   });
 
   describe("the counts are per provider-side user, which is the unit of the work", () => {
-    it("counts one provider-side user named by two identities once", async () => {
+    itUnderHangBackstop("counts one provider-side user named by two identities once", async () => {
       // **PR #164 review, F3.** `owedByAccount` counted rows and printed them under the noun
       // "provider-side user(s)", so an operator was told an account owed 2 while one drain call
       // cleared it and `RevocationOutcome.revoked` said 1 — three figures sharing a word and not a
@@ -799,7 +798,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
   });
 
   describe("the drain and the delete guard agree about the same set", () => {
-    it("refuses to hard-delete a live account that still owes a superseded revocation", async () => {
+    itUnderHangBackstop("refuses to hard-delete a live account that still owes a superseded revocation", async () => {
       // 0009's rule — the guard counts what the drain counts — applied to the set the drain now
       // reads. Deleting here would destroy the only record that the superseded user's sessions are
       // owed a revocation, which is the exact failure SONNY-230 describes.
@@ -815,7 +814,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect((await client.query("SELECT count(*)::int AS n FROM sonny.account")).rows[0].n).toBe(0);
     });
 
-    it("leaves a superseded id owed when the provider call fails transiently", async () => {
+    itUnderHangBackstop("leaves a superseded id owed when the provider call fails transiently", async () => {
       // `ProviderRejected` is the only answer that counts as done. A timeout leaves the row owed,
       // releases the lease, and the next drain finds it — the same contract the closed-account case
       // has had since PR #87's third round, now reaching supersessions too.
@@ -839,7 +838,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
       expect(await owedRevocationCount(client)).toBe(0);
     });
 
-    it("does not stamp a live account's CURRENT id while revoking that same id elsewhere", async () => {
+    itUnderHangBackstop("does not stamp a live account's CURRENT id while revoking that same id elsewhere", async () => {
       // One `signOutAllForUser` revokes every session of one provider-side user, so the drain fans
       // its stamp out across every row naming it. **Every OWED row, and no other.** A row that is
       // current on a live account is not owed anything, and stamping it would mean that when that
