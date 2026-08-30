@@ -88,6 +88,30 @@ struct EntitlementServiceTests {
         }
     }
 
+    /// Which claim the stub is currently signing, in a form a `@Sendable` handler may read.
+    ///
+    /// A gateway whose clock is wrong signs claims in its own wrong frame and then, once it is put
+    /// right, signs them in the real one — so a test of SONNY-344 has to move the claim and the
+    /// `Date` header together, and one of them being fixed would be a scenario no gateway produces.
+    final class SignedClaim: @unchecked Sendable {
+        private let lock = NSLock()
+        private var compact: String
+
+        init(_ compact: String) { self.compact = compact }
+
+        var text: String {
+            lock.lock()
+            defer { lock.unlock() }
+            return compact
+        }
+
+        func set(_ compact: String) {
+            lock.lock()
+            self.compact = compact
+            lock.unlock()
+        }
+    }
+
     /// Whether the stub answers at all, in a form a `@Sendable` handler may read.
     final class Reachability: @unchecked Sendable {
         private let lock = NSLock()
@@ -694,8 +718,10 @@ struct EntitlementServiceTests {
         let clocks = MovableClocks(wall: Self.issuedAt)
         let first = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
         let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let network = Reachability()
         first.register { _ in
-            .reply(
+            guard network.isReachable else { return .failure(URLError(.notConnectedToInternet)) }
+            return .reply(
                 statusCode: 200,
                 headers: [
                     "Content-Type": "application/json",
@@ -712,8 +738,22 @@ struct EntitlementServiceTests {
             monotonicNow: clocks.monotonic
         )
         _ = try await live.refreshNow()
+        // **The network goes away before the refusal, and saying so is the point** (PR #173's
+        // review, finding 6). The refusal below starts a refresh, and a refresh that reached this
+        // stub would adopt a claim issued a hundred hours ago against a mark that has just passed
+        // its window — which is `markKeptOrReset`'s reset, and it would put the mark back at
+        // `issuedAt` and make the assertions below fail. It did not fail before this line was added,
+        // and only because the fixture's *default* one-hour session had expired a hundred hours ago
+        // by then, so the refresh died renewing it rather than being unable to adopt. Measured
+        // rather than reasoned: restoring the pre-fix shape and changing nothing but that default to
+        // `expiresIn: 400 * 24 * 60 * 60` fails both assertions below — `persisted` a flat `0.0`
+        // seconds past `issuedAt`, and the relaunch answering `.entitled`. This test is about a mark
+        // that survives **with no network**, so having no network is the state it should be
+        // asserting in rather than a thing it got away with.
+        network.goOffline()
         clocks.advance(by: 100 * 60 * 60)
         #expect(await live.decision(for: Self.capability) == .refused(.lapsed))
+        await live.awaitPendingRefresh()
         first.unregister()
 
         // The mark was written back during that decision, which is what the next launch inherits.
@@ -776,6 +816,286 @@ struct EntitlementServiceTests {
         // And putting the clock right brings the claim back, which a persisted year would not have.
         clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(60))
         #expect(await service.decision(for: Self.capability) == .entitled)
+    }
+
+    // MARK: - A wrong clock on the gateway
+
+    @Test
+    @MainActor
+    func aGatewayAYearAheadCannotLeaveTheMarkPermanentlyWrong() async throws {
+        // **SONNY-344's repro, driven end to end through the production writers.** Nothing is seeded:
+        // the claim, the mark and the refresh that repairs them all arrive the way the app produces
+        // them. On the tree this was found at, the last three assertions read `.refused(.lapsed)`,
+        // `.refused(.lapsed)` and a mark 365 days out — and stayed that way for as long as the Mac
+        // existed, because a high-water mark only ever rises.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let year: TimeInterval = 365 * 24 * 60 * 60
+        let poisonedTime = Self.issuedAt.addingTimeInterval(year)
+        let gatewaySays = Reported(instant: poisonedTime)
+        let signed = SignedClaim(signer.claim(subject: "test-user", issuedAt: poisonedTime))
+        // **A session that outlasts the poisoning**, because the proactive token refresh reasons in
+        // server time too: with the gateway a year ahead, an hour-long access token is an hour-long
+        // token that expired a year ago, and this test would spend its second refresh failing to
+        // renew a session rather than exercising the mark. The fixture's own doc records that this is
+        // what `expiresIn` is for.
+        let fixture = SignedInBackendFixture(
+            expiresIn: 400 * 24 * 60 * 60,
+            now: clocks.now,
+            monotonicNow: clocks.monotonic
+        )
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: gatewaySays.instant)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": signed.text])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+
+        // **While the gateway is wrong nothing is broken**, and that is why this reaches production
+        // rather than a test: its header and its signed claim agree, so the Mac judges in the
+        // gateway's own frame and answers yes. Everything below happens after it is put right.
+        _ = try await service.refreshNow()
+        #expect(await service.decision(for: Self.capability) == .entitled)
+
+        // Ninety-seven hours of real time — past the poisoned claim's own 24-hour life and 72-hour
+        // grace — and the gateway is now correct in both the header and what it signs.
+        let realNow = Self.issuedAt.addingTimeInterval(97 * 60 * 60)
+        clocks.advance(by: 97 * 60 * 60)
+        gatewaySays.set(realNow)
+        signed.set(signer.claim(subject: "test-user", issuedAt: realNow))
+
+        // One refusal, which is the answer a user would report. It starts the refresh that repairs
+        // this, so no explicit `refreshNow()` is made here: the background path is the claim.
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+        await service.awaitPendingRefresh()
+
+        #expect(await service.decision(for: Self.capability) == .entitled)
+        // And the mark is back on real time rather than merely inside the new claim's window, so a
+        // rollback is still refused tomorrow.
+        let mark = try #require(store.current?.observedServerTime)
+        #expect(abs(mark.timeIntervalSince(realNow)) < 60)
+    }
+
+    @Test
+    @MainActor
+    func oneWrongDateHeaderCannotRunTheObservationPastWhatRealTimeAllows() async throws {
+        // The single bad host in an otherwise healthy fleet, which is the likelier shape of the same
+        // failure: one response is a year out and every response around it is honest. Nothing here
+        // reaches the repair above — the bad instant is never recorded in the first place.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let gatewaySays = Reported(instant: Self.issuedAt)
+        // **A session that outlasts the bad header.** §3.5's offset is unbounded on purpose, so a
+        // header a year out also makes the *token* look a year expired and the client renews it
+        // before it will send anything — which is a second, real consequence of one bad header, and
+        // one this test would otherwise spend itself on instead of on the mark.
+        let fixture = SignedInBackendFixture(
+            expiresIn: 400 * 24 * 60 * 60,
+            now: clocks.now,
+            monotonicNow: clocks.monotonic
+        )
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: gatewaySays.instant)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let store = MemoryStore()
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        _ = try await service.refreshNow()
+
+        clocks.advance(by: 60)
+        gatewaySays.set(Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60))
+        _ = try await service.refreshNow()
+
+        // **The mark is read here, before any decision is asked for, and the order is not cosmetic.**
+        // The bound is spent per response, so an exact figure is a statement about how many responses
+        // have happened — and `decision(for:)` starts a refresh of its own, which is a response this
+        // test did not write. Read at the one point where the count is fixed at two, the arithmetic
+        // is exact: the minute that really passed, plus what one response may carry.
+        let markAfterTheBadHeader = try #require(store.current?.observedServerTime)
+        #expect(
+            markAfterTheBadHeader
+                == Self.issuedAt.addingTimeInterval(60 + SonnyBackendClient.maximumUncorroboratedForwardJump)
+        )
+
+        // **The year does reach the answer, once, and that is recorded rather than hidden.** §3.5's
+        // offset is deliberately not bounded — see `recordServerClock` — so `serverNow()` carries the
+        // bad header for exactly as long as it is the last one seen, and the decision it produces is
+        // fail-closed. What matters is that nothing was written down.
+        #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
+        // That refusal starts a refresh. Waiting for it is what keeps the rest of this deterministic
+        // rather than a race the suite's load decides.
+        await service.awaitPendingRefresh()
+
+        // The next honest response ends it. Nothing was kept, so there is nothing to undo — which is
+        // the whole of SONNY-344: on the tree this was found at, this last answer stayed `.lapsed`
+        // for a year and then forever.
+        gatewaySays.set(Self.issuedAt.addingTimeInterval(60))
+        _ = try await service.refreshNow()
+        #expect(await service.decision(for: Self.capability) == .entitled)
+        // Stated as the property rather than as arithmetic, for the reason given above: by now the
+        // count of responses includes one this test did not write. A year is 31,536,000 seconds.
+        let mark = try #require(store.current?.observedServerTime)
+        #expect(mark.timeIntervalSince(Self.issuedAt) < 60 * 60)
+    }
+
+    @Test
+    @MainActor
+    func aGatewayClockSteppedForwardIsCaughtUpRatherThanRefusedForever() async throws {
+        // **The half of the bound that keeps it from being a different bug.** A host that corrects
+        // its own clock forward is not wrong afterwards, only ahead — and a bound that *refused*
+        // such an observation would refuse every later one too, because each is ahead of the same
+        // frozen projection, leaving this client's idea of server time stuck behind for good. The
+        // cap is absorbed per response instead, so a real correction is taken up within two.
+        let signer = Signer()
+        let clocks = MovableClocks(wall: Self.issuedAt)
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        let gatewaySays = Reported(instant: Self.issuedAt)
+        let fixture = SignedInBackendFixture(now: clocks.now, monotonicNow: clocks.monotonic)
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": "application/json",
+                    "Date": SonnyHTTPDate.formatter.string(from: gatewaySays.instant)
+                ],
+                body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
+            )
+        }
+        let service = EntitlementService(
+            client: fixture.client,
+            store: MemoryStore(),
+            keys: signer.keys,
+            monotonicNow: clocks.monotonic
+        )
+        _ = try await service.refreshNow()
+
+        // The gateway steps ten minutes forward — four times what one response may carry.
+        let step: TimeInterval = 600
+        clocks.advance(by: 1)
+        gatewaySays.set(Self.issuedAt.addingTimeInterval(step + 1))
+        _ = try await service.refreshNow()
+        let afterOne = try #require(await fixture.client.lastObservedServerTime()).serverInstant
+        #expect(afterOne < gatewaySays.instant)
+        #expect(
+            afterOne
+                == Self.issuedAt.addingTimeInterval(1 + SonnyBackendClient.maximumUncorroboratedForwardJump)
+        )
+
+        clocks.advance(by: 1)
+        gatewaySays.set(Self.issuedAt.addingTimeInterval(step + 2))
+        _ = try await service.refreshNow()
+        let afterTwo = try #require(await fixture.client.lastObservedServerTime()).serverInstant
+        #expect(afterTwo == gatewaySays.instant)
+    }
+
+    @Test
+    @MainActor
+    func theBoundaryOfTheResetIsTheLastHonouredInstant() async throws {
+        // **The reset's own boundary, pinned at the notch either side of which the answer inverts**
+        // (PR #173's review, finding 4; a mutant loosening `>` to `>=` survived the first battery).
+        // `judge` answers `.entitled` at exactly `honouredUntil`, so a mark sitting on that instant
+        // belongs to a claim that is still alive — and resetting there would roll the mark back by
+        // the claim's whole 96-hour window on a live entitlement, which is the one direction it must
+        // never move in. The identical boundary one function away is already pinned by name in
+        // `aStoredClaimTheMarkHasNotYetKilledStillOutranksAnOlderOne`; this is the other half.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let compact = signer.claim(subject: "test-user", issuedAt: Self.issuedAt)
+        guard case .success(let claim) = EntitlementVerifier.verify(compact, against: signer.keys) else {
+            Issue.record("the fixture's own claim did not verify")
+            return
+        }
+        // 24 h of life, 72 h of grace and 300 s of tolerance, which is what the fixture's claim says.
+        let lastHonouredInstant = Self.issuedAt.addingTimeInterval(96 * 60 * 60 + 300)
+        #expect(claim.honouredUntil == lastHonouredInstant)
+
+        // Exactly on the boundary: the claim is still live, so the mark stays where it is.
+        let onTheBoundary = MemoryStore(StoredEntitlement(
+            compactClaim: compact,
+            observedServerTime: lastHonouredInstant
+        ))
+        try await EntitlementService(client: fixture.client, store: onTheBoundary, keys: signer.keys)
+            .adopt(claim, compact: compact, observedAt: lastHonouredInstant)
+        #expect(onTheBoundary.current?.observedServerTime == lastHonouredInstant)
+
+        // One second past it: the claim is dead, the mark is what killed it, and it goes back to the
+        // claim's own signed issue time.
+        let pastIt = lastHonouredInstant.addingTimeInterval(1)
+        let beyondTheBoundary = MemoryStore(StoredEntitlement(
+            compactClaim: compact,
+            observedServerTime: pastIt
+        ))
+        try await EntitlementService(client: fixture.client, store: beyondTheBoundary, keys: signer.keys)
+            .adopt(claim, compact: compact, observedAt: pastIt)
+        #expect(beyondTheBoundary.current?.observedServerTime == Self.issuedAt)
+    }
+
+    @Test
+    @MainActor
+    func aStoredClaimTheMarkHasNotYetKilledStillOutranksAnOlderOne() async throws {
+        // The other side of the condition SONNY-344 put on `adopt`'s replay guard, and the reason
+        // that condition is `honouredUntil` and not something looser: a mark that has not yet passed
+        // the stored claim's window changes nothing, and the replayed older claim is still refused.
+        // The mark here sits **exactly** at `honouredUntil`, which `judge` still answers `.entitled`
+        // at — so a boundary written one notch tighter would hand this replay the claim.
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let current = signer.claim(subject: "test-user", capabilities: [], issuedAt: Self.issuedAt)
+        // 24 h of life, 72 h of grace and 300 s of tolerance, which is what the fixture's claim says.
+        let lastHonouredInstant = Self.issuedAt.addingTimeInterval(96 * 60 * 60 + 300)
+        let store = MemoryStore(StoredEntitlement(
+            compactClaim: current,
+            observedServerTime: lastHonouredInstant
+        ))
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys
+        )
+
+        let olderCompact = signer.claim(
+            subject: "test-user",
+            capabilities: ["test.capability"],
+            issuedAt: Self.issuedAt.addingTimeInterval(-3600)
+        )
+        guard case .success(let older) = EntitlementVerifier.verify(olderCompact, against: signer.keys) else {
+            Issue.record("the fixture's own claim did not verify")
+            return
+        }
+        try await service.adopt(older, compact: olderCompact, observedAt: lastHonouredInstant)
+
+        #expect(store.current?.compactClaim == current)
+        #expect(store.current?.observedServerTime == lastHonouredInstant)
+        // Which is the point: the revoked state survives the replay.
+        #expect(await service.decision(for: Self.capability) == .refused(.notEntitled))
     }
 
     // MARK: - Fetching and caching

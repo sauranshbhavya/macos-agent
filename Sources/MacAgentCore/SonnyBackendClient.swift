@@ -184,6 +184,23 @@ public actor SonnyBackendClient {
     /// longest request is a margin that lets exactly that happen.
     static let proactiveRefreshMargin: TimeInterval = 180
 
+    /// How far ahead of what real time can account for one `Date` header may move this client's
+    /// recorded server observation: **300 seconds** (SONNY-344).
+    ///
+    /// **Derived, and it has to clear two separate things.** The first is how stale the *previous*
+    /// observation can be: a `Date` is stamped before the response is transmitted, so an observation
+    /// carried forward under-reads by whatever that response's latency was, and §12's longest client
+    /// budget — `SonnyBackendTimeouts.researchSynthesis`, 120 s — is the ceiling on that, because a
+    /// slower response is cancelled and never observed at all. The second is the gateway's own
+    /// legitimate clock correction, which is not bounded by anything this side can name. 300 s clears
+    /// the first with headroom for the second, and it is the number the gateway already carries for
+    /// the same purpose in the other direction: `ENTITLEMENT_SKEW_TOLERANCE_SECONDS` is 300
+    /// (`grep -n 'ENTITLEMENT_SKEW_TOLERANCE_SECONDS = ' server/src/entitlement/claim.ts` → `107:`
+    /// at `f55e4ed`), which is what arrives in every claim as `skew_tolerance_seconds`. Both sides
+    /// absorbing the same disagreement is the property worth having; a tighter number here would make
+    /// this client refuse a skew its own claims are built to tolerate.
+    static let maximumUncorroboratedForwardJump: TimeInterval = 300
+
     private var cachedTokens: SonnyAccountTokens?
     private var tokenGeneration: UInt64 = 0
     private var hasReadStore = false
@@ -672,12 +689,87 @@ public actor SonnyBackendClient {
     private func recordServerClock(from response: HTTPURLResponse) {
         guard let header = response.value(forHTTPHeaderField: "Date"),
               let serverDate = SonnyHTTPDate.parse(header) else { return }
+        let monotonic = monotonicNow()
+        let corroborated = corroboratedInstant(reported: serverDate, at: monotonic)
+        // **The offset follows the header whole, and only the observation is bounded** (SONNY-344).
+        // This was written both ways and the measurement decided it. Capping the offset as well
+        // removes a transient: `EntitlementService` judges at the later of `serverNow()` and the
+        // mark, so one header a year out refuses every gated capability until the next response
+        // arrives. But that refusal is bounded and cures itself — the refusal is what starts the
+        // refresh, and `recordServerClock` runs on every response including a failing one — whereas
+        // capping the offset makes `serverNow()` stop meaning "the server's clock as last reported",
+        // which is what token expiry is reasoned in and what
+        // `aServerSayingMoreTimeHasPassedIsBelievedOverThisMacsOwnClock` holds.
+        //
+        // **The offset does reach the Keychain, and the sentence here used to deny it** (PR #173's
+        // review, finding 3). `refreshedSnapshot` writes `receivedAt: serverNow()`, and
+        // `WireTokenResponse.tokens(emailAddress:receivedAt:)` turns that into
+        // `accessTokenExpiresAt`, which the token store persists — so a header a year out is written
+        // down as a session that expires a year late. **What makes that non-permanent is not that it
+        // was never stored**, it is that the gateway is the other half of the check: a token this
+        // client believes is live is still refused as `401 auth.token_expired`, and §3.3's reactive
+        // refresh rewrites the record with an expiry derived from a fresh, correct `Date`. The
+        // entitlement mark has no such second party — nothing on the network disagrees with it —
+        // which is exactly why it needed the bound and the repair and this does not.
         serverClockOffset = serverDate.timeIntervalSince(now())
         // **Only ever forward.** A response that reports an earlier instant than one already seen —
         // a proxy with a slow clock, a replayed response — must not lower what this client will
         // vouch for, or the defence could be walked back by the same party it defends against.
         if let existing = lastServerObservation, existing.serverInstant >= serverDate { return }
-        lastServerObservation = ObservedServerTime(serverInstant: serverDate, monotonicAt: monotonicNow())
+        lastServerObservation = ObservedServerTime(serverInstant: corroborated, monotonicAt: monotonic)
+    }
+
+    /// A reported instant, held to the pace real time can account for (SONNY-344).
+    ///
+    /// **The mirror of the backward guard directly above, and it was missing.** That guard says a
+    /// server instant may not go down; nothing said how fast it may go up, so one `Date` header from
+    /// a gateway whose clock was a year out wrote a year into `lastServerObservation` — and from
+    /// there into `EntitlementService`'s persisted high-water mark, which is the value the user must
+    /// not be able to lower and which therefore had no way back. Server time advances at exactly the
+    /// rate of real time, and `ContinuousClock` measures real time in a way nothing on this Mac can
+    /// set, so the previous observation carried forward is the ceiling a legitimate advance sits
+    /// under.
+    ///
+    /// **Capped rather than refused, which is the half that makes it self-correcting.** A gateway
+    /// that steps its own clock forward — an NTP correction after a long drift — is not wrong
+    /// afterwards, only ahead; refusing every observation from it would freeze this client's
+    /// observation permanently behind, because each later response is ahead of the same frozen
+    /// projection. Capping absorbs `maximumUncorroboratedForwardJump` per response, so a real
+    /// correction of a few minutes is caught up in two or three responses.
+    ///
+    /// **What the cap is spent in is responses, not seconds, and it compounds — so "a year can
+    /// never get in" is false and the true bound is worth writing down** (PR #173's review, finding
+    /// 2). Each response moves this observation up by at most 300 s beyond real time, so a year of
+    /// error is absorbed in 31_536_000 / 300 = **105,120 responses**, and the amount that actually
+    /// matters — enough to reach the end of a claim's own window, 24 h of life plus 72 h of grace
+    /// plus 300 s of tolerance — in 345_900 / 300 = **1,153**. Those are the numbers that make this
+    /// safe rather than an absolute refusal, and a client that made 1,153 requests against a gateway
+    /// stuck a year ahead would get there. What stops that from being permanent is not this bound
+    /// but `EntitlementService.markKeptOrReset`, which is the other half of the fix.
+    ///
+    /// **What it cannot do:** an anchor is needed to bound against, so the first observation of a
+    /// process is accepted as reported. That residual is closed on the other side, where a claim the
+    /// gateway has just signed is fresh evidence about the gateway's own clock — see
+    /// `EntitlementService.adopt`.
+    private func corroboratedInstant(reported: Date, at monotonic: ContinuousClock.Instant) -> Date {
+        guard let existing = lastServerObservation else { return reported }
+        let ceiling = existing
+            .projected(to: monotonic)
+            .addingTimeInterval(Self.maximumUncorroboratedForwardJump)
+        return min(reported, ceiling)
+    }
+
+    /// Forget the instant a server last reported (SONNY-344).
+    ///
+    /// **`EntitlementService` calls this, and only when it has just reset the persisted mark this
+    /// observation produced.** The two are one belief about server time held in two places — the
+    /// observation is where it enters, the mark is where it is written down — so retiring the belief
+    /// has to retire both or the observation immediately re-establishes the mark it was reset from,
+    /// and the repair would only land after the app was quit and reopened. It costs the caller
+    /// nothing it still has a use for: the mark is reset only when it has been shown to be ahead of a
+    /// claim the gateway has just signed, which is the same thing being said about this observation.
+    func discardServerObservation() {
+        lastServerObservation = nil
     }
 }
 
