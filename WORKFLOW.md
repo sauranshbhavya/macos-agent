@@ -328,16 +328,22 @@ something up.)
   none. **A server lane's container name and port are derived, not typed**, and the documented
   setup now does that for you (SONNY-355 — `CLAUDE.md`'s server half, `server/README.md`, the
   manual-test checklist, and the banner `server/test/global-setup.ts` prints all carry the same
-  five lines): `$LANE` is the worktree's own directory name, so the container name cannot
+  block): `$LANE` is the worktree's own directory name, so the container name cannot
   collide, and `-p 0:5432` asks Docker for any free host port which `docker port` then reads
   back into `DATABASE_URL`. Nothing in it is a placeholder, deliberately — a name or a port a
   reader is expected to fill in is one fixed pair again the first time it is pasted unedited,
   which is what the setup here used to be (`--name sonny-gw-db`, `-p 55433:5432`, in every
-  place it was written down). **The symptom names nothing on its own, which is the reason it
-  is still written down here**: a suite-wide connection failure — `Test Files 11 failed | 20
-  passed` with `Connection terminated unexpectedly`, and a fresh `initdb` in the container
-  log inside that run's window — is another lane's container, not a defect in the branch
-  under test. Observed between two lanes on 2026-08-29, and that run was discarded. The test
+  place it was written down). **Wait for the database before you run anything against it**:
+  the documented setup does that with `pg_isready` because `docker run -d` returns long
+  before Postgres accepts a connection — 11 to 38 seconds of `initdb` on one Mac, measured
+  twice on 2026-08-29. **The symptom names nothing on its own, which is the reason it is still written
+  down here, and TWO different things produce it**: a suite-wide connection failure — `Test
+  Files 11 failed | 20 passed` with `Connection terminated unexpectedly`, and a fresh
+  `initdb` in a container log inside that run's window. Neither is a defect in the branch
+  under test. If the `initdb` is in *your own* container at the start of your run, the
+  database was still starting and you skipped the readiness wait; if it is in a container you
+  did not start, or appears in yours part-way through a run that had been working, it is
+  another lane's. Observed between two lanes on 2026-08-29, and that run was discarded. The test
   side is one knob as well (`server/test/support/database.ts`, **SONNY-352**), and
   `npm run test:db` still falls back to `localhost:55433` when `DATABASE_URL` is unset — right
   for a lone session, and the collision itself the moment a second lane runs.

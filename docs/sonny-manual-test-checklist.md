@@ -1134,14 +1134,19 @@ bottom-left account row → **Sign in**.
       LANE="$(basename "$(git rev-parse --show-toplevel)")"
       docker run -d --name "sonny-gw-db-$LANE" -e POSTGRES_PASSWORD=postgres -p 0:5432 postgres:17
       PORT="$(docker port "sonny-gw-db-$LANE" 5432 | head -1 | sed 's/.*://')"
+      : "${PORT:?no host port — did the docker run above fail?}"
+      until docker exec "sonny-gw-db-$LANE" pg_isready -q -U postgres; do sleep 1; done
       cd server && DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" \
         npm run build && npm run migrate -- up
       export DATABASE_URL="postgres://postgres:postgres@host.docker.internal:$PORT/postgres"
       ```
       (`-p 0:5432` asks Docker for any free host port and `docker port` reads back which one, so
-      nothing here collides with a container already running. And `host.docker.internal` in the
-      exported value, not `localhost` — the gateway is in a container
-      and `localhost` there is the container.) Then export the four Supabase names and
+      nothing here collides with a container already running. The `pg_isready` line is a readiness
+      wait and you need it: `docker run -d` returns when the container has started, and Postgres
+      runs `initdb` before it accepts anything — 11 to 38 seconds, measured twice 2026-08-29 — so a migration
+      run started immediately fails with `Connection terminated unexpectedly` and nothing else.
+      And `host.docker.internal` in the exported value, not `localhost` — the gateway is in a
+      container and `localhost` there is the container.) Then export the four Supabase names and
       `RATE_LIMIT_SALT` with any values you like, run `./scripts/deploy.sh local`, and:
       `curl -s -X POST http://localhost:8080/v1/auth/email/start -H 'Content-Type: application/json'
       -d '{"email":"you@example.com"}'`. It must answer **200** with a `request_id` and

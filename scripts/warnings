@@ -139,10 +139,23 @@ cleanup() {
 # stdout — both streams, because this script deliberately splits them (progress to stderr, the
 # report to stdout) and a copy carrying only half of that is not the run.
 #
-# `trap '' INT TERM` around the tee is load-bearing and is not tidiness: the tee sits in this
-# script's process group, so a signal aimed at the group reaches it too, and the next write to a
-# fifo whose reader is gone raises SIGPIPE — whose default action kills the process outright,
-# EXIT trap and all. scripts/mutate carries the same three lines and the measurement behind them.
+# Two layers, and scripts/mutate carries the full enumeration behind them — every route by which a
+# signal reaches a background process in this shell's group, and whether the EXIT trap survives it.
+# The short version: the tee sits in this script's process group, so a signal aimed at the group
+# reaches it too, and the next write to a fifo whose reader is gone raises SIGPIPE, whose default
+# action kills the process outright with no trap run at all.
+#
+#   1. The tee ignores INT, QUIT, TERM and HUP. HUP is the one that matters most and the one an
+#      earlier version of this missed: a closing terminal or a dropped connection is how a 95s run
+#      most often ends early. Measured on this script with only HUP absent from that list: exit 141
+#      with the run lock still held, against exit 129 and a released lock on the version before the
+#      tee existed at all.
+#   2. This shell ignores SIGPIPE itself, from the end of report_begin. SIGKILL cannot be caught by
+#      anyone, so a longer ignore-list is not an answer; with this, a dead tee costs a failed write
+#      instead of the process, and the EXIT trap runs whatever happens.
+#
+# The build below resets SIGPIPE to the default for its own child, so nothing this script measures
+# runs in a different signal environment from a plain `swift build`.
 report_begin() {
   local path="$1" fifo
   [[ -n "$WORKDIR" && -d "$WORKDIR" ]] || die "internal error: no work directory for the report fifo"
@@ -152,10 +165,11 @@ report_begin() {
   rm -f "$fifo"
   mkfifo "$fifo" || die "could not create the report fifo at $fifo"
   : >"$path" || die "could not write this run's report at $path"
-  ( trap '' INT TERM; exec tee -a "$path" ) <"$fifo" &
+  ( trap '' INT QUIT TERM HUP; exec tee -a "$path" ) <"$fifo" &
   REPORT_TEE_PID=$!
   exec 9>&1 8>&2
   exec >"$fifo" 2>&1
+  trap '' PIPE
   REPORT_PATH="$path"
 }
 
@@ -172,10 +186,12 @@ report_drain() {
 
 assert_intended_exit() {
   if [[ -z "$EXIT_INTENDED" ]]; then
+    # `|| true`: with SIGPIPE ignored a dead tee turns a printf into a failed command rather than
+    # a dead process, and under `set -e` a failed command here would skip the drain below.
     printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     printf '%s: any output above this line is not a warning report. See the error above it.\n' \
-      "$SCRIPT_NAME" >&2
+      "$SCRIPT_NAME" >&2 || true
     report_drain
     exit 1
   fi
@@ -224,6 +240,14 @@ truncates the first without a word, leaving a short file that cannot be told fro
 printed little. So the run also writes a copy at a path no caller chose, both streams together
 (progress and report), named in the first lines it prints and again in the summary. Redirect it
 wherever you like as well; that still works. What it is no longer is the only copy.
+
+ONE BEHAVIOUR CHANGED WITH IT, and this script is the one where you will notice. It used to split
+its output — progress on stderr, the report on stdout — so `scripts/warnings > file` left the
+progress lines on your terminal. It no longer does: the tee is a single sink, stderr is merged into
+stdout at the top of the run, and `2>` on this command now captures an empty file. That is the
+price of a report whose line order is the run's; two tees, one per stream, would interleave into the
+report file in an order neither stream can predict. Use `1>` or `&>` to capture, and watch the run
+in the report file rather than on stderr.
 
 Exit codes
   0  built cleanly, no warnings from this repository's sources
@@ -669,8 +693,12 @@ run_check() {
   printf '%s: building %s. Cold build; give it a minute or two.\n' "$SCRIPT_NAME" "$tree" >&2
   started="$(date +%s)"
   set +e
-  swift build --build-tests --scratch-path "$SCRATCH" \
-    -Xswiftc -F -Xswiftc "$TESTING_FRAMEWORKS_DIR" >"$log" 2>&1
+  # `trap - PIPE` before the exec: report_begin leaves SIGPIPE ignored in this shell, and an
+  # ignored disposition is inherited across fork and exec. The compiler must run in the same signal
+  # environment a plain `swift build` gives it, or this script is measuring something else.
+  ( trap - PIPE
+    exec swift build --build-tests --scratch-path "$SCRATCH" \
+      -Xswiftc -F -Xswiftc "$TESTING_FRAMEWORKS_DIR" ) >"$log" 2>&1
   status=$?
   set -e
   ended="$(date +%s)"
@@ -980,6 +1008,102 @@ selftest() {
     | grep -c '^' || true)"
   st_eq "two runs left two report directories" "$run_dirs" "2"
   st_eq "and two whole reports — neither run wrote over the other" "$kept_reports" "2"
+
+  # ------------------------------------------------------------------------------------------
+  # SIGHUP, which is how a 95s run most often ends early: a closing terminal, a dropped connection,
+  # a session leader exiting. The tee sits in this script's process group, so a group signal reaches
+  # it too — and with HUP absent from its ignore list the tee dies, this shell's next write goes to
+  # a pipe with no reader, and SIGPIPE ends the process with the run lock still held.
+  # scripts/mutate carries the full enumeration; this is the arm that watches this file wire it.
+  #
+  # **The tee is signalled and this run is NOT.** An arm that signals both is betting on which of
+  # two deliveries bash processes first, and that bet loses under load — it did, on a run sharing
+  # the machine with a server suite, reporting `expected [129], got [2]`. The tee's death is the
+  # whole discriminator anyway: ignored, the run finishes normally; not ignored, this shell takes
+  # SIGPIPE at its next write. Signalled by pid rather than by process group, because signalling
+  # this selftest's own group would take the selftest down with it; the run is backgrounded through
+  # `exec` so $! IS the script.
+  # ------------------------------------------------------------------------------------------
+  printf '\n  a SIGHUP aimed at the report writer does not take the run down with it\n'
+  ( cd "$repo"; exec "$SELF" ) >"$ST_ROOT/hup.out" 2>&1 &
+  local runner=$! teepid="" waited=0
+  while [[ $waited -lt 600 ]]; do
+    teepid="$(ps -A -o pid=,ppid=,command= \
+      | awk -v p="$runner" '$2 == p && $0 ~ /tee/ { print $1 }' | head -1)"
+    [[ -n "$teepid" ]] && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if [[ -n "$teepid" ]]; then
+    st_pass "the report writer is running and can be found the way a group signal would reach it"
+  else
+    st_fail "no report writer to signal" "nothing under pid $runner looked like a tee"
+  fi
+  kill -HUP "$teepid" 2>/dev/null || true
+  set +e
+  wait "$runner"
+  status=$?
+  set -e
+  st_eq "the run still finishes on its own terms (a warning is a finding)" "$status" "2"
+  st_contains "and its output is whole, not ending where the tee died" \
+    "$(cat "$ST_ROOT/hup.out" 2>/dev/null || true)" "1 warning(s)"
+  if [[ -e "$repo/.git/warnings.lock" ]]; then
+    st_fail "the run lock was left held" "the next run in this checkout would be refused"
+    rm -rf -- "$repo/.git/warnings.lock"
+  else
+    st_pass "and the run lock came off, so the next run can start"
+  fi
+
+  # And the second layer, which the arm above does not watch: with HUP restored to the tee's ignore
+  # list the run survives, so nothing in that arm can tell whether this shell also ignores SIGPIPE.
+  # SIGKILL is the case no ignore-list reaches — nothing catches it — so the report writer dies
+  # whatever the tee traps, and what has to survive is the EXIT trap: the lock must still come off.
+  # Measured: without `trap '' PIPE` in report_begin this arm is the only thing in this selftest
+  # that fails, which is the whole reason it exists.
+  printf '\n  a SIGKILLed report writer still leaves the run lock released\n'
+  ( cd "$repo"; exec "$SELF" ) >"$ST_ROOT/kill.out" 2>&1 &
+  runner=$!
+  teepid=""
+  waited=0
+  while [[ $waited -lt 600 ]]; do
+    teepid="$(ps -A -o pid=,ppid=,command= \
+      | awk -v p="$runner" '$2 == p && $0 ~ /tee/ { print $1 }' | head -1)"
+    [[ -n "$teepid" ]] && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # Asserted, not assumed: an empty $teepid makes `kill -9 ""` a no-op, the run finishes normally,
+  # the lock comes off for the ordinary reason and this arm passes having tested nothing. It did
+  # exactly that on the first draft, and a vacuous pass reads the same as a real one.
+  if [[ -n "$teepid" ]]; then
+    st_pass "the report writer was found, so there is something to kill"
+  else
+    st_fail "no report writer to kill" "nothing under pid $runner looked like a tee"
+  fi
+  kill -9 "$teepid" 2>/dev/null || true
+  set +e
+  wait "$runner"
+  status=$?
+  set -e
+  # Two checks, and only the first is a reliable discriminator — said here because the other one's
+  # power was measured to vary. Without the SIGPIPE ignore this shell dies of a broken pipe at its
+  # next write, which is exit 141 every time. Whether the LOCK is also left held depends on where
+  # that write falls relative to release_lock, and cleanup() in this file writes nothing, so it
+  # sometimes falls after: the lock assertion failed on one control build and passed on another
+  # against the same defect. scripts/mutate's equivalent fails reliably, because its cleanup does
+  # write before releasing.
+  if [[ "$status" -eq 141 ]]; then
+    st_fail "the run died on a broken pipe when the report writer was killed" \
+      "exit 141 — no EXIT trap ran at all"
+  else
+    st_pass "the run did not die on a broken pipe (exit $status)"
+  fi
+  if [[ -e "$repo/.git/warnings.lock" ]]; then
+    st_fail "the run lock was left held after the report writer was killed" "exit was $status"
+    rm -rf -- "$repo/.git/warnings.lock"
+  else
+    st_pass "the run lock came off even though the report writer was killed"
+  fi
 
   printf '\n  a clean tree exits 0\n'
   st_write_package "$repo" clean
