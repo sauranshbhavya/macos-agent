@@ -93,6 +93,17 @@ const AUTH_INTENT: readonly (readonly [name: string, read: (config: Config) => u
  * four use, because **`0` is a legitimate value here and the others have no such value**: an
  * operator setting it to zero has said this deployment spends nothing, and a presence sweep that
  * treated that as missing would refuse to start over an answer somebody gave.
+ *
+ * **SONNY-212 added `CREDIT_PLANS` for the same reason and by the same argument.** It carries every
+ * tier, allowance and credit weight this deployment bills against, `requireCreditCatalogue` refuses
+ * an unset one at the route, and an unset one has no safe reading in either direction — no allowance
+ * locks every user out of screen control, and unlimited is an uncapped bill. It is read for presence
+ * rather than parsed here: parsing it is `requireCreditCatalogue`'s, which runs before any request
+ * for the reason the paragraph below gives, and a second parse in this sweep would be a second thing
+ * that believes it validates the catalogue. **A truthiness test rather than `!== undefined`**,
+ * unlike the cap above and for the opposite reason: the empty string is not an answer somebody gave
+ * — no catalogue can be spelled with zero characters — so there is no legitimate falsy value for a
+ * presence sweep to mistake.
  */
 const AUTH_ALSO_REQUIRED: readonly (readonly [name: string, read: (config: Config) => unknown])[] = [
   ["DATABASE_URL", (config) => config.databaseUrl],
@@ -100,6 +111,7 @@ const AUTH_ALSO_REQUIRED: readonly (readonly [name: string, read: (config: Confi
   ["ENTITLEMENT_SIGNING_KEY", (config) => config.entitlementSigningKey],
   ["ENTITLEMENT_SIGNING_KEY_ID", (config) => config.entitlementSigningKeyId],
   ["SPEND_CAP_UNITS", (config) => config.spendCapUnits !== undefined],
+  ["CREDIT_PLANS", (config) => config.creditPlans],
 ];
 
 export interface AuthWiring {

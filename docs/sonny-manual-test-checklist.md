@@ -2148,6 +2148,91 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       nothing at all. **Do this half offline** — with the container up, any request corrects the
       clock and there is nothing to see.
 
+### How many screen-control runs are left this month (new 2026-08-31, SONNY-212)
+
+**What changed:** the gateway now derives a per-account monthly allowance from row 12's metering and
+serves it as `GET /v1/account/credits`. **Screen control is the only line that draws on it** —
+everything else is free and uncapped against the pool, and watchers are free and *capped* by
+SONNY-236's own cap rather than metered (founder decision, 2026-08-31). Nothing refuses on this
+number yet (the gate is SONNY-213) and nothing renders it yet (the indicator is SONNY-214), so what
+these rows check is that the figure the server derives is one a founder recognises.
+
+**Every number is a release-time input and none of them is set.** That is the point of these rows
+rather than a caveat on them: `CREDIT_PLANS` carries the tiers, the allowances, the credit weights
+and what one run is worth, this repository supplies no default, and a gateway with auth mounted and
+no `CREDIT_PLANS` **exits 78 naming it**. The values below are placeholders chosen so the arithmetic
+is checkable by eye, not proposals.
+
+**Setup.** The SONNY-135 section's container setup, plus one more variable, and it queues behind the
+same deferred identity sitting that section names (SONNY-280's resume checklist, steps (1)–(5)):
+
+```
+export CREDIT_PLANS='{"runCredits":100,"defaultPlan":"free","weights":{"perSession":10,"perIteration":5,"perMegapixel":2},"plans":[{"key":"free","monthlyCredits":500},{"key":"pro","monthlyCredits":10000}]}'
+./scripts/deploy.sh local
+```
+
+- [ ] **(SONNY-212)** With the container up and a signed-in session, ask it for the number before
+      running anything: `curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/credits`.
+      **You get a 200 with `screen_control_runs_left` equal to `screen_control_runs_included`**, and
+      `plan` reads `free` — an account nobody has provisioned is a free user, not a refusal.
+- [ ] **(SONNY-212)** Run one real screen-control task, let it finish, and ask again. **The number
+      has gone down**, and the `credits` block beside it explains by how much: `drawn` should be
+      `10 + 5 x (iterations) + 2 x (megapixels sent)`. Compare `iterations` against what
+      `npm run usage` prints for that session. **The finding is a `drawn` you cannot reconcile with
+      the session `npm run usage` shows** — not a number you find surprising, which at these
+      placeholder weights it will be.
+- [ ] **(SONNY-212)** Run a *short* task and a *long* one and compare. **The long one costs more
+      runs.** A twelve-step session and a two-step session must not cost the same; that is the whole
+      of what "weighted by real cost" buys, and it is the property a later fixed-price-per-run change
+      would silently remove.
+- [ ] **(SONNY-212)** Ask Sonny to do something that is **not** screen control — a plan, a web
+      research, a transcription — and ask again. **The number has not moved at all.** This is the
+      one-paid-line decision, and it is the row most worth running twice.
+- [ ] **(SONNY-212)** Put the account on the paid tier
+      (`npm run entitlements -- grant <account-id> --plan pro`) and ask again. **The included figure
+      jumps to the paid tier's** and runs-left rises with it — an upgrade takes effect immediately
+      rather than next month.
+- [ ] **(SONNY-212)** Now `npm run entitlements -- revoke <account-id>` and ask again. **The
+      allowance falls back to the free tier's**, while the entitlement claim still reports `pro` as
+      the plan. That split is deliberate: a cancelled subscription keeps its plan name so the app can
+      say which plan ended, and does not keep its allowance.
+- [ ] **(SONNY-212)** Restart the container with `CREDIT_PLANS` unset. **It exits 78 and names
+      `CREDIT_PLANS`** in the message alongside anything else missing. A gateway that started and
+      answered a run count from nothing would be the finding.
+- [ ] **(SONNY-212)** Sanity-check the whole thing against a real cost, once `npm run usage` has
+      sessions measured on the shipping capture path. **This is the row the ticket actually exists
+      for**: pick numbers where one run is worth roughly what a session costs, and check that a
+      month's allowance reads like a sensible month. The figures then go into `CREDIT_PLANS` on the
+      real deployment and nowhere in the repository.
+- [ ] **(SONNY-212)** **A choice to make while you are picking those numbers, not afterwards — two of
+      the three weights are priced on figures the app declares about itself** (PR #182's review, F7).
+      `perMegapixel` reads the pixel dimensions the request states, which the server checks are
+      positive integers and never compares against the image it actually decoded; `perSession` counts
+      session ids the app mints. A modified client can declare a tiny image while sending a large one,
+      or reuse one session id all month. **`perIteration` is the one weight nothing the client sends
+      can deflate**, because it counts requests the server logged whether the caller liked it or not.
+      - **What is still bounded:** the spend cap, which counts *calls* and is deliberately unweighted,
+        so a client doing all of that still gets at most `SPEND_CAP_UNITS` calls in a period.
+      - **What is not:** the revenue. `SPEND_CAP_UNITS` is an anti-abuse ceiling set so no ordinary
+        user ever reaches it, so it sits **far above any plan's allowance**, and under-declaring buys
+        extra runs anywhere in that gap. It buys nothing today, because nothing refuses on this
+        number yet; it becomes real the moment the gate lands (SONNY-213).
+      - **How big is it — measured, because "buys extra runs" without a number reads as a footnote.**
+        At **the placeholder weights in `server/.env.example`** (`perSession 10, perIteration 5,
+        perMegapixel 2, runCredits 100`), a full 12-iteration session at a real capture's dimensions
+        (2406 × 1354) costs **148.19 credits honestly and 60.00 deflated** — a **2.47× multiplier**,
+        because `perIteration` carries only **40%** of the honest price and it is the only component
+        a client cannot talk down. **The multiplier is one over whatever share `perIteration`
+        carries, so it grows as your weights get more accurate**: `catalogue.ts` says `perMegapixel`
+        is what vision cost actually tracks, so a well-calibrated set puts *more* weight on the
+        deflatable component, and a calibration where `perIteration` carries 10% is a 10× multiplier
+        on the paid line. That is the size of what you are choosing against.
+      - **The decision:** if you want an allowance nothing can talk down, set `perSession` and
+        `perMegapixel` to **0** and put the whole price on `perIteration`. That is a `CREDIT_PLANS`
+        value and needs no code change. The cost of doing it is that a session sending huge images
+        pays the same as one sending small ones, so the weighting stops tracking real cost as closely.
+        Decide which you want here rather than meeting it later.
+
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
 SONNY-296 re-checked the seven dated prototype-limitation findings in the spec's §4 and §4A.4

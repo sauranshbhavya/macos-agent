@@ -170,6 +170,12 @@ PASSTHROUGH=(
   ENTITLEMENT_SIGNING_KEY
   ENTITLEMENT_SIGNING_KEY_ID
   SPEND_CAP_UNITS
+  # SONNY-212's one, joining the three above on exactly their rule: `CREDIT_PLANS` is required
+  # wherever auth is mounted, so a container given the Supabase names and not this exits 78 naming
+  # it. It is the one entry here that is not a credential -- it holds tiers, allowances and credit
+  # weights, no secret of any kind -- and it is forwarded the same way regardless, because what
+  # decides this list is what `src/config.ts` requires and not what is sensitive.
+  CREDIT_PLANS
   # SONNY-130's two, and SONNY-132's two. See the block above for why these four and not VISION_API_KEY.
   OPENAI_API_KEY
   TAVILY_API_KEY

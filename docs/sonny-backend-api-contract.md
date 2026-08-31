@@ -916,6 +916,47 @@ makes no network call of any kind, and returns `.plan(AgentPlan)` directly from 
 For a gated capability, with no valid claim and no network, the answer is no. Both directions are
 pinned by tests on SONNY-135.
 
+### 5.4 The screen-control allowance
+
+`GET /v1/account/credits` returns **how many screen-control runs are left this period** — the single
+number SONNY-17 says a user tracks, added by SONNY-212.
+
+```json
+{
+  "plan": "<plan key>",
+  "period_start": "2026-08-01T00:00:00.000Z",
+  "period_end": "2026-09-01T00:00:00.000Z",
+  "screen_control_runs_left": 97,
+  "screen_control_runs_included": 100,
+  "credits": { "allowance": 1000, "drawn": 30, "remaining": 970, "per_run": 10 }
+}
+```
+
+- **Screen control is the only line that draws on this pool.** Everything else is free and uncapped
+  against it. A standing watcher's repeated checks were written down as an exception on SONNY-236
+  and are not one: the founders decided on 2026-08-31 that **watchers are free and capped instead**,
+  so a second currency never appears beside the run count.
+- **Unsigned and uncached, which is the opposite of §5.3 and right for the opposite reason.** The
+  entitlement claim is signed because the *client* enforces it offline, and it is honoured for four
+  days past issue because an entitlement changes on the order of a subscription. A run count changes
+  on the order of a run, so nothing offline can be enforced about it and a stored one is wrong in the
+  direction that shows runs to somebody who has none.
+- **Derived from §11's metering rather than from a ledger.** The draw is a query over
+  `sonny.metering_event` restricted to `screen.analyze` rows that reached a provider, so the audit
+  row *is* the charge and there is no second writer of the same fact. What that costs is that a
+  change to the weights re-prices the period already under way; the reasoning, and why that is
+  acceptable for a forward-looking estimate and would **not** be for a refusal, is in
+  `server/src/credit/balance.ts`.
+- **Every number is configuration.** Tiers, allowances, the credit weights and the value of one run
+  arrive as `CREDIT_PLANS`, which this repository gives no default and refuses to start without. The
+  tier *count* is configuration too: the product decision today is free plus one paid tier, and
+  `plans` is a list of any length so a third is not a code change.
+- **`credits` is diagnostic and is not a second number for a user.** It exists so the derivation can
+  be sanity-checked against a measured cost; the Mac reads the run count and ignores it.
+- Authenticated, not metered, not charged against the spend cap, and rate limited like every other
+  authenticated route — charging a user for asking how much is left would make the question spend the
+  answer.
+
 ---
 
 ## 6. Sizes
