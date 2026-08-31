@@ -212,6 +212,37 @@ describe("runs left, derived from what row 12 measured", () => {
     expect(balance.runsLeft).toBe(0);
   });
 
+  it("rounds, and the run count is what a missing round would cost a user", () => {
+    // **This arm exists because the battery said the one below it was not enough** (SONNY-212's
+    // four-property run at `00b8fcc`): with `round` replaced by the identity function the whole
+    // suite still passed, because the sweep below only ever checks the response against *itself*
+    // and a self-consistent response is self-consistent unrounded too. So this asserts the values,
+    // the way `theWipesOwnSentenceNamesEveryStoreItDeletes` does and for its reason — a
+    // completeness check cannot see a wrong answer, only a missing one.
+    //
+    // The fixture is chosen so the defect is invisible everywhere except the number the user reads:
+    // `drawn` is 0.4 either way, and it is `0.5 - 0.4` that leaves `0.09999999999999998`, which
+    // floors to **zero runs left when the user has one**. A whole run lost to IEEE 754, on the last
+    // one they have, which is exactly when they would notice.
+    const catalogue = catalogueOf({
+      runCredits: 0.1,
+      monthlyCredits: [0.5],
+      weights: { perSession: 0.1, perIteration: 0.1, perMegapixel: 0 },
+    });
+    const balance = creditBalance({
+      catalogue,
+      planKey: undefined,
+      draw: drawOf({ sessions: 1, iterations: 3 }),
+      now,
+    });
+    expect(balance.credits.drawn).toBe(0.4);
+    expect(balance.credits.remaining).toBe(0.1);
+    expect(balance.runsLeft).toBe(1);
+    // Stated as the thing that must not happen, so the assertion above cannot be read as arbitrary.
+    expect(balance.credits.remaining).not.toBe(0.5 - 0.4);
+    expect(Math.floor((0.5 - 0.4) / 0.1)).toBe(0);
+  });
+
   it("publishes credit figures that recompute to the run count beside them", () => {
     // Fractional weights are where a response could contradict its own arithmetic: 0.1 per megapixel
     // against 30 megapixels is 2.9999999999999996 in IEEE 754. `balance.ts` rounds first and derives
