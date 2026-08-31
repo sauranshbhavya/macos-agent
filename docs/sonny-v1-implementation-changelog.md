@@ -174,11 +174,18 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: in progress
 Date: 2026-08-31
 Tickets: SONNY-212 — the credit/allowance model: a per-account monthly credit pool derived from row 12's metering, screen control as the only line that draws on it, and `GET /v1/account/credits` serving "screen-control runs left this month" for the Mac to read.
-Reviewed by: not yet — fresh session per WORKFLOW.md step 7, on the PR. The mutation battery is the
-lane's own and is run (below); a reviewer's independent battery is a separate thing and is the point
-of it being separate — on PR #180 the lane's came back 7 killed / 0 survived and the reviewer's 6
-mutants / 6 survived, both honest, because a lane's plan inherits the blind spot of the session that
-wrote the assertions.
+Reviewed by: fresh session per WORKFLOW.md step 7, on PR #182 — ten findings at full adversarial
+depth, **eight taken, one recorded as answered, one declined as incorrect.** F1 and F2 were
+correctness defects and both are fixed; F3–F6 were the reviewer's own battery survivors and all four
+are closed; F7 is a design consequence now recorded with its answer; F8 was wrong on a checkable
+fact; F9 and F10 were stale figures in the PR body.
+
+**The two batteries are the mechanism working rather than a redundancy.** The lane's four mutants and
+the reviewer's eight overlap in nothing, and each set found what the other's plan could not: the
+lane's found that its own rounding assertion was circular, and the reviewer's found four properties
+this branch argues for in prose that no test held. On PR #180 the same pair came back 7 killed / 0
+survived and 6 mutants / 6 survived, both honest, for the same reason — a lane's plan inherits the
+blind spot of the session that wrote the assertions.
 
 **The ticket's `Branch:` line says `feature/billing-credits` and this branch is
 `feature/a-month-has-a-number-of-screen-control-runs`.** The worktree was created on the second name
@@ -211,21 +218,21 @@ Files changed:
 - `Sources/MacAgentCore/ScreenControlAllowance.swift` (new) — the Mac's reading, and nothing more.
 - `server/test/credit.test.ts`, `server/test/credit.db.test.ts`, `server/test/support/credit.ts` (all new); `server/test/authdeps.test.ts`, `server/test/gate.test.ts`, `server/test/support/config.ts`; `Tests/MacAgentCoreTests/ScreenControlAllowanceTests.swift` (new).
 
-Tests. **The server figures are measured at `4c7d6b0`**, the head that carries the battery's coverage
-fix. **The two app-half figures are carried from `e367c4d` under WORKFLOW.md step 5's tree-identity
-rule**, with the proof of the right scope beside them: those figures depend on `Sources/`, `Tests/`
-and `Package.swift`, and `git diff --stat e367c4d HEAD -- Sources Tests Package.swift` prints
-**nothing — 0 bytes**, checked rather than eyeballed. Nothing on this branch above `e367c4d` touches
-the app half at all; the only non-documentation change among them is `server/test/credit.test.ts`,
-which is why the server half is re-measured rather than carried.
+Tests, **all re-measured at `0c1c0c1`, the head carrying PR #182's fix round. Nothing is carried.**
+The earlier figures were carried across two documentation commits under WORKFLOW.md step 5's
+tree-identity proof; that proof stopped holding the moment the fix round touched `Sources/`,
+`server/src/` and both test trees, so every figure below was taken again rather than repointed —
+which is the rule's own distinguishing question, whether the tree moved rather than whether the SHA
+did. (This is also the reviewer's F9, which found the *PR body* still carrying the pre-fix figures
+under a proof that no longer printed nothing.)
 The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
 which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
 tracked file and is therefore re-run at the head rather than carried**:
-- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 657 passed | 361 skipped (1018) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
-- Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1018 passed (1018)**, exit 0, **0 skipped**. 657 + 361 = 1018, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
+- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 659 passed | 363 skipped (1022) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
+- Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1022 passed (1022)**, exit 0, **0 skipped**. 659 + 363 = 1022, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
 - `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
-- App half, the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 54.697 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0). Measured at `e367c4d`, carried under the proof above.
-- `scripts/warnings` → **0 warnings** at `e367c4d (clean)`, every file in `Sources/` and `Tests/` recompiled, 124 s. Carried under the same proof, whose path list is what that figure depends on: the script builds with `--build-tests`, so `Tests/` is in scope as well as `Sources/`.
+- App half: `swift build` exit 0; the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 51.197 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
+- `scripts/warnings` → **0 warnings**, every file in `Sources/` and `Tests/` recompiled. Its own header stamps the tree as **`0c1c0c1` plus 1 uncommitted file**, and the uncommitted file is this changelog: a `.md` the Swift compiler never reads, so the count is a measurement of `0c1c0c1`'s code. Said rather than hidden, because the script prints that line precisely so a figure cannot be quoted apart from the tree it came from.
 
 Behavior added:
 - A per-account monthly credit pool, derived from `sonny.metering_event`, with screen control as the only line that draws on it.
@@ -352,6 +359,57 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   `drawn` is `0.4` either way, and it is `0.5 - 0.4` that leaves `0.09999999999999998`, flooring to
   **zero runs left when the user has one**. Re-run at `4c7d6b0`: **4 killed, 0 survived, 0
   unattributed**, and P4's killer is now the arm written for it.
+- **F1 is the same IEEE-754 defect as P4, one line below where P4 was fixed, and the same circular
+  assertion is what hid it.** `round` reached `allowance`, `drawn` and `remaining` — and not the
+  division, which is the *last* float operation before the floor that produces the number a user
+  reads. `7 / 0.07` is `99.99999999999999` and floored to **99 on a plan that includes 100, with
+  nothing drawn at all**; `0.3 / 0.1` floored to 2 where a reader recomputing from the `credits`
+  block got 3. That block is on the wire precisely so a founder can check the derivation, and
+  `CREDIT_PRECISION`'s own comment promised the two would agree "at the boundary, which is exactly
+  where somebody checking it would look". The test that claimed to hold it asserted
+  `runsLeft === Math.floor(remaining / perRun)` — the implementation restated, true under the defect
+  by construction. **Twice in one branch, the same shape**: a self-consistency check where a value
+  assertion was needed, once caught by the lane's battery and once by the reviewer's. The lesson is
+  not about floats. `runsFrom` rounds inside the floor now, and three catalogues pin it by value.
+- **F2 is a third case for `upstream_duration_ms`, and it is the finding that most changes what this
+  branch claims.** Recorded in full in the `upstream_duration_ms` bullet above. What is worth
+  repeating here is where it came from: migration `0012`'s own column comment enumerates what a null
+  duration means — "a validation refusal, an oversize capture, a route with no configured adapter" —
+  and that enumeration omits the cancellation. This branch inherited the invariant and built billing
+  on it. The migration is on the ticket's never-touch list and the filter is not, so the fix is here;
+  a comment in `credit.db.test.ts` that repeated the same incomplete enumeration travelled with it.
+  **The reachability is re-proved in-branch rather than transcribed** from the reviewer's probe, over
+  a real socket with the provider held open, which is `metering.test.ts`'s own construction.
+- **F3 through F6 were four survivors of the reviewer's battery, and each is a decision this branch
+  argues for in prose that no test held.** The most serious is F6: replacing `caller.accountId` with a
+  fixed UUID in the route passed the entire suite, so nothing held that this route reads the caller's
+  own account — a route serving one account's balance to another, under a test named "it names the
+  caller's own account and nobody else's" whose second half was unchecked. The other three are
+  boundary blindness of one kind: **every** catalogue in the suite made `defaultPlan` the first entry,
+  so "the plan `defaultPlan` names" and "whatever is listed first" were the same behaviour everywhere;
+  the period test back-dated comfortably inside the window and never sat on `until`; and the
+  grace-coupling test — whose whole stated purpose is that the two copies of that rule "fail if either
+  side's rule moves" — put every fixture days from the only instant at which they can disagree.
+- **F7's answer, since the ticket needed one rather than a note.** Two of the three weights are priced
+  on numbers the client declares: `perMegapixel` reads pixel dimensions the route validates as
+  positive integers and never compares against the decoded image, and `perSession` counts
+  client-minted session ids. `perIteration` is the honest one. **The exposure is still bounded, and by
+  the spend cap** — which counts calls, is unweighted and covers every metered route, so a client
+  deflating every declaration it can still makes one charged call per iteration, each bounded by
+  §6.1's body limit and §12's deadlines. That is exactly what declining `unitsForMeteredCall`'s
+  invitation bought, arriving as a defence nobody designed it for. **What is not bounded is the
+  revenue**, across the gap between a plan's allowance and an anti-abuse ceiling chosen so no
+  legitimate user reaches it — and that gap buys nothing today, because nothing refuses on this
+  number. It becomes real at SONNY-213. **A deployment that wants a non-gameable allowance already has
+  one with no code change**: price on `perIteration` alone. That is what the weights being
+  configuration buys.
+- **F8 was declined, and the reason is worth more than the finding.** The reviewer reported the
+  read-time re-pricing hand-off as recorded on no ticket, having pulled SONNY-213, 214 and 215. All
+  three carry it: the coordinator posted it on 2026-08-31 and each has exactly one comment stating it.
+  `scripts/plane pull` returns the description and **not** the comments; `scripts/plane comments` is
+  the other call. A coordinator's decision lands in a comment by convention here, so a session looking
+  for one with `pull` alone keeps finding nothing and concluding it was never recorded — which is how
+  a correct record gets duplicated by the next session trying to help. Nothing was duplicated.
 
 Known limitations / deferred scope:
 - **Every dollar amount and allowance number is unset**, by the ticket's own design — they are
