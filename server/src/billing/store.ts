@@ -191,17 +191,24 @@ function writeFor(
  *
  * Two spellings of this would be the defect one layer up: the webhook would refuse a delivery the
  * checkout route had just handed someone a link for, or the reverse, and which of the two was wrong
- * would depend on which one a reader happened to open. The parameterised subscription id is what the
- * two disagree about and nothing else — `refuseForeignSubscription` passes the incoming one so the
- * row's *own* subscription does not count against it, and `hasLiveSubscription` passes `null` so
- * every live subscription counts.
+ * would depend on which one a reader happened to open. So the shared fragment is the whole of
+ * "live", and the one caller that needs *less* than that appends its own clause.
+ *
+ * **It was written with a nullable third parameter — `($3::text IS NULL OR billing_subscription_id
+ * <> $3)`, `null` meaning "exclude nothing" — and a mutation battery is what took that out.** H3 of
+ * the guard round replaced that `null` with `""` and **survived**: an empty string is not null, so
+ * the clause became `billing_subscription_id <> ''`, which is true of every subscription id there
+ * can ever be, so the mutant meant exactly what the original meant. It was an equivalent mutant
+ * rather than a coverage gap — the adapter's `readString` refuses an empty id, so the sentinel could
+ * never collide with real data — and the honest options were to argue that in prose or to remove the
+ * sentinel so the shape does not exist. This is the second. One caller passes two parameters and the
+ * other passes three, which is what they actually differ by.
  */
 const LIVE_SUBSCRIPTION = `SELECT billing_subscription_id FROM sonny.entitlement
       WHERE account_id = $1
         AND revoked_at IS NULL
         AND billing_provider = $2
-        AND billing_subscription_id IS NOT NULL
-        AND ($3::text IS NULL OR billing_subscription_id <> $3)`;
+        AND billing_subscription_id IS NOT NULL`;
 
 async function refuseForeignSubscription(
   client: pg.Client,
@@ -209,7 +216,10 @@ async function refuseForeignSubscription(
   accountId: string,
   subscriptionId: string,
 ): Promise<boolean> {
-  const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider, subscriptionId]);
+  // The one thing the refusal needs that the guard does not: the row's OWN subscription is not
+  // foreign to it, so a delivery about the subscription this account is live on is not a conflict.
+  const existing = await client.query(`${LIVE_SUBSCRIPTION}
+        AND billing_subscription_id <> $3`, [accountId, provider, subscriptionId]);
   return existing.rows.length > 0;
 }
 
@@ -236,7 +246,7 @@ export async function hasLiveSubscription(
   provider: string,
   accountId: string,
 ): Promise<boolean> {
-  const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider, null]);
+  const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider]);
   return existing.rows.length > 0;
 }
 
