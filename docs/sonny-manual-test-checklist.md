@@ -2335,8 +2335,11 @@ list only fills up by answering the real per-app question in a real session.
 - [ ] **(SONNY-144)** Approve two apps through the flow — start a screen task on each and answer the
       per-app question — then open Settings → Security & Access → Screen Control. **Both are listed**,
       each by its real name, with the bundle identifier and when you allowed it underneath.
-- [ ] **(SONNY-144)** Press Remove on one of them. Ask Sonny to use that app again: **it asks.** Ask
-      it to use the other: **it does not.**
+- [ ] **(SONNY-144)** Press Remove on one of them. **It asks first** — like every other row delete
+      in the app. Confirm. Then ask Sonny to use that app again: **it asks.** Ask it to use the
+      other: **it does not.**
+- [ ] **(SONNY-144)** Press Remove on a row and **cancel** at the dialog. **The app stays on the
+      list**, and Sonny still controls it without asking.
 - [ ] **(SONNY-144)** Press Remove All and confirm. The list is empty and the empty state reads
       sensibly — it should say how an app gets onto the list, not offer you a way to add one.
 - [ ] **(SONNY-144)** Press Remove All again and **cancel** at the dialog. **Nothing is removed.**

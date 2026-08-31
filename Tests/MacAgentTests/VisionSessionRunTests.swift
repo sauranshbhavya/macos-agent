@@ -846,6 +846,90 @@ struct VisionSessionRunTests {
         #expect(summary.contains("no longer allowed to control VS Code"))
     }
 
+    /// **A grant no surface will render is still reachable, and Remove All is what reaches it**
+    /// (PR #175 review, F1).
+    ///
+    /// The finding, made permanent. `approvedApps` is filtered by the terminal deny list, so a file
+    /// holding only ineligible grants renders no rows; Remove All used to be gated on that rendered
+    /// list, which closed the last door — the Memory row's Delete is disabled at a count of zero
+    /// while the file reads perfectly well, and the entries sheet reads the same filtered array. The
+    /// grant was then removable only by Settings → Data's whole-app wipe, which is a regression
+    /// against the unfiltered list this branch replaced.
+    ///
+    /// **The first assertion is a positive control**: a filter that dropped everything, or a fixture
+    /// that never wrote the grant, would otherwise make the empty rows below read as success.
+    /// `seedRawGrant` is the only way to build this state — `approve` refuses a terminal — which is
+    /// the point: the state exists because a file outlives the code that filled it.
+    @Test
+    func aGrantNoSurfaceRendersIsStillReachableByRemoveAll() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        let terminal = try #require(ScreenControlPolicy.terminalBundleIdentifiers.sorted().first)
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: terminal,
+            displayName: "A Terminal"
+        )
+        #expect(try fixture.approvedApps.loadAll().count == 1, "positive control: the fixture wrote a grant")
+
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshStoreReadability()
+
+        // Nothing renders it, which is correct and is what makes the rest of this test necessary.
+        #expect(fixture.viewModel.approvedApps.isEmpty)
+        #expect(ApprovedAppRevocationPresentation.rows(for: fixture.viewModel.approvedApps).isEmpty)
+        #expect(MemoryEntryPresentation.entries(for: .approvedApps, viewModel: fixture.viewModel).isEmpty)
+
+        // And the Memory row is a dead end: the file opens, so nothing says it is damaged, and the
+        // count is zero, so Delete is off. This is the closed door, asserted rather than described.
+        let memoryRow = MemoryRowPresentation.row(for: .approvedApps, viewModel: fixture.viewModel)
+        #expect(memoryRow.count == 0)
+        #expect(memoryRow.readability == .readable)
+        #expect(!memoryRow.canDelete)
+
+        // The one door that is open.
+        #expect(fixture.viewModel.storedApprovedAppCount == 1)
+        #expect(
+            ApprovedAppRevocationPresentation.offersRemoveAll(
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            )
+        )
+
+        fixture.viewModel.forgetAllApprovedApps()
+
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+        #expect(fixture.viewModel.storedApprovedAppCount == 0)
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// The count and the rendered list come from one load and cannot disagree about an ordinary
+    /// grant — the case where both should say the same thing.
+    @Test
+    func theStoredCountAndTheRenderedListAgreeWhenEveryGrantIsRenderable() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        for (identifier, name) in [("com.apple.Notes", "Notes"), ("com.apple.Safari", "Safari")] {
+            try fixture.approvedApps.approve(
+                bundleIdentifier: identifier,
+                displayName: name,
+                approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        fixture.viewModel.refreshMemoryEntries()
+
+        #expect(fixture.viewModel.storedApprovedAppCount == 2)
+        #expect(fixture.viewModel.approvedApps.count == 2)
+    }
+
     /// **Removing an app in Settings mid-session stops that session at the next iteration**
     /// (SONNY-144).
     ///

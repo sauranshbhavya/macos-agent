@@ -823,6 +823,10 @@ struct ProductShellTests {
             "recentArtifacts",            // ditto
             "clipboardHistoryItems",      // ditto
             "approvedApps",               // ditto
+            // Written by the same `refreshMemoryEntries()` line, from the same load, so it can
+            // never be stale while `approvedApps` is fresh (PR #175 review, F1). It is the count
+            // *before* the deny-list filter, which is what Settings' Remove All is offered on.
+            "storedApprovedAppCount",
             "outputLocations",            // ditto (SONNY-209)
             "resumableTasks",             // ditto, via refreshResumableTasks() (SONNY-210)
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()

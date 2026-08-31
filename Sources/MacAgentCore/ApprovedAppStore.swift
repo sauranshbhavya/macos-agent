@@ -187,10 +187,14 @@ public struct ApprovedAppStore: @unchecked Sendable {
     /// at a list they asked to empty, half emptied, with no way to tell which half went. This writes
     /// the empty list once, so the press either happens or does not.
     ///
-    /// **It takes what ``loadAll()`` cannot show, and that is deliberate.** The revocation surface
-    /// renders only grants the terminal deny list still allows, so a stored entry the list refuses
-    /// has no row and therefore no per-row Remove. This is the one control that reaches it — the
-    /// user asked for the file to hold nothing, and it then holds nothing.
+    /// **It takes what the revocation surface does not render, and that is deliberate.** ``loadAll()``
+    /// shows everything; the *view* filters, dropping any grant the terminal deny list refuses, so a
+    /// stored entry the list hides has no row and therefore no per-row Remove. This is the one
+    /// control that reaches it — the user asked for the file to hold nothing, and it then holds
+    /// nothing. (That claim was false as first shipped: the control was gated on the rendered list
+    /// being non-empty, so with *every* stored grant ineligible it was not on screen either and
+    /// nothing short of Settings' whole-app wipe reached the file. It is gated on this store's own
+    /// count now — PR #175 review, F1.)
     ///
     /// A store with nothing in it is a no-op rather than a write, so pressing Remove All on an empty
     /// list does not mint a file for a user who never granted anything.

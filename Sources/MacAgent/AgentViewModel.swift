@@ -69,6 +69,15 @@ final class AgentViewModel: ObservableObject {
     @Published private(set) var recentArtifacts: [RecentArtifact] = []
     @Published private(set) var clipboardHistoryItems: [ClipboardHistoryItem] = []
     @Published private(set) var approvedApps: [ApprovedApp] = []
+
+    /// How many grants the file holds, **before** the deny-list filter `approvedApps` applies.
+    ///
+    /// The two differ only when the store holds a grant no surface will render, which is the whole
+    /// reason this exists: Settings' Remove All is offered on this rather than on the rendered list,
+    /// so the one control that reaches such a grant is present exactly when there is one to reach
+    /// (PR #175 review, F1). Written by `refreshMemoryEntries()` from the same load, so it cannot
+    /// disagree with `approvedApps`; zero when that load fails, like every other list here.
+    @Published private(set) var storedApprovedAppCount: Int = 0
     @Published private(set) var outputLocations: [OutputLocation] = []
     /// Runs that began and did not finish (row 13, SONNY-210), newest activity first.
     ///
@@ -3505,15 +3514,24 @@ final class AgentViewModel: ObservableObject {
         clipboardHistoryItems = loadMemoryEntries(.clipboardHistoryItems) {
             try clipboardHistoryMonitor.historyStore.loadAll()
         }
-        approvedApps = loadMemoryEntries(.approvedApps) {
-            // **Filtered here rather than in either surface that renders it** (SONNY-144). Settings'
-            // allowed-apps list and the Memory section's entries sheet both read this array, so a
-            // filter in one of them is a filter the other does not have — and a revocation list
-            // offering to take back a grant on Terminal would tell the user they had allowed
-            // something Sonny will never do. The store's write path already refuses to persist one;
-            // this is about a file outliving the code that filled it, not about today's writers.
-            ApprovedAppRevocationPresentation.eligible(try approvedAppStore.loadAll())
+        // **Filtered for display, counted before the filter, from one read** (SONNY-144; the count
+        // is PR #175's review, F1). Settings' allowed-apps list and the Memory section's entries
+        // sheet both read `approvedApps`, so a filter in one of them is a filter the other does not
+        // have — and a revocation list offering to take back a grant on Terminal would tell the user
+        // they had allowed something Sonny will never do. The store's write path already refuses to
+        // persist one; this is about a file outliving the code that filled it, not about today's
+        // writers.
+        //
+        // `storedApprovedAppCount` is what Settings' Remove All is offered on, and it has to come
+        // from before the filter or the filter closes the only route to the entries it hides: with
+        // every stored grant ineligible, the rendered list is empty, the Memory row's Delete is
+        // disabled at a count of zero, the entries sheet is empty, and nothing short of the whole-app
+        // wipe reaches the file. One load answers both, so the count and the list cannot disagree.
+        let storedApprovedApps = loadMemoryEntries(.approvedApps) {
+            try approvedAppStore.loadAll()
         }
+        storedApprovedAppCount = storedApprovedApps.count
+        approvedApps = ApprovedAppRevocationPresentation.eligible(storedApprovedApps)
         outputLocations = loadMemoryEntries(.outputLocations) {
             // Already ranked best-suggestion-first by the store, so the sheet lists them in the order
             // Sonny would actually offer them. Sorting again here would be a second ordering that can
@@ -3922,7 +3940,9 @@ final class AgentViewModel: ObservableObject {
     /// One store call rather than a loop over `approvedApps`, for two reasons the store's own
     /// `forgetAll()` states: it is one write instead of one per grant, and it reaches a stored entry
     /// the deny-list filter keeps out of the rendered list — which per-row Remove, by construction,
-    /// cannot.
+    /// cannot. **The second reason is only true because the control is offered on
+    /// `storedApprovedAppCount`** rather than on the rendered list; gated on the list, it was not on
+    /// screen in the one case it was the only way through (PR #175 review, F1).
     func forgetAllApprovedApps() {
         performMemoryStoreWrite(failureMessage: "Could not remove your allowed apps") {
             try approvedAppStore.forgetAll()
