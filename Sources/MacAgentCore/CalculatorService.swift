@@ -78,6 +78,17 @@ public struct CalculatorService: Sendable {
         return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Whether a token names a unit this calculator can actually convert (SONNY-284).
+    ///
+    /// The unit table is `ConversionUnit`'s and stays there — this is the one door onto it, opened
+    /// for `InstantCommandResolver.looksLikeBareConversion`, which has to decide whether a
+    /// four-token command is a conversion at all *before* the evaluator gets a chance to say so.
+    /// Same reasoning as `withoutTrailingEqualsOrQuestionMark` above: the two sides of that decision
+    /// read one definition, or one of them starts refusing what the other accepts.
+    public static func namesConversionUnit(_ raw: String) -> Bool {
+        (try? ConversionUnit(raw: raw)) != nil
+    }
+
     private func looksLikeConversion(_ expression: String) -> Bool {
         let lowered = " \(expression.lowercased()) "
         return lowered.contains(" to ") || lowered.contains(" in ")

@@ -88,9 +88,11 @@ public struct InstantCommandResolver: Sendable {
         // not in it — so `2 + 2` was answered here and `2 + 2 =` fell through to a planner with no
         // calculator to offer, one character apart. The sum is read the way the evaluator will read
         // it, and the plan carries that form so its own summary says `2 + 2` too.
-        let sum = CalculatorService.withoutTrailingEqualsOrQuestionMark(command)
-        if looksLikeBareArithmetic(sum) || looksLikeBareConversion(sum) {
-            return .plan(calculatorPlan(expression: sum))
+        //
+        // **And a calculation phrased as a sentence is still a calculation** (SONNY-284) — the
+        // filler around it is dropped here before the same two rules read what is left.
+        if let expression = calculatorExpression(in: command) {
+            return .plan(calculatorPlan(expression: expression))
         }
 
         return nil
@@ -577,6 +579,93 @@ public struct InstantCommandResolver: Sendable {
         return nil
     }
 
+    /// The words people wrap a calculation in when they say it out loud rather than type it
+    /// (SONNY-284). `what is 2 + 2`, `how much is 5 times 5`, `convert 5 km to miles`,
+    /// `5 km in miles please` — each of these is a calculation and each reached a planner that has
+    /// no calculator to offer (`CalculatorCapabilityAdapter.metadata.plannerTools` is empty), so
+    /// the answer a first user got in their first ten minutes was "Calculation is unsupported by
+    /// the registered local tools".
+    ///
+    /// **Bounded and explicit, never a general "strip the words and see".** Widening the
+    /// calculator's reach is only safe because the two rules underneath it — `looksLikeBareArithmetic`
+    /// and `looksLikeBareConversion` — are unchanged in their strictness: what is left after the
+    /// filler comes off must be *entirely* digits and operators, or exactly a four-token conversion
+    /// naming a unit this calculator knows. So `what is my ip address` strips to `my ip address`,
+    /// matches neither, and stays the planner's, which is the whole constraint this ticket carried.
+    ///
+    /// **Longest phrase first, and that ordering is load-bearing**: `how much is 5 times 5` stripped
+    /// by `how much` leaves `is 5 times 5`, which matches nothing and reaches the planner. Both
+    /// lists are written alphabetically — which is *not* longest-first, deliberately, so the
+    /// ordering is the sort's doing rather than a hand-kept invariant a later phrase can break
+    /// silently — and `longestFirst` is one function so one test covers both.
+    private static let calculationLeadIns = longestFirst([
+        "calc", "calculate", "compute", "convert", "how much", "how much is",
+        "please", "solve", "what is", "what's", "whats", "work out"
+    ])
+
+    /// The other end of the same sentence — `5 km in miles please`.
+    private static let calculationTailOffs = longestFirst([
+        "for me", "please", "thank you", "thanks"
+    ])
+
+    private static func longestFirst(_ phrases: [String]) -> [String] {
+        phrases.sorted { $0.count > $1.count }
+    }
+
+    /// The command with its calculation filler removed, or nil when what is left is not a
+    /// calculation at all. Zero filler is the ordinary case and costs one pass: a bare `2 + 2` or
+    /// `10 cm to in` reaches the same two rules it always did.
+    ///
+    /// The expression handed back is a slice of what the user actually wrote, not the normalized
+    /// form — the plan's summary says `Calculate five times five.` for the same reason
+    /// `calc five times five` has always said it, and `CalculatorService.evaluate` normalizes again
+    /// on its own way to the answer. Normalization here is only ever asked whether this *is* a
+    /// calculation.
+    ///
+    /// **The stripping lives here and not in `CalculatorService`**, deliberately: this is command
+    /// recognition, and the evaluator's refusal to strip filler from an expression it is handed is a
+    /// stated boundary with a test on it (`CalculatorServiceTests.doesNotStripFillerWordsByDesign`).
+    /// A resolver that hands over `two plus two` leaves that boundary exactly where it was.
+    private func calculatorExpression(in command: String) -> String? {
+        var expression = command
+        // Each pass removes at least one character, so the loop is bounded by the command's length;
+        // the count is the guard against a phrase that could ever strip to itself.
+        for _ in 0...command.count {
+            let trimmed = CalculatorService.withoutTrailingEqualsOrQuestionMark(expression)
+            if let shorter = withoutOneCalculationFillerPhrase(trimmed) {
+                expression = shorter
+                continue
+            }
+            expression = trimmed
+            break
+        }
+
+        guard !expression.isEmpty else {
+            return nil
+        }
+        let normalized = SpokenArithmeticNormalizer.normalize(expression)
+        guard looksLikeBareArithmetic(normalized) || looksLikeBareConversion(normalized) else {
+            return nil
+        }
+        return expression
+    }
+
+    /// One lead-in or one tail-off, or nil when the text begins and ends with neither. Matched
+    /// whole-word against a lowercased copy with the curly apostrophe folded to the straight one,
+    /// because `what’s` is what dictation produces and `what's` is what the list holds.
+    private func withoutOneCalculationFillerPhrase(_ text: String) -> String? {
+        let lowered = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        for phrase in Self.calculationLeadIns where lowered.hasPrefix("\(phrase) ") {
+            return String(text.dropFirst(phrase.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for phrase in Self.calculationTailOffs where lowered.hasSuffix(" \(phrase)") {
+            return String(text.dropLast(phrase.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
     private func looksLikeBareArithmetic(_ command: String) -> Bool {
         let allowed = CharacterSet(charactersIn: "0123456789.+-*/() \t\n")
         let scalars = command.unicodeScalars
@@ -588,6 +677,16 @@ public struct InstantCommandResolver: Sendable {
         return hasDigit && hasOperator
     }
 
+    /// **At least one side has to name a unit** (SONNY-284). Four tokens with a number in front and
+    /// `to`/`in` in the middle is also the shape of `convert 5 docs to pdf` and `10 files in folder`,
+    /// and while nothing but a bare command could reach this rule that cost only a confusing error,
+    /// `convert` is now filler the resolver strips — so without this the widening would hand the
+    /// document-conversion verb straight to the calculator.
+    ///
+    /// **One side rather than both**, because a conversion the calculator cannot do is still a
+    /// conversion and deserves its own answer: `5 km to parsecs` reaches the evaluator and is told
+    /// `parsecs is not a supported conversion unit`, where the planner would only be able to say the
+    /// request is unsupported.
     private func looksLikeBareConversion(_ command: String) -> Bool {
         let parts = command
             .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
@@ -597,7 +696,8 @@ public struct InstantCommandResolver: Sendable {
               ["to", "in"].contains(parts[2].lowercased()) else {
             return false
         }
-        return true
+        return CalculatorService.namesConversionUnit(parts[1])
+            || CalculatorService.namesConversionUnit(parts[3])
     }
 
     private func calculatorPlan(expression: String) -> AgentPlan {

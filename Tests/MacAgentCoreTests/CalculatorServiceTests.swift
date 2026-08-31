@@ -85,13 +85,32 @@ struct CalculatorServiceTests {
         #expect(spoken.result == digits.result)
     }
 
+    /// **Still by design after SONNY-284, and the layer is the point.** "what is" is neither a
+    /// number-word nor an operator idiom, so an expression handed to the evaluator with it still on
+    /// the front fails cleanly. What changed is a layer up: `InstantCommandResolver` recognises the
+    /// sentence, takes the filler off, and hands this evaluator `two plus two`. Moving the stripping
+    /// down here instead would make every caller of `evaluate` a filler-tolerant parser, including
+    /// the one that decides whether a command *is* a calculation at all.
     @Test
     func doesNotStripFillerWordsByDesign() throws {
-        // "what is" is neither a number-word nor an operator idiom, so this still fails cleanly —
-        // full command-style phrasing is out of scope; only the arithmetic phrase itself normalizes.
         #expect(throws: CalculatorError.self) {
             try calculator.evaluate("what is two plus two")
         }
+    }
+
+    /// The one door onto `ConversionUnit`'s table, opened for
+    /// `InstantCommandResolver.looksLikeBareConversion` (SONNY-284) — which has to decide whether a
+    /// four-token command is a conversion *before* the evaluator gets a chance to say so.
+    @Test
+    func namesConversionUnitAnswersForTheUnitsThisCalculatorKnows() {
+        #expect(CalculatorService.namesConversionUnit("km"))
+        #expect(CalculatorService.namesConversionUnit("Miles"))
+        #expect(CalculatorService.namesConversionUnit("in."))
+        #expect(CalculatorService.namesConversionUnit("celsius"))
+        #expect(CalculatorService.namesConversionUnit("parsecs") == false)
+        #expect(CalculatorService.namesConversionUnit("docs") == false)
+        #expect(CalculatorService.namesConversionUnit("pdf") == false)
+        #expect(CalculatorService.namesConversionUnit("") == false)
     }
 
     @Test
