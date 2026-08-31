@@ -107,7 +107,14 @@ PATTERNS_CI=(
   # that can catch it. `BILLING_CHECKOUT_URL` and `BILLING_PLANS` are deliberately NOT here: a
   # checkout link is meant to be given to users and a plan map names products and capability keys,
   # neither of which is a credential, and adding them would train people to baseline this scanner.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  #
+  # `BILLING_PROVIDER_ACCESS_TOKEN` joined it with SONNY-216, the THIRD whose leak is a write and the
+  # first provider API credential this gateway holds at all. Whoever holds it can mint a customer
+  # portal session for any customer of the organization -- that customer's invoices, payment method
+  # and cancel button -- without touching this gateway. Opaque and vendor-prefixless like the two
+  # above, so again only the name can catch it. `BILLING_API_BASE_URL` beside it is deliberately NOT
+  # here, for the reason the checkout link is not: an API origin is a hostname, not a credential.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|BILLING_PROVIDER_ACCESS_TOKEN|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the
