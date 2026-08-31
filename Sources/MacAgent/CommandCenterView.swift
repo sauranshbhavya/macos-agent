@@ -1278,7 +1278,7 @@ private struct InsightsView: View {
                 // founder-decisions doc calls for one, and it was previously applied to only
                 // one of these four sections rather than consistently to all of them.
                 VStack(alignment: .leading, spacing: 16) {
-                    InsightsOverviewBento(summary: summary)
+                    InsightsOverviewBento(summary: summary, allowance: viewModel.screenControlAllowance)
 
                     WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
 
@@ -1310,6 +1310,10 @@ private struct InsightsView: View {
         .background(SonnyTheme.ink)
         .onAppear {
             viewModel.refreshTaskHistory()
+            // The one place the allowance is read for Command Center (SONNY-214). Here rather than
+            // on a timer or at launch, because this is the only page that shows it and the figure
+            // is worth a request exactly when somebody is looking at it.
+            Task { await viewModel.refreshScreenControlAllowance() }
         }
     }
 }
@@ -1317,15 +1321,65 @@ private struct InsightsView: View {
 /// Literal wireframe layout (`14-MainAppInsights.svg`) originally had 4 equal-width stat cards;
 /// "Avg. cycle time" was dropped per direct instruction (2026-07-18) as not adding much value,
 /// leaving 3.
+///
+/// **The usage row beneath them is in no wireframe, deliberately** (SONNY-214). Those were drawn
+/// before the product had an allowance to report; row 13's billing half gives it one, and this page
+/// is the stats area the ticket names. It sits under the three cards rather than becoming a fourth
+/// one because it is a different kind of figure — the cards are all this week against last week,
+/// and this is a period balance the server owns.
 private struct InsightsOverviewBento: View {
     let summary: TaskHistoryInsightsSummary
+    /// `nil` when no figure has been read — see `AgentViewModel.screenControlAllowance` for why the
+    /// row then renders nothing at all rather than a placeholder or a zero.
+    let allowance: ScreenControlAllowance?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                InsightStatCard(stat: .completedThisWeek(summary))
+                InsightStatCard(stat: .completionRate(summary))
+                InsightStatCard(stat: .currentStreak(summary))
+            }
+
+            if let allowance {
+                ScreenControlUsageRow(allowance: allowance)
+            }
+        }
+    }
+}
+
+/// The usage line: a label and a number, on the same card surface the three stat cards above use so
+/// it reads as part of the stats area rather than as a notice pinned under it.
+///
+/// System A throughout — `SonnyTheme`/`SonnyType`, flat and opaque. The widget's own copy of this
+/// figure is System B and shares nothing but the presentation type that formats it.
+private struct ScreenControlUsageRow: View {
+    let allowance: ScreenControlAllowance
 
     var body: some View {
         HStack(spacing: 12) {
-            InsightStatCard(stat: .completedThisWeek(summary))
-            InsightStatCard(stat: .completionRate(summary))
-            InsightStatCard(stat: .currentStreak(summary))
+            Text("Screen Control")
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
+                .lineLimit(1)
+
+            Spacer(minLength: 12)
+
+            Text(ScreenControlUsagePresentation.usageLine(allowance))
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
     }
 }
 
