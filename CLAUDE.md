@@ -287,15 +287,15 @@ rotation, and why staging is never seeded from production.
 
 **`./scripts/deploy.sh staging` and `production` are stubs and exit 3 today.** They build the image
 and then say plainly that nothing was pushed and nothing is running, because no host exists yet: the
-gateway runs on a VM with staged hosts — development first tries deploymind, beta on Oracle Cloud,
-v1 on AWS (`docs/sonny-row-12-host-decision.md` §12.2) — and none is reachable. `local` is real and
+gateway runs on a VM with staged hosts — Oracle Cloud first, then AWS for v1
+(`docs/sonny-row-12-host-decision.md` §12.4) — and neither is reachable. `local` is real and
 verifies that the build it just made is the one answering. **The first real remote deploy is owed
 and recorded on SONNY-126.**
 
-Nothing under `server/` **couples** to a host, deliberately — the three are named in prose, in
-comments and in this file, because a reader needs to know which they are; none gets a code path, a
-build flag or a configuration default. Each one receives an OCI image and a set of
-environment variables, so moving between them is a redeploy rather than a rewrite.
+Nothing under `server/` **couples** to a host, deliberately — both are named in prose, in comments
+and in this file, because a reader needs to know which they are; neither gets a code path, a build
+flag or a configuration default. Each one receives an OCI image and a set of environment variables,
+so moving between them is a redeploy rather than a rewrite.
 
 ### Packaging the app
 

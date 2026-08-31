@@ -45,11 +45,13 @@ inferred** (added 2026-08-26, SONNY-288). Three kinds of text live in it and the
 **This document is host-agnostic.** No requirement in it comes from any hosting platform's published
 limits, and nothing in it presumes where the server runs. The host choice was deliberately held when
 this was written (SONNY-125, gated on SONNY-114); **it was made on 2026-08-21 and nothing here
-changed** (updated 2026-08-26, SONNY-288) — the gateway runs on a VM, staged deploymind then Oracle
-Cloud then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2,
-and section 13's first row). Host-agnosticism is the property that made that survivable, so it is
-kept rather than spent. Where a number here constrains the host, it is derived from Sonny's own code
-and says so.
+changed** (updated 2026-08-26, SONNY-288) — the gateway runs on a VM, staged Oracle Cloud then AWS,
+with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.4, and section
+13's first row). **That staging read deploymind → Oracle → AWS until 2026-08-30, when the founders
+dropped the deploymind stage (SONNY-373) — and no requirement here changed then either**, which is
+the same property holding a second time. Host-agnosticism is the property that made that survivable,
+so it is kept rather than spent. Where a number here constrains the host, it is derived from Sonny's
+own code and says so.
 
 **What binds what.** Twelve of row 12's fourteen tickets are written against this document. Where a
 ticket's own description conflicts with this contract, the ticket wins for that ticket's work and the
@@ -1659,15 +1661,16 @@ against the tree at `d3598a7` on 2026-08-26, and it goes stale the way any board
 question this contract left open has an answer, recorded where the row says. **Open** means it has
 none.
 
-**Two rows were resolved again on 2026-08-28 and carry their own date**, which is what a column
-resolved at one instant has to do once it is amended at another: SONNY-134's retention window and its
-snapshot-lineage row both moved from Open to Decided and built. Every other row is still the
-2026-08-26 reading and has not been re-checked; a reader comparing two rows should read the date on
-each rather than the heading above both.
+**Three rows have been resolved again since, and each carries its own date**, which is what a column
+resolved at one instant has to do once it is amended at another: on 2026-08-28, SONNY-134's
+retention window and its snapshot-lineage row both moved from Open to Decided and built; on
+2026-08-30, the host row was amended when the founders dropped the deploymind stage (SONNY-373).
+Every other row is still the 2026-08-26 reading and has not been re-checked; a reader comparing two
+rows should read the date on each rather than the heading above both.
 
 | Open | Owner | Status, resolved 2026-08-26 at `d3598a7` |
 |---|---|---|
-| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `113:`). The first real remote deploy is recorded as owed on SONNY-126 |
+| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2); **amended 2026-08-30 (SONNY-373): the founders dropped the deploymind stage, leaving Oracle Cloud then AWS** (§12.4). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `395:` at `a175020`). The first real remote deploy is recorded as owed on SONNY-126 |
 | **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **SONNY-204** | **Owned, not built.** SONNY-155 was the triage ticket; it closed 2026-08-21 handing all three to SONNY-204, which sits in Backlog. This row read "**nobody yet** — SONNY-155, Backlog, untriaged" until 2026-08-26 (4.1) |
 | Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape | **Open.** SONNY-129 is in Backlog |
 | Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 | **Decided.** SONNY-126 closed 2026-08-21: TypeScript on Node >= 22, Fastify, Zod, Postgres via `pg`, a plain-SQL migration runner that refuses a file carrying no `-- @rollback` half (`ls server/src/db/migrations/*.sql \| wc -l` → 10), a containerized deploy path coupled to no host, and credential rotation as an ordered list so a rotation is three independently valid deploys (`server/README.md`). Two acceptance criteria — health on staging and production, a migration rolled back on staging — were deferred by the founder on 2026-08-21 because no remote environment exists; that is the row above |
