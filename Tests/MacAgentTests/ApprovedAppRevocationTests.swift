@@ -239,8 +239,8 @@ struct ApprovedAppRevocationTests {
     /// suite. One function, and both of its answers pinned.
     @Test
     func theEmptyAndUnreadableStatesAreDifferentInAllThreeFields() {
-        let empty = ApprovedAppRevocationPresentation.emptyState(for: .readable)
-        let unreadable = ApprovedAppRevocationPresentation.emptyState(for: .unreadable)
+        let empty = ApprovedAppRevocationPresentation.emptyState(for: .readable, storedGrantCount: 0)
+        let unreadable = ApprovedAppRevocationPresentation.emptyState(for: .unreadable, storedGrantCount: 0)
 
         #expect(empty.systemImage == ApprovedAppRevocationPresentation.emptySystemImage)
         #expect(empty.title == ApprovedAppRevocationPresentation.emptyTitle)
@@ -260,10 +260,55 @@ struct ApprovedAppRevocationTests {
     /// direction: a file that will not open is news and an empty list is not.
     @Test
     func theUnreachablePartlyUnreadableStateFailsTowardsTheNewsRatherThanTheSilence() {
-        let partly = ApprovedAppRevocationPresentation.emptyState(for: .partlyUnreadable)
+        let partly = ApprovedAppRevocationPresentation.emptyState(for: .partlyUnreadable, storedGrantCount: 0)
 
+        // **All three fields, like its sibling above** (PR #175 cycle 3, G5). `systemImage` was the
+        // one this test did not assert, so a mutation of the icon alone would have lived here while
+        // the battery's N1 — which changes all three at once — died either way.
+        #expect(partly.systemImage == ApprovedAppRevocationPresentation.unreadableSystemImage)
         #expect(partly.title == ApprovedAppRevocationPresentation.unreadableTitle)
         #expect(partly.message == ApprovedAppRevocationPresentation.unreadableMessage)
+    }
+
+    /// **A store holding grants none of which can be rendered is neither empty nor unreadable**
+    /// (PR #175 cycle 3, G2).
+    ///
+    /// It used to be shown the empty state, so a user whose allowed app had joined the terminal deny
+    /// list in a release read "No allowed apps yet" above a sentence inviting them to allow an app
+    /// that would not surface the one they had — both false — with Remove All beside it. The state is
+    /// reachable by an ordinary release rather than by a hand-edited file: the deny list is
+    /// extensible by design and has already grown once, the verdict is recomputed on every load, and
+    /// the store never prunes.
+    @Test
+    func aStoreHoldingOnlyHiddenGrantsSaysSoRatherThanSayingItIsEmpty() {
+        let held = ApprovedAppRevocationPresentation.emptyState(for: .readable, storedGrantCount: 1)
+        let empty = ApprovedAppRevocationPresentation.emptyState(for: .readable, storedGrantCount: 0)
+        let unreadable = ApprovedAppRevocationPresentation.emptyState(for: .unreadable, storedGrantCount: 0)
+
+        #expect(held.title == ApprovedAppRevocationPresentation.heldButNotHonouredTitle)
+        #expect(held.message == ApprovedAppRevocationPresentation.heldButNotHonouredMessage)
+        #expect(held.systemImage == ApprovedAppRevocationPresentation.heldButNotHonouredSystemImage)
+
+        // The two sentences it replaces, named so a revert to either fails here rather than in prose.
+        #expect(held.title != empty.title)
+        #expect(held.message != empty.message)
+        #expect(held.title != unreadable.title)
+        #expect(held.message != unreadable.message)
+
+        // It names the control that ends the state, which is this repository's empty-state
+        // convention and the whole reason the old copy was wrong: it named one that cannot.
+        #expect(held.message.contains(ApprovedAppRevocationPresentation.removeAllLabel))
+        #expect(!held.message.contains("will appear here"))
+    }
+
+    /// **An unreadable file is the bigger news and wins the ordering**, and its count is zero anyway.
+    /// Asserted because the two arms are now chosen by two inputs rather than one.
+    @Test
+    func anUnreadableFileOutranksAHeldGrantInTheEmptyStatesOrdering() {
+        let bothAtOnce = ApprovedAppRevocationPresentation.emptyState(for: .unreadable, storedGrantCount: 3)
+
+        #expect(bothAtOnce.title == ApprovedAppRevocationPresentation.unreadableTitle)
+        #expect(bothAtOnce.message == ApprovedAppRevocationPresentation.unreadableMessage)
     }
 
     /// The view calls the one function rather than re-deriving the choice per field.
@@ -271,7 +316,9 @@ struct ApprovedAppRevocationTests {
     func theViewAsksForTheWholeStateRatherThanTernaryingEachField() throws {
         let list = try Self.revocationListSource()
 
-        #expect(list.contains("ApprovedAppRevocationPresentation.emptyState(for: readability)"))
+        #expect(list.contains("ApprovedAppRevocationPresentation.emptyState("))
+        #expect(list.contains("for: readability,"))
+        #expect(list.contains("storedGrantCount: viewModel.storedApprovedAppCount"))
         #expect(
             !list.contains("readability == .readable"),
             "a ternary per field is the shape whose swapped arm no test could see"
@@ -509,8 +556,15 @@ struct ApprovedAppRevocationTests {
 
         #expect(!list.contains(".disabled(viewModel.isRunning)"))
         #expect(!row.contains(".disabled("))
-        #expect(flat.contains("Neither control is disabled while a task runs, and that is an answer rather than an omission"))
-        #expect(flat.contains("how a user stops that session"))
+        #expect(flat.contains("Neither control is disabled while a task runs."))
+        // **The disproved leg is recorded as disproved, not deleted** (PR #175 cycle 3, G6). The
+        // first version of this assertion read the argument that removing the app is *how* a user
+        // stops a session — which F2's own confirmation, the emergency-stop hotkey and the Memory
+        // section's ungated door between them falsified. A scan that still demanded that sentence
+        // would pin the branch to a premise this review disproved.
+        #expect(flat.contains("That leg does not hold and is recorded here rather than quietly dropped"))
+        #expect(flat.contains("gating both controls was always available"))
+        #expect(flat.contains("two answers to one question about one store"))
     }
 
     /// The section is System A: the row action is `CommandCenterRowActionStyle(tone: .danger)`, the

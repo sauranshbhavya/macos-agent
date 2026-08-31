@@ -5819,15 +5819,27 @@ private struct SettingsSecurityAccessPage: View {
 /// Command Center's own invariant, on the Memory entries sheet in this file, is that nothing in the
 /// app deletes a row on one press, and it names a revoked app grant as its example.
 ///
-/// **Neither control is disabled while a task runs, and that is an answer rather than an omission**
-/// (PR #175 review, F3). Per-row Remove *cannot* be: removing the app a session is controlling is
-/// how a user stops that session, which is this ticket's acceptance criterion and the last item on
-/// its manual checklist, so the control has to be live in exactly the state a gate would switch it
-/// off. Remove All follows it rather than splitting the section, and the precedent this lands
-/// against is split by page role rather than by destructiveness — every control on Settings → Data
-/// is gated because it operates on Sonny's whole local data (the founder decision at PR #117's F3),
-/// while every delete in the Memory section is live, including the per-type Delete that empties an
-/// entire store. These two do what the Memory section's do, to the same store.
+/// **Neither control is disabled while a task runs. That is an answer rather than an omission, and
+/// it is the founders' to overturn** (PR #175 review, F3; the reasoning corrected at cycle 3, G6).
+///
+/// The argument this first rested on was that removing the app a session is controlling is *how a
+/// user stops that session*, so the control has to be live in the state a gate would switch it off.
+/// **That leg does not hold and is recorded here rather than quietly dropped.** F2 put a
+/// confirmation in front of this very press, so it is two presses now; `EmergencyStopHotKey` is
+/// armed for the whole of every vision session, which is one key and reaches no Settings page; and
+/// `cancelCurrentRun` has doors on both surfaces. Revoking is *a* way to stop a session, not the way.
+/// A gate here would not even make the mechanism unreachable — the Memory section's Delete commits
+/// through the same `forgetApprovedApp`, ungated — so gating both controls was always available, and
+/// this comment used to imply it was not.
+///
+/// What survives, and what the decision now rests on: gating here would put **two answers to one
+/// question about one store** on two surfaces, which is the defect F2 was raised for; the precedent
+/// is split by page role rather than by destructiveness — every control on Settings → Data is gated
+/// because it operates on Sonny's whole local data (the founder decision at PR #117's F3), while
+/// every delete in the Memory section is live, including the per-type Delete that empties an entire
+/// store, and these two do what the Memory section's do, to the same store; and this ticket's
+/// acceptance criterion and its last manual item both direct a mid-run Remove *at this page*, so a
+/// gate rewrites a checklist item rather than merely disabling a button.
 ///
 /// **What that accepts, stated rather than left to be found:** a revocation write that *fails*
 /// during a run reports on `errorMessage`, which the widget picks ahead of `.result`, so it replaces
@@ -5883,8 +5895,13 @@ private struct ApprovedAppRevocationList: View {
                 // (SONNY-239). A grants file that will not decrypt loads as zero grants, so without
                 // this split a user who has allowed apps would be told they have allowed none, under
                 // a sentence inviting them to go and allow one. One call rather than a ternary per
-                // field, or nothing holds which arm the view takes (PR #175 review, F4).
-                let state = ApprovedAppRevocationPresentation.emptyState(for: readability)
+                // field, or nothing holds which arm the view takes (PR #175 review, F4). The third
+                // arm is the same defect through the filter rather than through a damaged file, which
+                // is why the count goes in too (PR #175 cycle 3, G2).
+                let state = ApprovedAppRevocationPresentation.emptyState(
+                    for: readability,
+                    storedGrantCount: viewModel.storedApprovedAppCount
+                )
                 CollectionEmptyState(
                     systemImage: state.systemImage,
                     title: state.title,

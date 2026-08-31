@@ -899,11 +899,80 @@ struct VisionSessionRunTests {
             )
         )
 
+        // And the section says so rather than saying the list is empty (PR #175 cycle 3, G2): the
+        // old copy told this user they had allowed nothing, under an invitation to allow an app
+        // that would not have surfaced the one they had.
+        let state = ApprovedAppRevocationPresentation.emptyState(
+            for: MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel),
+            storedGrantCount: fixture.viewModel.storedApprovedAppCount
+        )
+        #expect(state.title == ApprovedAppRevocationPresentation.heldButNotHonouredTitle)
+        #expect(state.message == ApprovedAppRevocationPresentation.heldButNotHonouredMessage)
+
         fixture.viewModel.forgetAllApprovedApps()
 
         #expect(try fixture.approvedApps.loadAll().isEmpty)
         #expect(fixture.viewModel.storedApprovedAppCount == 0)
         #expect(fixture.viewModel.errorMessage == nil)
+
+        // Once it is cleared the ordinary empty state is what is left, so the new arm cannot become
+        // a state the section is simply stuck in.
+        #expect(
+            ApprovedAppRevocationPresentation.emptyState(
+                for: MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel),
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            ).title == ApprovedAppRevocationPresentation.emptyTitle
+        )
+    }
+
+    /// **An unreadable grants file offers no Remove All, and says what is wrong rather than that the
+    /// list is empty** (PR #175 cycle 3, G3).
+    ///
+    /// Today's behaviour is right and nothing held it: `loadMemoryEntries` answers `[]` on a throw,
+    /// so the count falls to zero with the list and the control is correctly hidden. The reviewer's
+    /// N2 sourced the count so it did *not* fall to zero and the whole suite still passed. What that
+    /// mutant ships is the state `forgetAll()`'s own doc exists to prevent: Remove All offered above
+    /// "Sonny can't read your allowed apps", and pressing it fails, because `forgetAll()` refuses an
+    /// unreadable file — so the user is told "Could not remove your allowed apps" on the one screen
+    /// already telling them Sonny cannot read the file. *Remove All must not become a second, quieter
+    /// door onto destroying it* is this branch's sentence, and this is the direction of the new gate
+    /// that nothing covered.
+    ///
+    /// The first two expectations are the positive control: a file that is really there and really
+    /// will not decrypt. Without them a fixture that wrote nothing would make the zero below read as
+    /// success.
+    @Test
+    func anUnreadableGrantsFileOffersNoRemoveAllAndSaysWhatIsWrong() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try corruptGrantsFile(at: fixture.approvedApps.fileURL)
+        #expect(FileManager.default.fileExists(atPath: fixture.approvedApps.fileURL.path))
+        #expect(throws: (any Error).self) { try fixture.approvedApps.loadAll() }
+
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshStoreReadability()
+
+        #expect(fixture.viewModel.storedApprovedAppCount == 0)
+        #expect(
+            !ApprovedAppRevocationPresentation.offersRemoveAll(
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            ),
+            "Remove All over a file forgetAll() will refuse is a control that can only fail"
+        )
+
+        // And what the section shows instead is the unreadable state, not the empty one and not the
+        // held-grant one — the count is zero, so only the readability tells them apart.
+        let readability = MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel)
+        #expect(readability == .unreadable)
+        let state = ApprovedAppRevocationPresentation.emptyState(
+            for: readability,
+            storedGrantCount: fixture.viewModel.storedApprovedAppCount
+        )
+        #expect(state.title == ApprovedAppRevocationPresentation.unreadableTitle)
     }
 
     /// The count and the rendered list come from one load and cannot disagree about an ordinary
