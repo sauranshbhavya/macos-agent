@@ -296,9 +296,11 @@ struct StandingWatcherRunTests {
         #expect(try fixture.store.loadWatchers().isEmpty, "precondition: the wipe took the file")
         #expect(FileManager.default.fileExists(atPath: fixture.store.fileURL.path) == false)
 
-        // Now let the page answer, after the wipe.
+        // Now let the page answer, after the wipe. **`settle()`, not `awaitStandingWatcherCheck()`**
+        // — the wipe cleared the handle that one awaits, so it would return before the late answer
+        // ran and this test would pass with the generation guard deleted (W14).
         observer.releaseTheAnswer(with: "steady")
-        await fixture.viewModel.awaitStandingWatcherCheck()
+        await fixture.settle()
 
         #expect(try fixture.store.loadWatchers().isEmpty, "the wipe was undone by a check in flight")
         #expect(FileManager.default.fileExists(atPath: fixture.store.fileURL.path) == false)
@@ -364,13 +366,52 @@ struct StandingWatcherRunTests {
         let afterAbandon = try #require(try fixture.store.loadWatchers().first)
         #expect(afterAbandon.consecutiveFailures == 1)
 
+        // Same reason as the wipe test above: the abandonment cleared the handle, so the only honest
+        // way to let the late answer run is to spin the actor.
         observer.releaseTheAnswer(with: "something entirely different")
-        await fixture.viewModel.awaitStandingWatcherCheck()
+        await fixture.settle()
 
         let settled = try #require(try fixture.store.loadWatchers().first)
         #expect(settled.consecutiveFailures == 1, "the late answer wrote back")
         #expect(settled.candidateDigest == nil, "the late answer promoted a reading")
         #expect(fixture.viewModel.watcherNotice == nil)
+    }
+
+    /// **`checkTimeout` and `checkInterval` compose in the build the founders actually run, not only
+    /// in the shipped one** (PR #184 review; the same class of defect as F6).
+    ///
+    /// Shipped, `checkInterval` is 900s and `checkTimeout` 60s, so a check is always abandoned long
+    /// before the next interval and the two never interact. The manual rows instruct
+    /// `checkInterval: 30`, which **inverts** that: a check may now outlive two intervals. The
+    /// inversion exists only in the founders' build, which is exactly where nobody re-derives the
+    /// numbers — so it is asserted here rather than reasoned about.
+    ///
+    /// The three steps, on the injected clock: a pulse inside the timeout starts no second fetch; the
+    /// pulse at the timeout abandons exactly once and records one failure; and the watcher's cadence
+    /// is then set by the timeout rather than by the interval.
+    @Test
+    func theCheckTimeoutAndTheCheckIntervalComposeInTheShortenedBuild() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.holdTheAnswer()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        try fixture.store.saveWatcher(watcher(baselineDigest: "base", createdAt: start))
+
+        await fixture.startCheck(now: start)
+        #expect(observer.callCount == 1)
+
+        // A pulse at one shortened interval: the slot is held, and nothing else is asked.
+        fixture.viewModel.checkStandingWatchers(now: start.addingTimeInterval(30))
+        await fixture.settle()
+        #expect(observer.callCount == 1, "a second fetch started while one was in flight")
+        #expect(try fixture.store.loadWatchers().first?.consecutiveFailures == 0, "abandoned too early")
+
+        // A pulse at two shortened intervals, which is the timeout: abandoned exactly once.
+        fixture.viewModel.checkStandingWatchers(now: start.addingTimeInterval(60))
+        await fixture.settle()
+        let afterTimeout = try #require(try fixture.store.loadWatchers().first)
+        #expect(afterTimeout.consecutiveFailures == 1, "the abandonment did not record exactly one failure")
     }
 
     // MARK: - The notification channel
@@ -480,6 +521,23 @@ private struct WatcherFixture {
     func check(now: Date = Date()) async {
         viewModel.checkStandingWatchers(now: now)
         await viewModel.awaitStandingWatcherCheck()
+    }
+
+    /// Spins this actor a bounded number of times so an *abandoned* check's continuation can run.
+    ///
+    /// **`awaitStandingWatcherCheck()` cannot be used for that, and the battery is what proved it.**
+    /// It awaits `standingWatcherCheck?.value`, and abandoning a check sets that handle to `nil` — so
+    /// after a wipe or a stall it returns immediately, before the late answer has been processed.
+    /// A test asserting there and then passes whether or not the generation guard exists, which is
+    /// exactly what W14 ("an abandoned check writes back anyway") showed: the test written for that
+    /// property did not kill it, and the mutant survived that test while being caught elsewhere.
+    ///
+    /// Yields rather than sleeps, for the reason `startCheck` gives — there is no threshold here to
+    /// lose a race against, and the assertions afterwards are what fail if the count were too small.
+    func settle() async {
+        for _ in 0..<200 {
+            await Task.yield()
+        }
     }
 
     /// Starts a check and returns once the observer has actually been asked — for the tests about a

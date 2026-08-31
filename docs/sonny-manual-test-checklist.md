@@ -2545,6 +2545,35 @@ don't.**
   **Change both back to `15 * 60` and `7 * 24 * 60 * 60` before committing anything** —
   `theShippedCapIsTheOneRecordedOnTheTicket` fails if you don't, which is the backstop rather than the
   reminder.
+- **What these rows cover, and one thing they deliberately do not.** A page that **fails fast** — a
+  404, a refused connection, a blocked host — is covered by the unreachable row below: eight failures
+  and the watcher stops saying so. A page that **hangs** — accepts the connection and never answers —
+  is **not covered by any row, by decision**, and this is stated rather than left as an absence.
+
+  That case was PR #184's F3, and it was blocking: one hanging page held the checker's single slot
+  forever, stopping every other watcher with nothing reported. The fix abandons a check that has been
+  in flight past `checkTimeout` and records it as a failed reading so the cap can still end it.
+  **None of that is manually reachable**, because `SafeURL.isPrivateOrLocalHost` refuses `localhost`,
+  `.local`, loopback, RFC1918, link-local and CGNAT — so the obvious arrangement, `nc -l 8080` and a
+  watcher on `http://localhost:8080/`, never opens a socket. It throws before fetching, which is a
+  *failed reading* and lands on the fast-failure path: a founder trying it would see the unreachable
+  ending after eight checks and conclude the stall path works, having never touched it. That is worse
+  than no coverage. Arranging a genuine hang needs a public host that accepts and never responds — a
+  VPS or a tunnelling service — and that refusal in `SafeURL` is a security property that must not be
+  weakened to make a test possible.
+
+  Held instead by `onePageThatNeverAnswersIsAbandonedAndDoesNotStopTheOthers`,
+  `aStalledCheckThatAnswersLateWritesNothing` and
+  `theCheckTimeoutAndTheCheckIntervalComposeInTheShortenedBuild`.
+
+- **One number interacts with your shortened build and it is worth knowing before you watch a slow
+  page.** `checkTimeout` is 60 seconds and is *not* shortened, so in a build with
+  `checkInterval: 30` a check may outlive two intervals. That is harmless and is asserted by the last
+  test named above: a pulse while a check is in flight starts no second fetch, and the check is
+  abandoned at 60 seconds. The visible effect is that a **slow** page is retried on the timeout rather
+  than on the interval — so if you are counting 30-second intervals against a sluggish site and one
+  seems to be missing, that is this and not a defect.
+
 - **There is deliberately no shipped override for this** — no environment variable, no debug menu.
   The cap is a founder decision and it should not ship with a documented bypass; and since a
   packaged build is required regardless, editing one constant before that build costs nothing.
