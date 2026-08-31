@@ -296,15 +296,19 @@ struct AutomationStoresTests {
     /// would simply stop testing that entry. This is the assertion that makes a deletion or a
     /// silent addition fail, and the reason the per-operation tests below can be written as a loop
     /// without being self-fulfilling.
+    ///
+    /// The count came out of this test's name on SONNY-186, when `.openWorkspace` left the set and
+    /// nine became eight. `CLAUDE.md`'s rule about counts in test names is the reason: the number
+    /// lives in the assertion, where the suite complains, rather than in a symbol every doc comment
+    /// citing it then has to be swept for.
     @Test
-    func theForbiddenStepListIsExactlyTheNineOperationsRoutinesMayNotContain() {
+    func theForbiddenStepListIsExactlyTheOperationsRoutinesMayNotContain() {
         #expect(
             StoredRoutine.forbiddenStepOperations == [
                 .saveRoutine,
                 .runRoutine,
                 .createWorkspace,
                 .editWorkspace,
-                .openWorkspace,
                 .switchRunningApp,
                 // Row I's third layer of "unattended vision: never". A stored routine structurally
                 // cannot carry a vision step, so the scheduled path can never see one through this
@@ -316,8 +320,11 @@ struct AutomationStoresTests {
             ]
         )
         // The complement matters as much as the membership: a rule that crept wider would refuse
-        // routines users legitimately author. These four are the everyday routine operations.
-        for operation in [AgentOperation.openApp, .openURL, .writeMarkdown, .createLocalDraft] {
+        // routines users legitimately author. These four are the everyday routine operations, and
+        // `.openWorkspace` is the fifth as of SONNY-186 — listed here rather than only removed
+        // above, so that putting it back fails on the direction the founders decided rather than on
+        // a set literal somebody could edit to match.
+        for operation in [AgentOperation.openApp, .openURL, .writeMarkdown, .createLocalDraft, .openWorkspace] {
             #expect(StoredRoutine.forbiddenStepOperations.contains(operation) == false)
         }
     }

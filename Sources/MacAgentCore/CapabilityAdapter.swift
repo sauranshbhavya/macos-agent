@@ -238,9 +238,28 @@ public struct CapabilityExecutionContext {
     /// on the step wins over `preferredBrowser`, which today is only ever set by the routine path. The
     /// reasoning is specificity: a routine's binding is a saved default inferred from the apps that
     /// routine opens, while a name on the step is what the user said in this command. The more
-    /// specific and more recent instruction wins. Workspace binding is unaffected and does not come
-    /// through this parameter at all — `OpenWorkspaceCapabilityAdapter` resolves its own browser from
-    /// the workspace's app list and passes it directly.
+    /// specific and more recent instruction wins.
+    ///
+    /// **Workspace binding used to be outside this parameter entirely, and as of SONNY-186 it is
+    /// not.** This said *"Workspace binding is unaffected and does not come through this parameter
+    /// at all — `OpenWorkspaceCapabilityAdapter` resolves its own browser from the workspace's app
+    /// list and passes it directly"*, which was true while a routine could not carry
+    /// `open_workspace`: the two rules could not meet, because nothing set `preferredBrowser` on a
+    /// path that reached that adapter. A routine may carry one now, so they meet, and the adapter
+    /// reads `preferredBrowser` first and falls back to the workspace's own app list — the founders'
+    /// 2026-08-04 one-routine-one-browser rule winning inside a routine, and nothing changing
+    /// outside one. The decision and its cost are recorded at
+    /// `OpenWorkspaceCapabilityAdapter.execute`; it does **not** read a browser named on the
+    /// `open_workspace` step, so the precedence stated above still describes every path that exists.
+    ///
+    /// **This comment is why PR #177's F1 is filed against the record and not only the code.** The
+    /// changelog bullet that branch wrote named `git grep -n "forbiddenStepOperations" -- Sources`
+    /// as the enumeration that finds what a relaxation of that set makes reachable. It cannot reach
+    /// this file: `grep -c "forbiddenStepOperations" Sources/MacAgentCore/CapabilityAdapter.swift`
+    /// → **0**, against **13** files that do contain it
+    /// (`git grep -l "forbiddenStepOperations" -- Sources | wc -l`), both at `740876c`. A file that
+    /// reasons about the *consequence* of a rule without naming the rule is invisible to a grep
+    /// keyed on the rule's name, and this file was the one that documented the split.
     ///
     /// **Reads the step for this operation rather than the first browser named anywhere in the plan.**
     /// A chained plan can open two URLs, and "open A in Chrome then B in Safari" must not put both in

@@ -18,12 +18,16 @@ import MacAgentTestSupport
 struct ScheduledRoutineRunTests {
     /// AC5 (SONNY-38) — a scheduled run's assessment is unaffected by any saved workspace.
     ///
-    /// Scheduled runs pass `.unscoped` on purpose rather than by omission: a stored routine can
-    /// never name a workspace (`SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
-    /// `create_workspace` and `open_workspace` as routine steps), there is no command text a user
-    /// typed, and no dispatch named one — so there is no binding available to resolve. This pins
-    /// that a workspace sitting in the store cannot change that: it runs identically, with no scope
-    /// escalation anywhere in its trace.
+    /// Scheduled runs pass `.unscoped` on purpose rather than by omission: there is no command text
+    /// a user typed and no dispatch named one. Until SONNY-186 that was the whole story — a stored
+    /// routine could not carry `open_workspace`, so no name was available to resolve either. A
+    /// routine may carry one now and the answer is unchanged, for the reason recorded at the call
+    /// site: opening a workspace is not being bound by one, and binding an unattended run would put
+    /// it one out-of-scope resource away from a tier-3 escalation it structurally cannot satisfy.
+    /// This pins that a workspace sitting in the store cannot change that: it runs identically,
+    /// with no scope escalation anywhere in its trace.
+    /// `aScheduledRoutineThatOpensAWorkspaceStillRunsUnscoped` is the same property for the routine
+    /// that actually names one.
     @Test
     func aScheduledRunIsUnaffectedByAnySavedWorkspace() async throws {
         let fixture = try makeFixture()
@@ -57,6 +61,107 @@ struct ScheduledRoutineRunTests {
         #expect(!notice.contains("is not part of the"))
         // And the run left no binding behind on the shared view model.
         #expect(fixture.viewModel.activeTaskScope == .unscoped)
+    }
+
+    // MARK: - SONNY-186: a scheduled routine may open a workspace, and is still unscoped
+
+    /// The routine that actually names a workspace, which the test above could not be.
+    ///
+    /// **What it holds is that opening a workspace is not the same act as being bound by one.** The
+    /// routine opens Research and then opens a URL Research does not list. Were the scheduled path
+    /// to turn the step's name into the run's boundary, that second step would escalate on scope —
+    /// and an unattended run structurally cannot satisfy a tier 3, so per SONNY-10 this occurrence
+    /// and usually every future one would be skipped, silently, for a routine the user taught
+    /// deliberately. The founders' decision binds the *step*; the call site's `.unscoped` is what
+    /// keeps the two apart.
+    ///
+    /// The workspace's own URL is asserted so this cannot pass by the routine simply not running.
+    @Test
+    func aScheduledRoutineThatOpensAWorkspaceStillRunsUnscoped() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try WorkspaceStore(fileURL: fixture.root.appendingPathComponent("workspaces.json"))
+            .save(StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open the Research workspace.",
+                    workspaceName: "Research"
+                ),
+                AgentStep(
+                    id: "foreign",
+                    operation: .openURL,
+                    description: "Open a domain the workspace does not list.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("ran on schedule"))
+        #expect(
+            fixture.browserOpener.openedURLs.map(\.absoluteString)
+                == ["https://github.com", "https://example.com/page"]
+        )
+        #expect(fixture.viewModel.logStore.events.allSatisfy { !$0.message.contains("is not part of the") })
+        #expect(!notice.contains("is not part of the"))
+        #expect(fixture.viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// The deleted-or-renamed answer on the path where nobody is present to read a clarification
+    /// panel (SONNY-186). A scheduled routine that quietly does nothing is the outcome the founder
+    /// decision named as the worst one, so the notice has to carry both names.
+    ///
+    /// **It asserts a substring the notice template cannot supply, and the first version of it did
+    /// not** (PR #177's F2). The template is
+    /// `"“\(name)” was not run because Sonny needed to ask something first: \(question)"` and this
+    /// fixture's routine is literally named `Morning`, so `contains("Morning")` was satisfied by the
+    /// template's own prefix whether or not the *question* named the routine — and because the test
+    /// deletes the only workspace, the plain `.missingWorkspace` question would have contained
+    /// `Research` and the notice `was not run` regardless. All three assertions passed on the
+    /// un-relabelled error, so the test could not tell `.missingWorkspaceInRoutine` from
+    /// `.missingWorkspace`: the one thing it is named for. The tell was in this branch's own battery
+    /// and went unread — R2 came back killed by three tests and this was not one of them.
+    /// `opens a workspace called "Research"` appears only in the re-labelled error, so it is the
+    /// assertion that carries the property.
+    @Test
+    func aScheduledRoutineWhoseWorkspaceIsGoneSaysWhatItCouldNotFind() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let workspaceStore = WorkspaceStore(fileURL: fixture.root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open the Research workspace.",
+                    workspaceName: "Research"
+                )
+            ]
+        )
+        try workspaceStore.delete(workspaceNamed: "Research")
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("was not run"))
+        // The load-bearing one: this clause exists only in `.missingWorkspaceInRoutine`'s question,
+        // so it fails on the plain `.missingWorkspace` the three assertions below cannot see.
+        #expect(notice.contains("The routine \"Morning\" opens a workspace called \"Research\""))
+        #expect(notice.contains("Morning"))
+        #expect(notice.contains("Research"))
+        // Nothing ran: the refusal is at preparation, before any step.
+        #expect(fixture.browserOpener.openedURLs.isEmpty)
+        #expect(fixture.appOpener.openedBundleIDs.isEmpty)
     }
 
     // MARK: - Unattended vision: never (SONNY-94, the belt)
