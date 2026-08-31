@@ -49,6 +49,14 @@ final class SonnyAccountModel: ObservableObject {
     /// pressed is a broken control; not offering it is the requirement (founder direction,
     /// 2026-08-31). `SubscriptionReading` carries the four situations that produce `nil`.
     @Published private(set) var subscription: SubscriptionSnapshot?
+    /// Why the portal did not open, in the portal's own vocabulary (PR #183, F4).
+    ///
+    /// **Its own published value rather than `failure`**, because `failure` is a `SignInFailure` and
+    /// `SignInCopy` is documented as the sentences *the sign-in flow* can show. Routing a portal
+    /// press through it told a signed-in user that Sonny "couldn't finish signing you in", and told
+    /// a user hitting a revoked provider credential to "try again in a moment" on the one failure
+    /// whose definition is that a retry fails identically.
+    @Published private(set) var portalFailure: BillingPortalFailure?
 
     private let service: SonnyAccountService
     /// Read for the subscription line only. **This model asks it nothing about permission** —
@@ -218,7 +226,28 @@ final class SonnyAccountModel: ObservableObject {
     /// opened*, so a failure is not news — it is the ordinary state of a Mac with no gateway to have
     /// signed a claim — and reporting one would put a warning under a sign-in the user just
     /// completed. It cannot throw either: `currentSubscription()` answers `nil` rather than failing.
+    ///
+    /// ## Why this reads twice
+    ///
+    /// **Because one read cannot show a row on the first open, which is the branch's own headline
+    /// manual item** (PR #183, F1). `currentSubscription()` is local and instant by design: it reads
+    /// the cache, and when the cache is empty it starts a detached refresh and returns `nil`
+    /// immediately. Nothing re-read when that refresh landed. And this is the *only* writer of the
+    /// entitlement store — `decision(for:)` has no caller anywhere in `Sources/` — so on any Mac
+    /// that has not previously opened Account the cache is empty **by construction**, and the trace
+    /// was: open Account → nothing cached → refresh starts → row absent → claim arrives → nothing
+    /// reads it → row stays absent until the dialog is closed and reopened.
+    ///
+    /// So: read, and if there was nothing, wait once for the fetch that read started and look
+    /// again. The second read is skipped entirely when the first one answered, so the common case —
+    /// a Mac with a valid cached claim — still never waits on the network.
     func refreshSubscription() async {
+        subscription = await entitlements.currentSubscription()
+        guard subscription == nil else { return }
+        // **`awaitPendingRefresh()` rather than `refreshNow()`**, which would be a second request
+        // beside the one already in flight: `startRefresh` is single-flighted and this joins it.
+        // When no refresh is pending there is nothing to await and this returns immediately.
+        await entitlements.awaitPendingRefresh()
         subscription = await entitlements.currentSubscription()
     }
 
@@ -231,16 +260,40 @@ final class SonnyAccountModel: ObservableObject {
     /// **`openURL` is handed a URL the gateway chose, and that is the whole of the trust here.** It
     /// arrives over TLS from Sonny's own gateway on an authenticated call, so it is not screen
     /// content and not model output — the untrusted-content rules that govern those do not reach it.
-    /// It is still checked for a web scheme before it is opened, because "the server would never" is
-    /// the assumption every deserialization bug is made of, and a `file:` URL handed to
-    /// `NSWorkspace.open` is a different kind of action entirely.
+    /// It is still checked before it is opened, because "the server would never" is the assumption
+    /// every deserialization bug is made of, and a `file:` URL handed to `NSWorkspace.open` is a
+    /// different kind of action entirely.
+    ///
+    /// **The check is `SafeURL.validateWebURL` plus an https narrowing, and it is both rather than
+    /// either** (PR #183, F7). This was a hand-rolled scheme comparison, and it was the only one of
+    /// this repository's four such sites not to use the shared helper — which additionally requires
+    /// a host and blocks loopback, RFC1918, link-local and `.local`, the same class of argument the
+    /// `file:` sentence above already makes. The helper alone is not enough because it permits
+    /// `http`, and a billing portal reached over cleartext is not one this app should open; the
+    /// narrowing alone is not enough because it was what let a mutant weakening the guard to
+    /// `scheme != "file"` survive the whole suite.
     func openBillingPortal() async {
-        await run {
+        isBusy = true
+        portalFailure = nil
+        // The sign-in surface's own outcome is cleared too: the two share a dialog, and leaving a
+        // stale sign-in notice above a fresh portal failure reads as one message about both.
+        failure = nil
+        notice = nil
+        defer { isBusy = false }
+        do {
             let response = try await service.hostedBillingPortalURL()
-            guard let scheme = response.scheme?.lowercased(), scheme == "https" else {
+            let validated = try SafeURL.validateWebURL(response.absoluteString)
+            guard validated.scheme?.lowercased() == "https" else {
                 throw SonnyBackendError.undecodableResponse("billing portal URL")
             }
-            openPortalURL(response)
+            openPortalURL(validated)
+        } catch let error as SonnyBackendError {
+            portalFailure = BillingPortalFailure(error)
+        } catch {
+            // `SafeURL.validateWebURL` throws its own error type for a URL with no host, a private
+            // host, or an unsupported scheme. All of them mean the same thing to the user and none
+            // of them is fixed by pressing again.
+            portalFailure = .cannotBeOpened
         }
     }
 
@@ -253,6 +306,7 @@ final class SonnyAccountModel: ObservableObject {
         code = ""
         failure = nil
         notice = nil
+        portalFailure = nil
     }
 
     /// **Signs out even when the revoke could not happen**, and says which of the two occurred.
@@ -263,6 +317,15 @@ final class SonnyAccountModel: ObservableObject {
             identity = nil
             code = ""
             step = .address
+            // **Cleared here, synchronously, and not left to the next `refreshSubscription()`**
+            // (PR #183, F13). When a second user signs in, `onChange(of: step)` fires and
+            // `signedInStep` renders immediately with whatever this holds, while the refresh behind
+            // it awaits an actor hop, a Keychain read and a signature verification — so the previous
+            // user's `<Plan> · Active` line and a live Manage subscription button are on screen in
+            // the meantime. `SubscriptionReading`'s session check is what stops that being
+            // permanent; this is what stops it happening at all.
+            subscription = nil
+            portalFailure = nil
             if case .clearedLocallyOnly = outcome {
                 notice = SignInCopy.signedOutLocallyOnly
             }
@@ -501,6 +564,17 @@ struct SignInDialogView: View {
                 .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 160))
                 .disabled(model.isBusy)
                 .accessibilityLabel(SubscriptionCopy.manageLabel)
+            }
+
+            // **Rendered here rather than in `messages`**, which is the sign-in surface's channel:
+            // this sentence is about the control directly above it, and a portal failure appearing
+            // under the sign-in form would read as a statement about signing in (PR #183, F4).
+            if let portalFailure = model.portalFailure {
+                Text(BillingPortalCopy.message(for: portalFailure))
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

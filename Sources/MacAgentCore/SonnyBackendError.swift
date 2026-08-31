@@ -19,6 +19,14 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
     case authCodeUsed
     case entitlementRequired
     case entitlementExpired
+    /// The account holds no subscription to manage. §7.2's `entitlement.no_subscription`, on
+    /// `POST /v1/billing/portal` alone (SONNY-216).
+    ///
+    /// **Named here because an unnamed code is not merely unhandled, it is mis-worded** (PR #183,
+    /// F4). Without this case it decoded to `.unknown(…)`, which `SignInFailure` maps to
+    /// `.unexpected`, whose sentence is "Sonny couldn't finish signing you in." — shown to a user
+    /// who is signed in and pressed Manage subscription.
+    case entitlementNoSubscription
     case limitRate
     case limitSpend
     case requestInvalid
@@ -43,6 +51,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case "auth.code_used": self = .authCodeUsed
         case "entitlement.required": self = .entitlementRequired
         case "entitlement.expired": self = .entitlementExpired
+        case "entitlement.no_subscription": self = .entitlementNoSubscription
         case "limit.rate": self = .limitRate
         case "limit.spend": self = .limitSpend
         case "request.invalid": self = .requestInvalid
@@ -69,6 +78,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case .authCodeUsed: return "auth.code_used"
         case .entitlementRequired: return "entitlement.required"
         case .entitlementExpired: return "entitlement.expired"
+        case .entitlementNoSubscription: return "entitlement.no_subscription"
         case .limitRate: return "limit.rate"
         case .limitSpend: return "limit.spend"
         case .requestInvalid: return "request.invalid"
@@ -130,8 +140,10 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
             return envelopeSaysRetryable
         case .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
              .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,
-             .limitSpend, .requestInvalid, .requestTooLarge, .providerRejected, .resourceNotFound,
-             .versionUnsupported, .unknown:
+             .entitlementNoSubscription, .limitSpend, .requestInvalid, .requestTooLarge,
+             .providerRejected, .resourceNotFound, .versionUnsupported, .unknown:
+            // `entitlementNoSubscription` joins the not-retryable side: an account with no
+            // subscription still has none a moment later, and the route sets `retryable: false`.
             return false
         }
     }

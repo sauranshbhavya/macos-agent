@@ -236,25 +236,38 @@ const CUSTOMER_SESSIONS_PATH = "/v1/customer-sessions/";
 /**
  * How long this gateway waits for Polar before giving up: **eight seconds**.
  *
- * **Chosen against the Mac's own budget rather than against a guess at Polar's latency**, because
- * what the number decides is *which* timeout the user meets. The Mac spends
- * `SonnyBackendTimeouts.auth` — 20 seconds — on an account call
- * (`Sources/MacAgentCore/SonnyBackendClient.swift:28`). If this budget were the larger of the two,
- * the Mac's own transport timeout would fire first, and that one is **not retried**; a typed `504
- * provider.timeout` from this gateway **is** retried once, which that file's own comment at `:33-39`
- * spells out. So the requirement is that this number be comfortably the smaller, and eight seconds
- * leaves twelve for the round trip in both directions.
+ * **The reason this number had was false, and is corrected here rather than quietly replaced**
+ * (PR #183, F6). It was argued entirely on retry behaviour: that a typed `504 provider.timeout` from
+ * this gateway is retried once by the Mac while the Mac's own transport timeout is not, so this
+ * budget had to be the smaller of the two. **The Mac does not retry this route at all.**
+ * `SonnyAccountService.hostedBillingPortalURL()` passes `isRetrySafe: false` — deliberately, because
+ * each press should mint its own session — and `SonnyBackendClient.send` gates every retry on that
+ * flag *before* it reaches the error's ceiling. So both outcomes are retried **zero** times here,
+ * and the mechanism the number was derived from is switched off for this call. The citation it
+ * carried, `SonnyBackendClient.swift:33-39`, is the doc comment on `screenAnalyze`, a route that
+ * *is* retry-safe.
  *
- * The other end of the range is an ordinary successful call, which is one TLS handshake and one
- * small JSON round trip to a commercial API — hundreds of milliseconds, not seconds. Eight is far
- * enough above that to never fire on a healthy call and far enough below twenty to always beat the
- * client.
+ * **The reasons that survive, and they are enough.**
  *
- * **What it is not is a guess that this gateway can afford to wait eight seconds.** An unbounded
- * call inside a request handler is how a route stops answering at all, and every value here is
- * better than none.
+ * - **It must be comfortably smaller than the Mac's own 20-second `SonnyBackendTimeouts.auth`
+ *   budget** (`Sources/MacAgentCore/SonnyBackendClient.swift:28`), not so a retry can happen but so
+ *   that the *user* is told something true. Under this budget the gateway answers a typed
+ *   `504 provider.timeout` that it logs and the app can word for itself; over it, the Mac's
+ *   transport gives up first and the app reports a generic unreachable-backend failure about a
+ *   gateway that was working fine. One of those is diagnosable from the logs and the other is not.
+ * - **An unbounded call inside a request handler is how a route stops answering at all**, which is
+ *   an argument for a bound rather than for this bound.
+ * - **The floor is an ordinary successful call**: one TLS handshake and one small JSON round trip to
+ *   a commercial API, hundreds of milliseconds. Eight seconds is far enough above that never to
+ *   fire on a healthy call, and far enough below twenty to always beat the client.
+ *
+ * **The relation to the Mac's 20 seconds is now pinned by a test rather than by this comment**
+ * (`the outbound budget stays under the Mac's own`), following `ModelRouteNumbersTests`' precedent:
+ * a cross-half number that lives in prose on one side is a number the next session moves without
+ * noticing the other side. A mutant raising this to 30 000 survived the whole suite before that
+ * test existed.
  */
-const PORTAL_SESSION_TIMEOUT_MS = 8_000;
+export const PORTAL_SESSION_TIMEOUT_MS = 8_000;
 
 /**
  * Mint a customer portal session for one account, and turn every way that can go wrong into a
@@ -293,6 +306,47 @@ const PORTAL_SESSION_TIMEOUT_MS = 8_000;
  * user's invoices, and a cached link handed back to the same user after expiry is a dead page. One
  * mint per press is the only shape with neither failure.
  */
+/**
+ * The body of a response, read once and never re-read.
+ *
+ * Only the 404 branch calls this and it returns immediately afterwards, so nothing else consumes
+ * the same stream. A body this fails to read is `""`, which `looksLikeAMissingCustomer` refuses --
+ * the fail-loud direction.
+ */
+async function peek(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Does this 404 look like **the provider** saying it has no such customer, rather than something
+ * else saying it has no such endpoint (PR #183, F5)?
+ *
+ * **What this can tell apart, and what it cannot, stated rather than implied.** A wrong origin or a
+ * dropped path prefix is answered by a proxy, a load balancer or a framework's own handler, and
+ * those answer HTML, an empty body, or plain text. The provider answers its own JSON error
+ * envelope. So "the body parses as a JSON object" separates the two cases that matter here. It does
+ * **not** verify that the object is Polar's not-found shape specifically, because nobody on this
+ * project has yet seen one -- the manual row now records the body verbatim, and when it does, this
+ * is where the check is tightened.
+ *
+ * **It fails in the safe direction on purpose.** A genuine missing-customer 404 whose body this
+ * cannot parse falls through to `rejected`, which reports a loud fault to a user who has nothing to
+ * manage. The opposite mistake tells a paying subscriber they have no subscription.
+ */
+function looksLikeAMissingCustomer(body: string): boolean {
+  if (body.trim() === "") return false;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
 async function polarPortalSession(
   config: PolarProviderConfig,
   accountId: string,
@@ -329,14 +383,33 @@ async function polarPortalSession(
   // Polar answers a `external_customer_id` it does not know with a not-found rather than an empty
   // success, so this is where a user who has never subscribed lands.
   //
+  // **The status alone is not enough, and that was the unexamined half of the same judgement**
+  // (PR #183, F5). A 404 is also what a wrong path or a wrong origin answers -- `BILLING_API_BASE_URL`
+  // is operator-set, and `CUSTOMER_SESSIONS_PATH` is root-anchored so a configured path prefix is
+  // silently dropped. Mapping every 404 to `noCustomer` means that under a misconfiguration **every
+  // paying subscriber** is told "This account holds no subscription to manage", which is verbatim
+  // the outcome the 422 reasoning below calls a support incident that reads like data loss -- and
+  // the client's second defence does not help, because those users hold claims, so their row is
+  // rendered and they do press. So the body has to look like the provider answering.
+  //
   // **Confirmed against the live account by a manual row rather than asserted here.** A 422 is the
   // other plausible answer for an unknown external id, and nobody on this project has run this
   // request against real Polar yet; if it turns out to be 422, this branch is where that is fixed
   // and the manual row is what would find it. Until then a 422 falls to `rejected` below, which is
   // the safe direction: it reports a fault loudly instead of telling a paying subscriber they have
   // no subscription.
-  if (response.status === 404) return { kind: "noCustomer" };
-  if (response.status >= 500) {
+  if (response.status === 404 && looksLikeAMissingCustomer(await peek(response))) {
+    return { kind: "noCustomer" };
+  }
+  // **429 is on the provider's side of the line, not the caller's** (PR #183, F10). It is the one
+  // 4xx that is retryable by definition, and this gateway decided that twice before this adapter
+  // existed: `src/auth/supabase.ts:521-525` states the rule — "a rate limit and a server error are
+  // statements about the provider's ability to answer, never about whether the user's input was
+  // correct" — and `src/auth/revocation.ts` reads "any 4xx but 429 is ProviderRejected". This was
+  // the third provider adapter in the tree and the only one that put 429 on the input-was-wrong
+  // side, which sent a throttled call to the Mac as not-retryable and made it give up on the one
+  // thing waiting would fix.
+  if (response.status === 429 || response.status >= 500) {
     return { kind: "unavailable", reason: `provider answered ${response.status}` };
   }
   if (!response.ok) {

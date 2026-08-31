@@ -116,12 +116,35 @@ export function billingDepsFrom(config: Config): BillingDeps | undefined {
   // malformed origin here is a startup failure that names itself rather than a portal route that
   // throws on the first user who presses Manage subscription.
   if (config.billingApiBaseUrl !== undefined) {
+    // **The scheme is checked as well as the parse, because this variable decides where a bearer
+    // credential is sent** (PR #183, F12). `new URL` accepts anything with a scheme, so
+    // `http://api.polar.sh` passed and the adapter would then put `authorization: Bearer <token>`
+    // on the wire in cleartext. A route that throws on the first press is recoverable; a credential
+    // that has already travelled unencrypted is not, which makes this the half of the guard worth
+    // more than the half that was here.
+    let origin: URL;
     try {
-      void new URL(config.billingApiBaseUrl);
+      origin = new URL(config.billingApiBaseUrl);
     } catch {
       throw new ConfigError(
         `BILLING_API_BASE_URL is not a URL. It is the provider's API origin, and it is optional — ` +
           `leave it unset to use the provider adapter's own default.`,
+      );
+    }
+    if (origin.protocol !== "https:") {
+      throw new ConfigError(
+        `BILLING_API_BASE_URL must be https. It is the origin an Organization Access Token is sent ` +
+          `to, and any other scheme puts that credential on the wire in the clear.`,
+      );
+    }
+    // A path here is silently dropped rather than honoured, because the adapter's request path is
+    // root-anchored: `new URL("/v1/customer-sessions/", "https://host/gw")` is `https://host/v1/...`.
+    // Refusing it is better than dropping it, because the resulting 404 from the wrong path is the
+    // status `looksLikeAMissingCustomer` exists to keep from reading as "no customer".
+    if (origin.pathname !== "/") {
+      throw new ConfigError(
+        `BILLING_API_BASE_URL must be an origin with no path. The provider's request path is ` +
+          `appended from the root, so a prefix here would be silently dropped rather than used.`,
       );
     }
   }
