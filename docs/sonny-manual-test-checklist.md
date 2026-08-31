@@ -2139,6 +2139,36 @@ it is checkable rather than a claim.
       and the three spellings originally listed all put a space or a context word beside the digits,
       so none of them could have caught that.)
 
+### A routine can open a saved workspace (new 2026-08-30, SONNY-186)
+
+Teaching a routine that opens a workspace used to fail — `open_workspace` was refused inside a
+routine. The founders' 2026-08-30 decision allows it, binding at the step, and creating or editing a
+workspace from inside a routine stays refused. The rows worth a human are the ones about what a user
+sees when the workspace is no longer there.
+
+- [ ] **(SONNY-186)** With a workspace saved (apps and at least one URL), say **"teach me a routine
+      called morning setup that opens my research workspace"**. It should save, not refuse. Then
+      **"run my morning setup routine"** — the workspace's apps and URLs open, and the widget's
+      result names the workspace.
+- [ ] **(SONNY-186, the refusal that stays)** Ask for a routine that **creates** a workspace, and one
+      that **changes** an existing workspace. Both must still be refused.
+- [ ] **(SONNY-186, the renamed workspace — the important one)** With that routine saved, rename the
+      workspace it opens (or delete it and save one under a different name), then run the routine.
+      **Sonny must say which routine wanted which workspace, and list the workspaces you do have** —
+      the new name among them. It must not run the routine's other steps and it must not quietly do
+      nothing. Check the sentence reads like something a person wrote.
+- [ ] **(SONNY-186, nothing saved)** Delete every workspace, then run the routine. The answer should
+      say you have not saved any workspaces yet, and still name the routine.
+- [ ] **(SONNY-186, unattended)** Give that routine a schedule with unattended running on, let it
+      fire with the workspace **missing**, and read the "did not run" notice — it must name the
+      routine and the workspace. With the workspace **present**, it should run normally, including a
+      step that touches something the workspace does not list: a scheduled run is deliberately not
+      bound by the workspace it opens, so that step must not be blocked or silently skipped.
+- [ ] **(SONNY-186, one browser)** Save a workspace whose apps include Safari but whose URL list is
+      empty, and a routine that opens that workspace and then opens a URL of its own. **Both the
+      workspace and the routine's own URL should land in Safari**, not one in Safari and one in your
+      system default browser.
+
 ## 8. How to report back
 
 For each real finding, give me:

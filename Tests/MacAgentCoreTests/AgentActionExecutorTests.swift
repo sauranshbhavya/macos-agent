@@ -3547,6 +3547,300 @@ struct AgentActionExecutorTests {
     /// pattern-matching the call shape and so missed the one test that hands the executor to an
     /// `AgentRunner` instead of calling it directly — which is why the claim is written here as a
     /// requirement on callers rather than as a description of them.
+    // MARK: - SONNY-186: a routine may open a saved workspace
+
+    /// The founder decision itself (2026-08-30), end to end: a routine carrying `open_workspace`
+    /// passes both write doors and, when it runs, actually opens the workspace.
+    ///
+    /// Written through the real `save_routine` capability rather than the store, because the two
+    /// doors are the thing that changed and they are separate code:
+    /// `SaveRoutineCapabilityAdapter.validateRoutineSteps` and `RoutineStore.save` both consult
+    /// `StoredRoutine.forbiddenStepOperations`, and a save that reached disk through only one of
+    /// them would prove half of it. The reload afterwards is what makes that claim about disk.
+    @Test
+    func aRoutineMayOpenASavedWorkspaceAndDoesOpenItsAppsAndURLs() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"])
+        )
+        try await fixture.saveRoutine(named: "Morning Setup", steps: [openWorkspaceStep(named: "Research")])
+
+        let stored = try fixture.routineStore.routine(named: "Morning Setup")
+        #expect(stored.steps.map(\.operation) == [.openWorkspace])
+        #expect(stored.steps.map(\.workspaceName) == ["Research"])
+
+        let result = try await fixture.executor.execute(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        ) { _, _ in }
+
+        #expect(fixture.appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com"])
+        #expect(result.summary.contains("Opened workspace Research with 1 app(s) and 1 URL(s)."))
+    }
+
+    /// Creating and editing stay refused, which is the half of the decision that did *not* change.
+    ///
+    /// The set literal in `AutomationStoresTests` pins membership and the loop beside it pins the
+    /// refusal; this pins the boundary as the founders drew it — one operation moved, the two it
+    /// used to sit beside did not — through the door a user actually reaches, and it fails if a
+    /// later reading of "a routine may work with workspaces" widens the family.
+    @Test
+    func aRoutineStillMayNotCreateOrEditAWorkspace() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+
+        for operation in [AgentOperation.createWorkspace, .editWorkspace] {
+            await #expect(throws: AutomationStoreError.unsafeRoutineStep(operation.rawValue)) {
+                try await fixture.saveRoutine(
+                    named: "Morning Setup",
+                    steps: [
+                        AgentStep(
+                            id: "workspace",
+                            operation: operation,
+                            description: "Touch a workspace.",
+                            workspaceName: "Research",
+                            workspaceApps: ["Notes"]
+                        )
+                    ]
+                )
+            }
+        }
+        #expect(try fixture.routineStore.loadAll().isEmpty)
+    }
+
+    /// The routine's browser binding now reads a nested workspace open, and this is the shape that
+    /// forced it (SONNY-186).
+    ///
+    /// Before, `browser(for:)` looked at `.openApp` steps alone — correct while a routine could not
+    /// carry `.openWorkspace` at all. Left that way, this routine would have opened the workspace's
+    /// Safari and then sent its *own* URL to whatever the system default is: two browsers in one
+    /// routine, for a reason no user could see. `nil` in `openedBrowsers` is the failure this
+    /// asserts against, and it is exactly what the unchanged code produced.
+    @Test
+    func aWorkspaceTheRoutineOpensBindsTheBrowserForTheRoutinesOwnURLs() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                openWorkspaceStep(named: "Research"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ]
+        )
+
+        _ = try await fixture.executor.execute(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        ) { _, _ in }
+
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(
+            fixture.browserOpener.openedBrowsers
+                == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")]
+        )
+    }
+
+    /// **The deleted-or-renamed answer SONNY-186 owed, at the time it is usually met.** A rename is
+    /// what is staged here, and it reaches the code as a deletion — a routine step holds a
+    /// workspace *name*, so the two are the same event from the routine's side, which is why one
+    /// case covers both.
+    ///
+    /// Three things are asserted and each is a decision: the whole routine is refused rather than
+    /// silently skipping the step, the answer names the *routine* (the user asked to run one, and a
+    /// sentence opening on a workspace they never mentioned reads as a non-sequitur), and it lists
+    /// the saved workspace names — which is where a rename's new name is, and therefore the whole
+    /// diagnostic.
+    @Test
+    func aRoutineWhoseWorkspaceWasRenamedRefusesTheWholeRoutineAndNamesBoth() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                AgentStep(id: "open-notes", operation: .openApp, description: "Open Notes.", appName: "Notes"),
+                openWorkspaceStep(named: "Research")
+            ]
+        )
+        // The rename, as the product can perform it: the old name is gone and the new one holds the
+        // same contents. Nothing rewrites the routine, by design — there is no identifier to follow.
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Deep Research", apps: ["Safari"], urls: []))
+        try fixture.workspaceStore.delete(workspaceNamed: "Research")
+
+        let prepared = try fixture.executor.prepare(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        )
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("Morning Setup"))
+        #expect(question.contains("Research"))
+        #expect(question.contains("Deep Research"))
+        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
+        #expect(prepared.previews.first?.title == "Clarification needed")
+        // Nothing ran. The step before the workspace open is an app open, so a routine that got as
+        // far as executing anything would have left a trace here.
+        #expect(fixture.appOpener.openedBundleIDs.isEmpty)
+    }
+
+    /// The same refusal when there is no list to offer, which is a different sentence and the one a
+    /// user who deleted their last workspace actually meets. The routine is still named.
+    @Test
+    func theRefusalStillNamesTheRoutineWhenNoWorkspacesAreSavedAtAll() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try await fixture.saveRoutine(named: "Morning Setup", steps: [openWorkspaceStep(named: "Research")])
+        try fixture.workspaceStore.delete(workspaceNamed: "Research")
+
+        let prepared = try fixture.executor.prepare(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        )
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(
+            question == "The routine \"Morning Setup\" opens a workspace called \"Research\", and I don't have one saved by that name — you haven't saved any workspaces yet. What would you like me to do instead?"
+        )
+    }
+
+    /// The other half of "when it fires decides how much has already happened". A workspace deleted
+    /// *between* preparation and the step's own turn cannot be caught by the preview, so the routine
+    /// stops at that step with its earlier steps already done — the same thing every other failing
+    /// routine step does, and deliberately not given a special case.
+    ///
+    /// What is under test is that the error is still the routine-aware one rather than the bare
+    /// "No workspace named Research is saved.", since this is the path where a user sees an error
+    /// instead of a question.
+    @Test
+    func aWorkspaceDeletedAfterPreparationFailsAtItsOwnStepWithTheRoutineNamed() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                AgentStep(id: "open-notes", operation: .openApp, description: "Open Notes.", appName: "Notes"),
+                openWorkspaceStep(named: "Research")
+            ]
+        )
+        let plan = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        let prepared = try fixture.executor.prepare(plan: plan)
+        #expect(prepared.clarificationQuestion == nil)
+
+        try fixture.workspaceStore.delete(workspaceNamed: "Research")
+
+        await #expect(
+            throws: AutomationStoreError.missingWorkspaceInRoutine(routine: "Morning Setup", workspace: "Research")
+        ) {
+            _ = try await fixture.executor.execute(plan: prepared.plan) { _, _ in }
+        }
+        // The step before it really did run: this is partial execution, stated rather than implied.
+        #expect(fixture.appOpener.openedBundleIDs == ["com.apple.Notes"])
+        #expect(
+            AutomationStoreError.missingWorkspaceInRoutine(routine: "Morning Setup", workspace: "Research")
+                .errorDescription
+                == "The routine Morning Setup opens a workspace called Research, and no workspace by that name is saved."
+        )
+    }
+
+    /// Safe mode's "Data leaves device" line, through the door SONNY-186 opened.
+    ///
+    /// `.openWorkspace`'s egress answer is not a membership test — it depends on whether the
+    /// *stored* workspace holds URLs — and `stepLeavesDevice`'s `.runRoutine` branch used to scan a
+    /// routine's steps against `dataEgressOperations` alone, correct only while a routine could not
+    /// carry `.openWorkspace`. Left alone it printed "Data leaves device: no" over a routine that
+    /// opens a workspace full of URLs. Both directions, because a blanket "yes" is the other way to
+    /// pass the first half.
+    @Test
+    func aRoutineOpeningAWorkspaceInheritsThatWorkspacesEgressAnswer() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Reading", apps: ["Safari"], urls: ["https://example.com"]))
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Notes"], urls: []))
+        try await fixture.saveRoutine(named: "Reading Setup", steps: [openWorkspaceStep(named: "Reading")])
+        try await fixture.saveRoutine(named: "Writing Setup", steps: [openWorkspaceStep(named: "Writing")])
+
+        let leaky = try fixture.executor.assessRisk(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Reading Setup"),
+            scope: .unscoped
+        )
+        #expect(leaky.approvalCopy?.dataLeavesDevice == true)
+
+        let local = try fixture.executor.assessRisk(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Writing Setup"),
+            scope: .unscoped
+        )
+        #expect(local.approvalCopy?.dataLeavesDevice == false)
+    }
+
+    private func openWorkspaceStep(named workspaceName: String) -> AgentStep {
+        AgentStep(
+            id: "open-workspace",
+            operation: .openWorkspace,
+            description: "Open the \(workspaceName) workspace.",
+            workspaceName: workspaceName
+        )
+    }
+
+    /// A routine fixture whose openers and both stores are readable, which `routineFixture` above
+    /// deliberately is not — it hands back only the executor. SONNY-186's tests need to write a
+    /// workspace *before* the routine is saved (the save capability previews the nested step, so a
+    /// missing workspace refuses the save) and to read what the run opened.
+    private struct WorkspaceRoutineFixture {
+        let executor: AgentActionExecutor
+        let root: URL
+        let appOpener: RecordingAppOpener
+        let browserOpener: RecordingBrowserOpener
+        let routineStore: RoutineStore
+        let workspaceStore: WorkspaceStore
+
+        /// Through the real `save_routine` capability, so both write doors are exercised.
+        func saveRoutine(named name: String, steps: [AgentStep]) async throws {
+            _ = try await executor.execute(
+                plan: AgentPlan(
+                    summary: "Teach routine.",
+                    requiresConfirmation: true,
+                    steps: [
+                        AgentStep(
+                            id: "save-routine",
+                            operation: .saveRoutine,
+                            description: "Save routine.",
+                            routineName: name,
+                            routineSteps: steps
+                        )
+                    ]
+                )
+            ) { _, _ in }
+        }
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+
+    private func makeWorkspaceRoutineFixture() throws -> WorkspaceRoutineFixture {
+        let root = try makeDirectory()
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        return WorkspaceRoutineFixture(
+            executor: makeExecutor(
+                root: root,
+                browserOpener: browserOpener,
+                appOpener: appOpener,
+                routineStore: routineStore,
+                workspaceStore: workspaceStore
+            ),
+            root: root,
+            appOpener: appOpener,
+            browserOpener: browserOpener,
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
+    }
+
     private struct RoutineFixture {
         let executor: AgentActionExecutor
         let root: URL
