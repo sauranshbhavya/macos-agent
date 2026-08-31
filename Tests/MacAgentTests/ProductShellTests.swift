@@ -781,6 +781,12 @@ struct ProductShellTests {
             // present at a wipe by construction, so F1's concern — a notice destroyed while nobody
             // could see it — does not arise here.
             "watcherNotice",
+            // `notifiedWatcherIDs` goes with the records it is about (PR #184 cycle 3, N1). It is
+            // the set of watchers already notified, so a delete that keeps failing says its sentence
+            // once rather than once per pulse — and the wipe has just deleted every record those ids
+            // name, so keeping them would silence the first notice of a watcher created afterwards
+            // that happened to reuse one.
+            "notifiedWatcherIDs",
             "taskDetailRequest",
             // Row J's grants, cached for one vision iteration. The grants file is one of the
             // stores the wipe erases, so its in-memory copy is erased with it (SONNY-202).

@@ -434,6 +434,25 @@ final class AgentViewModel: ObservableObject {
     /// `observeStandingWatcher` awaits an observer that may ignore cancellation entirely. This is
     /// what makes a late answer inert rather than merely discouraged.
     private var standingWatcherCheckGeneration = 0
+    /// The watchers already notified about, so a record whose deletion keeps failing says its
+    /// sentence once rather than on every pulse (PR #184 cycle 3, N1).
+    ///
+    /// **`finishStandingWatcher` publishes and then deletes, and a delete can keep throwing** — a
+    /// read-only directory, a full disk, a permissions change. The record then survives, the expired
+    /// branch re-decides `.stopped` on the *next pulse* rather than at the next check interval, and
+    /// the notice fires again: measured at 11 notices across 11 pulses, one banner every 30 seconds,
+    /// indefinitely. Nothing downstream coalesces them — `AppDelegate`'s sink has no
+    /// `removeDuplicates()` and `deliver` mints a fresh `UUID()` per request — and PR #184's F1
+    /// removed the gate that had been damping it, correctly and for reasons that still hold.
+    ///
+    /// **This is the guard `recordLocalStorageLoadFailure` already has**, for the identical shape
+    /// recorded at PR #110's F1: republish only when it is new, or a caller on a timer turns one
+    /// damaged store into a notification per tick. Chosen over deleting before publishing, which
+    /// would invert an ordering argued for at `finishStandingWatcher` — publishing first means the
+    /// worst case is a repeat rather than a watcher that says nothing at all.
+    ///
+    /// Ids rather than a count, so two different watchers stuck at once still get one sentence each.
+    private var notifiedWatcherIDs: Set<String> = []
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
@@ -4615,6 +4634,9 @@ final class AgentViewModel: ObservableObject {
         // cancellation before it writes. Neither half works alone.
         abandonStandingWatcherCheck()
         watcherNotice = nil
+        // The ids go with the records the wipe just deleted; keeping them would silence the first
+        // notice of a watcher created afterwards that happened to reuse an id.
+        notifiedWatcherIDs = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
@@ -6797,10 +6819,25 @@ final class AgentViewModel: ObservableObject {
     /// **In that order, and the order is the decision.** A watcher deleted before its notice was
     /// published would leave nothing anywhere if the publish were ever to fail; a notice published
     /// after a delete that failed would tell the user a watcher had stopped while it was still in the
-    /// file and still being checked. Publishing first and deleting after means the worst case is a
-    /// watcher that says the same thing twice, which is a nuisance rather than a lie.
+    /// file and still being checked.
+    ///
+    /// **This used to end "the worst case is a watcher that says the same thing twice, which is a
+    /// nuisance rather than a lie", and that was true of a transient failure and false of a
+    /// persistent one** (PR #184 cycle 3, N1). A delete that keeps throwing leaves the record, the
+    /// expired branch re-decides `.stopped` on every pulse, and the repeat is unbounded — 11 notices
+    /// across 11 pulses, measured. The ordering is unchanged and the bound is `notifiedWatcherIDs`,
+    /// which is what makes the sentence above true rather than aspirational. Recorded rather than
+    /// silently corrected, because a comment claiming a case is bounded is exactly what stopped
+    /// three readers looking.
     private func finishStandingWatcher(_ watcher: StandingWatcher, reason: StandingWatcherStopReason) {
-        watcherNotice = StandingWatcherNoticeCopy.message(for: reason, subject: watcher.subject)
+        // **Once per watcher, whatever happens to the delete below** (PR #184 cycle 3, N1). The
+        // ordering here is deliberate and unchanged — publish, then delete — so the worst case of a
+        // *transient* failure is still a repeat rather than silence. What this adds is the bound the
+        // comment below used to assume: a *persistent* failure leaves the record, and the expired
+        // branch re-decides `.stopped` on every pulse, so without this the repeat is unbounded.
+        if notifiedWatcherIDs.insert(watcher.id).inserted {
+            watcherNotice = StandingWatcherNoticeCopy.message(for: reason, watcher: watcher)
+        }
         do {
             try resumableTaskStore.deleteWatcher(id: watcher.id)
         } catch {

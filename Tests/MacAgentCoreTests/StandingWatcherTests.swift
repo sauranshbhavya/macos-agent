@@ -438,6 +438,69 @@ struct StandingWatcherTests {
         #expect(updated.lastCheckedAt == .fixture)
     }
 
+    /// **F4's cheap half: `.expired` may not assert "It did not change" when a difference was ever
+    /// seen** (founder decision, PR #184).
+    ///
+    /// The case it is about is a page alternating between its baseline and one other reading: never
+    /// `.changed`, because the two never land consecutively, and never `.unwatchable`, because any
+    /// return to the baseline resets the instability count. It runs its whole life and used to end by
+    /// asserting the one thing certainly false about it.
+    ///
+    /// **The control is the unchanged page in the same test**, which still gets the stronger
+    /// sentence — otherwise "does not say it did not change" is satisfied by never saying it.
+    @Test
+    func expiryOnlyClaimsNothingChangedWhenNothingEverDid() {
+        let steady = sampleWatcher(id: "steady", subject: "a quiet page", baselineDigest: "base")
+        #expect(
+            StandingWatcherNoticeCopy.message(for: .expired, watcher: steady)
+                == "Sonny stopped watching “a quiet page” after 7 days. It did not change."
+        )
+
+        // One difference, then back to the baseline — the alternating page, at the moment its last
+        // reading matched, which is where `candidateDigest` and `unstableReadings` are both clear.
+        var flickered = sampleWatcher(id: "flickers", subject: "a flickering page", baselineDigest: "base")
+        guard case .pending(let sawDifference) = StandingWatcherEvaluator.apply(
+            reading: "other", to: flickered, now: .fixture
+        ) else {
+            Issue.record("a first difference should be pending")
+            return
+        }
+        guard case .unchanged(let backToBaseline) = StandingWatcherEvaluator.apply(
+            reading: "base", to: sawDifference, now: .fixture.addingTimeInterval(900)
+        ) else {
+            Issue.record("a reading equal to the baseline is unchanged")
+            return
+        }
+        flickered = backToBaseline
+        #expect(flickered.candidateDigest == nil, "precondition: the reset really happened")
+        #expect(flickered.unstableReadings == 0, "precondition: the reset really happened")
+        #expect(flickered.firstDifferenceAt != nil, "the record must outlive the reset, or the sentence cannot")
+
+        #expect(
+            StandingWatcherNoticeCopy.message(for: .expired, watcher: flickered)
+                == "Sonny stopped watching “a flickering page” after 7 days. Nothing settled."
+        )
+    }
+
+    /// And the first difference is stamped once and never moved, so a later one does not restart it.
+    @Test
+    func theFirstDifferenceIsStampedOnceAndNeverCleared() {
+        let watcher = sampleWatcher(id: "w1", subject: "a page", baselineDigest: "base")
+        guard case .pending(let first) = StandingWatcherEvaluator.apply(reading: "a", to: watcher, now: .fixture) else {
+            Issue.record("expected pending")
+            return
+        }
+        #expect(first.firstDifferenceAt == .fixture)
+
+        guard case .pending(let second) = StandingWatcherEvaluator.apply(
+            reading: "b", to: first, now: .fixture.addingTimeInterval(900)
+        ) else {
+            Issue.record("expected pending")
+            return
+        }
+        #expect(second.firstDifferenceAt == .fixture, "a later difference moved the first one")
+    }
+
     // MARK: - Due-ness and expiry
 
     /// A watcher that has never been checked is due at once, so the record written at creation gets

@@ -60,11 +60,15 @@ public struct LiveStandingWatcherObserver: StandingWatcherObserving {
 /// background process the cap exists to prevent — so "I have stopped, and here is why" is owed even
 /// when the answer is that nothing happened.
 public enum StandingWatcherNoticeCopy {
+    /// Takes the whole record rather than its subject, because `.expired`'s sentence depends on
+    /// something only the record knows: whether this watcher ever read anything other than its
+    /// baseline (founder decision on F4, PR #184).
     public static func message(
         for reason: StandingWatcherStopReason,
-        subject: String,
+        watcher: StandingWatcher,
         limits: StandingWatcherLimits = .standard
     ) -> String {
+        let subject = watcher.subject
         switch reason {
         case .changed:
             // The only one of the five that is the thing the user asked for. It says what changed
@@ -72,6 +76,16 @@ public enum StandingWatcherNoticeCopy {
             // nothing else, and a button here would be the route to acting the founders declined.
             return "“\(subject)” changed."
         case .expired:
+            // **"It did not change" is asserted only when nothing ever differed** (founder decision
+            // on F4). A page alternating between its baseline and one other reading is never
+            // `.changed` — the two never land consecutively — and never `.unwatchable`, because any
+            // return to the baseline resets the instability count; so it runs its whole life and
+            // used to end by asserting the one thing that was certainly false about it. "Nothing
+            // settled" is true of that page and of a page that flickered once and steadied, and it
+            // does not claim to know which.
+            guard watcher.firstDifferenceAt == nil else {
+                return "Sonny stopped watching “\(subject)” after \(dayCount(limits.maxLifetime)). Nothing settled."
+            }
             return "Sonny stopped watching “\(subject)” after \(dayCount(limits.maxLifetime)). It did not change."
         case .unwatchable:
             // Says which of the two silences this is. "It did not change" would be false — the page

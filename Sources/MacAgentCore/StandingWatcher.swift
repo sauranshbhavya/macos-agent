@@ -222,6 +222,22 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
     /// How many checks in a row have failed to read the page at all. Reset by any successful read.
     public var consecutiveFailures: Int
 
+    /// When this watcher first read something other than its baseline, or `nil` if it never has.
+    ///
+    /// **Set once and never cleared, which is the whole reason it is not derivable from the fields
+    /// above** (founder decision on F4, PR #184). `.expired` may no longer assert "It did not change"
+    /// when a difference was *ever* seen, and every candidate for answering that question is reset:
+    /// `candidateDigest` is cleared by any reading equal to the baseline, and so is
+    /// `unstableReadings`. The case F4 is about — a page alternating between the baseline and one
+    /// other reading — lands on either side of that reset depending on which of the two the last
+    /// check happened to see, so a sentence conditioned on them would be right about half the time,
+    /// which is worse than one that is consistently wrong.
+    ///
+    /// A date rather than a flag, the rule this record's other lifecycle facts follow: it answers
+    /// "when" as well as "whether" at no extra cost, and a file written before this field existed
+    /// decodes as never having seen one.
+    public var firstDifferenceAt: Date?
+
     public init(
         id: String = UUID().uuidString,
         subject: String,
@@ -231,7 +247,8 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
         baselineDigest: String,
         candidateDigest: String? = nil,
         unstableReadings: Int = 0,
-        consecutiveFailures: Int = 0
+        consecutiveFailures: Int = 0,
+        firstDifferenceAt: Date? = nil
     ) {
         self.id = id
         self.subject = Self.cappedSubject(subject)
@@ -245,6 +262,7 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
         // unreachable stops permanently out of reach.
         self.unstableReadings = max(0, unstableReadings)
         self.consecutiveFailures = max(0, consecutiveFailures)
+        self.firstDifferenceAt = firstDifferenceAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -257,6 +275,7 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
         case candidateDigest
         case unstableReadings
         case consecutiveFailures
+        case firstDifferenceAt
     }
 
     /// Written out rather than synthesized so a decoded record runs through the same subject cap and
@@ -273,7 +292,10 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
             baselineDigest: try container.decode(String.self, forKey: .baselineDigest),
             candidateDigest: try container.decodeIfPresent(String.self, forKey: .candidateDigest),
             unstableReadings: try container.decode(Int.self, forKey: .unstableReadings),
-            consecutiveFailures: try container.decode(Int.self, forKey: .consecutiveFailures)
+            consecutiveFailures: try container.decode(Int.self, forKey: .consecutiveFailures),
+            // `decodeIfPresent`, so a record written before this field existed reads as never having
+            // seen a difference rather than failing and taking the whole file with it.
+            firstDifferenceAt: try container.decodeIfPresent(Date.self, forKey: .firstDifferenceAt)
         )
     }
 
