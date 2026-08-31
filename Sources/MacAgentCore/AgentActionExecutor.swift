@@ -2216,9 +2216,26 @@ public final class AgentActionExecutor {
 
             let segmentItemIndex = segment.steps.first?.itemIndex
             if itemJob != nil, sawFirstSegment, segmentItemIndex != currentItemIndex {
-                // A new item starts with nothing carried from the last one. Without this, item 2's
-                // bare "reveal it in Finder" would point at the file item 1 produced — the carry is
-                // right *within* one item's units and is a cross-contamination between items.
+                // A new item starts with nothing carried from the last one: the carry is right
+                // *within* one item's units and would be a cross-contamination between items.
+                //
+                // **Defensive, and measured to be so rather than assumed.** A mutation battery at
+                // `6976659` deleted this line and the whole suite passed (R4), and the reason is the
+                // fallback fifteen lines below: a unit that writes nothing still re-seeds the carry
+                // from its last *suggestion*, and every folder-shaped capability returns one naming
+                // the folder it worked in. So for an item to inherit the previous item's file, its
+                // own first unit would have to produce no write **and** no suggestion, and then be
+                // followed inside the same item by a step that consumes an artifact — and no
+                // combination of today's capabilities does that: the ones that suggest nothing
+                // (calculator, URL opening, Shortcut invocation) also give a consuming step nothing
+                // to consume, so that item fails at the consumer and its later units are skipped.
+                //
+                // Kept rather than removed, because the invariant is right and the line costs
+                // nothing: a capability that succeeds while producing neither a write nor a
+                // suggestion would make it live, and it would be live silently — the wrong file
+                // opened, and a run reporting success. `scripts/mutate` will keep reporting R4 as a
+                // survivor until such a capability exists, and that is the honest state rather than a
+                // gap to close with a test that pins something else.
                 previousArtifactPath = nil
             }
             currentItemIndex = segmentItemIndex
