@@ -115,7 +115,7 @@ struct FirstRunSequenceTests {
     /// The relaunch is driven through the product's own `AppRelaunching` seam rather than simulated
     /// beside it, so the test cannot pass by agreeing with itself about what a relaunch is.
     @Test
-    func asecondLaunchOverTheSameMacResumesRatherThanRestarting() {
+    func asecondLaunchOverTheSameMacResumesRatherThanRestarting() async {
         let suite = FirstRunDefaultsSuite()
         defer { suite.removeAtEndOfTest() }
         let relauncher = NoOpRelauncher()
@@ -131,7 +131,7 @@ struct FirstRunSequenceTests {
 
         screenAccess.requestScreenRecording()
         #expect(screenAccess.needsRelaunchGuidance)
-        screenAccess.relaunchNow()
+        await screenAccess.relaunchNow()
         #expect(relauncher.relaunchCount == 1)
 
         // The process that comes back shares only the two things that survive it: the Keychain, and
@@ -373,11 +373,19 @@ struct FirstRunSequenceTests {
     }
 
     /// **No raw error can reach this sequence, and the reason is structural rather than a promise.**
-    /// It has two failure surfaces and only one of them can fail: `ScreenAccessOnboardingModel`
-    /// throws nothing and holds no error state at all, and every `SignInFailure` maps to one of
-    /// `SignInCopy`'s own sentences. Asserted over `allCases` so a case added later has to be given
-    /// a sentence rather than inheriting silence, and against the wire vocabulary a raw error would
-    /// carry.
+    /// Every `SignInFailure` maps to one of `SignInCopy`'s own sentences, asserted over `allCases`
+    /// so a case added later has to be given a sentence rather than inheriting silence, and against
+    /// the wire vocabulary a raw error would carry.
+    ///
+    /// **Both surfaces can fail now, and the screen-access one is held differently** (SONNY-348).
+    /// This used to read "only one of them can fail: `ScreenAccessOnboardingModel` throws nothing
+    /// and holds no error state at all", and the second half of that sentence was the assertion
+    /// underneath it — a `throws` count of zero over the whole file. That stopped being available
+    /// the moment a relaunch that cannot reopen the bundle had to be reported rather than discarded,
+    /// and it was never the property this test is about: what matters is that no error's *words*
+    /// reach the user, not that no error exists. So the file's own error channel is pinned instead —
+    /// the catch stores a Bool and reads nothing off the error, and the sentence that reaches the
+    /// screen is a literal.
     @Test
     func noStepCanSurfaceARawError() throws {
         var sentences: Set<String> = []
@@ -400,7 +408,14 @@ struct FirstRunSequenceTests {
             let source = try MacAgentSource.read(file)
             #expect(MacAgentSource.count(of: "localizedDescription", inText: source) == 0, "\(file)")
         }
-        #expect(MacAgentSource.count(of: "throws", inText: try MacAgentSource.read("ScreenAccessOnboarding.swift")) == 0)
+        // The screen-access surface's own error channel, whole: everything the catch does with the
+        // failure is record that there was one. An error read here — its description, its case, the
+        // status inside it — would be a leak this file's `localizedDescription` scan cannot see.
+        let catchBlock = try MacAgentSource.braceBlock(
+            of: try MacAgentSource.read("ScreenAccessOnboarding.swift"),
+            openedBy: "} catch {"
+        )
+        #expect(catchBlock.trimmingCharacters(in: .whitespacesAndNewlines) == "relaunchFailed = true")
 
         // And the one place a sign-in failure is drawn renders the mapped sentence and nothing else.
         // `localizedDescription` is the obvious leak and the scan above covers it; this covers the
