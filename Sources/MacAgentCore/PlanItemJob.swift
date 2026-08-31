@@ -286,6 +286,11 @@ public extension AgentOperation {
              .saveRoutine, .runRoutine, .createWorkspace, .editWorkspace, .openWorkspace,
              .createLocalDraft, .calculateUtility, .lookupClipboardHistory, .expandSnippet,
              .saveSnippet, .switchRunningApp, .lookupRecentArtifacts, .visionSession, .clarify,
+             // `start_watching` reads `targetURL` and `watchSubject`, and neither is a
+             // `PlanItemField` — so a job cannot write an item into it, which is the honest answer
+             // rather than an omission. A watcher per item in a folder would also be five refusals
+             // and one watcher, against `StandingWatcherLimits.maxActive` (SONNY-382).
+             .startWatching,
              .unsupported:
             return []
         }

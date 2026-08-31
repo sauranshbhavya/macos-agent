@@ -43,7 +43,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
@@ -91,7 +92,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let scope = TaskWorkspaceScope.scoped(
@@ -137,7 +139,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let scope = TaskWorkspaceScope.scoped(
@@ -178,7 +181,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
@@ -218,7 +222,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
@@ -254,7 +259,8 @@ struct RunningAppAndRecentArtifactsTests {
             snippetStore: UnreachableLocalStores.snippets(),
             runningAppSwitcher: switcher,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
@@ -359,7 +365,8 @@ struct RunningAppAndRecentArtifactsTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: store,
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
         let plan = AgentPlan(
@@ -430,7 +437,8 @@ struct RunningAppAndRecentArtifactsTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: store,
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let logStore = AgentLogStore()
         let runner = AgentRunner(

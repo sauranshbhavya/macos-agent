@@ -28,6 +28,7 @@ public enum DefaultCapabilityAdapters {
             OpenWorkspaceCapabilityAdapter(),
             InvokeShortcutCapabilityAdapter(),
             VisionSessionCapabilityAdapter(),
+            StandingWatcherCapabilityAdapter(),
             MetadataOnlyCapabilityAdapter(metadata: clarify)
         ]
     }

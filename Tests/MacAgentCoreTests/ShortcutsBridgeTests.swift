@@ -322,7 +322,8 @@ struct ShortcutsBridgeTests {
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutCatalog: catalog,
             shortcutInvoker: invoker,
-            shortcutRunHistoryStore: history
+            shortcutRunHistoryStore: history,
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
     }
 

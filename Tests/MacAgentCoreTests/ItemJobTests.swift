@@ -1518,7 +1518,8 @@ struct ItemJobTests {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-history.json")
-            )
+            ),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
     }
 }

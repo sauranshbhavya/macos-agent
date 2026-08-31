@@ -757,8 +757,12 @@ struct WorkspaceScopeTests {
     /// the build until it is classified; this test is the other half — it fails when an existing
     /// case is *re*classified without anyone saying so.
     @Test
-    func everyAgentOperationIsClassifiedAndTheTableCoversAllThirtyTwoCases() {
-        #expect(AgentOperation.allCases.count == 32)
+    func everyAgentOperationIsClassifiedAndTheTableCoversEveryCase() {
+        // **The count lives here rather than in the name** (`CLAUDE.md`'s rule about counts in test
+        // names, and SONNY-382 is the operation that made it bite). It was
+        // `…CoversAllThirtyTwoCases`, which the changelog's PR #94 entry cites by that name — that
+        // citation is a dated record of what the test was called then and stays verbatim.
+        #expect(AgentOperation.allCases.count == 33)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
@@ -770,7 +774,7 @@ struct WorkspaceScopeTests {
         // `theSelectionDrivenFileOperationsNameFinderAndOnlyWhenTheStepIsSelectionDriven`, and the
         // not-yet-resolved arm is `aSelectionDrivenStepNamesFinderBeforeAnythingHasPinnedItsFolder`.
         // Every other row is unchanged by either field, which is the point of the probe carrying
-        // them for all 32.
+        // them for every case.
         let expected: [AgentOperation: [ScopedResource]] = [
             .scanSelectLargestFiles: [input, output],
             .createZip: [input, output],
@@ -810,6 +814,12 @@ struct WorkspaceScopeTests {
             .saveSnippet: [],
             .lookupRecentArtifacts: [],
             .invokeShortcut: [],
+            // SONNY-382. The page it will fetch, now and on every later check — reported for
+            // `open_url`'s reason, and the only resource there is: a watcher writes one record
+            // inside Sonny's own store and by the notify-only decision can never open, write or run
+            // anything. Knowable rather than opaque, because what it will touch is decided now and
+            // never re-decided.
+            .startWatching: [.webDomain("example.com")],
             .clarify: [],
             .unsupported: []
         ]
