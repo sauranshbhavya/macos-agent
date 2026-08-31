@@ -85,7 +85,8 @@ struct TaskRecordingPolicyTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         ).suppressesTracesForTests)
         #expect(AgentActionExecutor(
             recordingPolicy: .suppressTraces,
@@ -94,7 +95,8 @@ struct TaskRecordingPolicyTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         ).suppressesTracesForTests)
     }
 

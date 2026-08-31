@@ -6412,6 +6412,7 @@ struct AgentActionExecutorTests {
             shortcutCatalog: shortcutCatalog,
             shortcutRunHistoryStore: shortcutRunHistoryStore
                 ?? ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json")),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             now: now,
             hotKeyReady: hotKeyReady
         )

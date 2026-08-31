@@ -34,7 +34,8 @@ struct SnippetRoutineAuthoringTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: snippetStore,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: executor)
 

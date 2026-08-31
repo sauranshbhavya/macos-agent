@@ -207,7 +207,10 @@ struct SpokenPathTests {
         "resolvedAppName": false,
         "resolvedBundleIdentifier": false,
         "visionGoal": false,
-        "browserName": false
+        "browserName": false,
+        // SONNY-382. A phrase describing what the user wants to be told about, never a folder — and
+        // a watcher's own location is a URL, in `targetURL`, which is already `false` above.
+        "watchSubject": false
     ]
 
     /// Every property the table above calls a path is normalised, and every property it does not is
@@ -250,7 +253,8 @@ struct SpokenPathTests {
             resolvedBundleIdentifier: phrase,
             resolvedFromFinderSelection: true,
             itemIndex: 7,
-            visionGoal: phrase
+            visionGoal: phrase,
+            watchSubject: phrase
         )
 
         let after = SpokenPath.normalizingFolderPhrases(in: before)
@@ -348,7 +352,8 @@ struct SpokenPathTests {
                 clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
                 snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
                 recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
-                shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json"))
+                shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json")),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         }
 

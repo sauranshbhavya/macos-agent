@@ -314,7 +314,8 @@ struct SwitchInWorkspaceRoutingTests {
                 snippetStore: UnreachableLocalStores.snippets(),
                 runningAppSwitcher: switcher,
                 recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         )
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
@@ -363,7 +364,8 @@ struct SwitchInWorkspaceRoutingTests {
                 snippetStore: UnreachableLocalStores.snippets(),
                 runningAppSwitcher: StubRunningAppSwitcher(apps: []),
                 recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+                shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         )
         #expect(throws: RunningAppSwitchError.noMatchingRunningApp("xcod")) {

@@ -128,6 +128,9 @@ public final class AgentActionExecutor {
     private let shortcutCatalog: any ShortcutCatalogProviding
     private let shortcutInvoker: any ShortcutInvoking
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
+    /// Unfinished runs and standing watchers. Held only so `start_watching` can reach it through
+    /// `CapabilityExecutionContext` (SONNY-382); nothing in this class reads it directly.
+    private let resumableTaskStore: ResumableTaskStore
     private let capabilityRegistry: CapabilityRegistry
     private let fileManager: FileManager
     private let now: () -> Date
@@ -172,6 +175,10 @@ public final class AgentActionExecutor {
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore,
+        // Undefaulted like every other store on this initializer (SONNY-240, SONNY-350): a default
+        // here would be the real `~/Library` file, and a fixture that never heard of watchers would
+        // be writing into the developer's own unfinished runs.
+        resumableTaskStore: ResumableTaskStore,
         capabilityRegistry: CapabilityRegistry = .default,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
@@ -214,6 +221,7 @@ public final class AgentActionExecutor {
         self.shortcutCatalog = shortcutCatalog
         self.shortcutInvoker = shortcutInvoker
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
+        self.resumableTaskStore = resumableTaskStore
         self.capabilityRegistry = capabilityRegistry
         self.fileManager = fileManager
         self.now = now
@@ -879,6 +887,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .invokeShortcut, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .visionSession:
             return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
+        case .startWatching:
+            return try previewCapability(for: .startWatching, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
             // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
             // `prepare` has nothing to do with a job's unavailable items.
@@ -1021,6 +1031,8 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .visionSession:
             return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+        case .startWatching:
+            return try await executeCapability(for: .startWatching, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
@@ -1054,6 +1066,7 @@ public final class AgentActionExecutor {
         case openWorkspace
         case invokeShortcut
         case visionSession
+        case startWatching
         case chain
     }
 
@@ -1177,6 +1190,8 @@ public final class AgentActionExecutor {
             return .invokeShortcut
         case .visionSession:
             return .visionSession
+        case .startWatching:
+            return .startWatching
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }
@@ -1728,7 +1743,13 @@ public final class AgentActionExecutor {
         // iteration. This is the most literal egress in the product — redacted first (SONNY-89's
         // structural non-bypass), but pixels of the user's screen all the same — so Safe mode's
         // "Data leaves device: yes" line must read yes, and does.
-        .visionSession
+        .visionSession,
+        // Starting a watcher fetches the page once, right then, to record the baseline — so this is
+        // `alwaysLeavesDevice` on the same footing as `web_to_markdown`, and there is no shape of
+        // the step that fetches nothing. The *later* checks egress too, and are not this set's to
+        // classify: they run from a timer with no plan and no step behind them, which is why the
+        // approval the user reads names the cadence (SONNY-382).
+        .startWatching
     ]
 
     /// `AgentStep.searchQuery` is reused by several operations for a value that is not a search
@@ -1925,6 +1946,7 @@ public final class AgentActionExecutor {
             shortcutCatalog: shortcutCatalog,
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
+            resumableTaskStore: resumableTaskStore,
             fileManager: fileManager,
             now: now,
             hotKeyReady: hotKeyReady,

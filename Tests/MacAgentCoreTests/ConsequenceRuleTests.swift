@@ -1147,7 +1147,8 @@ struct ConsequenceRuleTests {
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-history.json")
-            )
+            ),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
     }
 

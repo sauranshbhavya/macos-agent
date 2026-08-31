@@ -72,7 +72,12 @@ struct AgentPlanSchemaFixtureTests {
         // none, for the reason `AgentPlanSchema.itemJobSchema` records. They appear once each rather
         // than twice: that schema is embedded at the top level only, unlike `stepSchema`, because a
         // job is a property of a plan and a routine's nested steps are not a plan.
+        //
+        // **60 since SONNY-382**, which added one nullable step property (`watchSubject`). It is
+        // **two** rather than one for exactly the reason the paragraph above gives: a step property
+        // is serialized once under `steps` and again under `routineSteps`. A reader tempted to write
+        // 59 here is reading `baseStepProperties` and not the wire.
         let unions = text.components(separatedBy: "\"type\" : [").count - 1
-        #expect(unions == 58, "expected 58 serialized type-union nodes, found \(unions)")
+        #expect(unions == 60, "expected 60 serialized type-union nodes, found \(unions)")
     }
 }

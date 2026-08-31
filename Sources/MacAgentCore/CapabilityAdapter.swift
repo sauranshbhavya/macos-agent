@@ -178,6 +178,13 @@ public struct CapabilityExecutionContext {
     public var shortcutCatalog: any ShortcutCatalogProviding
     public var shortcutInvoker: any ShortcutInvoking
     public var shortcutRunHistoryStore: ShortcutRunHistoryStore
+    /// Unfinished runs and standing watchers, in one file (SONNY-210, SONNY-236).
+    ///
+    /// Here for `start_watching` and for nothing else today: `StandingWatcherCapabilityAdapter` is
+    /// the only door a *user* creates a watcher through, and it needs to read the cap and write the
+    /// record. The resumable half of the store is the view model's own and does not come through
+    /// here.
+    public var resumableTaskStore: ResumableTaskStore
     public var fileManager: FileManager
     public var now: () -> Date
     /// Live push-to-talk hotkey registration state. Read through a closure for the same reason
@@ -347,6 +354,10 @@ public struct CapabilityExecutionContext {
         shortcutCatalog: any ShortcutCatalogProviding,
         shortcutInvoker: any ShortcutInvoking,
         shortcutRunHistoryStore: ShortcutRunHistoryStore,
+        // Non-defaulted, exactly as the twelve stores beside it are and for SONNY-240's reason: a
+        // defaulted store resolves to the real `~/Library` location, so a fixture that omitted it
+        // would create watchers in the developer's own data — and then check them on a real timer.
+        resumableTaskStore: ResumableTaskStore,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
@@ -397,6 +408,7 @@ public struct CapabilityExecutionContext {
         self.shortcutCatalog = shortcutCatalog
         self.shortcutInvoker = shortcutInvoker
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
+        self.resumableTaskStore = resumableTaskStore
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
