@@ -174,7 +174,23 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: complete
 Date: 2026-08-30
 Tickets: SONNY-144 — Settings → Security & Access → Screen Control lists the apps the user has allowed Sonny to control, each with its own Remove, plus a Remove All behind a confirmation.
-Reviewed by: fresh session (per WORKFLOW.md step 7) — pending.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — three search cycles plus a scoped verification round, all on PR #175. Cycle 1 raised F1–F8 (F1 blocking), cycle 3 G1–G6, and the verification round V3; every one taken.
+
+**Rebased once, at merge time, onto `06d899e` (PR #180's merge), last in the wave by founder instruction after holding on `37c9177` through six merges — #179, #174, #177, #176, #178 and #180.** **Every figure below is re-measured at `1b95f19`, the post-rebase head, and nothing is carried across the hop.** The tree-identity proof that would have allowed a carry does not hold, and was checked rather than assumed: the merged range moved `Sources/MacAgent/AgentViewModel.swift` and `Tests/MacAgentTests/ProductShellTests.swift`, two of this branch's own eleven files, plus `AgentActivityPresentation.swift`, `AppDelegate.swift` and `ScreenAccessOnboarding.swift` under `Sources/MacAgent/` — which is the population one of this branch's own scans reads. Four files conflicted, two of them code: the two code files replayed textually clean and both `docs/` files conflicted, exactly as predicted.
+
+**Two figures moved in ways the diff would not predict, which is the reason for the re-measure rule rather than a footnote to it.** `scripts/changelog-order` answers **152 entries** where this entry said 146, `main` having gained six while this branch waited; and the flagged suite answers **2564** where it said 2542, the 22 being `main`'s, since this branch's own test count did not change in the hop.
+
+**The rebase orphaned all nine SHAs this entry had stamped, and each is recorded beside its replay with both checks inline.** Every old one still resolves — `git cat-file -t` prints `commit` — and none is on this history: `git merge-base --is-ancestor <old> HEAD` exits **1** for all nine, which is `CLAUDE.md`'s stamp that goes bad without going missing, while the replay exits **0**. The old base `37c9177` exits **0**, being `main`'s own commit rather than a branch head.
+
+| orphaned | replay | | orphaned | replay |
+|---|---|---|---|---|
+| `b52cc81` | `3916b30` | | `9e3ea90` | `e49a327` |
+| `469f369` | `3bacfa2` | | `8441477` | `aec8b1d` |
+| `b47f6d3` | `8c49547` | | `ec5dddc` | `d114632` |
+| `57950c9` | `dde142f` | | `0e55b20` | `1b95f19` |
+| `c3300dc` | `c030be3` | | | |
+
+The orphaned nine appear below only inside dated records of what a round found at the time, which are events rather than live figures. Every live figure is at `1b95f19`.
 
 **The branch name is not the one the ticket's Branch: line names.** SONNY-144 was written on
 2026-08-17 and says `feature/app-control-revocation`; the worktree this ran in was created on
@@ -192,19 +208,47 @@ Files changed:
 - `Tests/MacAgentTests/ApprovedAppRevocationTests.swift` (new), `Tests/MacAgentTests/VisionSessionRunTests.swift`, `Tests/MacAgentTests/ProductShellTests.swift`, `Tests/MacAgentCoreTests/ApprovedAppStoreTests.swift`, `Tests/MacAgentCoreTests/UnprivilegedGateTests.swift`.
 - `docs/sonny-manual-test-checklist.md`, `docs/sonny-v1-implementation-changelog.md`.
 
-**This list was one file short as first written** and is derived rather than recalled now: `git diff --name-only 37c9177..HEAD | wc -l` → **11** at `b47f6d3` and 11 again at `57950c9`, and every one of the 11 is above. `UnprivilegedGateTests.swift` was the missing one — its gated-directory-locking count went 12 → 14 for the two forced-write-failure tests — and the closing comment had it while the durable record did not (PR #175 review, F5). **The number said 12 for one round and the list was complete the whole time** (cycle 3, G1): a wrong numeral inside the sentence announcing that the list is derived, which is the shape `CLAUDE.md` records as the seventh defect — *a parenthesis written while correcting another parenthesis is where attention is at its lowest.* Re-run rather than adjusted.
+**This list was one file short as first written** and is derived rather than recalled now: `git diff --name-only 06d899e..HEAD | wc -l` → **11**, and every one of the 11 is above. **The base in that command is the post-rebase one, and the change is not cosmetic**: anchored at the old `37c9177` it now answers 62, because the merged range brought `main`'s own six branches with it. The pre-rebase readings were 11 at `b47f6d3` and 11 again at `57950c9`, both orphaned heads. `UnprivilegedGateTests.swift` was the missing one — its gated-directory-locking count went 12 → 14 for the two forced-write-failure tests — and the closing comment had it while the durable record did not (PR #175 review, F5). **The number said 12 for one round and the list was complete the whole time** (cycle 3, G1): a wrong numeral inside the sentence announcing that the list is derived, which is the shape `CLAUDE.md` records as the seventh defect — *a parenthesis written while correcting another parenthesis is where attention is at its lowest.* Re-run rather than adjusted.
 
-Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2542 tests in 174 suites, 67.544s, 7 known issues, exit 0** at `ec5dddc`. `scripts/warnings` -> **0 warnings, exit 0**, its own report stamped `ec5dddc (clean)`, 162s. `scripts/changelog-order` -> **exit 0**, `is in merge order, 146 entries, both eras`.
+Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2564 tests in 174 suites, 48.600s, 7 known issues, exit 0** at `1b95f19`. `scripts/warnings` -> **0 warnings, exit 0**, its own report stamped `1b95f19 (clean)`, 115s. `scripts/changelog-order` -> **exit 0**, `is in merge order, 152 entries, both eras`. Exit codes read with nothing between each command and `$?`.
 
-Mutation, by round, each scoped to what that round changed:
-- **The fix round, 6 mutants at `b47f6d3` -> 6 killed, 0 survived, exit 0.** R5 is a build-failure kill carrying no test evidence — dropping `.partlyUnreadable` from the switch makes it non-exhaustive — so the compiler holds that arm's *presence* and R1 holds its *value*. Counted, and said rather than left to read as coverage. The reviewer's N1 later measured the value half behaviourally by *moving* the case rather than deleting it, and it died to the same test, so the framing above was more pessimistic than the truth.
-- **V3's pair, 2 mutants at `ec5dddc` -> 2 killed, 0 survived, exit 0.** The reviewer's V3 rebuilt against the fixed tree, plus the mirror it did not run, because a scan that separates in one direction and not the other has only moved the shared marker rather than removed it.
-- **Cycle 3, 5 mutants at `c3300dc` -> 4 killed, 1 survived, exit 2**, then **S3 re-run at `9e3ea90` -> KILLED**. **S3 is this round's own finding and the one worth reading**: the scans holding F1's gate and G2's new arm both asked whether the section *mentions* `viewModel.storedApprovedAppCount`, and the two call sites share that string — so a mutant feeding the empty state a literal zero, with the gate's own reading left intact, passed all 2540 tests. A presence check over a token two callers share cannot see one of them stop reading it. Each call is now sliced from its own marker and asked separately, with the occurrence count pinned at two.
+**The full suite is the check that matters after this particular rebase, and it was run rather than reasoned about.** `swift build` does not build the test targets, so a green build says nothing here: two files can be individually merge-clean and jointly incoherent, which is PR #111's condition. The specific way it would have bitten is `ProductShellTests`' stored-property classifier — this branch adds `storedApprovedAppCount` to its list, and a stored property `main` had added to `AgentViewModel` would leave that list short and the classifier red. `main` added none, and that is the **compiler and the suite** saying so rather than a text match: `everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe` reflects over the real instance at run time, and it passes.
 
-**The figures were 2527 tests at `b52cc81`** (reproduced independently by the reviewer at `469f369`), then 2537 after the fix round at `b47f6d3`. Every round re-measures rather than adjusting.
+Mutation: **one consolidated battery of 18 mutants at `1b95f19` → 18 killed, 0 survived, 0 unattributed, exit 0.** It covers every property this branch claims to protect, and it replaces three per-round batteries taken at three different heads rather than adding to them.
 
-**Every figure is measured on this entry's own tree and carried across the docs commit above it**, per `WORKFLOW.md` step 5. A suite count depends on `Sources/`, `Tests/` and `Package.swift`; a `scripts/warnings` count on `Sources/` and `Tests/`; a mutation verdict on the four conditions that rule names. `git status --porcelain -- Sources Tests Package.swift` printed nothing at the head this entry sits on, so every path any of them depends on is byte-identical to the tree that produced it — the docs commit moves only `docs/`.
+**Why one battery rather than a carry analysis, since step 5's default is to carry.** The analysis was done first. Conditions 1 and 2 fail outright for four mutants: `main` moved `AgentViewModel.swift`, which is two mutants' target file, and every killer living in `VisionSessionRunTests` builds an `AgentViewModel` through `makeFixture`, so condition 4 fails for those too. **Conditions 3 and 4 are the ones that matter on this branch, because its killers are source scans** — `revocationListSource()` and `revocationRowSource()` read **`Sources/MacAgent/CommandCenterView.swift` alone**, which the merged range did not touch, so condition 3 holds for them, while `appSourcesContain(_:)` globs **`Sources/MacAgent/`**, where the range moved three files, so it does not. What decided the rest is that they were carriable only by an argument spanning three intra-branch heads *and* the merged range — the fix round's six were measured before cycle 3 rewrote `emptyState` and `CommandCenterView.swift` — and a chain that long costs a reader more to check than it costs this lane to re-run. Eighteen mutants is about twenty minutes and yields one measurement of one tree.
 
+| | mutant | killers |
+|---|---|---|
+| P1 | the terminal deny-list filter in `eligible` removed | 4 |
+| P2 | the blank-identifier filter in `eligible` removed | 1 |
+| P3 | the Remove All gate inverted | 3 |
+| P4 | the count taken after the filter instead of before it | 1 |
+| P5 | the count survives a failed load, so Remove All is offered over a file `forgetAll` refuses | 1 |
+| P6 | a store holding only hidden grants is shown the empty state | 2 |
+| P7 | the view stops telling the empty state what the store holds | 1 |
+| P8 | an unreadable file loses the ordering to a held grant | 1 |
+| P9 | the unreadable arm's icon alone | 2 |
+| P10 | the `.partlyUnreadable` arm falls towards silence, by *moving* the case rather than deleting it | 1 |
+| P11 | the row's Remove commits without raising its dialog | 1 |
+| P12 | the view gates Remove All on the rendered list again | 2 |
+| P13 | the row's screen-reader label replaced with a literal, the tooltip untouched | 1 |
+| P14 | the row's tooltip replaced with a literal, the screen-reader label untouched | 1 |
+| P15 | `forgetAll`'s empty-store guard removed | 2 |
+| P16 | `forgetAll` swallows an unreadable file instead of refusing it | 1 |
+| P17 | the shared row builder stops trimming a whitespace-only display name | 1 |
+| P18 | the Settings unreadable sentence borrows the sheet's standing | 1 |
+
+**P10 is the mutant the fix round could not build, and its history is kept rather than tidied away.** That round's R5 *deleted* the `.partlyUnreadable` case, which makes the switch non-exhaustive, so it came back a build-failure kill carrying no test evidence and was recorded as one — the compiler holding that arm's presence and another mutant its value. The reviewer then measured the value half behaviourally by *moving* the case instead, which compiles. P10 is that shape and it dies; the lane's own framing was more pessimistic than the truth.
+
+**The per-round batteries below are dated records of what each round found, not live figures — and one of them found a survivor that the re-measurement above must not erase.**
+
+- **The fix round, 6 mutants at `b47f6d3` (orphaned; replay `8c49547`) → 6 killed, 0 survived.**
+- **Cycle 3, 5 mutants at `c3300dc` (orphaned; replay `c030be3`) → 4 killed, 1 survived.** **S3 survived**, and it stays recorded as a survivor of the run that found it. It is this branch's own finding and the sharpest thing in its record: the scans holding F1's gate and G2's new arm both asked whether the section *mentions* `viewModel.storedApprovedAppCount`, and the two call sites share that string — so a mutant feeding the empty state a literal zero, with the gate's own reading left intact, passed all 2540 tests. A presence check over a token two callers share cannot see one of them stop reading it. Re-run and killed at `9e3ea90` (orphaned; replay `e49a327`); P7 is that mutant today.
+- **The reviewer's rounds:** 9 mutants at `469f369` → 7 killed, 2 survived (M4 and M7, both closed by the fix round); 2 at `57950c9` → 1 killed, 1 survived (N2, closed by G3); 3 at `8441477` → 2 killed, 1 survived (**V3**, closed by the round below).
+- **V3's pair, 2 mutants at `ec5dddc` (orphaned; replay `d114632`) → 2 killed.** P13 and P14 today.
+
+**Three instances of one defect class landed on this branch, and none of the three was found by reading the test** — F6 (a forbidden token the tree never held), S3 (two call sites sharing `storedGrantCount: viewModel.storedApprovedAppCount`) and V3 (`row.removeAccessibilityLabel` on both `.accessibilityLabel` and `.help`). The generalisation — **a presence check over a token that two sites share stands in for a property of one of them, and passes while that one has stopped holding it** — is filed as **SONNY-378**, which lands it as a `CLAUDE.md` gotcha. That is not a feature branch's to write, so it is pointed at by identifier rather than written here, and all three instances are carried on that ticket. **A fourth instance of the same family arrived while writing this entry**, in the edit script rather than in the tree: a file-wide `index()` anchored on "Behavior added:", which occurs in the Entry Template above `## Entries` as well as in this entry, inverted a slice and duplicated ninety lines of preamble. `scripts/changelog-order` caught it — *entry matches no merge on the mainline and it is not the first entry* — and the edit was redone scoped to this entry's own span.
 
 Behavior added:
 - Settings → Security & Access → Screen Control lists every app the user has allowed, by name, with the bundle identifier and when it was allowed underneath, and a Remove on each row.
