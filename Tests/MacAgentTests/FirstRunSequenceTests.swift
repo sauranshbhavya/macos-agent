@@ -387,8 +387,9 @@ struct FirstRunSequenceTests {
     ///
     /// **What the replacement is stronger against, corrected** (PR #180's review, F6). The first
     /// version of this sentence said the old count "would have passed a catch publishing
-    /// `error.localizedDescription`", and that is false: the loop three lines below has scanned this
-    /// very file for `localizedDescription` since before this branch, so that example was already
+    /// `error.localizedDescription`", and that is false: the loop below has scanned this very file
+    /// for `localizedDescription` since before this branch, two lines above the line that was
+    /// removed (`:401` against the removed `:403`, at `37c9177`), so that example was already
     /// covered and the comparison ignored a sibling assertion in its own function. The real gain is
     /// the rest of the family, none of which carries that token — `"\(error)"`,
     /// `String(describing: error)`, and `if case .reopenRefused(let status)` rendering the status
