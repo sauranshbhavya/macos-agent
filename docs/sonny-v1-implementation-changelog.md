@@ -170,6 +170,187 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/a-month-has-a-number-of-screen-control-runs
+Status: in progress
+Date: 2026-08-31
+Tickets: SONNY-212 — the credit/allowance model: a per-account monthly credit pool derived from row 12's metering, screen control as the only line that draws on it, and `GET /v1/account/credits` serving "screen-control runs left this month" for the Mac to read.
+Reviewed by: not yet — fresh session per WORKFLOW.md step 7, on the PR.
+
+**The ticket's `Branch:` line says `feature/billing-credits` and this branch is
+`feature/a-month-has-a-number-of-screen-control-runs`.** The worktree was created on the second name
+before the session started, and it follows the naming this repository has actually used since the
+`feature/billing-*` set was written (`feature/an-approved-app-can-be-taken-back` beside it). Recorded
+rather than resolved silently, per WORKFLOW.md §4: nothing about the contract changed, only the
+branch it lands on.
+
+**The ticket's BLOCKED-on line is stale and was treated as such.** It reads "BLOCKED on row 12: reads
+metering (SONNY-133)", and SONNY-133 is Done and merged — `sonny.metering_event` and
+`src/metering/query.ts` are what this branch consumes. Nothing in `src/metering/` was touched.
+
+Spec sections covered: **§5.4** (new — the screen-control allowance, written into
+`docs/sonny-backend-api-contract.md` by this branch), consuming **§11**'s metering table and **§5.3**'s
+entitlement record. §14's pricing row is implemented as *mechanism only*: the table entry says "the
+shape is decided, the numbers are not", and every number remains outside the repository.
+**Not covered, and out of scope by the ticket's own never-touch list:** refusing on the number
+(SONNY-213), rendering it (SONNY-214), auto top-up (SONNY-215), which capability keys are gated
+(row 18, SONNY-23), and metering itself (row 12 — read, never edited).
+
+Files changed:
+- `server/src/credit/catalogue.ts` (new) — the plan catalogue and the cost weights, parsed from `CREDIT_PLANS`.
+- `server/src/credit/balance.ts` (new) — the pure derivation: draw → credits → runs left.
+- `server/src/credit/store.ts` (new) — the one query over `sonny.metering_event`, plus the plan-liveness rule and the `CreditStore` seam.
+- `server/src/routes/credits.ts` (new) — `GET /v1/account/credits`.
+- `server/src/config.ts` — `CREDIT_PLANS` and `requireCreditCatalogue`.
+- `server/src/auth/deps.ts` — `CREDIT_PLANS` joins `AUTH_ALSO_REQUIRED`'s presence sweep.
+- `server/src/app.ts` — the route, the store, and a `creditStore` override.
+- `server/.env.example`, `server/README.md`, `server/scripts/deploy.sh` (`PASSTHROUGH`), `docs/sonny-backend-api-contract.md` §5.4, `docs/sonny-manual-test-checklist.md`.
+- `Sources/MacAgentCore/ScreenControlAllowance.swift` (new) — the Mac's reading, and nothing more.
+- `server/test/credit.test.ts`, `server/test/credit.db.test.ts`, `server/test/support/credit.ts` (all new); `server/test/authdeps.test.ts`, `server/test/gate.test.ts`, `server/test/support/config.ts`; `Tests/MacAgentCoreTests/ScreenControlAllowanceTests.swift` (new).
+
+Tests, all at `e367c4d` (the implementation commit), and **carried across the documentation commit
+above it under WORKFLOW.md step 5's tree-identity rule rather than re-stamped**. The paths each
+figure depends on were named before the command was written: the Swift figures depend on `Sources/`,
+`Tests/` and `Package.swift`, and the server figures on `server/src`, `server/test`,
+`server/package.json`, `server/tsconfig.json`, `server/tsconfig.typecheck.json` and
+`server/vitest.config.ts`. `git diff --stat e367c4d HEAD --` over exactly those paths prints nothing.
+The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
+which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
+tracked file and is therefore re-run at the head rather than carried**:
+- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 656 passed | 361 skipped (1017) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
+- Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1017 passed (1017)**, exit 0, **0 skipped**. 656 + 361 = 1017, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
+- `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (557 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
+- App half, the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 54.697 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
+- `scripts/warnings` → **0 warnings** at `e367c4d (clean)`, every file in `Sources/` and `Tests/` recompiled, 124 s.
+
+Behavior added:
+- A per-account monthly credit pool, derived from `sonny.metering_event`, with screen control as the only line that draws on it.
+- `GET /v1/account/credits` — plan, period, `screen_control_runs_left`, `screen_control_runs_included`, and the credit derivation beside them.
+- `CREDIT_PLANS`: every tier, allowance and credit weight as one configuration value, with no default in this repository and a startup refusal without it.
+- `ScreenControlAllowanceService` on the Mac — one authenticated `GET`, no cache, no local store.
+
+Behavior preserved (required, no blanket claims):
+- **The spend cap (SONNY-135) is untouched.** `unitsForMeteredCall` still returns one unit per metered call, `admitRequest` still reserves and settles the same way, and nothing in `src/entitlement/store.ts` or `src/entitlement/hook.ts` changed. `entitlement.test.ts` and `entitlement.db.test.ts` pass unchanged.
+- **Metering (SONNY-133) is read and never written to.** No file under `src/metering/` is in the diff; `metering.test.ts` and `metering.db.test.ts` pass unchanged, and `npm run usage` is untouched.
+- **The signed entitlement claim (§5.3) is unchanged** — same payload, same lifetimes, same route. `claimFactsFor` still keeps a revoked account's plan key, which this branch depends on rather than alters.
+- **`authWiringFrom`'s two supported shapes still hold.** A health-only gateway (no Supabase names) still needs no `CREDIT_PLANS` and starts; a sign-in gateway now names it among the missing rather than failing later. `authdeps.test.ts`'s message now reads "8 variables are missing" where it read 7, which is that test doing its job.
+- **Deny-by-default still covers every route.** `gate.test.ts`'s population scan caught the two new entries (`GET` and Fastify's generated `HEAD` for `/v1/account/credits`) and both are challenged with `401`.
+- **`registerMetering`'s POST scan is unaffected** — the new route is a `GET`, is in no metered-route map, and opens no provider call.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+- **The pool is derived from metering, not ledgered — the single decision three later tickets
+  inherit.** There is no credit table and no credit writer. `credit/store.ts` sums this account's
+  `screen.analyze` rows for the period and `credit/balance.ts` prices them. The alternative was a
+  ledger written as sessions complete, and it was declined on this repository's own recorded
+  reasoning: 0012's header refuses a second uniqueness enforcement beside `claimMeteringEvent`
+  because "two things that both believe they enforce 'at most once' is how it ends up enforced by
+  neither", and `metering/hook.ts`'s hook ordering exists so that a charge can never exist without
+  the audit row that justifies it. Deriving makes that structural — the audit row *is* the charge —
+  and it costs no reconciliation, no drift, and no backfill for the sessions already on disk when the
+  first real weights land. **What it costs instead is written where a later ticket will read it**
+  (`balance.ts`): applying weights at read time re-prices the period already under way, which is the
+  opposite of the call `usage_period.cap_units` makes. That is right for a forward-looking estimate
+  nobody was promised and **would not be for a refusal** — SONNY-213 has to decide that deliberately
+  rather than inherit it, and the file says so.
+- **A credit is not a spend-cap unit, and the two mechanisms are deliberately not merged.**
+  `unitsForMeteredCall`'s doc comment has said since SONNY-135 that this ticket is where a real
+  weight lands, and taking that invitation literally would have been a defect: weighting the cap per
+  route means the four unpaid routes weigh zero, which deletes the anti-abuse ceiling that bounds a
+  leaked token to `SPEND_CAP_UNITS` calls — the exact cost SONNY-16 recorded. So the cap stays a
+  count of metered calls (an operator's ceiling), the allowance is a separate weighted pool (a plan's
+  purchase), and only one of them is a product-facing number. Both files now say which they are.
+- **`upstream_duration_ms IS NOT NULL` is the column that says a call cost money, and the two obvious
+  alternatives were measured wrong rather than rejected on taste.** `meteredUpstreamCall` sets
+  `upstreamAttempted` before the provider call and writes the duration in a `finally`, so the column
+  is non-null exactly when a call was opened and returned or threw — the same question
+  `entitlement/hook.ts` asks before charging a hold, so a draw and a charge agree about which
+  requests were free. **`provider` is wrong** because the router writes no attribution for a call that
+  threw, so a `provider_error` iteration that really reached a vendor carries a null provider and
+  pricing on it would give away every failed call. **`outcome` is wrong** more subtly: `outcomeFor`'s
+  last line returns `refused` when an upstream call *was* attempted and the error carried no provider
+  code, so `refused` does not mean "spent nothing" in every case that function can produce.
+- **A revoked or past-grace entitlement draws on the default tier while keeping its plan key.**
+  `claimFactsFor` deliberately keeps `plan` on a revoked account so a client can say which plan ended;
+  the allowance is the other half of that decision and goes the other way. The rule is
+  `creditPlanKeyFor`, which **repeats** `claimFactsFor`'s two conditions rather than calling it,
+  because "no capabilities" cannot be read back as "not live" — an unprovisioned account and a live
+  plan that gates nothing both carry an empty list, and today *every* plan does, since no capability
+  is gated anywhere (row 18). The repetition is pinned rather than tolerated:
+  `theCreditPlanIsLiveExactlyWhenTheClaimKeepsItsCapabilities` drives both functions over the same
+  records and fails if either side's rule moves.
+- **An unknown plan key fails to the default and never to the largest tier.** The reachable
+  misconfiguration is a `BILLING_PLANS` entry naming a plan the catalogue does not carry. The two
+  directions are not symmetric: falling to free costs a paying customer the difference, visibly and
+  complainably, while falling anywhere generous is an unbounded bill nobody sees until it arrives.
+- **The tier count is data, and the test that proves it names no plan key.** The product decision is
+  free plus exactly one paid tier (founder, 2026-08-16), and `plans` is still a list of any length,
+  because a decision that is true today is exactly the kind that becomes a release-time input. The
+  proof is that every plan key in `credit.test.ts` is a UUID minted microseconds before the assertion
+  that reads it — a suite asserting `"free"` and `"pro"` would pass just as happily against an
+  implementation with those two words compiled into it.
+- **`CREDIT_PLANS` has no default anywhere and startup refuses without it**, which is
+  `SPEND_CAP_UNITS`' call and made for its reason: an absent catalogue has no safe reading. "No
+  allowance" locks every user out of the one paid feature; "unlimited" is SONNY-16's leaked-token cost
+  with a mechanism in front of it doing nothing. It also joins `AUTH_ALSO_REQUIRED`'s presence sweep,
+  so an operator learns about it in one message instead of one restart later, and it is the one entry
+  on `deploy.sh`'s `PASSTHROUGH` list that is not a credential — what decides that list is what
+  `config.ts` requires, not what is sensitive.
+- **The number is served unsigned and uncached, which is the opposite of the entitlement claim beside
+  it and right for the opposite reason.** A claim is signed because the *client* enforces it offline,
+  and honoured for 24 h plus 72 h of grace because an entitlement changes on the order of a
+  subscription. A run count changes on the order of a run: a four-day-old one is wrong most of the
+  time it is read, and wrong in the direction that shows runs to somebody who has none. So it is a
+  separate route, and `ScreenControlAllowanceService` writes to no local store — which also keeps it
+  out of `LocalStore.allCases` and the six enrolments a new store owes.
+- **Rounding is load-bearing for one property and is not cosmetic.** Credits are floating point, so a
+  0.1-per-megapixel weight against 30 megapixels leaves `2.9999999999999996`. Every published figure
+  is rounded to six places and `runsLeft` is derived from the *rounded* remainder, so a response's
+  four credit numbers and its run count agree exactly and a reader can recompute one from the others.
+  Deriving from the unrounded value and publishing the rounded one would make the response contradict
+  its own arithmetic at the boundary — which is where anyone checking it would look.
+- **The watcher contradiction was settled before this branch started, and the settlement is why the
+  model has one currency.** SONNY-236 recorded a standing watcher's repeated checks as "a recurring
+  charge against the user's allowance", which contradicts this ticket's "everything else draws
+  nothing". The founders decided on 2026-08-31 that **watchers are free and capped instead** — the
+  cap's shape and numbers are SONNY-236's — so nothing about watchers enters this model and
+  "screen-control runs left" stays the single number a user tracks rather than a pool two different
+  things spend out of. `credit/store.ts`'s `PAID_ROUTE` is a constant and not a knob for exactly this
+  reason: a route added to it by configuration would be a second currency arriving quietly.
+
+Known limitations / deferred scope:
+- **Every dollar amount and allowance number is unset**, by the ticket's own design — they are
+  release-time inputs waiting on a measured per-session screen-control cost. `npm run usage` produces
+  that measurement and the manual-test rows say how to sanity-check the result.
+- **The period is the UTC calendar month, not a subscription's anchor date.** `entitlement/period.ts`
+  already records that a real billing period runs from a subscription's own anchor and that its
+  `periodStart` becomes the fallback when subscriptions land. Subscriptions have landed (SONNY-211),
+  and this branch adds a *second* call site to that function rather than resolving the question, which
+  is deliberate: an anchored period is a change to both consumers at once and belongs with whichever
+  ticket moves the first. Recorded here rather than filed, because the file it concerns already
+  carries the decision.
+- **Nothing refuses on this number and nothing renders it.** SONNY-213 and SONNY-214, both unstarted,
+  both blocked on this branch.
+- **No mutation battery was run.** The tree is green, the two suites are new, and the battery is owed
+  before merge under WORKFLOW.md step 5's "mutate the property" rule — the properties worth mutating
+  are the route restriction, the `upstream_duration_ms` filter, the plan-liveness rule and the
+  rounding.
+
+Open questions (required, write "none" if true):
+- **Whether "runs left" should fall by exactly one per run.** It does not, and that is deliberate: a
+  twelve-iteration session costs more than a three-iteration one, which is what "weighted by real
+  cost" means and what bounds the founders' exposure per run. The alternative — one session, one run —
+  reads more honestly as a count and leaves cost per run varying by the full twelve-to-one range. The
+  weights are configuration, so a founder can collapse the difference by setting `perIteration` and
+  `perMegapixel` to zero and pricing entirely on `perSession`; that is a numbers decision and not a
+  code change, which is the point.
+- **Whether the `credits` block should be on the wire at all.** It is diagnostic — the ticket's
+  verification asks the founders to sanity-check the numbers, and a run count with no visible
+  derivation cannot be sanity-checked. The Mac deliberately ignores it. If SONNY-214 finds it a
+  temptation to render, removing it is a one-field change.
+
+Next branch: SONNY-213 (the gate) and SONNY-214 (the usage indicator), both of which consume this
+seam rather than extending it; SONNY-215 (auto top-up) after them.
+
 ### Branch: chore/the-three-records-this-wave-owes
 Status: complete — SONNY-376, SONNY-378 and SONNY-379 Done; written 2026-08-31 before the PR opened
 Date: 2026-08-31

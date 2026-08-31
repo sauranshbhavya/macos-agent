@@ -444,6 +444,44 @@ tier this repository invented.
 Both halves are fail-closed and they fail closed differently: no capabilities means every gated
 capability is refused, and a `NULL` cap means the deployment's rather than none.
 
+### Screen-control runs left
+
+**The spend cap above is an anti-abuse ceiling; this is the product's allowance, and they are two
+different things on purpose** (SONNY-212). The cap counts every metered call and bounds a leaked
+credential. The allowance is what a plan buys, it is denominated in credits, and **screen control is
+the only line that draws on it** — everything else is free and uncapped against it. A standing
+watcher's repeated checks were written down on SONNY-236 as an exception and are not one: the
+founders decided on 2026-08-31 that watchers are free and *capped* instead, so "screen-control runs
+left this month" stays a single number rather than a pool two things spend out of.
+
+```
+GET /v1/account/credits   ->   { "screen_control_runs_left": 97, "screen_control_runs_included": 100, … }
+```
+
+**The pool is derived from §11's metering, not ledgered.** `src/credit/store.ts` sums this account's
+`screen.analyze` rows for the period; `src/credit/balance.ts` turns sessions, iterations and pixels
+into credits and credits into runs. There is no credit table, so there is nothing to reconcile,
+nothing to backfill, and no second writer of a fact §11 already records — the audit row *is* the
+charge. What that costs is that changing a weight re-prices the period under way, which is acceptable
+for a forward-looking estimate and would **not** be for a refusal; `balance.ts` says so where a later
+ticket will read it.
+
+**Only rows whose `upstream_duration_ms` is set draw.** That is the table's own record of "a provider
+call was opened", and it is the same question `entitlement/hook.ts` asks before charging a hold, so a
+credit draw and a cap charge agree about which requests were free. `provider` and `outcome` were both
+measured as wrong for this and `src/credit/store.ts` says why.
+
+**Every number is `CREDIT_PLANS`, and this repository has no default for it.** Tiers, allowances, the
+credit weights and what one run is worth all arrive in that one JSON value; startup refuses without
+it, for `SPEND_CAP_UNITS`' reason — an unset catalogue has no safe reading, since no allowance locks
+every user out of screen control and unlimited is an uncapped bill. The tier *count* is configuration
+too: the product decision today is free plus one paid tier, and `plans` is a list of any length.
+
+**Revoked, past-grace and unknown plans all fall to the catalogue's default tier.** A cancelled
+subscription keeps its plan *key* on the claim — so a client can say which plan ended — and does not
+keep its allowance. Of the two ways to be wrong, a smaller allowance than a user is owed is visible
+and complainable; a larger one is a bill nobody sees until it arrives.
+
 ### Which routes are gated
 
 **None, and that is this ticket's answer rather than an omission.** `CAPABILITY_REQUIRED` in
@@ -955,8 +993,11 @@ decision 2026-08-27), so a credentialed local container is this one command rath
 `SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added at the extension point
 SONNY-306 left, by SONNY-130 then SONNY-131 — `OPENAI_API_KEY`, `TAVILY_API_KEY` and
 `VISION_API_KEY`, the three credentials the five model routes need, and — by SONNY-135 —
-`ENTITLEMENT_SIGNING_KEY`, `ENTITLEMENT_SIGNING_KEY_ID` and `SPEND_CAP_UNITS`, which are required
-wherever auth is mounted. **The count is deliberately not written here**: it is
+`ENTITLEMENT_SIGNING_KEY`, `ENTITLEMENT_SIGNING_KEY_ID` and `SPEND_CAP_UNITS`, and — by SONNY-212 —
+`CREDIT_PLANS`, all of which are required wherever auth is mounted. `CREDIT_PLANS` is the one entry
+on that list that is not a credential: it carries tiers, allowances and credit weights and no secret
+of any kind, and it is forwarded because what decides the list is what `src/config.ts` requires,
+not what is sensitive. **The count is deliberately not written here**: it is
 `awk '/^PASSTHROUGH=\(/,/^\)/' server/scripts/deploy.sh | grep -cE '^  [A-Z]'`, run against the
 tree in front of you, because this sentence has already been a number that a later ticket made stale.
 `SUPABASE_ANON_KEY` is SONNY-307's, which also decided that
