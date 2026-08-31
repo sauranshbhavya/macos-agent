@@ -13,6 +13,8 @@ import {
 import { ConfigError } from "../src/config.js";
 import type { WithConnection } from "../src/db/connection.js";
 import { claimFactsFor, unprovisioned } from "../src/entitlement/store.js";
+import { isPublicRoute } from "../src/auth/gate.js";
+import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -184,6 +186,79 @@ describe("the webhook signature is the authentication", () => {
     expect(response.statusCode).toBe(401);
     expect(store.calls).toEqual([]);
     await app.close();
+  });
+
+  it("refuses a v1 entry that decodes to the wrong number of bytes, with a 401 and not a 500", async () => {
+    // **The guard in front of `timingSafeEqual`, which nothing held** (PR #178 review, F2; mutant R1
+    // survived). That function throws a `RangeError` on a length mismatch, and a throw inside a route
+    // handler is a 500 where a refusal is meant — the mistake `auth/token.ts:209` records this
+    // repository having made once already. Every `v1,` entry that reaches the comparison in any other
+    // test is a real HMAC-SHA256 and therefore exactly 32 bytes, so the wrong-secret and tampered-body
+    // cases all present the *right* length and never reach the throw; the two short literals elsewhere
+    // in this file are refused earlier, at the header and timestamp checks, and never reach the loop.
+    // This is the only shape that gets a wrong-length buffer to the compare: valid id, in-tolerance
+    // timestamp, and a `v1,` value that decodes to six bytes.
+    const store = recordingStore();
+    const app = build(store);
+    const body = subscriptionPayload("subscription.active", "active");
+    const timestamp = String(Math.floor(NOW.getTime() / 1000));
+
+    const response = await post(app, body, {
+      "content-type": "application/json",
+      "webhook-id": "msg_1",
+      "webhook-timestamp": timestamp,
+      "webhook-signature": "v1,anything",
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("auth.required");
+    expect(store.calls).toEqual([]);
+    await app.close();
+  });
+
+  it("refuses a timestamp that is in range for the regex and out of range for a Date", async () => {
+    // **The tolerance check failed OPEN for these** (PR #178 review, F3). A 13-to-15-digit second
+    // count overflows the ECMAScript `Date` range, so `getTime()` is `NaN`, `drift` is `NaN`, and
+    // `NaN > tolerance` is `false` — the comparison that exists to refuse said accept, and the
+    // `Invalid Date` then travelled on to Postgres and threw. Not an authentication bypass: the
+    // timestamp is inside the signed content, so only the provider or a holder of the secret reaches
+    // it at all. Signed honestly here for exactly that reason — the point is what a VALID delivery
+    // carrying such a value does.
+    const store = recordingStore();
+    const app = build(store);
+    const body = subscriptionPayload("subscription.active", "active");
+
+    for (const timestamp of ["8640000000001", "999999999999999", "-999999999999999"]) {
+      const response = await post(app, body, {
+        "content-type": "application/json",
+        "webhook-id": "msg_1",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": `v1,${signatureFor(Buffer.from(SECRET, "utf8"), "msg_1", timestamp, Buffer.from(body, "utf8"))}`,
+      });
+      expect(response.statusCode).toBe(401);
+      expect(store.calls).toEqual([]);
+    }
+    await app.close();
+  });
+
+  it("never returns a verdict carrying an Invalid Date", () => {
+    // The half of F3 that is about what travels onward rather than what is refused: `sentAt` becomes
+    // `occurredAt`'s fallback, so an `ok: true` verdict holding an unrepresentable instant is what
+    // reached the database as `0NaN-NaN-NaNTNaN:NaN:NaN.NaN+NaN:NaN`.
+    const timestamp = "8640000000001";
+    const body = Buffer.from("{}", "utf8");
+    const verdict = verifyWebhookSignature({
+      key: Buffer.from(SECRET, "utf8"),
+      headers: {
+        "webhook-id": "msg_1",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": `v1,${signatureFor(Buffer.from(SECRET, "utf8"), "msg_1", timestamp, body)}`,
+      },
+      body,
+      now: NOW,
+    });
+
+    expect(verdict).toEqual({ ok: false, refusal: "timestamp_malformed" });
   });
 
   it("refuses a delivery with no signature headers at all", async () => {
@@ -389,6 +464,31 @@ describe("what the provider says maps onto a neutral event", () => {
     expect(revoked.event.state).toBe("ended");
   });
 
+  it("treats an inherited Object key as unreadable, not as a status", () => {
+    // **`STATUS[status]` reached `Object.prototype`** (PR #178 review, F4), so `constructor` and its
+    // five siblings produced a truthy `state` that is not a `SubscriptionState` at all. `writeFor`'s
+    // exhaustive switch then matched nothing, returned `undefined`, and the delivery became a
+    // `TypeError` and a 500 rather than the recorded `unreadable` row the table's own doc comment
+    // promises. Same reachability as F3 — it needs the signing secret — so this is the table's "no
+    // default arm" claim being made true rather than an exploit being closed.
+    for (const status of [
+      "constructor",
+      "toString",
+      "valueOf",
+      "__proto__",
+      "hasOwnProperty",
+      "isPrototypeOf",
+    ]) {
+      const reading = read(subscriptionPayload("subscription.updated", status));
+      expect(reading.kind).toBe("unreadable");
+      if (reading.kind !== "unreadable") throw new Error("unreachable");
+      expect(reading.reason).toContain(status);
+    }
+    // The control: an ordinary unknown status behaves the same way, which is what says the guard did
+    // not simply move the failure somewhere else.
+    expect(read(subscriptionPayload("subscription.updated", "zzz")).kind).toBe("unreadable");
+  });
+
   it("ignores a delivery that is not about a subscription", () => {
     const reading = read(JSON.stringify({ type: "order.paid", data: { id: "ord_1" } }));
     expect(reading).toEqual({ kind: "ignored", eventId: "msg_1", eventType: "order.paid" });
@@ -502,6 +602,30 @@ describe("what a deployment has to configure", () => {
     // 404 and not 401: the route does not exist on a deployment that takes no payments, which is
     // the opposite call from the model routes and `app.ts` says why.
     expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("mounts exactly two billing routes, one challenged and one carried by its signature", async () => {
+    // **The gate's own population scan cannot see either of these** (PR #178 review, F6):
+    // `gate.test.ts` builds from `testConfig()`, which names no provider, so `app.ts` mounts neither
+    // route and the scan that exists to catch a route added without thought is blind to anything
+    // behind a config flag. `gate.test.ts` now scans a billing-configured app too; this is the same
+    // property from the billing side, so a third route added inside that scope fails here as well as
+    // there. Asserted as an exact list rather than a membership check, because what the scan is for
+    // is noticing an addition.
+    const app = build(recordingStore());
+    await app.ready();
+    const all = await registeredRoutes(app);
+    // The same guard `gate.test.ts` uses: proves the parse really parsed, so a filter that answers
+    // nothing cannot pass as "no billing routes were mounted".
+    expectPopulationIsReal(all);
+    const routes = all
+      .map((route) => `${route.method} ${route.url}`)
+      .filter((route) => route.includes("/v1/billing/"));
+
+    expect(routes.sort()).toEqual(["POST /v1/billing/checkout", "POST /v1/billing/webhook"]);
+    expect(isPublicRoute("POST", "/v1/billing/webhook")).toBe(true);
+    expect(isPublicRoute("POST", "/v1/billing/checkout")).toBe(false);
     await app.close();
   });
 

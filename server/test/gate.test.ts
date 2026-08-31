@@ -117,6 +117,50 @@ describe("which routes the gate challenges", () => {
     await app.close();
   });
 
+  it("challenges every route a BILLING-configured app serves too, which this scan could not see", async () => {
+    // **The scan builds from `testConfig()`, which names no payment provider, so `app.ts` mounted
+    // neither billing route and this population contained neither** (PR #178 review, F6). Nothing was
+    // unprotected — the checkout route has its own 401 test and the webhook has the signature tests —
+    // but the scan is the *mechanism* that catches a route added without a thought about auth, and it
+    // was blind to anything mounted behind a config flag. A second route added inside that billing
+    // scope later would have been invisible to it. This is the same scan over the other shape of the
+    // app, so the mechanism covers both.
+    const app = buildApp(
+      testConfig({
+        billingProvider: "polar",
+        billingWebhookSecret: "a-webhook-secret-that-is-not-a-real-one",
+        billingCheckoutUrl: "https://buy.example.test/checkout/abc",
+        billingPlans: "prod_x=paid:screen_control",
+        billingGraceDays: 14,
+      }),
+      { provider: new UnusedProvider(), withConnection: noDatabase },
+      { entitlementStore: fakeEntitlementStore() },
+    );
+    const routes = await registeredRoutes(app);
+    expectPopulationIsReal(routes);
+
+    // Both routes are in the population now, which is the half that was missing.
+    const billing = routes
+      .map((route) => `${route.method} ${route.url}`)
+      .filter((route) => route.includes("/v1/billing/"))
+      .sort();
+    expect(billing).toEqual(["POST /v1/billing/checkout", "POST /v1/billing/webhook"]);
+
+    // And every route this shape of the app serves is either public by a written decision or
+    // challenged — the same property the scan above asserts, over the larger population.
+    const unclassified = routes.filter(
+      (route) => !isPublicRoute(route.method, route.url) && route.url.startsWith("/v1/billing/"),
+    );
+    expect(unclassified.map((route) => `${route.method} ${route.url}`)).toEqual([
+      // The checkout route is authenticated like any other: absent from `PUBLIC_ROUTES`, challenged
+      // by the gate, with its own 401 test in `billing.test.ts`. The webhook is NOT here, because it
+      // is on the list — authenticated by its signature instead, which is the one entry in that list
+      // that is not public in the sense the six beside it are.
+      "POST /v1/billing/checkout",
+    ]);
+    await app.close();
+  });
+
   it("sees a route a third registrar adds, wherever in the plugin tree it added it", async () => {
     // What F5 was about, asserted rather than promised: had this scan still enumerated
     // `registerHealth` and `registerAuth`, it would report the same seven routes it always did while

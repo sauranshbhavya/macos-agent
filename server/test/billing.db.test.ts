@@ -36,6 +36,15 @@ const NOW = new Date("2026-08-30T12:00:00Z");
 describeDb("a subscription reaches the entitlement", () => {
   let client: pg.Client;
   let account: string;
+  const opened: pg.Client[] = [];
+
+  /** A second real connection, for the one property a shared client cannot express. */
+  const connect = async (): Promise<pg.Client> => {
+    const extra = new pg.Client({ connectionString: testDatabaseUrl() });
+    await extra.connect();
+    opened.push(extra);
+    return extra;
+  };
 
   const event = (
     overrides: Partial<SubscriptionEvent> & { state: SubscriptionState },
@@ -75,6 +84,7 @@ describeDb("a subscription reaches the entitlement", () => {
   });
 
   afterAllUnderHangBackstop(async () => {
+    for (const extra of opened) await extra.end();
     await client.end();
   });
 
@@ -286,6 +296,134 @@ describeDb("a subscription reaches the entitlement", () => {
     // it applies, and the row is what makes the second copy a no-op.
     expect((await apply({ kind: "ignored", eventId: "msg_1", eventType: "order.paid" })).outcome)
       .toBe("duplicate");
+  });
+
+  itUnderHangBackstop("twoConcurrentCopiesOfOneDeliveryProduceOneRowAndOneGrant", async () => {
+    // **The claim `store.ts`'s header, the PR body and the ticket all make, and which nothing held**
+    // (PR #178 review, F5): a concurrent duplicate blocks on the speculative-insertion lock and then
+    // takes its `DO NOTHING` branch. `aReplayedDeliveryChangesNothing` is sequential and this
+    // fixture's shared `client` serialises everything through one connection, so neither could
+    // express the race at all. Two real connections can. Eight of this suite's own database files
+    // already drive concurrency this way; `entitlement.db.test.ts` and `idempotency.db.test.ts` are
+    // the closest shapes, the second being the same "the first statement is the claim" design.
+    const a = await connect();
+    const b = await connect();
+    const delivery = event({ state: "active" });
+    const run = (on: pg.Client) =>
+      applyBillingDelivery(on, {
+        provider: POLAR,
+        reading: delivery,
+        plans: PLANS,
+        graceMilliseconds: GRACE_MS,
+      });
+
+    const [first, second] = await Promise.all([run(a), run(b)]);
+
+    // **Which one wins is not asserted, because it is a real race** — the reviewer observed the
+    // winner varying across runs. What is asserted is the invariant that holds whichever way it
+    // lands: exactly one applied, exactly one duplicate.
+    expect([first.outcome, second.outcome].sort()).toEqual(["applied", "duplicate"]);
+
+    const events = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM sonny.billing_event",
+    );
+    expect(events.rows[0]!.n).toBe(1);
+    const entitlements = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM sonny.entitlement",
+    );
+    expect(entitlements.rows[0]!.n).toBe(1);
+    // And the grant is the one the delivery describes, not a half-applied version of it.
+    expect((await readEntitlement(client, account)).capabilities).toEqual(["screen_control"]);
+  });
+
+  itUnderHangBackstop("aSecondSubscriptionOnOneAccountCannotRevokeTheLiveOne", async () => {
+    // **The gap the unique index does not cover, and the direction that costs the customer access**
+    // (PR #178 review, F1). `sonny.entitlement` is keyed on the account and holds one subscription
+    // id; before the fix, a second subscription's events simply overwrote the first's, so cancelling
+    // the *duplicate* set `revoked_at` and emptied the capabilities while the other subscription was
+    // still active and still billing — recorded as `applied`, so the audit table said nothing was
+    // wrong either.
+    await apply(event({ state: "active" }));
+
+    // The second subscription is refused and recorded rather than silently overwriting.
+    const second = await apply(
+      event({
+        eventId: "msg_2",
+        state: "active",
+        subscriptionId: "sub_456",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+    expect(second).toEqual({ outcome: "conflict", accountId: account });
+    expect(await recorded("msg_2")).toEqual({ outcome: "conflict", account_id: account });
+
+    // **The property that was broken**: cancelling the subscription that never granted anything must
+    // not revoke the access the live one grants.
+    const cancelled = await apply(
+      event({
+        eventId: "msg_3",
+        eventType: "subscription.revoked",
+        state: "ended",
+        subscriptionId: "sub_456",
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+    expect(cancelled.outcome).toBe("conflict");
+
+    const record = await readEntitlement(client, account);
+    expect(record.revokedAt).toBeNull();
+    expect(claimFactsFor(record, new Date(NOW.getTime() + 120_000)).capabilities)
+      .toEqual(["screen_control"]);
+  });
+
+  itUnderHangBackstop("aResubscriptionAfterACancellationIsNotAConflict", async () => {
+    // The other side of the liveness test, and the reason `refuseForeignSubscription` asks whether
+    // the row is live rather than whether it names a different subscription: cancel-then-resubscribe
+    // is the ordinary path and a new subscription must take the revoked row over.
+    await apply(event({ state: "active" }));
+    await apply(
+      event({
+        eventId: "msg_2",
+        eventType: "subscription.revoked",
+        state: "ended",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+
+    const fresh = await apply(
+      event({
+        eventId: "msg_3",
+        state: "active",
+        subscriptionId: "sub_789",
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+
+    expect(fresh).toEqual({ outcome: "applied", accountId: account });
+    const record = await readEntitlement(client, account);
+    expect(record.revokedAt).toBeNull();
+    expect(claimFactsFor(record, new Date(NOW.getTime() + 120_000)).capabilities)
+      .toEqual(["screen_control"]);
+  });
+
+  itUnderHangBackstop("aSecondSubscriptionIsRefusedWhileTheFirstIsMerelyPastDue", async () => {
+    // A row in grace is live — `revoked_at` is still NULL — so a second subscription beside a
+    // past-due one is the same anomaly and gets the same answer. Asserted because "live" is the whole
+    // of the test and a reader could reasonably expect past_due to count as not-live.
+    await apply(event({ state: "past_due", occurredAt: new Date(NOW.getTime() + 60_000) }));
+
+    const second = await apply(
+      event({
+        eventId: "msg_2",
+        state: "active",
+        subscriptionId: "sub_456",
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+
+    expect(second.outcome).toBe("conflict");
+    const record = await readEntitlement(client, account);
+    expect(record.pastDueSince).not.toBeNull();
   });
 
   itUnderHangBackstop("aSubscriptionCannotBeMovedOntoASecondAccount", async () => {
