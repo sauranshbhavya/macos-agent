@@ -61,6 +61,41 @@ import { z } from "zod";
  * the mistake that file spends a paragraph warning against, made in the file that consumes it.
  *
  * Every component is a rate a deployment sets, and any of them may be zero.
+ *
+ * ## Two of these three are priced on numbers the client declares
+ *
+ * Stated because it is a new consequence of this ticket and it was named nowhere
+ * (PR #182's review, F7). Under row 12 these fields were diagnostics, where a client lying corrupts
+ * only its own `npm run usage` output; pricing on them turns them into money.
+ *
+ * - **`perMegapixel` is self-reported.** `routes/screen.ts` validates `pixel_width` and
+ *   `pixel_height` as positive integers and never compares them against the image it decoded, so a
+ *   modified client can declare `1 x 1` while sending a full-resolution capture the vendor bills for.
+ * - **`perSession` is self-reported.** `session_id` is client-minted by design (§4.5 rule 5 — the
+ *   gateway holds no session state), and the draw counts `count(DISTINCT session_id)`, so a client
+ *   reusing one id for a whole month pays this weight once instead of once per session.
+ * - **`perIteration` is the honest one.** It counts rows the metering hook writes whether the caller
+ *   likes it or not, so nothing a client sends can deflate it.
+ *
+ * **The founders' exposure is still bounded, and by the spend cap rather than by anything here.**
+ * That was checked rather than assumed: the cap counts *calls*, is deliberately unweighted, and
+ * applies to every metered route — which is exactly why SONNY-212 declined `unitsForMeteredCall`'s
+ * invitation to weight it. So a client that deflates every declaration it can still makes one
+ * metered call per iteration, each charged one unit, each bounded in turn by §6.1's body limit and
+ * §12's deadlines. Total exposure per account per period is `SPEND_CAP_UNITS` maximum-size calls,
+ * whatever the weights say.
+ *
+ * **What is not bounded is the revenue, and the gap is the distance between two very different
+ * numbers.** `SPEND_CAP_UNITS` is an anti-abuse ceiling chosen so no legitimate user ever reaches
+ * it, so it necessarily sits far above any plan's allowance — a client that under-declares buys
+ * extra runs anywhere in between. Today that buys nothing at all, because nothing refuses on this
+ * number; **it becomes real at SONNY-213**, which is where the decision belongs.
+ *
+ * **A deployment that wants a non-gameable allowance already has one, with no code change:** set
+ * `perSession` and `perMegapixel` to zero and price entirely on `perIteration`. That is what the
+ * weights being configuration buys, and it is the cheapest answer available before anything refuses.
+ * Bounding `pixels` by the decoded byte length the route already computes is the other answer and is
+ * a bigger call than this file should take.
  */
 const weightsSchema = z.object({
   /** Credits charged once per session that drew anything at all — the fixed cost of starting one. */

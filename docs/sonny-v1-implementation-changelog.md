@@ -264,16 +264,25 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   leaked token to `SPEND_CAP_UNITS` calls — the exact cost SONNY-16 recorded. So the cap stays a
   count of metered calls (an operator's ceiling), the allowance is a separate weighted pool (a plan's
   purchase), and only one of them is a product-facing number. Both files now say which they are.
-- **`upstream_duration_ms IS NOT NULL` is the column that says a call cost money, and the two obvious
-  alternatives were measured wrong rather than rejected on taste.** `meteredUpstreamCall` sets
-  `upstreamAttempted` before the provider call and writes the duration in a `finally`, so the column
-  is non-null exactly when a call was opened and returned or threw — the same question
-  `entitlement/hook.ts` asks before charging a hold, so a draw and a charge agree about which
-  requests were free. **`provider` is wrong** because the router writes no attribution for a call that
-  threw, so a `provider_error` iteration that really reached a vendor carries a null provider and
-  pricing on it would give away every failed call. **`outcome` is wrong** more subtly: `outcomeFor`'s
-  last line returns `refused` when an upstream call *was* attempted and the error carried no provider
-  code, so `refused` does not mean "spent nothing" in every case that function can produce.
+- **Two columns say that a call cost money, and the first version of this bullet claimed one was
+  enough** (corrected by PR #182's review, F2). A row draws when `upstream_duration_ms` is set **or**
+  its outcome is `client_cancelled`. `meteredUpstreamCall` sets `upstreamAttempted` before the
+  provider call and writes the duration in a `finally` after it — but the metering event has a second
+  writer, `reply.raw.on("close", …)`, which fires while the handler is **still awaiting the
+  provider**, before that `finally` has run. So a user pressing Stop mid-run writes a row with
+  `upstreamAttempted: true`, `outcome: client_cancelled` and a **null** duration: the vendor was paid,
+  `entitlement/hook.ts` charged the spend cap, and a filter on the duration alone excluded it — the
+  iteration drew nothing, and a session made entirely of cancelled iterations paid no per-session
+  weight either. **The claim that the draw and the cap ask the same question was therefore false**,
+  in this file, in `server/src/credit/store.ts`, in `server/README.md` and in the PR body; all four
+  are corrected. They ask different questions — the cap reads a fact set *before* the call, the draw
+  reads the table, which is written at one of two moments — and the pair is what makes them agree on
+  every path rather than on every path where the handler finishes. **The two rejected alternatives
+  stay rejected**, and the reviewer constructed both: **`provider` alone is wrong** because the
+  router writes no attribution for a call that threw, so a `provider_error` iteration that really
+  reached a vendor carries a null provider; **`outcome` alone is wrong** more subtly, because
+  `outcomeFor`'s last line returns `refused` when an upstream call *was* attempted and the error
+  carried no provider code. The cancellation case is a *third* case, not a defence of either.
 - **A revoked or past-grace entitlement draws on the default tier while keeping its plan key.**
   `claimFactsFor` deliberately keeps `plan` on a revoked account so a client can say which plan ended;
   the allowance is the other half of that decision and goes the other way. The rule is

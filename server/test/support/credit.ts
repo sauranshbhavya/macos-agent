@@ -18,16 +18,34 @@ export function catalogueOf(input: {
   readonly runCredits: number;
   readonly monthlyCredits: readonly number[];
   readonly weights?: CreditCatalogue["weights"];
+  /**
+   * Which tier is the default. **Defaults to the first, and that default was a hole**
+   * (PR #182's review, F3): every catalogue in the suite had `defaultPlan === plans[0]`, so
+   * "returns the plan `defaultPlan` names" and "returns whatever is listed first" were the same
+   * behaviour everywhere and no test could tell them apart — a mutant returning `plans[0]` survived
+   * the whole suite. It is not academic: the two stop coinciding on a real deployment the moment an
+   * operator lists the paid tier first, and an unknown plan key then falls to *it*, which is the
+   * "unbounded bill nobody sees" `catalogue.ts` argues against. A test about the fallback passes a
+   * non-zero index.
+   */
+  readonly defaultIndex?: number;
 }): CreditCatalogue {
   const plans = input.monthlyCredits.map((monthlyCredits) => ({
     key: `plan-${randomUUID()}`,
     monthlyCredits,
   }));
+  const defaultIndex = input.defaultIndex ?? 0;
+  const fallback = plans[defaultIndex];
+  if (fallback === undefined) {
+    // Loudly, rather than silently building a catalogue whose `defaultPlan` names nothing: that is a
+    // fixture bug that would surface as `parseCreditCatalogue` refusing, several layers from here.
+    throw new Error(
+      `catalogueOf: defaultIndex ${defaultIndex} names no tier among ${plans.length}`,
+    );
+  }
   return {
     runCredits: input.runCredits,
-    // The first tier is the default, which is the free one in the shape the founders decided: the
-    // smallest thing an account can be.
-    defaultPlan: plans[0]!.key,
+    defaultPlan: fallback.key,
     weights: input.weights ?? { perSession: 0, perIteration: 1, perMegapixel: 0 },
     plans,
   };
@@ -63,12 +81,29 @@ export const TEST_CREDIT_PLANS = JSON.stringify({
 export function fakeCreditStore(facts: {
   planKey?: string | undefined;
   draw?: { sessions: number; iterations: number; pixels: number };
-}): { factsFor: (accountId: string, now: Date) => Promise<CreditFacts>; asked: Date[] } {
+}): {
+  factsFor: (accountId: string, now: Date) => Promise<CreditFacts>;
+  asked: Date[];
+  /**
+   * Every account id the store was asked about, in order.
+   *
+   * **This exists because nothing held that the route reads the *caller's* account**
+   * (PR #182's review, F6): replacing `caller.accountId` with a fixed UUID in `routes/credits.ts`
+   * passed the entire suite. The argument was ignored here (`_accountId`) and the route test
+   * asserted only that an unauthenticated request gets a 401, so the second half of its own name —
+   * "and nobody else's" — was unchecked. A route that serves one account's balance to another is the
+   * whole of what that name promises, and `gate.test.ts`'s own comment on this route says why.
+   */
+  askedAbout: string[];
+} {
   const asked: Date[] = [];
+  const askedAbout: string[] = [];
   return {
     asked,
-    factsFor: (_accountId, now) => {
+    askedAbout,
+    factsFor: (accountId, now) => {
       asked.push(now);
+      askedAbout.push(accountId);
       return Promise.resolve({
         planKey: facts.planKey,
         draw: facts.draw ?? { sessions: 0, iterations: 0, pixels: 0 },

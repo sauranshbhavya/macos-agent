@@ -44,25 +44,43 @@ function count(value: string | number | null | undefined): number {
 /**
  * What one account's screen control consumed between two instants.
  *
- * **`upstream_duration_ms IS NOT NULL` is what separates an iteration that cost money from one that
- * did not**, and the column choice is a measurement rather than a preference:
+ * **Two columns together say that an iteration cost money, and it took a defect to establish that
+ * one was not enough** (PR #182's review, F2).
  *
- * - `metering/hook.ts`'s `meteredUpstreamCall` sets `upstreamAttempted` *before* the provider call
- *   and writes the duration in a `finally`, so the column is non-null exactly when a call was opened
- *   and returned or threw. That is the same "was a provider reached" question `entitlement/hook.ts`
- *   asks before it charges a hold, so a credit draw and a cap charge agree about which requests were
- *   free.
- * - **`provider` would be wrong**, and it is the obvious candidate: it is written from the router's
- *   attribution, which a *failed* call never produces — so a `provider_error` iteration that really
- *   did reach a vendor carries a null provider, and pricing on that column would silently give away
- *   every failed call.
- * - **`outcome` would also be wrong**, more subtly. `outcomeFor`'s last line returns `refused` when
+ * `metering/hook.ts`'s `meteredUpstreamCall` sets `upstreamAttempted` *before* the provider call and
+ * writes the duration in a `finally` afterwards, so `upstream_duration_ms` is non-null whenever a
+ * call was opened and the handler lived long enough to see it return or throw. **The metering event
+ * has a second writer, and it fires in between.** `reply.raw.on("close", …)` writes the row when the
+ * caller disconnects while the handler is still awaiting the provider — at which point the `finally`
+ * has not run, so the row lands with `upstreamAttempted: true` (hence `outcome: 'client_cancelled'`)
+ * and a **null** duration. The vendor has been paid, `entitlement/hook.ts` has charged the spend
+ * cap, and a filter on the duration alone excluded the row: the iteration drew nothing, contributed
+ * no pixels, and did not even count toward `sessions`, so a session made entirely of cancelled
+ * iterations paid no per-session weight either. A user pressing Stop mid-run got it free.
+ *
+ * That case is ordinary and it is on the paid route specifically — Stop, quitting the app, or losing
+ * the network mid-iteration all close the socket while the vision call is in flight — so
+ * `outcome = 'client_cancelled'` is read **additively**, never instead of the duration.
+ *
+ * **The two rejected candidates are still rejected, and each was constructed rather than reasoned
+ * about:**
+ *
+ * - **`provider` alone would be wrong.** It is written from the router's attribution, which a
+ *   *failed* call never produces — so a `provider_error` iteration that really did reach a vendor
+ *   carries a null provider, and pricing on that column silently gives away every failed call.
+ * - **`outcome` alone would be wrong**, more subtly. `outcomeFor`'s last line returns `refused` when
  *   an upstream call *was* attempted and the error carried no provider code, so `refused` does not
  *   mean "spent nothing" in every case the function can produce.
  *
- * A session all of whose iterations were refused contributes no rows here at all, so it is not
- * counted in `sessions` either and pays no per-session weight. That is the intended reading: nothing
- * was spent on it.
+ * **What the draw and the spend cap each ask, stated exactly, because the sentence here used to say
+ * they asked the same question and they do not.** The cap asks `upstreamWasAttempted(request)`,
+ * which reads a fact set *before* the call. The draw asks the table, which is written at one of two
+ * moments. The pair above is what makes the two agree on every path this gateway has — including the
+ * one where the handler never finishes — rather than on every path where it does.
+ *
+ * A session all of whose iterations were refused before any provider call contributes no rows here
+ * at all, so it is not counted in `sessions` either and pays no per-session weight. That is the
+ * intended reading: nothing was spent on it.
  */
 export async function readScreenControlDraw(
   client: pg.Client,
@@ -76,7 +94,7 @@ export async function readScreenControlDraw(
       WHERE account_id = $1
         AND route = $2
         AND session_id IS NOT NULL
-        AND upstream_duration_ms IS NOT NULL
+        AND (upstream_duration_ms IS NOT NULL OR outcome = 'client_cancelled')
         AND occurred_at >= $3
         AND occurred_at < $4`,
     [input.accountId, PAID_ROUTE, input.since, input.until],

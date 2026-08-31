@@ -129,9 +129,16 @@ describeDb("what draws on the credit pool", () => {
   });
 
   itUnderHangBackstop("charges nothing for an iteration that reached no provider", async () => {
-    // `upstream_duration_ms IS NULL` is the table's record of "no provider call was opened at all":
-    // a validation refusal, an oversize capture, a route with no configured adapter. A session made
-    // entirely of those is not counted as a session either, so it pays no per-session weight.
+    // A null `upstream_duration_ms` **beside an outcome of `refused`** is the table's record of "no
+    // provider call was opened at all": a validation refusal, an oversize capture, a route with no
+    // configured adapter. A session made entirely of those is not counted as a session either, so it
+    // pays no per-session weight.
+    //
+    // **The qualification is the correction** (PR #182's review, F2). This comment repeated
+    // migration `0012`'s own enumeration, which omits the case where the duration is null because the
+    // handler never got to write it — a cancellation mid-provider-call, covered by the arm below.
+    // Reading a null duration as "nothing was spent" was the defect; it is only that when the
+    // outcome agrees.
     await insert(
       event({ sessionId: "refused-session", sessionIteration: 1, upstreamDurationMs: null,
               provider: null, outcome: "refused" }),
@@ -155,6 +162,39 @@ describeDb("what draws on the credit pool", () => {
       sessions: 1,
       iterations: 1,
       pixels: 1_000_000,
+    });
+  });
+
+  itUnderHangBackstop("charges a cancelled iteration, whose duration never landed", async () => {
+    // **PR #182's review, F2.** The metering event has a second writer — the response's `close`
+    // listener — and it fires while the handler is still awaiting the provider, before
+    // `meteredUpstreamCall`'s `finally` has written the duration. So this row shape is what a user
+    // pressing Stop mid-run produces: the vendor was paid, `entitlement/hook.ts` charged the spend
+    // cap, and `upstream_duration_ms` is NULL. A filter on the duration alone gave it away free.
+    // `credit.test.ts`'s `a cancelled screen-control iteration really does write a row of this
+    // shape` is what proves the row is reachable rather than invented here.
+    await insert(
+      event({ sessionId: "cancelled-session", sessionIteration: 1, provider: null,
+              outcome: "client_cancelled", upstreamDurationMs: null }),
+    );
+    expect(await readScreenControlDraw(client, window())).toEqual({
+      sessions: 1,
+      iterations: 1,
+      pixels: 1_000_000,
+    });
+
+    // And the exclusion it must not take with it: a cancellation that arrived BEFORE any provider
+    // call is `refused`, not `client_cancelled` (`outcomeFor` takes exactly that branch), and it
+    // still draws nothing.
+    await client.query("TRUNCATE sonny.metering_event");
+    await insert(
+      event({ sessionId: "cancelled-early", sessionIteration: 1, provider: null,
+              outcome: "refused", upstreamDurationMs: null }),
+    );
+    expect(await readScreenControlDraw(client, window())).toEqual({
+      sessions: 0,
+      iterations: 0,
+      pixels: 0,
     });
   });
 
@@ -202,6 +242,34 @@ describeDb("what draws on the credit pool", () => {
       "SELECT count(*) AS count FROM sonny.metering_event",
     );
     expect(Number(rows[0]!.count)).toBe(3);
+  });
+
+  itUnderHangBackstop("excludes the very first instant of the next period", async () => {
+    // **PR #182's review, F4.** The arm above back-dates to 23:59:59.999, comfortably inside the
+    // window, so it holds that an OLD row is excluded and says nothing about which side of `until`
+    // the boundary falls on. `occurred_at < $4` is exclusive, and an inclusive one would count
+    // midnight UTC on the 1st into the period that just closed — a real answer to give a user, at
+    // the one moment they are most likely to look.
+    await insert(event({ sessionId: "next-period", sessionIteration: 1 }));
+    await backDateAllTo(new Date("2026-09-01T00:00:00.000Z"));
+    expect(await readScreenControlDraw(client, window())).toEqual({
+      sessions: 0,
+      iterations: 0,
+      pixels: 0,
+    });
+
+    // One millisecond earlier is the last instant this period owns, and it is counted — so the zero
+    // above is a boundary and not a query matching nothing.
+    await backDateAllTo(new Date("2026-08-31T23:59:59.999Z"));
+    expect(await readScreenControlDraw(client, window())).toEqual({
+      sessions: 1,
+      iterations: 1,
+      pixels: 1_000_000,
+    });
+
+    // And the lower bound is inclusive: the period's own first instant belongs to it.
+    await backDateAllTo(new Date("2026-08-01T00:00:00.000Z"));
+    expect((await readScreenControlDraw(client, window())).iterations).toBe(1);
   });
 
   itUnderHangBackstop("counts this account and not another's", async () => {
