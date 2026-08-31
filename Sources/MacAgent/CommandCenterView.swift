@@ -4648,7 +4648,20 @@ enum MemoryDeletionCopy {
     /// about to remove, and the whole point here is that the contents are unknown — a per-category
     /// version would be nine ways of saying the same unknowable thing.
     static func unreadableMessage(for category: MemoryCategory) -> String {
-        "Sonny can't read this, so it can't tell you what's in it. \(category.title) starts over. Sonny keeps the file it can't read instead of deleting it."
+        let base = "Sonny can't read this, so it can't tell you what's in it. \(category.title) starts over. Sonny keeps the file it can't read instead of deleting it."
+        // **The one consequence Sonny does know without opening the file** (founder decision on F5,
+        // PR #184). `resumable-tasks.json` holds standing watchers beside the unfinished tasks this
+        // row is named for, and moving it aside takes it out of the path the checker reads — so
+        // every watcher in it stops, permanently, and none of the four endings fires. The rest of
+        // this sentence is honest about *contents* being unknowable and was silent about that.
+        //
+        // Said here rather than as a notification, which was the declined option: a banner would put
+        // something the user cannot act on in front of them, and this is the surface they are
+        // already looking at when it becomes true.
+        guard category.stores.contains(.resumableTasks) else {
+            return base
+        }
+        return base + " Any watchers in it have stopped."
     }
 
     /// What the Memory page reports after a per-type Delete.
@@ -4658,6 +4671,16 @@ enum MemoryDeletionCopy {
     /// unchanged, so a row with nothing wrong with it reports exactly what it always did.
     static func outcome(for category: MemoryCategory, deletedFileCount: Int, keptFileCount: Int) -> String {
         guard keptFileCount > 0 else {
+            // **A row that owns no file counts none** (SONNY-236). The file figure is the whole point
+            // of this sentence for twelve of the thirteen stores — a destructive press reporting a
+            // concrete, checkable fact about the disk — and it is a falsehood for a row whose delete
+            // rewrites a file it shares rather than removing one. Without this branch a successful
+            // press on Unfinished tasks reported "0 files", which reads as a delete that did nothing.
+            guard category.stores.contains(where: { $0.rowDeletionScope == .wholeFile }) else {
+                // No count and no "starts over": the row's title is a plural noun phrase, so the
+                // sibling sentence below would render "Unfinished tasks starts over."
+                return "Deleted \(category.title.lowercased())."
+            }
             let noun = deletedFileCount == 1 ? "file" : "files"
             return "Deleted \(category.title.lowercased()) — \(deletedFileCount) \(noun)."
         }

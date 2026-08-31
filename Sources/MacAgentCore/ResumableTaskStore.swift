@@ -241,6 +241,99 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// The collections `resumable-tasks.json` holds, and what Settings' wipe sentence calls each of
+/// them.
+///
+/// **This exists because one derivation is not reachable and the gap it leaves is a data-loss
+/// disclosure** (SONNY-236). The wipe's sentence is built from `LocalStore.allCases`, and a second
+/// collection inside an existing store's file adds no case there — so watchers would be deleted by a
+/// press whose own sentence never named them, which is exactly the defect
+/// `theWipesOwnSentenceNamesEveryStoreItDeletes` was written to make impossible for a *store*.
+/// Nothing in the type system connects "this file gained a stored property" to "the sentence gained
+/// a phrase", so this enum is the declaration that stands in for it, and
+/// `theWipesOwnSentenceNamesEveryCollectionInEveryStore` binds the two by counting
+/// `ResumableTaskFile`'s stored properties against these cases: a third collection makes the counts
+/// disagree and fails there rather than arriving unnamed.
+///
+/// **The count assertion is the load-bearing half, not the switch.** An exhaustive switch only
+/// guarantees that every *case* has a name; it says nothing about a stored property that never
+/// became a case, which is the direction this actually has to cover. `ProductShellTests`' stored-
+/// property classifier is the same trick against the same blindness.
+enum ResumableTaskFileCollection: CaseIterable {
+    case tasks
+    case watchers
+
+    /// Lower case and standing alone, the rule `LocalStore.deletionCopyNames` states: each of these
+    /// lands mid-list in a sentence naming fourteen things.
+    var wipeCopyName: String {
+        switch self {
+        case .tasks:
+            return "unfinished tasks"
+        case .watchers:
+            // "watchers", not "standing watchers": the neighbouring items in that sentence are bare
+            // plurals of the product's own nouns — routines, workspaces, snippets — and "standing"
+            // is the ticket's word for the shape rather than the user's word for the thing.
+            return "watchers"
+        }
+    }
+}
+
+/// What `resumable-tasks.json` holds: unfinished runs, and standing watchers beside them.
+///
+/// **Two collections in one file, because this store stays the thirteenth.** SONNY-210 built it,
+/// SONNY-235 extends the task record and SONNY-236 adds watchers, and none of the three adds a
+/// fourteenth `LocalStore` — a new file would need a case there, a URL in the wipe, a line in the
+/// wipe's sentence, a Memory classification and the rest of the six-things-a-store-is list. The two
+/// collections are siblings rather than one generalised record: a watcher has no plan, no steps and
+/// nothing to resume, so folding it into `ResumableTask` would leave every reader of that type
+/// needing a filter (see `StandingWatcher`'s own note).
+///
+/// **The file used to be a bare JSON array of tasks, and files written that way still decode.** The
+/// legacy shape is recognised by its *shape* — a top-level array — and read as tasks with no
+/// watchers. Nothing forces a rewrite on load: the store's expire-on-read, drop-on-write rule is
+/// there because load is the path that has to stay cheap, and the container is produced by the next
+/// write that happens for its own reasons. So a user who never starts a watcher and never
+/// checkpoints a run keeps an array on disk forever, and that is correct rather than a migration
+/// that has not run.
+struct ResumableTaskFile: Codable, Equatable, Sendable {
+    var tasks: [ResumableTask]
+    var watchers: [StandingWatcher]
+
+    init(tasks: [ResumableTask], watchers: [StandingWatcher]) {
+        self.tasks = tasks
+        self.watchers = watchers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tasks
+        case watchers
+    }
+
+    init(from decoder: Decoder) throws {
+        // **Shape first, not try-and-fall-back.** Deciding by catching a keyed decode's failure
+        // would make every genuine error inside the container — a corrupt watcher, a plan that will
+        // not decode — look like a legacy file, and the fallback would then fail with a message
+        // about the wrong shape entirely. `unkeyedContainer()` succeeds only when the top level
+        // really is an array, so this asks the one question that separates the two formats and
+        // lets every other failure propagate as itself.
+        if var array = try? decoder.unkeyedContainer() {
+            var decoded: [ResumableTask] = []
+            while !array.isAtEnd {
+                decoded.append(try array.decode(ResumableTask.self))
+            }
+            self.init(tasks: decoded, watchers: [])
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            tasks: try container.decode([ResumableTask].self, forKey: .tasks),
+            // `decodeIfPresent`, so a container written before watchers existed reads as none rather
+            // than failing — which would take every unfinished task in the file down with it.
+            watchers: try container.decodeIfPresent([StandingWatcher].self, forKey: .watchers) ?? []
+        )
+    }
+}
+
 /// The **thirteenth** local store, on the shared pattern exactly: runs that began and did not finish.
 ///
 /// **Lifecycle, as the founder decided it on 2026-08-22:** a record lives until its task completes
@@ -296,6 +389,11 @@ public struct ResumableTaskStore: @unchecked Sendable {
     public let fileURL: URL
     public let idleExpiry: TimeInterval
     public let maxTasks: Int
+    /// The standing-watcher cap. Injectable for tests exactly as `idleExpiry` and `maxTasks` are,
+    /// and for the same reason: reaching `maxActive` otherwise means creating the shipped number of
+    /// real watchers. `noProductionPathBuildsItsOwnStandingWatcherLimits` pins that nothing in `Sources/`
+    /// passes anything but `.standard`.
+    public let limits: StandingWatcherLimits
     private let fileManager: FileManager
     private let encryption: LocalStorageEncryption
 
@@ -314,13 +412,17 @@ public struct ResumableTaskStore: @unchecked Sendable {
         fileManager: FileManager = .default,
         encryption: LocalStorageEncryption = .shared,
         idleExpiry: TimeInterval = ResumableTaskStore.defaultIdleExpiry,
-        maxTasks: Int = ResumableTaskStore.defaultMaxTasks
+        maxTasks: Int = ResumableTaskStore.defaultMaxTasks,
+        limits: StandingWatcherLimits = .standard
     ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
         self.idleExpiry = max(1, idleExpiry)
         self.maxTasks = max(1, maxTasks)
+        // Already floored by `StandingWatcherLimits.init`, so nothing is re-floored here — a second
+        // copy of that rule is the shape this repository consolidates away.
+        self.limits = limits
     }
 
     /// Where the shipping app keeps this store.
@@ -337,19 +439,25 @@ public struct ResumableTaskStore: @unchecked Sendable {
     /// The order is the offer's order: the thing the user was doing most recently is the thing to
     /// raise first.
     public func loadAll(now: Date = Date()) throws -> [ResumableTask] {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            return []
-        }
-        let data = try Data(contentsOf: fileURL)
-        let decoded = try encryption.decode(
-            [ResumableTask].self,
-            from: data,
-            decoder: .resumableTaskISO8601
-        )
-        return decoded
-            .migratingLegacyPlaintext(store: "unfinished tasks", write: write)
+        try loadFile()
+            .tasks
             .filter { !hasGoneIdle($0, now: now) }
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Every standing watcher, oldest first.
+    ///
+    /// **Nothing is filtered out here, unlike `loadAll`.** A task that has gone idle is dropped
+    /// silently because nobody is waiting to be told about it; a watcher whose lifetime has run out
+    /// is the opposite — its expiry is a thing the user is owed a sentence about
+    /// (`StandingWatcherStopReason.expired`), so it has to reach the checker rather than vanish on
+    /// the read that would have found it. Retiring an expired watcher is the checker's job and it
+    /// notifies while doing it.
+    ///
+    /// Oldest first, which is check order: the watcher that has been waiting longest is looked at
+    /// first when a pulse can only get through some of them.
+    public func loadWatchers() throws -> [StandingWatcher] {
+        try loadFile().watchers.sorted { $0.createdAt < $1.createdAt }
     }
 
     /// Inserts or replaces one record, dropping anything that has gone idle in the same write.
@@ -364,13 +472,17 @@ public struct ResumableTaskStore: @unchecked Sendable {
             throw ResumableTaskStoreError.planTooLarge(bytes: encodedPlan.count, limit: Self.maxEncodedPlanBytes)
         }
 
-        var tasks = try loadAll(now: now)
+        let file = try loadFile()
+        var tasks = file.tasks.filter { !hasGoneIdle($0, now: now) }
         if let index = tasks.firstIndex(where: { $0.id == task.id }) {
             tasks[index] = task
         } else {
             tasks.append(task)
         }
-        try write(capped(tasks))
+        // `file.watchers` carried through untouched. A task write that dropped the watchers sharing
+        // this file would end every standing watcher the moment any run checkpointed, which is
+        // silent in both directions — nothing fails, and the user is simply never told again.
+        try write(ResumableTaskFile(tasks: capped(tasks), watchers: file.watchers))
     }
 
     /// Forgets one unfinished task.
@@ -389,19 +501,98 @@ public struct ResumableTaskStore: @unchecked Sendable {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
         }
-        let tasks = try loadAll(now: now)
+        let file = try loadFile()
+        let tasks = file.tasks.filter { !hasGoneIdle($0, now: now) }
         let remaining = tasks.filter { $0.id != id }
         guard remaining.count != tasks.count else {
             return
         }
-        try write(remaining)
+        try write(ResumableTaskFile(tasks: remaining, watchers: file.watchers))
     }
 
+    /// **Every unfinished task, and nothing else in this file.**
+    ///
+    /// This is what Command Center's Memory row presses (SONNY-236, founder decision 2026-08-31),
+    /// and it exists because that row is labelled *Unfinished tasks* while the file underneath it
+    /// also holds standing watchers. The row used to delete through
+    /// `LocalDataDeletionService.deleteStoreFilesOnly()`, which unlinks the file — correct while the
+    /// file held one kind of thing, and a mislabelled delete the moment it held two. A user pressing
+    /// Delete on a row named for unfinished tasks has no reason to expect their watchers to be in
+    /// scope, and CLAUDE.md's account of PR #110's F2 is that calling the wrong deletion door is
+    /// silent in every direction.
+    ///
+    /// **Rewrites rather than unlinks**, which is the whole difference from `deleteAll()` below, and
+    /// the reason the two are named apart rather than sharing one door with a flag: a caller that
+    /// picks the wrong one loses data it promised to keep, so the choice should be visible in the
+    /// call.
+    public func deleteAllTasks() throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return
+        }
+        let file = try loadFile()
+        guard !file.tasks.isEmpty else {
+            // Nothing to remove, so nothing is rewritten. The same no-op rule `delete(id:)` follows,
+            // and here it also means a press on an empty row cannot re-encrypt the watchers for no
+            // reason.
+            return
+        }
+        try write(ResumableTaskFile(tasks: [], watchers: file.watchers))
+    }
+
+    /// **The whole file: every unfinished task and every standing watcher.**
+    ///
+    /// Not the Memory row's door — that is `deleteAllTasks()` above, and the distinction is
+    /// load-bearing. This is the file-level delete, and what reaches it is
+    /// `LocalDataDeletionService` doing Settings' whole wipe, which is the one control that says it
+    /// takes everything.
     public func deleteAll() throws {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
         }
         try fileManager.removeItem(at: fileURL)
+    }
+
+    /// Inserts or replaces one standing watcher.
+    ///
+    /// **The cap is enforced here, and it refuses rather than evicts** (`StandingWatcherLimits.maxActive`).
+    /// Every other cap in this repository's stores drops the oldest record — `capped(_:)` directly
+    /// below does exactly that for tasks — and that is right for a record nobody asked for, which is
+    /// what an unfinished-task checkpoint is. A watcher is the opposite: the user said the sentence
+    /// that created it, so silently ending one to make room for another is losing something they
+    /// asked for, with no notification and no trace. Refusing is a sentence Sonny can say instead.
+    ///
+    /// **Only an insert is capped.** An update is how a check records its own result, so refusing one
+    /// at the cap would freeze every watcher's state the moment the fifth was created — and the
+    /// record that then failed to save is the one carrying the reading that would have fired.
+    public func saveWatcher(_ watcher: StandingWatcher) throws {
+        let file = try loadFile()
+        var watchers = file.watchers
+        if let index = watchers.firstIndex(where: { $0.id == watcher.id }) {
+            watchers[index] = watcher
+        } else {
+            guard watchers.count < limits.maxActive else {
+                throw StandingWatcherStoreError.tooManyWatchers(limit: limits.maxActive)
+            }
+            watchers.append(watcher)
+        }
+        try write(ResumableTaskFile(tasks: file.tasks, watchers: watchers))
+    }
+
+    /// Forgets one standing watcher — what the user's Stop press does, and what the checker does to a
+    /// watcher that has finished.
+    ///
+    /// Deleting something already gone is a silent no-op that does not rewrite the file, the rule
+    /// every other delete in this store follows.
+    public func deleteWatcher(id: String) throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return
+        }
+        let file = try loadFile()
+        let remaining = file.watchers.filter { $0.id != id }
+        guard remaining.count != file.watchers.count else {
+            return
+        }
+        try write(ResumableTaskFile(tasks: file.tasks, watchers: remaining))
     }
 
     private func hasGoneIdle(_ task: ResumableTask, now: Date) -> Bool {
@@ -416,12 +607,29 @@ public struct ResumableTaskStore: @unchecked Sendable {
         return Array(tasks.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxTasks))
     }
 
-    private func write(_ tasks: [ResumableTask]) throws {
+    /// The file as it is on disk, both collections, before any expiry or ordering rule is applied.
+    ///
+    /// One reader for both collections rather than two, so a task write and a watcher write cannot
+    /// come to different conclusions about what the file currently holds.
+    private func loadFile() throws -> ResumableTaskFile {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return ResumableTaskFile(tasks: [], watchers: [])
+        }
+        let data = try Data(contentsOf: fileURL)
+        let decoded = try encryption.decode(
+            ResumableTaskFile.self,
+            from: data,
+            decoder: .resumableTaskISO8601
+        )
+        return decoded.migratingLegacyPlaintext(store: "unfinished tasks", write: write)
+    }
+
+    private func write(_ file: ResumableTaskFile) throws {
         try fileManager.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let data = try encryption.encode(tasks, encoder: .resumableTaskPrettySorted)
+        let data = try encryption.encode(file, encoder: .resumableTaskPrettySorted)
         try data.write(to: fileURL, options: .atomic)
     }
 }
@@ -434,6 +642,26 @@ public enum ResumableTaskStoreError: Error, Equatable, LocalizedError {
         switch self {
         case .planTooLarge(let bytes, let limit):
             return "This task's plan is \(bytes) bytes, over the \(limit)-byte limit for resuming, so Sonny did not keep it."
+        }
+    }
+}
+
+/// The one failure the watcher half of this store has that is not a file-system or encryption
+/// failure.
+///
+/// Its own type rather than a case on `ResumableTaskStoreError`, because the two are read by
+/// different callers about different things and only one of them is a task: a caller catching "this
+/// plan is too big to resume" has no sensible branch for "you already have five watchers".
+public enum StandingWatcherStoreError: Error, Equatable, LocalizedError {
+    case tooManyWatchers(limit: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .tooManyWatchers(let limit):
+            // Says what to do, because there is something to do. The cap is deliberately small
+            // enough that a person can name what their five watchers are for, so "stop one" is a
+            // real instruction rather than the product refusing and leaving them there.
+            return "Sonny is already watching \(limit) things, which is the most it will watch at once. Stop one of them and ask again."
         }
     }
 }

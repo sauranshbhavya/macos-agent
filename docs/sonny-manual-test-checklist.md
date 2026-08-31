@@ -2513,6 +2513,155 @@ list only fills up by answering the real per-app question in a real session.
       next step, and it does not re-ask. (The dialog is new since the review round; a founder
       following the old wording would have met a step this row did not describe.)
 
+### A standing watcher tells you something changed (new 2026-08-31, SONNY-236)
+
+A watcher is the one feature in Sonny whose entire output is a notification, hours or days after you
+asked. **No agent can verify that a banner fires** — the wiring is pinned by a source scan, and that
+scan proves the code posts into the right category, not that macOS drew anything.
+
+**Read this whole paragraph before you start, because two things make these rows expensive if you
+don't.**
+
+- **You must run a packaged build.** `swift run MacAgent` has no bundle identity, so
+  `SonnyNotificationService.init?` returns nil and *no notification path exists at all* — you would
+  see nothing and correctly conclude the feature was broken. Run `./scripts/package-app.sh` and open
+  `.build/arm64-apple-macosx/debug/MacAgent.app`. This is CLAUDE.md's standing rule; it is repeated
+  here because the symptom of ignoring it is silence, which looks exactly like a defect.
+- **Shorten two constants in your local build first, and these two values are chosen so every row
+  below fits one build.** A watcher checks every 15 minutes and reports a change only on the
+  **second** consecutive matching reading, so unedited the shortest row is half an hour and the
+  longest is two hours. Before packaging, in `Sources/MacAgentCore/StandingWatcher.swift`, edit
+  `StandingWatcherLimits.standard`: `checkInterval: 15 * 60` → `checkInterval: 30`, and
+  `maxLifetime: 7 * 24 * 60 * 60` → `maxLifetime: 600`.
+
+  The arithmetic, so you can see nothing here is arbitrary and so a row that behaves differently is a
+  real finding: at a 30-second interval a **change** needs 2 checks (about a minute), a **churning**
+  page needs 4 (two minutes), an **unreachable** page needs 8 (four minutes), and the lifetime is ten
+  minutes — comfortably longer than the longest row, which matters because expiry is checked *before*
+  due-ness, so too short a lifetime retires a watcher before it can reach any other ending.
+  **`maxLifetime: 120` does not work** and was what this section first said: the unreachable row needs
+  210 seconds and the watcher would expire at 120.
+
+  **Change both back to `15 * 60` and `7 * 24 * 60 * 60` before committing anything** —
+  `theShippedCapIsTheOneRecordedOnTheTicket` fails if you don't, which is the backstop rather than the
+  reminder.
+- **What these rows cover, and one thing they deliberately do not.** A page that **fails fast** — a
+  404, a refused connection, a blocked host — is covered by the unreachable row below: eight failures
+  and the watcher stops saying so. A page that **hangs** — accepts the connection and never answers —
+  is **not covered by any row, by decision**, and this is stated rather than left as an absence.
+
+  That case was PR #184's F3, and it was blocking: one hanging page held the checker's single slot
+  forever, stopping every other watcher with nothing reported. The fix abandons a check that has been
+  in flight past `checkTimeout` and records it as a failed reading so the cap can still end it.
+  **None of that is manually reachable**, because `SafeURL.isPrivateOrLocalHost` refuses `localhost`,
+  `.local`, loopback, RFC1918, link-local and CGNAT — so the obvious arrangement, `nc -l 8080` and a
+  watcher on `http://localhost:8080/`, never opens a socket. It throws before fetching, which is a
+  *failed reading* and lands on the fast-failure path: a founder trying it would see the unreachable
+  ending after eight checks and conclude the stall path works, having never touched it. That is worse
+  than no coverage. Arranging a genuine hang needs a public host that accepts and never responds — a
+  VPS or a tunnelling service — and that refusal in `SafeURL` is a security property that must not be
+  weakened to make a test possible.
+
+  Held instead by `onePageThatNeverAnswersIsAbandonedAndDoesNotStopTheOthers`,
+  `aStalledCheckThatAnswersLateWritesNothing` and
+  `theCheckTimeoutAndTheCheckIntervalComposeInTheShortenedBuild`.
+
+- **One number interacts with your shortened build and it is worth knowing before you watch a slow
+  page.** `checkTimeout` is 60 seconds and is *not* shortened, so in a build with
+  `checkInterval: 30` a check may outlive two intervals. That is harmless and is asserted by the last
+  test named above: a pulse while a check is in flight starts no second fetch, and the check is
+  abandoned at 60 seconds.
+
+  **The retry cadence of a hanging page is `checkTimeout + checkInterval`, which is 90 seconds in this
+  build — not 60.** The abandonment stamps the watcher's last-checked time, and due-ness is measured
+  from that, so the next check is one whole interval after the abandonment. Measured directly at the
+  shipped numbers: fetches at t=0 and t=960, which is 60 + 900. So against a sluggish site you will
+  see **two** 30-second pulses pass with nothing happening, not one; that is this and not a defect.
+  (This bullet said "retried on the timeout rather than on the interval" until PR #184's cycle-3
+  re-check measured it — the same class of defect as the row arithmetic F6 was filed for, in the fix
+  for F6.)
+
+- **There is deliberately no shipped override for this** — no environment variable, no debug menu.
+  The cap is a founder decision and it should not ship with a documented bypass; and since a
+  packaged build is required regardless, editing one constant before that build costs nothing.
+
+**Seeding a watcher, and why that is the right way to test this half rather than a workaround.**
+SONNY-236 builds a watcher that gets checked and fires; **SONNY-382** builds the part where a *user*
+creates one by asking. So these rows deliberately start from a watcher that already exists — that is
+this ticket's actual subject — and SONNY-382 adds its own row that starts from a spoken command.
+**Both are worth having, and this row is worth re-running once SONNY-382 lands**, from the other end.
+
+Seed it in the same local build where you shortened the two constants above. In
+`Sources/MacAgent/AppDelegate.swift`, add `import MacAgentCore` at the top — **that file does not
+import it today**, and without the import none of the four types below resolve — then paste this
+immediately after `viewModel.startRoutineScheduling()` (line 153 at `e0dfa00`), setting the URL and
+the subject to a page you can edit:
+
+```swift
+Task { @MainActor in
+    let watched = URL(string: "https://example.com/the-page-you-can-edit")!
+    let reading = try? await LiveStandingWatcherObserver().readableText(at: watched)
+    try? ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()).saveWatcher(
+        StandingWatcher(
+            subject: "the page I am testing",
+            url: watched,
+            createdAt: Date(),
+            baselineDigest: StandingWatcherEvaluator.digest(of: reading ?? "")
+        )
+    )
+}
+```
+
+It reads the page once and uses that as the baseline, which is what SONNY-382's real creation path
+will do. **Remove the line once you have a watcher** — it seeds a fresh one on every launch, and the
+fifth is where the cap starts refusing.
+
+**Do not try to write the store file by hand.** `resumable-tasks.json` is encrypted through
+`LocalStorageEncryption` like every other local store, so hand-written JSON will not decrypt, and
+what you will see is the storage banner rather than a watcher.
+
+- [ ] **(SONNY-236)** With a watcher running against a page you can edit, **change the page once and
+      leave it changed**. At the next check **nothing happens** — this is correct, not a bug. At the
+      check after that, a notification appears reading **“<what you asked>” changed.** Confirm the
+      one-interval delay is what you saw: a first difference is never reported.
+- [ ] **(SONNY-236)** Click that notification. **Command Center comes forward.** It offers no button
+      of its own — no Retry, no Allow. A watcher may not act, so a button here would be a defect
+      rather than a nicety.
+- [ ] **(SONNY-236)** Check the same page again after the notification. **Sonny has stopped watching
+      it** — a watcher is one-shot, and a second notification for the same change is a finding.
+- [ ] **(SONNY-236)** Point a watcher at a page whose content changes on **every** load — a site with
+      a rotating advertisement, a visible clock, or a shuffled "related" strip. Leave it. Within
+      two minutes a notification says Sonny **stopped watching it because the page reads differently
+      every time**, and it must **not** say the page did not change.
+
+      **A "changed" notification here is not automatically a finding**, and this row used to say it
+      was. The two-reading rule is a filter, not an absolute: a page rotating over a small pool can
+      supply two consecutive equal readings by chance, and a page that alternates between two
+      readings reaches neither ending. Report what you saw and how many checks it took rather than
+      pass/fail — the design permits this, and how often it happens in practice is the thing nobody
+      has measured. A page with a *visible clock* or a per-load nonce is the case the filter really
+      does defeat, and is the better one to try first.
+- [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first seven checks say **nothing**.
+      After the eighth — about **four minutes** at a 30-second interval — one notification says
+      *Sonny stopped watching “…”. The page could not be read.* A notification per failed fetch is a
+      finding, and so is the watcher expiring first (that would mean `maxLifetime` is too short).
+- [ ] **(SONNY-236)** Start a watcher on a page you leave alone and wait out the ten minutes. The
+      notification reads, literally: *Sonny stopped watching “…” after **1 day**. It did not change.*
+      **"1 day" is correct at this setting and is not a finding** — the sentence renders
+      `max(1, round(maxLifetime / 86400))`, so any lifetime under about a day and a half floors to
+      one. Seeing "7 days" would be the finding, because that would mean the constant is being read
+      from somewhere other than the one you edited.
+- [ ] **(SONNY-236)** While a watcher is running, start an ordinary task and let it run. The watcher
+      **still checks** — a routine would refuse here, a watcher does not, because it starts no task.
+- [ ] **(SONNY-236)** Do this one **within ten minutes of seeding**, or the watcher expires while you
+      are reading the dialog. Command Center → Memory. With at least one unfinished task **and** one watcher,
+      press **Delete** on the Unfinished tasks row and confirm. **The unfinished tasks go and the
+      watcher keeps running.** The result line reads `Deleted unfinished tasks.` with **no file
+      count**. A watcher silently disappearing here is the exact defect this branch was told to fix.
+- [ ] **(SONNY-236)** Also within ten minutes of seeding. Settings → Data → the whole local-data wipe.
+      Read the sentence **before** pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
+      stops notifying.
+
 ## 8. How to report back
 
 For each real finding, give me:
