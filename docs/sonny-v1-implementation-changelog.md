@@ -174,7 +174,11 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: in progress
 Date: 2026-08-31
 Tickets: SONNY-212 — the credit/allowance model: a per-account monthly credit pool derived from row 12's metering, screen control as the only line that draws on it, and `GET /v1/account/credits` serving "screen-control runs left this month" for the Mac to read.
-Reviewed by: not yet — fresh session per WORKFLOW.md step 7, on the PR.
+Reviewed by: not yet — fresh session per WORKFLOW.md step 7, on the PR. The mutation battery is the
+lane's own and is run (below); a reviewer's independent battery is a separate thing and is the point
+of it being separate — on PR #180 the lane's came back 7 killed / 0 survived and the reviewer's 6
+mutants / 6 survived, both honest, because a lane's plan inherits the blind spot of the session that
+wrote the assertions.
 
 **The ticket's `Branch:` line says `feature/billing-credits` and this branch is
 `feature/a-month-has-a-number-of-screen-control-runs`.** The worktree was created on the second name
@@ -207,24 +211,21 @@ Files changed:
 - `Sources/MacAgentCore/ScreenControlAllowance.swift` (new) — the Mac's reading, and nothing more.
 - `server/test/credit.test.ts`, `server/test/credit.db.test.ts`, `server/test/support/credit.ts` (all new); `server/test/authdeps.test.ts`, `server/test/gate.test.ts`, `server/test/support/config.ts`; `Tests/MacAgentCoreTests/ScreenControlAllowanceTests.swift` (new).
 
-Tests, all at `e367c4d` (the implementation commit), and **carried across the documentation commit
-above it under WORKFLOW.md step 5's tree-identity rule rather than re-stamped**. The paths each
-figure depends on were named before the command was written: the Swift figures depend on `Sources/`,
-`Tests/` and `Package.swift`, and the server figures on `server/src`, `server/test`,
-`server/package.json`, `server/tsconfig.json`, `server/tsconfig.typecheck.json` and
-`server/vitest.config.ts`. `git diff --stat e367c4d HEAD --` over exactly those paths prints
-nothing — 0 bytes of output, checked rather than eyeballed, and written against `HEAD` rather than a
-stamped SHA precisely because every commit above `e367c4d` on this branch is documentation, so the
-proof has to keep holding as they accumulate rather than name the one that existed when it was
-written.
+Tests. **The server figures are measured at `4c7d6b0`**, the head that carries the battery's coverage
+fix. **The two app-half figures are carried from `e367c4d` under WORKFLOW.md step 5's tree-identity
+rule**, with the proof of the right scope beside them: those figures depend on `Sources/`, `Tests/`
+and `Package.swift`, and `git diff --stat e367c4d HEAD -- Sources Tests Package.swift` prints
+**nothing — 0 bytes**, checked rather than eyeballed. Nothing on this branch above `e367c4d` touches
+the app half at all; the only non-documentation change among them is `server/test/credit.test.ts`,
+which is why the server half is re-measured rather than carried.
 The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
 which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
 tracked file and is therefore re-run at the head rather than carried**:
-- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 656 passed | 361 skipped (1017) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
-- Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1017 passed (1017)**, exit 0, **0 skipped**. 656 + 361 = 1017, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
-- `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0, re-run at `ea19230` rather than carried, since it scans every tracked file (566 there rather than the 557 at `e367c4d`, the difference being this branch's own new files); `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
-- App half, the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 54.697 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
-- `scripts/warnings` → **0 warnings** at `e367c4d (clean)`, every file in `Sources/` and `Tests/` recompiled, 124 s.
+- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 657 passed | 361 skipped (1018) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
+- Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1018 passed (1018)**, exit 0, **0 skipped**. 657 + 361 = 1018, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
+- `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
+- App half, the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 54.697 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0). Measured at `e367c4d`, carried under the proof above.
+- `scripts/warnings` → **0 warnings** at `e367c4d (clean)`, every file in `Sources/` and `Tests/` recompiled, 124 s. Carried under the same proof, whose path list is what that figure depends on: the script builds with `--build-tests`, so `Tests/` is in scope as well as `Sources/`.
 
 Behavior added:
 - A per-account monthly credit pool, derived from `sonny.metering_event`, with screen control as the only line that draws on it.
@@ -320,6 +321,28 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   "screen-control runs left" stays the single number a user tracks rather than a pool two different
   things spend out of. `credit/store.ts`'s `PAID_ROUTE` is a constant and not a knob for exactly this
   reason: a route added to it by configuration would be a second currency arriving quietly.
+- **The mutation battery found that the rounding was not actually tested, and the harness first told
+  us the opposite.** One mutant per property, per step 5: the paid-route constant moved off
+  `screen.analyze` (P1), the `upstream_duration_ms` filter deleted (P2), the revoked-plan guard
+  deleted (P3), and `round` replaced by the identity function (P4). The first run at `00b8fcc`
+  reported **4 killed, 0 survived** — and P4's only killer was
+  `test/pool.db.test.ts > … > gives each caller a connection nobody else is using`, a connection-pool
+  test with no possible connection to whether a credit figure is rounded. Re-run alone with
+  `--only P4` against the same tree and the same suite command, it came back **SURVIVED**. That is
+  the manufactured kill SONNY-224's declaration mechanism exists to prevent, arriving through a
+  failure no signature covers, and **nothing mechanical caught it** — what caught it was reading the
+  killer's name and finding it implausible, which is the judgment `scripts/mutate --help` says is
+  all that is left in this direction. Filed as **SONNY-381**; not fixed here, because it is a
+  pre-existing test outside this ticket and one observation is not a characterisation.
+- **The hole underneath it was in the assertion, not the fixtures, and it is the more useful half.**
+  `publishes credit figures that recompute to the run count beside them` recomputes the run count
+  from the *published* remainder, so it holds whether or not that remainder was ever rounded — a
+  self-consistent response is self-consistent unrounded too. A test named for a guarantee it does not
+  hold is the shape `CLAUDE.md` warns about, and a battery is what found it. The new arm asserts
+  **values**, on a fixture where the defect is invisible everywhere except the number a user reads:
+  `drawn` is `0.4` either way, and it is `0.5 - 0.4` that leaves `0.09999999999999998`, flooring to
+  **zero runs left when the user has one**. Re-run at `4c7d6b0`: **4 killed, 0 survived, 0
+  unattributed**, and P4's killer is now the arm written for it.
 
 Known limitations / deferred scope:
 - **Every dollar amount and allowance number is unset**, by the ticket's own design — they are
@@ -334,10 +357,8 @@ Known limitations / deferred scope:
   carries the decision.
 - **Nothing refuses on this number and nothing renders it.** SONNY-213 and SONNY-214, both unstarted,
   both blocked on this branch.
-- **No mutation battery was run.** The tree is green, the two suites are new, and the battery is owed
-  before merge under WORKFLOW.md step 5's "mutate the property" rule — the properties worth mutating
-  are the route restriction, the `upstream_duration_ms` filter, the plan-liveness rule and the
-  rounding.
+- **The mutation battery is run and clean, and it found one real hole.** Recorded under the
+  architectural section above rather than here, because what it found changed the branch.
 
 Open questions (required, write "none" if true):
 - **Whether "runs left" should fall by exactly one per run.** It does not, and that is deliberate: a
