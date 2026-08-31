@@ -4,11 +4,26 @@ public struct AgentPlan: Codable, Equatable, Sendable {
     public var summary: String
     public var requiresConfirmation: Bool
     public var steps: [AgentStep]
+    /// Set when this plan is one piece of work repeated over many items — "summarise each of these
+    /// forty PDFs" (SONNY-235). `nil` on every plan that is not, which is nearly all of them.
+    ///
+    /// **Plan-level rather than a step operation or a step property**, and `PlanItemJob`'s doc
+    /// comment is where that decision and the two rejected alternatives are recorded. `steps` holds
+    /// the *template* — the work done to one item — until `AgentActionExecutor.prepare` resolves the
+    /// items and replaces it with one copy per item; after that this field is the declaration the
+    /// expansion came from, and the record of which items the run is walking.
+    public var itemJob: PlanItemJob?
 
-    public init(summary: String, requiresConfirmation: Bool, steps: [AgentStep]) {
+    public init(
+        summary: String,
+        requiresConfirmation: Bool,
+        steps: [AgentStep],
+        itemJob: PlanItemJob? = nil
+    ) {
         self.summary = summary
         self.requiresConfirmation = requiresConfirmation
         self.steps = steps
+        self.itemJob = itemJob
     }
 }
 
@@ -57,6 +72,15 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// never touches, so a stored routine cannot carry a stale answer about a Finder read that
     /// happened once, long ago.
     public var resolvedFromFinderSelection: Bool?
+    /// Which of `AgentPlan.itemJob`'s items this step belongs to, zero-based, or `nil` on every step
+    /// of a plan that is not a job (SONNY-235).
+    ///
+    /// **Written only by `PlanItemJobResolver.expanding`**, and resolver-only in exactly the sense
+    /// `resolvedFromFinderSelection` is: absent from `AgentPlanDecoder.stepKeys` and from the planner
+    /// schema, so a model cannot assert it at any nesting depth. It is what lets the chain walk say
+    /// "this failure belongs to item 17" — and what lets SONNY-210's `completedStepIDs`, which knows
+    /// nothing about items, be read back as item progress without storing that progress twice.
+    public var itemIndex: Int?
     public var routineName: String?
     public var routineSteps: [AgentStep]?
     public var workspaceName: String?
@@ -180,6 +204,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         resolvedAppName: String? = nil,
         resolvedBundleIdentifier: String? = nil,
         resolvedFromFinderSelection: Bool? = nil,
+        itemIndex: Int? = nil,
         visionGoal: String? = nil
     ) {
         self.id = id
@@ -214,6 +239,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.resolvedAppName = resolvedAppName
         self.resolvedBundleIdentifier = resolvedBundleIdentifier
         self.resolvedFromFinderSelection = resolvedFromFinderSelection
+        self.itemIndex = itemIndex
         self.visionGoal = visionGoal
     }
 }
@@ -327,6 +353,7 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
     case invalidJSON
     case unexpectedTopLevelKey(String)
     case unexpectedStepKey(String)
+    case unexpectedItemJobKey(String)
     case missingOutputText
     case malformedPlan(String)
 
@@ -338,6 +365,8 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
             return "Planner returned an unexpected top-level key: \(key)."
         case .unexpectedStepKey(let key):
             return "Planner returned an unexpected step key: \(key)."
+        case .unexpectedItemJobKey(let key):
+            return "Planner returned an unexpected job key: \(key)."
         case .missingOutputText:
             return "Planner response did not include output text."
         case .malformedPlan(let detail):
@@ -350,7 +379,24 @@ public enum AgentPlanDecoder {
     private static let topLevelKeys: Set<String> = [
         "summary",
         "requiresConfirmation",
-        "steps"
+        "steps",
+        "itemJob"
+    ]
+
+    /// The keys a planner may name **inside** an `itemJob` (SONNY-235).
+    ///
+    /// `items` is deliberately absent, and that is the same rule `stepKeys` applies to
+    /// `resolvedFromFinderSelection` and the two app pins: the list of forty paths a job will act on
+    /// is *resolved* from the machine by `PlanItemJobResolver`, never asserted by a model. Without
+    /// this check a planner could name any forty paths it liked and have them written into forty
+    /// steps' `inputPath` — which the whitelist would still refuse, but only after the plan had
+    /// already been previewed and assessed as something the user might approve.
+    private static let itemJobKeys: Set<String> = [
+        "source",
+        "folderPath",
+        "itemKind",
+        "fileExtensions",
+        "itemField"
     ]
 
     private static let stepKeys: Set<String> = [
@@ -405,6 +451,19 @@ public enum AgentPlanDecoder {
 
         for step in steps {
             try validateStepKeys(step)
+        }
+
+        if let itemJob = dictionary["itemJob"] {
+            // `null` is how a strict-schema provider says "not a job", so it is not an object and is
+            // not an error either.
+            if !(itemJob is NSNull) {
+                guard let itemJobDictionary = itemJob as? [String: Any] else {
+                    throw AgentPlanDecodingError.invalidJSON
+                }
+                for key in itemJobDictionary.keys where !itemJobKeys.contains(key) {
+                    throw AgentPlanDecodingError.unexpectedItemJobKey(key)
+                }
+            }
         }
 
         // The key allowlist above only inspects key *names*. An unknown operation value or a

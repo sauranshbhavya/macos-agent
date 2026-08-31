@@ -107,6 +107,44 @@ struct AutomationStoresTests {
         #expect(innerStep.inputPath == "~/Documents/Client")
     }
 
+    /// The behavioural half of `itemIndex`'s membership in the resolver-only set (SONNY-235). A step
+    /// index into a job's item list has no meaning inside a routine — the list it points into is the
+    /// plan's, and a routine has no plan — so a forged one must not survive the read door, at either
+    /// nesting level.
+    @Test
+    func aForgedJobItemIndexIsStrippedAtBothNestingLevels() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var nested = AgentStep(
+            id: "scan",
+            operation: .scanSelectLargestFiles,
+            description: "Scan the folder.",
+            inputPath: "~/Documents/Client",
+            count: 3
+        )
+        nested.itemIndex = 16
+        var outer = AgentStep(
+            id: "zip",
+            operation: .createZip,
+            description: "Zip it.",
+            inputPath: "~/Documents/Client"
+        )
+        outer.itemIndex = 4
+        outer.routineSteps = [nested]
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Forged", steps: [outer]))
+
+        let loaded = try store.routine(named: "Forged")
+
+        #expect(loaded.steps[0].itemIndex == nil)
+        let innerStep = try #require(loaded.steps.first?.routineSteps?.first)
+        #expect(innerStep.itemIndex == nil)
+        // A pin is stripped; a step is not sanitised. Everything the planner wrote survives.
+        #expect(loaded.steps[0].inputPath == "~/Documents/Client")
+        #expect(innerStep.count == 3)
+    }
+
     /// The other direction, and the one that makes the strip safe to apply unconditionally: a routine
     /// saved the way the product saves them round-trips byte-identically. If this ever fails, the
     /// strip has started removing something a legitimate store had.
@@ -206,7 +244,12 @@ struct AutomationStoresTests {
             // SONNY-185. Not an identity like the two above it — one boolean recording whether the
             // resolve phase actually drove Finder to find this step's folder — but resolver-written
             // and decode-excluded on exactly the same terms, so the strip must clear it too.
-            "resolvedFromFinderSelection"
+            "resolvedFromFinderSelection",
+            // SONNY-235. Which item of a job's list this step belongs to — resolver-written and
+            // decode-excluded on the same terms, and meaningless outside the plan whose `itemJob`
+            // holds the list, so the strip must clear it. Held behaviourally by
+            // `aForgedJobItemIndexIsStrippedAtBothNestingLevels`.
+            "itemIndex"
         ]
 
         #expect(
