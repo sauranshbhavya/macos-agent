@@ -97,7 +97,65 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // Only launchable apps are candidates, and their relative order is preserved, so
         // "first browser in the list" is unchanged for every workspace that exists today — a
         // scope-only entry can never be a browser Sonny could open URLs in anyway.
-        let browser = WorkspaceBrowserCatalog.firstBrowser(in: apps)
+        //
+        // **An enclosing routine's binding wins over the workspace's own, and that is a decision
+        // this branch had to make rather than a mechanism it inherited** (SONNY-186, PR #177's F1).
+        // A routine could not carry `open_workspace` until this branch, so `preferredBrowser` was
+        // never non-nil here and the two rules could not meet. Now they can, and the founders'
+        // 2026-08-04 routine rule is the one that governs when they do: *the first browser-capable
+        // app anywhere in the routine binds all of the routine's URL steps*, with the first in step
+        // order winning when there are two. A routine that opens a Chrome workspace and a Safari
+        // workspace **is** "two browsers in one routine", so the tie-break already exists and this
+        // applies it one level down rather than inventing a second rule — which is the whole point
+        // of that decision's own sentence, that a routine and a workspace are one mental model.
+        //
+        // **What this costs, stated because it is the half a founder might overturn:** a routine
+        // opening a Chrome workspace and a Safari workspace puts both workspaces' URLs in whichever
+        // comes first in step order, so a user who deliberately gave two workspaces two browsers
+        // loses that distinction inside a routine. The alternative — each workspace keeps its own,
+        // which is what shipped in this branch's first round — is defensible and leaves a routine
+        // opening two browsers with nothing in the product explaining why. `RunRoutineCapabilityAdapter.browser(for:)`
+        // is the other half of this decision and reads the same way.
+        //
+        // **Nothing outside a routine changes**, and the reason is a one-site enumeration rather
+        // than a survey: exactly one site in `Sources` puts a non-nil value into
+        // `preferredBrowser` — `AgentActionExecutor.swift:1885`, inside the `executeNestedPlan`
+        // closure, whose own sole caller is `RunRoutineCapabilityAdapter.swift:93`. Every other
+        // site either threads the parameter it was given or declares one. So a standalone workspace
+        // open still resolves its own browser and a Safari workspace opened on its own still opens
+        // in Safari, byte for byte.
+        //
+        // The pipeline below is what measures it: **1**, naming that line, at `a82ae04` and on any
+        // later tree — the second stage drops comment lines, so this citation cannot inflate its
+        // own count. The control is deliberately not stamped, because it is a property of the
+        // command rather than of a commit: drop that second stage on whatever tree you are reading
+        // and the answer becomes **2**, the extra hit being this very block. That is what proves
+        // the stage is doing the excluding rather than the pattern failing to match.
+        //
+        //     git grep -n 'preferredBrowser: ' -- Sources \
+        //       | grep -vE ':[0-9]+: *[/][/]' \
+        //       | grep -v 'preferredBrowser: preferredBrowser' \
+        //       | grep -v 'preferredBrowser: MacApp?'
+        //
+        // **Two things about that command are the point, and both are corrections** (PR #177's R1).
+        // It is written to be un-matchable by its own text — the second stage drops comment lines,
+        // and the slashes are bracketed so this block is not a line comment opening a span the
+        // source-scanning tests would read to the end of the file (`CLAUDE.md`'s slash-star gotcha,
+        // same family). And it measures the claim: **`preferredBrowser` argument sites**, which is
+        // what "no other door sets it" is about. The citation this replaces counted call sites of
+        // `executeNestedPlan(` instead, which establishes only that *that* door has one caller —
+        // one half of the claim, with nothing telling a reader which half. It also answered **2**
+        // rather than the 1 it reported, because the second hit was its own line.
+        //
+        // The narrower fact the old command did measure is kept above as a sentence rather than a
+        // count, since it is still true and still load-bearing: the setting site is reached only
+        // through the routine adapter.
+        //
+        // A browser named on the *step* is deliberately still not read here. `context.browser(for:in:)`
+        // would honour one, and the precedence it documents would put it above the routine's binding;
+        // no path emits an `open_workspace` step carrying `browserName`, so wiring it would be a
+        // behaviour change on a shape nothing produces and a separate decision from this one.
+        let browser = context.preferredBrowser ?? WorkspaceBrowserCatalog.firstBrowser(in: apps)
         for rawURL in workspace.urls {
             let url = try SafeURL.validateWebURL(rawURL)
             log(.act, "Opening \(url.absoluteString)")

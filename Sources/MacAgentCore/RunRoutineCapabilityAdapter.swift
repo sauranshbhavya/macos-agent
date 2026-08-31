@@ -50,7 +50,7 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
 
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
         let routine = try routineRunSpec(plan, context: context)
-        let nested = try context.previewNestedPlan(routine.plan)
+        let nested = try namingRoutine(routine) { try context.previewNestedPlan(routine.plan) }
         return [headerPreview(for: routine)] + nested
     }
 
@@ -88,7 +88,12 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let routine = try routineRunSpec(plan, context: context)
         log(.act, "Running routine \(routine.name)")
-        let result = try await context.executeNestedPlan(routine.plan, browser(for: routine, context: context), log)
+        let result: AgentRunResult
+        do {
+            result = try await context.executeNestedPlan(routine.plan, browser(for: routine, context: context), log)
+        } catch let error as AutomationStoreError {
+            throw Self.namingRoutine(routine, in: error)
+        }
         // Return the nested execution's real previews — re-deriving them here would re-resolve
         // default output paths (fresh timestamps) and report files that were never written.
         return AgentRunResult(
@@ -156,20 +161,85 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// `WorkspaceBrowserCatalog`'s Arc, Firefox and Edge entries reachable — they were bundle
     /// identifiers no resolution path could ever produce while only the twelve-app catalog answered.
     ///
-    /// Only `.openApp` steps are considered, and a nested workspace open is therefore not handled
-    /// here. **The reason changed and the sentence had not** (PR #81's review): this used to say
-    /// `RoutineStore.save` "validates `schedule` and nothing else", which stopped being true at
-    /// SONNY-52 — `save` calls `StoredRoutine.validateStepSafety` before it persists, so the store
-    /// refuses a nested `open_workspace` at the same choke point the save capability does, and no
-    /// product path can write one. What can still produce such a routine is
-    /// `saveBypassingStepValidation`, module-internal and test-only by design, or a store file
-    /// edited outside Sonny. So this stays treated as unhandled rather than impossible — the same
-    /// conclusion as PR #28's F5, now resting on the reason that is actually true.
+    /// **A nested workspace open contributes its own apps, as of SONNY-186.** This considered
+    /// `.openApp` steps and nothing else for as long as `StoredRoutine.forbiddenStepOperations`
+    /// refused `.openWorkspace` inside a routine — the shape was reachable only through
+    /// `saveBypassingStepValidation` or a hand-edited store file, so it was treated as unhandled
+    /// rather than impossible (PR #28's F5, PR #81's review). It is a product shape now, and left
+    /// alone it would have contradicted the one thing the paragraph above is for: a routine that
+    /// opens a Safari workspace and then opens a URL would have put the workspace's own URLs in
+    /// Safari — `OpenWorkspaceCapabilityAdapter` resolves a browser from the same catalog for its
+    /// own URLs — and the routine's URL step in whatever the system default is. Two browsers, one
+    /// routine, for a reason no user could see.
+    ///
+    /// So both step kinds feed one ordered list and the existing rule is unchanged over it: first
+    /// browser-capable app wins, in step order, and a workspace's apps enter in the workspace's own
+    /// stored order at the position of the step that opens it. A routine with no `open_workspace`
+    /// step therefore binds byte-identically to before.
+    ///
+    /// **This half is only half, and the other half is at `OpenWorkspaceCapabilityAdapter.execute`
+    /// — it did not exist for one round, and the record claimed it did** (PR #177's F1). Reading the
+    /// workspace's apps into the list makes a workspace *donate* a browser to the routine; it does
+    /// nothing about the workspace *receiving* one, because that adapter opened its own URLs with
+    /// its own resolution and read `preferredBrowser` nowhere. So the two shapes that need both
+    /// halves stayed broken while the paragraph above read as if they were fixed:
+    /// `[open_app Chrome, open_workspace(→ Safari, with URLs), open_url]`, where the routine binds
+    /// Chrome and the workspace's URLs still went to Safari; and a routine opening two workspaces
+    /// with different browsers, which needs no `open_app` at all and is the exact sentence the
+    /// paragraph above gives as the reason this fix exists. That adapter now takes
+    /// `preferredBrowser` first, so the ordering computed here is what every URL the routine opens
+    /// actually uses.
+    ///
+    /// A workspace that cannot be loaded contributes nothing, for the same reason an unresolvable
+    /// app name does: the missing workspace is `open_workspace`'s own failure to report, at the step
+    /// that names it, and resolving a browser must not pre-empt that with a different failure before
+    /// any step has run.
     private func browser(for routine: StoredRoutine, context: CapabilityExecutionContext) -> MacApp? {
-        let apps = routine.steps
-            .filter { $0.operation == .openApp }
-            .compactMap { context.installedAppResolver.resolve($0.appName)?.macApp }
+        let apps = routine.steps.flatMap { step -> [MacApp] in
+            switch step.operation {
+            case .openApp:
+                return [context.installedAppResolver.resolve(step.appName)?.macApp].compactMap { $0 }
+            case .openWorkspace:
+                guard let workspace = try? context.workspaceStore.workspace(named: step.workspaceName ?? "") else {
+                    return []
+                }
+                return workspace.apps.compactMap { context.installedAppResolver.resolve($0)?.macApp }
+            default:
+                return []
+            }
+        }
         return WorkspaceBrowserCatalog.firstBrowser(in: apps)
+    }
+
+    /// Runs `body`, re-labelling a nested `open_workspace`'s "no such workspace" with the routine
+    /// that asked for it.
+    ///
+    /// **Why the re-label exists at all** (SONNY-186). A routine may open a workspace as of that
+    /// ticket, and the workspace it names can be deleted or renamed afterwards — the step holds a
+    /// name and nothing keeps the two in step. Without this the user types "run my morning routine"
+    /// and hears "I don't have a workspace called \"Research\" saved", a sentence about a thing they
+    /// did not mention, two levels below the thing they did. `AutomationStoreError` carries the pair
+    /// instead, and `AgentActionExecutor` turns it into the same clarification, listing the saved
+    /// workspace names — which is the diagnostic a rename actually needs.
+    ///
+    /// Wrapped at `preview` and `execute` and not at `assessRisk`, because those are the two doors
+    /// that can reach it: `OpenWorkspaceCapabilityAdapter` loads the store in `preview` and in
+    /// `execute`, and overrides `assessRisk` not at all. Only `.missingWorkspace` is re-labelled —
+    /// a missing *routine* is already the user's own word, and every other automation-store failure
+    /// keeps its own error for the same reason `missingAutomationTargetQuestion` leaves them alone.
+    private func namingRoutine<T>(_ routine: StoredRoutine, _ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as AutomationStoreError {
+            throw Self.namingRoutine(routine, in: error)
+        }
+    }
+
+    private static func namingRoutine(_ routine: StoredRoutine, in error: AutomationStoreError) -> AutomationStoreError {
+        guard case .missingWorkspace(let workspaceName) = error else {
+            return error
+        }
+        return .missingWorkspaceInRoutine(routine: routine.name, workspace: workspaceName)
     }
 
     private func headerPreview(for routine: StoredRoutine) -> ActionPreview {

@@ -63,13 +63,22 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// at only one of two doors is precisely what left the store accepting routines the save
     /// capability rejects (SONNY-52).
     ///
-    /// The rule itself is unchanged from the save capability's original list. Routines are
-    /// declarative local plans, so they may not author or invoke other routines
-    /// (`.saveRoutine`, `.runRoutine`), may not create, edit or open workspaces
-    /// (`.createWorkspace`, `.editWorkspace`, `.openWorkspace` — a scheduled routine deliberately
-    /// has no workspace binding, see `docs/sonny-founder-design-decisions.md`), may not ask a
-    /// question a scheduled run has nobody present to answer (`.clarify`), and may not persist the
-    /// planner's own "I do not know" as if it were a plan (`.unsupported`).
+    /// Routines are declarative local plans, so they may not author or invoke other routines
+    /// (`.saveRoutine`, `.runRoutine`), may not create or edit workspaces (`.createWorkspace`,
+    /// `.editWorkspace`), may not ask a question a scheduled run has nobody present to answer
+    /// (`.clarify`), and may not persist the planner's own "I do not know" as if it were a plan
+    /// (`.unsupported`).
+    ///
+    /// **`.openWorkspace` was on this list and is not any more** (SONNY-186, founder decision
+    /// 2026-08-30, recorded in `docs/sonny-founder-design-decisions.md`). The recorded reason for
+    /// refusing it was that *a scheduled routine deliberately has no workspace binding*, which is a
+    /// statement about the run's binding and was doing duty as a statement about the step. The
+    /// decision separates the two: the step names the workspace it opens, so there is nothing to
+    /// infer at fire time and no ambiguity about which one was meant, and a run's binding is still
+    /// decided where it always was — `WorkspaceTaskTagging` reads a routine's own
+    /// `open_workspace` step on the foreground path, and the scheduled path stays `.unscoped` for
+    /// the reason recorded at its call site. Creating and editing stay refused, each for its own
+    /// reason below, which is why this is one removal rather than a relaxation of the family.
     ///
     /// **`.editWorkspace` is here because a `Set` cannot force the question the way an exhaustive
     /// switch does.** `PlanScopedResources` refuses a `default:` clause precisely so a new
@@ -109,7 +118,6 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         .runRoutine,
         .createWorkspace,
         .editWorkspace,
-        .openWorkspace,
         .switchRunningApp,
         // A stored routine structurally cannot carry a vision session (E7 as ratified, row I). This
         // is the *third* independent layer of "unattended vision: never" — the other two being the
@@ -272,6 +280,31 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
     case missingName(String)
     case missingRoutine(String)
     case missingWorkspace(String)
+    /// A saved routine's own `open_workspace` step names a workspace that is not saved any more.
+    ///
+    /// **The deleted-or-renamed answer SONNY-186 owed, in the one place both halves of it are
+    /// enforced.** A routine may open a workspace as of that ticket, and a routine's step holds the
+    /// workspace's *name* — there is no identifier behind it, `WorkspaceStore` is a name-keyed
+    /// dictionary, and nothing rewrites a routine when a workspace changes. So **renaming a
+    /// workspace is indistinguishable from deleting it** from the routine's side, and this one case
+    /// covers both deliberately rather than pretending to tell them apart.
+    ///
+    /// It is distinct from `.missingWorkspace` because the two are read by a user in different
+    /// situations. `.missingWorkspace` answers "open my research workspace" — the user named the
+    /// thing that is missing, so naming it back is the whole answer. This one answers "run my
+    /// morning routine", where the user named something that *does* exist and the missing thing is
+    /// two levels down; a sentence about a workspace they never mentioned reads as a non-sequitur.
+    /// So the routine is named beside the workspace, and `AgentActionExecutor` turns it into the
+    /// same "did you mean one of …" clarification `.missingWorkspace` gets — the saved names are
+    /// exactly the diagnostic a rename needs, since the workspace's new name is in that list.
+    ///
+    /// **When it fires decides how much has already happened, and both times are real.** At
+    /// `prepare`, `RunRoutineCapabilityAdapter.preview` previews every nested step before anything
+    /// runs, so the whole routine is refused with nothing done. Between `prepare` and the step's
+    /// own execution — a workspace deleted inside that window — the routine stops at that step with
+    /// the earlier steps already run, which is what every other failing routine step does and is
+    /// left that way rather than given a special case.
+    case missingWorkspaceInRoutine(routine: String, workspace: String)
     case emptyRoutine
     case emptyWorkspace
     case unsafeRoutineStep(String)
@@ -285,6 +318,8 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
             return "No routine named \(name) is saved."
         case .missingWorkspace(let name):
             return "No workspace named \(name) is saved."
+        case .missingWorkspaceInRoutine(let routine, let workspace):
+            return "The routine \(routine) opens a workspace called \(workspace), and no workspace by that name is saved."
         case .emptyRoutine:
             return "A routine needs at least one saved step."
         case .emptyWorkspace:
