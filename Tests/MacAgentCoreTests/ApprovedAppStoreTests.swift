@@ -279,6 +279,64 @@ struct ApprovedAppStoreTests {
     /// branch — nine, then ten, then nine again after the rebase falsified a line the previous fix
     /// had not looked at — so what the assertions below check is the *filename* and the *directory*,
     /// and membership of the list the wipe actually uses. Those cannot go stale.
+    // MARK: - forgetAll (SONNY-144)
+
+    /// Remove All empties the file in one write, and a second store instance over the same file
+    /// agrees — an in-memory answer would make a clobbered write look like a successful one.
+    @Test
+    func forgetAllRemovesEveryGrantAndTheEmptinessSurvivesTheProcess() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("approved-apps.json")
+        let store = ApprovedAppStore(fileURL: fileURL, encryption: testEncryption())
+        try store.approve(bundleIdentifier: "com.apple.Notes", displayName: "Notes", approvedAt: .fixture)
+        try store.approve(bundleIdentifier: "com.apple.Safari", displayName: "Safari", approvedAt: .fixture)
+        #expect(try store.loadAll().count == 2)
+
+        try store.forgetAll()
+
+        #expect(try store.loadAll().isEmpty)
+        let reread = ApprovedAppStore(fileURL: fileURL, encryption: testEncryption())
+        #expect(try reread.loadAll().isEmpty)
+    }
+
+    /// **Remove All on an empty store writes nothing**, so a user who has never granted anything and
+    /// presses it does not end up with a file that says so. Asserted on the file's existence rather
+    /// than on its contents, because "no grants" and "no file" both load as `[]` and only the file
+    /// tells them apart.
+    @Test
+    func forgetAllOnAnEmptyStoreDoesNotMintAFile() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("approved-apps.json")
+        let store = ApprovedAppStore(fileURL: fileURL, encryption: testEncryption())
+
+        try store.forgetAll()
+
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    /// **A file that will not read is reported, never overwritten.** The bytes may still be
+    /// recoverable — a decrypt failure proves only that they were written under a different key —
+    /// and the user's route through an unreadable store is Memory's Delete, which keeps the file.
+    /// Remove All must not become a second, quieter door onto destroying it.
+    @Test
+    func forgetAllRefusesAnUnreadableFileAndLeavesItsBytesAlone() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("approved-apps.json")
+        try ApprovedAppStore(fileURL: fileURL, encryption: LocalStorageEncryption(keyManager: ApprovedAppTestKeyManager(byte: 0x42)))
+            .approve(bundleIdentifier: "com.apple.Notes", displayName: "Notes", approvedAt: .fixture)
+        let before = try Data(contentsOf: fileURL)
+
+        // A second key over the same file is what a real wrong-key store looks like.
+        let store = ApprovedAppStore(fileURL: fileURL, encryption: LocalStorageEncryption(keyManager: ApprovedAppTestKeyManager(byte: 0x99)))
+        #expect(throws: (any Error).self) { try store.forgetAll() }
+
+        #expect(try Data(contentsOf: fileURL) == before)
+        #expect(try ApprovedAppStore(fileURL: fileURL, encryption: LocalStorageEncryption(keyManager: ApprovedAppTestKeyManager(byte: 0x42))).loadAll().count == 1)
+    }
+
     @Test
     func theDefaultFileSitsBesideTheOtherStores() {
         let store = ApprovedAppStore(fileURL: ApprovedAppStore.realFileURL())

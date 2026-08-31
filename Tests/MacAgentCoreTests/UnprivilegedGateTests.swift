@@ -126,7 +126,15 @@ struct UnprivilegedGateTests {
         // `MemoryCommandCenterTests.aSetAsideFileTheControlCannotDeleteStaysOnTheLineAndIsNamed`,
         // which is the branch that decides whether the Data page's line keeps counting a file the
         // press could not remove, and names it, rather than going quiet because the press happened.
-        #expect(lockedAndGated == 12, "expected twelve gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Fourteen since SONNY-144, whose two gated tests lock the grants store's directory so a
+        // *revocation* write fails — one for the per-row Remove and one for Remove All, because they
+        // are separate commit paths with separate messages, and the property being pinned is that
+        // each reports its own failed write rather than borrowing the load failure's "could not be
+        // decrypted or decoded". Both are in `VisionSessionRunTests`:
+        // `aFailedRemoveSaysTheWriteFailedAndNeverBorrowsTheLoadFailuresWords` and
+        // `aFailedRemoveAllSaysWhichPressFailedAndNeverBorrowsTheLoadFailuresWords`.
+        #expect(lockedAndGated == 14, "expected fourteen gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
