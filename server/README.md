@@ -886,7 +886,16 @@ before you revoke.**
 |---|---|---|
 | 1 | Polar dashboard | Create a **second** token with `customer_sessions:write`. Both now work. |
 | 2 | this gateway | Deploy with `BILLING_PROVIDER_ACCESS_TOKEN` set to the new one. |
-| 3 | Polar dashboard | Revoke the old one, **after** step 2 is serving. |
+| 2a | **verify** | `curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/billing/portal" -H "Authorization: Bearer $TOKEN"` for a real subscriber's session — or press **Manage subscription** in the app. **Require a `200`.** |
+| 3 | Polar dashboard | Revoke the old one, **only after 2a passed**. |
+
+**Step 2a is not optional and it is not the deploy check** (PR #183, F11). Nothing in this gateway
+validates the token at startup: `billingDepsFrom` requires the *name* to be present and never makes a
+call. So a token pasted with a typo deploys cleanly, `/v1/health` reports the new build, and every
+signal an operator has says step 2 is serving — while the only thing that would have noticed is a
+portal press nobody has made. Revoke the old token at that point and both are dead. "Serving" is
+ambiguous between *the deploy finished* and *the new credential works*, and only the second makes
+revoking safe; 2a is the difference.
 
 Doing steps 1 and 3 together — "rotate" as a single dashboard action — takes the portal route down
 from that instant until step 2 finishes deploying. **What that outage looks like is worth knowing,

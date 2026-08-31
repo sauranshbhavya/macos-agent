@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { parseBillingPlans, billingDepsFrom } from "../src/billing/deps.js";
-import { POLAR, polarProvider, readPolarDelivery } from "../src/billing/polar.js";
+import {
+  POLAR,
+  PORTAL_SESSION_TIMEOUT_MS,
+  polarProvider,
+  readPolarDelivery,
+} from "../src/billing/polar.js";
 import type { BillingApplyInput, BillingStore } from "../src/billing/store.js";
 import {
   WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
@@ -821,9 +826,86 @@ describe("where a subscriber manages the subscription", () => {
   it("reports an account the provider has no customer for as having nothing to manage", async () => {
     // The ordinary case: signed in, never subscribed. Not a fault, and — the half worth pinning —
     // not confusable with one, because every other non-2xx below is a provider failure.
-    const { provider } = providerAnswering(() => new Response("", { status: 404 }));
+    const { provider } = providerAnswering(
+      () => new Response(JSON.stringify({ error: "ResourceNotFound" }), { status: 404 }),
+    );
 
     expect(await provider.portalUrlFor(ACCOUNT)).toEqual({ kind: "noCustomer" });
+  });
+
+  it("refuses a 404 that did not come from the provider, which is the misconfiguration case", async () => {
+    // **PR #183, F5 — the unexamined direction of the 422 judgement.** A 404 is also what a wrong
+    // origin or a dropped path prefix answers, and mapping every 404 to `noCustomer` means that
+    // under a misconfiguration EVERY PAYING SUBSCRIBER is told "This account holds no subscription
+    // to manage" — verbatim the outcome the 422 reasoning calls a support incident that reads like
+    // data loss. Those users hold claims, so the client's second defence does not help them: their
+    // row renders and they press.
+    //
+    // The discriminator is the body. A proxy or a framework answers HTML, plain text or nothing;
+    // the provider answers its own JSON envelope. Each of these is a 404 that must NOT read as a
+    // missing customer.
+    const html = providerAnswering(() => new Response("<html>404 Not Found</html>", { status: 404 }));
+    const empty = providerAnswering(() => new Response("", { status: 404 }));
+    const text = providerAnswering(() => new Response("not found", { status: 404 }));
+    const array = providerAnswering(() => new Response("[]", { status: 404 }));
+
+    expect(await html.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await empty.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await text.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await array.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+  });
+
+  it("treats a throttled call as the provider's capacity, not as a bad request", async () => {
+    // **PR #183, F10.** 429 is the one 4xx that is retryable by definition, and this gateway had
+    // already decided that twice: `src/auth/supabase.ts:521-525` — "a rate limit and a server error
+    // are statements about the provider's ability to answer, never about whether the user's input
+    // was correct" — and `src/auth/revocation.ts`, "any 4xx but 429 is ProviderRejected". This
+    // adapter was the third and the only one to put 429 on the input-was-wrong side, which sent a
+    // throttled call to the Mac as not-retryable and made it give up on the one thing waiting fixes.
+    const throttled = providerAnswering(() => new Response("", { status: 429 }));
+
+    expect(await throttled.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
+  });
+
+  it("keeps the link when the provider sends an expiry that does not parse", async () => {
+    // **PR #183, F8.** Deleting the `Number.isNaN` half of this guard survived the whole suite: one
+    // existing test sends a valid instant and the other omits the field, and omission is caught by
+    // the `undefined` half — so the branch that matters was never reached. It is not cosmetic. The
+    // route calls `link.expiresAt.toISOString()`, and `new Date("nonsense").toISOString()` throws
+    // `RangeError: Invalid time value`, so without the guard a provider sending a malformed
+    // timestamp turns a successful portal mint into a 500 on a route that otherwise cannot make one.
+    const before = Date.now();
+    const { provider } = providerAnswering(
+      () => new Response(sessionBody({ expires_at: "not a date" }), { status: 200 }),
+    );
+
+    const link = await provider.portalUrlFor(ACCOUNT);
+
+    expect(link.kind).toBe("link");
+    const expiresAt = (link as { expiresAt: Date }).expiresAt;
+    expect(Number.isNaN(expiresAt.getTime())).toBe(false);
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before);
+    // And the route can serialise it, which is the actual consequence the guard prevents.
+    expect(() => expiresAt.toISOString()).not.toThrow();
+  });
+
+  it("keeps its outbound budget under the Mac's own, which is a relation neither side can see", async () => {
+    // **PR #183, F6/S2.** `PORTAL_SESSION_TIMEOUT_MS` appeared on three lines of `polar.ts` and zero
+    // lines of `server/test/`, and was not exported, so no test could reach it — a mutant raising it
+    // to 30 000, past the Mac's own 20 s, survived the whole suite.
+    //
+    // **Both numbers are literals here, following `ModelRouteNumbersTests`' precedent**, because the
+    // rule is a relation *between* the halves and neither side can read the other's code. The Mac's
+    // number is `SonnyBackendTimeouts.auth`, asserted as 20 on its own side in that suite; moving
+    // either without the other now fails on that side.
+    //
+    // What the relation buys is not a retry — this route passes `isRetrySafe: false`, so nothing is
+    // retried, which is the correction F6 is about. It is that the user meets the gateway's typed
+    // `504 provider.timeout`, which is logged and worded, rather than the Mac's own transport
+    // timeout, which reports a generic unreachable backend about a gateway that was working.
+    const macAuthTimeoutMs = 20_000;
+    expect(PORTAL_SESSION_TIMEOUT_MS).toBe(8_000);
+    expect(PORTAL_SESSION_TIMEOUT_MS).toBeLessThan(macAuthTimeoutMs);
   });
 
   it("separates a provider that is down from one that refused, because only one is worth retrying", async () => {
@@ -945,13 +1027,17 @@ describe("where a subscriber manages the subscription", () => {
     // One table rather than five tests, because what is being asserted is that the mapping is
     // total and that no two cases collapse onto one answer. A mutant merging any pair fails here.
     const cases: readonly (readonly [number, number, string, boolean])[] = [
+      // The body matters as well as the status now (F5), so this row carries a provider-shaped one.
       [404, 409, "entitlement.no_subscription", false],
       [503, 502, "provider.unavailable", true],
       [401, 502, "provider.rejected", false],
     ];
 
     for (const [upstream, status, code, retryable] of cases) {
-      vi.stubGlobal("fetch", async () => new Response("", { status: upstream }));
+      vi.stubGlobal(
+        "fetch",
+        async () => new Response(JSON.stringify({ error: "x" }), { status: upstream }),
+      );
       const app = build(recordingStore());
 
       const response = await app.inject({
@@ -967,10 +1053,15 @@ describe("where a subscriber manages the subscription", () => {
     }
   });
 
-  it("answers a provider timeout with the code the client retries once", async () => {
-    // Separated from the table above because it is produced by a rejection rather than a status,
-    // and because this is the case the eight-second budget exists to produce: the gateway's typed
-    // 504 rather than the Mac's own transport timeout, which is not retried.
+  it("answers a provider timeout with its own typed code rather than a generic failure", async () => {
+    // Separated from the table above because it is produced by a rejection rather than a status.
+    //
+    // **This test's name used to end "with the code the client retries once", and that was false**
+    // (PR #183, F6). This route passes `isRetrySafe: false`, and `SonnyBackendClient.send` gates
+    // every retry on that flag before it reaches the error's ceiling, so a 504 here is retried
+    // **zero** times. What the eight-second budget actually buys is that the user meets *this* code
+    // — typed, logged, and worded by the app — instead of the Mac's own transport timeout, which
+    // reports a generic unreachable backend about a gateway that was working fine.
     vi.stubGlobal("fetch", async () => {
       const error = new Error("aborted");
       error.name = "TimeoutError";

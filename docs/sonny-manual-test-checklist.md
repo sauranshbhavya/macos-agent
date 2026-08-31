@@ -2146,17 +2146,32 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       nearly worked; not offering it is the requirement.
 - [ ] **(new 2026-08-31, SONNY-216) — what Polar answers for a customer it does not have, and it
       settles a mapping that was chosen without evidence.** With the gateway configured, call
-      `POST /v1/billing/portal` **as the fresh never-subscribed account** from the row above and read
-      the gateway log line for the upstream status. The code treats **404** as "no customer" and
-      **everything else 4xx, including 422, as a provider refusal**. Record which Polar actually
-      sent. **If it is 404**, nothing changes and this row is discharged. **If it is 422**, the
-      mapping is wrong and must flip: `server/src/billing/polar.ts`'s `polarPortalSession` is where
-      the branch lives, and `treats a 422 as a refusal rather than as a missing customer` in
-      `server/test/billing.test.ts` is the test whose reasoning inverts with it. **The consequence of
-      leaving it wrong is one-directional and that is why it was chosen this way**: an unknown id
-      answered 422 today reports a loud fault to a user who has nothing to manage, which is
-      harmless; the opposite mistake would tell a **paying subscriber** they have no subscription,
-      which is a support incident that reads like data loss.
+      `POST /v1/billing/portal` **as the fresh never-subscribed account** from the row above and
+      record **both the upstream status and the response body verbatim** — the body is now half the
+      check (PR #183, F5) and the reason is the row below this one. The code treats **404 with a
+      JSON-object body** as "no customer" and **everything else 4xx, including 422, as a provider
+      refusal**. **If it is a 404 with a JSON body**, nothing changes and this row is discharged.
+      **If it is 422**, the mapping must flip: `server/src/billing/polar.ts`'s `polarPortalSession`
+      is where the branch lives, and `treats a 422 as a refusal rather than as a missing customer` in
+      `server/test/billing.test.ts` is the test whose reasoning inverts with it. **If it is a 404
+      whose body is not a JSON object**, the mapping is right and `looksLikeAMissingCustomer` needs
+      widening to that shape. **The consequence of leaving it wrong is one-directional and that is
+      why it was chosen this way**: an unknown id answered 422 today reports a loud fault to a user
+      who has nothing to manage, which is harmless; the opposite mistake would tell a **paying
+      subscriber** they have no subscription, which is a support incident that reads like data loss.
+- [ ] **(new 2026-08-31, SONNY-216) — the 404 that is not about a customer, which is the direction
+      the row above cannot reach.** The row above provokes an unknown customer against a *correctly
+      configured* gateway, so it can only ever settle what Polar answers for a missing customer — it
+      is blind to a 404 that arrives for any other reason, and that is the dangerous one (PR #183,
+      F5). Set `BILLING_API_BASE_URL` to a **valid https origin that is not Polar** and serves a 404
+      (any host with no such path will do), restart the gateway, and press **Manage subscription**
+      as a **real paying subscriber**. The app must say **"Sonny couldn't open your billing page."**
+      and the gateway must log `billing portal refused by provider` at `error`. **The finding is the
+      app saying "There's no subscription on this account."** — that is a paying customer being told
+      their subscription does not exist because an operator mistyped a hostname, and it is the exact
+      outcome the 422 reasoning calls a support incident that reads like data loss. Note that
+      `BILLING_API_BASE_URL` now refuses a non-https origin and one carrying a path, so use an https
+      origin with no path.
 - [ ] **(new 2026-08-31, SONNY-216) — the access token rotates without taking the portal down.**
       Follow `server/README.md`'s three steps in order: create a **second** Organization Access Token
       in the Polar dashboard, redeploy the gateway with `BILLING_PROVIDER_ACCESS_TOKEN` set to it,

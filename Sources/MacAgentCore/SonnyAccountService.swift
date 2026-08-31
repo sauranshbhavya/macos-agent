@@ -98,6 +98,7 @@ public struct SonnyAccountService: Sendable {
     /// §3.3 names all three and says conflating any two is a real bug; branch 7 deliberately made
     /// local data deletion leave the Keychain encryption key alone. This touches one Keychain
     /// account under `com.sonny.account` and no file under `~/Library/Application Support/Sonny/`.
+
     /// Ask the gateway for a hosted billing-portal link for this account (SONNY-216).
     ///
     /// **This account service rather than a billing one, because there is nothing else to it.** The

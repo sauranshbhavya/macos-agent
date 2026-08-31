@@ -177,6 +177,21 @@ public actor EntitlementService {
             return nil
         }
         let instant = await effectiveNow(floor: stored.observedServerTime)
+        // **A claim belonging to another session is discarded and replaced, not merely ignored**
+        // (PR #183, F2). `decision(for:)` does exactly this a few lines above, and its comment
+        // records why: the second person to sign in on a Mac meets the first one's claim. Delegating
+        // the case to `SubscriptionReading.read` — which correctly answers `nil` — left the stale
+        // bytes on disk and started nothing, and `shouldRefresh` was then evaluated against the
+        // *foreign* claim, so while that claim was fresh no refresh happened at all. The gateway's
+        // refresh cadence is 8 hours against a 24-hour lifetime, so the second user saw no
+        // subscription row for up to eight hours, and nothing in the product would have shortened
+        // it — because this is the only caller that would. The same defect PR #152's F2 fixed on
+        // `decision(for:)`, arriving through the door this branch added.
+        if claim.subject != session.userID {
+            try? discardLocally()
+            startRefresh()
+            return nil
+        }
         if EntitlementJudgement.shouldRefresh(claim: claim, now: instant) {
             startRefresh()
         }
@@ -402,12 +417,19 @@ public actor EntitlementService {
         try store.clear()
     }
 
-    /// Wait for whatever refresh this actor has in flight, if any. **Tests, and nothing else.**
+    /// Wait for whatever refresh this actor has in flight, if any.
     ///
     /// A detached task is invisible to a test, which is how a suite comes to assert on a cache the
     /// refresh has not written yet. Exposed rather than made deterministic, because the production
     /// behaviour — an answer that never waits — is the property worth keeping.
-    func awaitPendingRefresh() async {
+    ///
+    /// **This used to say "Tests, and nothing else", and it has a production caller now** (PR #183,
+    /// F1). `SonnyAccountModel.refreshSubscription()` uses it to turn one local read into "read,
+    /// and if there was nothing yet, wait for the fetch this read started and look once more" —
+    /// which is what makes the subscription row appear the *first* time a user opens Account rather
+    /// than the second. It does not weaken the property above: `decision(for:)` and
+    /// `currentSubscription()` still never wait, and a caller that wants to is opting in by name.
+    public func awaitPendingRefresh() async {
         await refreshTask?.value
     }
 
