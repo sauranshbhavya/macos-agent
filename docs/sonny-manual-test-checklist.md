@@ -2662,6 +2662,49 @@ what you will see is the storage banner rather than a watcher.
       Read the sentence **before** pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
       stops notifying.
 
+### A job over many items, and its progress (new 2026-08-31, SONNY-235)
+
+**Why these rows exist at all.** The founders decided on 2026-08-31 that a job over many items asks
+**once**, for the whole job — "Rename all 40?" — rather than once per item, *on the condition* that
+the user can see it moving and can stop it partway. The approval is the part no agent can verify; so
+is whether the progress line is legible while it moves. Set up is two minutes and everything below
+runs from the packaged app.
+
+**Set up:** make a folder on your Desktop called `job-test` with **five** `.docx` files in it, each
+in its own subfolder (`one/a.docx`, `two/b.docx`, and so on) — five folders, one document each. Make
+a **sixth** subfolder with no document in it at all. Any Word file will do; they can be the same file
+copied.
+
+- [ ] **(SONNY-235)** In the widget, ask Sonny to **convert the Word documents in each of the folders
+      in `~/Desktop/job-test`**. **One approval appears, not six.** Read what it says. **The finding
+      is an approval that lists six rows, one per folder** — it should describe the work once and say
+      how many folders it covers.
+- [ ] **(SONNY-235)** Approve it and watch the widget while it runs. **A line under the job says how
+      far it has got** — "1 of 6 folders done", climbing. **The finding is no line at all, a line
+      that never changes, or a count that is wrong.** (It will not say "6 of 6" at the very end; the
+      last unit of a run is deliberately not reported, so it stops one short and the summary settles
+      it. That is expected, not a finding.)
+- [ ] **(SONNY-235)** Read the final summary. **It names both halves** — how many folders were done
+      *and* that one could not be, naming the empty folder. **The finding is a flat "Done" that says
+      nothing about the sixth**, or a flat failure that hides the five that worked.
+- [ ] **(SONNY-235)** Open Command Center while the same job runs again. **The running line there
+      shows the same count as the widget**, and a **Cancel** beside it. **The finding is the two
+      surfaces disagreeing**, or Command Center showing no count.
+- [ ] **(SONNY-235)** Run it once more and press **Cancel** part-way. **It stops.** **The finding is
+      Sonny carrying on through the remaining folders**, or reporting the ones it never reached as
+      failures.
+- [ ] **(SONNY-235)** After cancelling, look at the widget when it next opens, and at
+      **Command Center → Memory → Unfinished tasks**. **The cancelled job is not offered to continue**
+      — cancelling means the user stopped it, and offering it back is the product arguing with them.
+      (A job stopped by *quitting the app* is a different case and **is** offered; if you want to
+      check that one, quit mid-job instead of cancelling.)
+- [ ] **(SONNY-235)** Point the same request at a folder that contains **nothing at all**. **Sonny
+      says there is nothing to work through, in plain words, and asks for no approval.** **The
+      finding is a prompt to approve a job over nothing**, or a technical error.
+- [ ] **(SONNY-235)** Ask for the same work over a folder holding **more than fifty** subfolders.
+      **Sonny refuses and says how many it will take.** **The finding is Sonny starting anyway**, or
+      quietly doing the first fifty without saying so.
+
 ## 8. How to report back
 
 For each real finding, give me:
