@@ -101,7 +101,12 @@ describe("which routes the gate challenges", () => {
       // found the scan's own defect: its path sits *under* `DELETE /v1/account`, so Fastify prints
       // it as a child node and the parser read it as `GET /entitlements`, a path nothing serves.
       // `test/support/routes.ts` carries what that would have cost.
+      // SONNY-212's, arriving the same way, and challenged for a sharper reason than most: it names
+      // how much of a paid allowance an account has left, so an unauthenticated caller would be
+      // reading one user's balance by presenting nothing at all.
+      "GET /v1/account/credits",
       "GET /v1/account/entitlements",
+      "HEAD /v1/account/credits",
       "HEAD /v1/account/entitlements",
       "POST /v1/auth/signout",
       // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the

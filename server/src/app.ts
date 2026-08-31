@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
+  requireCreditCatalogue,
   requireEntitlementSigningKey,
   requireRateLimitSalt,
   requireSpendCapUnits,
@@ -10,6 +11,8 @@ import {
 import { registerEntitlement } from "./entitlement/hook.js";
 import { postgresEntitlementStore, type EntitlementStore } from "./entitlement/store.js";
 import { registerEntitlementRoutes } from "./routes/entitlements.js";
+import { postgresCreditStore, type CreditStore } from "./credit/store.js";
+import { registerCreditRoutes } from "./routes/credits.js";
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
@@ -129,6 +132,16 @@ export interface AppOverrides {
    * SQL, the replay bound and the out-of-order refusal underneath, against a real Postgres.
    */
   readonly billingStore?: BillingStore;
+  /**
+   * **`creditStore` exists for the sixth time and the sixth identical reason** (SONNY-212). What an
+   * account drew on screen control is a query over `sonny.metering_event`, so without a seam every
+   * behaviour this ticket is about — a plan's allowance becoming a run count, a revoked plan falling
+   * to the default, a period that resets, an account that has drawn past its allowance reading zero
+   * rather than a negative — would be verified only under `npm run test:db`. `credit.db.test.ts`
+   * proves the query itself against a real Postgres, including the one thing a fake cannot say
+   * anything about: that events on the other four routes change the answer by nothing at all.
+   */
+  readonly creditStore?: CreditStore;
 }
 
 export function buildApp(
@@ -481,6 +494,9 @@ export function buildApp(
    * or its plan map is not, which is `config.ts`'s standing property: a missing credential is a
    * startup failure with a named variable.
    */
+  const creditStore =
+    overrides.creditStore ?? (auth ? postgresCreditStore(auth.withConnection) : undefined);
+
   const billing = billingDepsFrom(config);
   const billingStore =
     overrides.billingStore ?? (auth ? postgresBillingStore(auth.withConnection) : undefined);
@@ -510,6 +526,27 @@ export function buildApp(
       registerEntitlementRoutes(app, {
         store: entitlementStore,
         signingKey: requireEntitlementSigningKey(config),
+        now: auth.now,
+      });
+    }
+    /**
+     * `GET /v1/account/credits`, mounted beside the entitlement claim and for its reason
+     * (SONNY-212): it is the second route whose configuration must be refused at *startup* rather
+     * than on the first real request, because `requireCreditCatalogue` is what stands between a
+     * malformed `CREDIT_PLANS` and a user being told a run count derived from nothing.
+     *
+     * **Mounted on `auth` and not on billing**, unlike the webhook above. A deployment that takes no
+     * payments still has free-tier users, and the free tier has an allowance — that is the whole of
+     * what "the free tier is not a hard wall" means. A credits route that appeared only once a
+     * payment provider was configured would leave those users with no way to read the number the
+     * product asks them to track. `creditStore` is non-null in this branch by construction — it is
+     * built from `auth` above — and the `if` is what tells the compiler so rather than a non-null
+     * assertion, which would be a claim instead of a check.
+     */
+    if (creditStore) {
+      registerCreditRoutes(app, {
+        store: creditStore,
+        catalogue: requireCreditCatalogue(config),
         now: auth.now,
       });
     }

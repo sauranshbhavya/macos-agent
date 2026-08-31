@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { providers, type Config } from "../../src/config.js";
 import { DEFAULT_ROUTE_CHAINS, UNVERIFIED_DATA_POLICY } from "../../src/model/provider-router.js";
+import { TEST_CREDIT_PLANS } from "./credit.js";
 import { TEST_SUPABASE_CONFIG } from "./tokens.js";
 
 /**
@@ -75,6 +76,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     // their own. A number here is a test fixture and not an allowance — `config.ts` carries the
     // distinction, and SONNY-212 owns the real ones.
     spendCapUnits: 1_000_000,
+    // SONNY-212. Fixture numbers, not allowances -- `support/credit.ts` says why, and it is the same
+    // distinction the cap above carries. A test that is *about* the catalogue builds its own.
+    creditPlans: TEST_CREDIT_PLANS,
     ...TEST_SUPABASE_CONFIG,
     openAIBaseUrl: "https://openai.invalid/v1",
     openAITextModel: "test-text-model",
