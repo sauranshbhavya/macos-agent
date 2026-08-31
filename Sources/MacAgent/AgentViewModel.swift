@@ -3689,6 +3689,19 @@ final class AgentViewModel: ObservableObject {
         refreshStoreReadability()
         let unreadable = category.stores.filter { unreadableStores.contains($0) }
         let readable = category.stores.filter { !unreadableStores.contains($0) }
+        // **The readable half splits again, by who owns the file** (SONNY-236, founder decision
+        // 2026-08-31). A row whose store shares its file with another collection must not unlink it:
+        // this row is named *Unfinished tasks* and `resumable-tasks.json` also holds the user's
+        // standing watchers, so the file-level door would destroy something the row never mentions,
+        // silently and with nothing failing. `LocalStoreRowDeletionScope` carries the reasoning and
+        // is exhaustive, so a fourteenth store has to answer the same question.
+        //
+        // **The unreadable half is deliberately not split the same way** and goes to quarantine at
+        // file level below, whatever a store's scope says: rewriting a file means decoding it, which
+        // is exactly what has failed. Nothing is lost by that — quarantine keeps the file, so a
+        // shared file's other collection is set aside intact rather than destroyed.
+        let readableWholeFile = readable.filter { $0.rowDeletionScope == .wholeFile }
+        let readableSharedFile = readable.filter { $0.rowDeletionScope == .collectionWithinASharedFile }
 
         var deletedFileCount = 0
         var failures: [String] = []
@@ -3700,10 +3713,19 @@ final class AgentViewModel: ObservableObject {
             // door also sweeps every file `LocalDataQuarantine` has set aside from these stores, so
             // this call destroyed the file an earlier press had promised to keep — and reported it
             // in the "N files" figure, where the user can see only one memory type.
-            let service = LocalDataDeletionService(fileURLs: readable.map(storeFileURL))
+            let service = LocalDataDeletionService(fileURLs: readableWholeFile.map(storeFileURL))
             deletedFileCount = try service.deleteStoreFilesOnly().deletedFileCount
         } catch {
             failures.append(error.localizedDescription)
+        }
+
+        // Attempted whatever the file-level delete above did, for the reason that comment gives.
+        for store in readableSharedFile {
+            do {
+                try deleteSharedFileRowContents(of: store)
+            } catch {
+                failures.append(error.localizedDescription)
+            }
         }
 
         var keptFileURLs: [URL] = []
@@ -3742,6 +3764,37 @@ final class AgentViewModel: ObservableObject {
         // This is the one press that adds to what Settings' Data page counts (SONNY-266), so the
         // line is re-listed here rather than waiting for that page to appear.
         refreshSetAsideFiles()
+    }
+
+    /// Removes one row's own collection from a file it shares, leaving everything else in that file
+    /// alone (SONNY-236).
+    ///
+    /// **Exhaustive with no `default`, and the twelve `.wholeFile` stores are listed rather than
+    /// swept up.** `rowDeletionScope` is what routes a store here, so those twelve are unreachable —
+    /// but a `default:` would let a fourteenth store arrive classified as sharing a file and be
+    /// silently deleted by nothing at all, which is the same invisible failure the split exists to
+    /// prevent, one door along. Listing them means the classification and the door have to be
+    /// changed together.
+    private func deleteSharedFileRowContents(of store: LocalStore) throws {
+        switch store {
+        case .resumableTasks:
+            // Not `deleteAll()`, which unlinks the file and is Settings' whole-wipe door. This
+            // rewrites it without the tasks and keeps the watchers beside them.
+            try resumableTaskStore.deleteAllTasks()
+        case .visionSessionJournal,
+             .routines,
+             .workspaces,
+             .clipboardHistory,
+             .clipboardHistorySettings,
+             .snippets,
+             .recentArtifacts,
+             .shortcutRunHistory,
+             .taskHistory,
+             .taskPlanDetails,
+             .approvedApps,
+             .outputLocations:
+            break
+        }
     }
 
     /// Re-reads every store and republishes `unreadableStores`.

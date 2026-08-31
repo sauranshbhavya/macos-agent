@@ -74,7 +74,10 @@ public enum LocalDataDeletionCopy {
     /// Read by both call sites, so the two cannot describe the same button differently. Each frames
     /// it in its own sentence, which is the only thing they do separately.
     public static var everythingItTakes: String {
-        list(LocalStore.allCases.map(\.deletionCopyName))
+        // `flatMap`, not `map`: a store names one *or more* things, because a store is a file and
+        // `resumable-tasks.json` holds two collections (SONNY-236). A `map` here would silently
+        // drop every phrase after a store's first.
+        list(LocalStore.allCases.flatMap(\.deletionCopyNames))
     }
 
     /// Oxford-comma join. Written out rather than `joined(separator:)` because the last separator

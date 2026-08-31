@@ -560,13 +560,14 @@ struct LocalStorageSecurityTests {
             .components(separatedBy: ", ")
 
         // **The whole table by value, in order** (PR #155 review, F1). The three assertions below
-        // this one are structural and the first of them reads `deletionCopyName` on *both* sides —
+        // this one are structural and the first of them reads `deletionCopyNames` on *both* sides —
         // so between them they could not see a wrong word at all, which is the same blindness this
         // branch's own W4 mutant exposed for a duplicated name. It is not a hypothetical gap: the
         // reviewer's V1 changed `.visionSessionJournal`'s arm to "screen activity" and the whole
         // suite stayed green, while that exact phrase is the reason this branch rejected deriving
-        // the sentence from Memory rows instead. Thirteen literals is the same shape
-        // `theWipeReachesEveryLocalStore` uses for the thirteen file names, and for the same reason:
+        // the sentence from Memory rows instead. Fourteen literals against thirteen stores since
+        // SONNY-236, because `resumable-tasks.json` names two collections; it is otherwise the same
+        // shape `theWipeReachesEveryLocalStore` uses for the thirteen file names, for the same reason:
         // this is a destructive action's disclosure, and a copy pass over it should have to say so.
         #expect(items == [
             "records of what Sonny did on screen",
@@ -581,7 +582,11 @@ struct LocalStorageSecurityTests {
             "what past tasks planned",
             "allowed apps",
             "common output locations",
-            "unfinished tasks"
+            "unfinished tasks",
+            // The fourteenth phrase and the thirteenth store, because `resumable-tasks.json` holds
+            // two collections (SONNY-236). `theWipesOwnSentenceNamesEveryCollectionInEveryStore`
+            // below is what stops a third arriving without one.
+            "watchers"
         ])
 
         // Structure, over the population rather than over the literals above — so a fourteenth store
@@ -591,10 +596,53 @@ struct LocalStorageSecurityTests {
         // list and the filename set `theWipeReachesEveryLocalStore` already pins. Deliberate: the
         // sentence is what a person reads before pressing an irreversible control, and a new store
         // arriving in it unread is the defect SONNY-233 was filed for.
-        #expect(items == LocalStore.allCases.map(\.deletionCopyName))
-        #expect(items.count == LocalStore.allCases.count)
+        #expect(items == LocalStore.allCases.flatMap(\.deletionCopyNames))
+        // Phrases, not stores — one store names two of them now, so this is no longer the store
+        // count and asserting that it is would fail on the very thing the table above records.
+        #expect(items.count == LocalStore.allCases.flatMap(\.deletionCopyNames).count)
+        #expect(items.count > LocalStore.allCases.count, "a store naming two things stopped doing so")
         #expect(Set(items).count == items.count, "two stores share a name and one of them is invisible")
         #expect(!items.contains(""), "a store is named by nothing at all")
+    }
+
+    /// **A collection inside a store's file reaches the wipe's sentence, or it is deleted by a press
+    /// that never named it** (SONNY-236).
+    ///
+    /// The sentence is derived from `LocalStore.allCases`, and `resumable-tasks.json` holds two
+    /// collections behind one case — so the derivation that protects a *store* protects only the
+    /// first thing a store's file holds. `ResumableTaskFileCollection` is the declaration standing in
+    /// for the missing derivation, and this is what binds it to reality: the count of
+    /// `ResumableTaskFile`'s stored properties against the count of that enum's cases. A third
+    /// collection added to the file without a case fails here.
+    ///
+    /// **The `Mirror` half is the one that matters.** The exhaustive switch on `wipeCopyName`
+    /// guarantees every case has a phrase; nothing but this count notices a stored property that
+    /// never became a case, which is the direction a new collection actually arrives from.
+    @Test
+    func theWipesOwnSentenceNamesEveryCollectionInEveryStore() {
+        let file = ResumableTaskFile(tasks: [], watchers: [])
+        let storedProperties = Mirror(reflecting: file).children.count
+
+        #expect(
+            storedProperties == ResumableTaskFileCollection.allCases.count,
+            """
+            `ResumableTaskFile` holds \(storedProperties) collections and \
+            `ResumableTaskFileCollection` names \(ResumableTaskFileCollection.allCases.count). \
+            A collection added to that file needs a case there, or the wipe deletes it without \
+            Settings' sentence ever naming it.
+            """
+        )
+        // The control: `Mirror` really reached the properties, so the equality above is not two
+        // zeroes agreeing.
+        #expect(storedProperties == 2)
+
+        // And each of those names really is in the sentence a person reads.
+        for name in ResumableTaskFileCollection.allCases.map(\.wipeCopyName) {
+            #expect(
+                LocalStore.resumableTasks.deletionCopyNames.contains(name),
+                "the wipe's sentence does not name \(name)"
+            )
+        }
     }
 
     /// The join, at the sizes the product cannot reach today and a successor might.
