@@ -3,6 +3,7 @@ import { describe, expect } from "vitest";
 import {
   applyBillingDelivery,
   hasLiveSubscription,
+  hasSubscriptionRecord,
   type BillingPlans,
 } from "../src/billing/store.js";
 import { POLAR } from "../src/billing/polar.js";
@@ -603,6 +604,56 @@ describeDb("a subscription reaches the entitlement", () => {
         occurredAt: new Date(NOW.getTime() + 120_000),
       }),
     );
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
+  });
+
+  itUnderHangBackstop("thePortalGuardStillSeesASubscriptionTheCheckoutGuardCallsDead", async () => {
+    // **SONNY-387, and the two predicates are asserted side by side because the divergence is the
+    // property.** The portal route asks whether this gateway ever recorded a subscription here; the
+    // checkout route asks whether one is live. They agree everywhere except on a cancelled account —
+    // and that account is precisely who the hosted portal is for, so a portal route reusing the
+    // checkout guard would refuse the user whose Account row still shows a live Manage button.
+    expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(false);
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
+
+    await apply(event({ state: "active" }));
+    expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(true);
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(true);
+
+    await apply(
+      event({
+        eventId: "msg_2",
+        eventType: "subscription.revoked",
+        state: "ended",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+    // The row is revoked. This is the one place the two answers differ, and it is the whole ticket.
+    expect(await readEntitlement(client, account).then((row) => row.revokedAt)).not.toBeNull();
+    expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(true);
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
+
+    // Both are scoped to the provider that issued the subscription, so a deployment that changed
+    // provider does not read the old one's record as this one's — the `$2` is not decoration.
+    expect(await hasSubscriptionRecord(client, "stripe", account)).toBe(false);
+  });
+
+  itUnderHangBackstop("aPlanTheOperatorGrantedIsNotASubscriptionToManage", async () => {
+    // **The other half of what the portal guard asks** (SONNY-387). `entitlements.ts`'s `grant`
+    // writes a plan and capabilities and names no subscription, so such an account renders
+    // `<Plan> · Active` and a Manage button while the provider has no customer for it at all. The
+    // guard answers `false` — which is the same 409 the provider's own `noCustomer` produced before
+    // it, reached without the call.
+    await client.query(
+      `INSERT INTO sonny.entitlement (account_id, plan, capabilities, cap_units, updated_at)
+            VALUES ($1, 'pro', $2, NULL, now())`,
+      [account, ["screen_control"]],
+    );
+    const granted = await readEntitlement(client, account);
+    expect(granted.plan).toBe("pro");
+    expect(granted.capabilities).toEqual(["screen_control"]);
+
+    expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(false);
     expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
   });
 

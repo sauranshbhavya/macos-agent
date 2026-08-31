@@ -213,13 +213,19 @@ function writeFor(
  * and both belong on one ticket rather than being improvised in a fix round.
  */
 /**
- * What "this account is already live on a subscription" means, as **one** definition with two
- * consumers — the refusal below, and the checkout route's guard.
+ * What "this gateway has recorded a subscription for this account with this provider" means, as
+ * **one** definition with three consumers — the foreign-delivery refusal below, the checkout route's
+ * guard, and the portal route's (SONNY-387).
  *
  * Two spellings of this would be the defect one layer up: the webhook would refuse a delivery the
  * checkout route had just handed someone a link for, or the reverse, and which of the two was wrong
- * would depend on which one a reader happened to open. So the shared fragment is the whole of
- * "live", and the one caller that needs *less* than that appends its own clause.
+ * would depend on which one a reader happened to open. So the shared fragment is the whole of what a
+ * recorded subscription is, and each caller that needs *less* than the whole appends its own clause.
+ *
+ * **`billing_subscription_id IS NOT NULL` is what makes this a statement about the provider rather
+ * than about the plan.** `entitlements.ts`'s operator `grant` writes a plan and capabilities onto a
+ * row and names no subscription, so an account can hold a plan this gateway granted itself and have
+ * no customer at the provider at all. Every consumer here is asking about the provider's side.
  *
  * **It was written with a nullable third parameter — `($3::text IS NULL OR billing_subscription_id
  * <> $3)`, `null` meaning "exclude nothing" — and a mutation battery is what took that out.** H3 of
@@ -231,11 +237,19 @@ function writeFor(
  * sentinel so the shape does not exist. This is the second. One caller passes two parameters and the
  * other passes three, which is what they actually differ by.
  */
-const LIVE_SUBSCRIPTION = `SELECT billing_subscription_id FROM sonny.entitlement
+const SUBSCRIPTION_RECORD = `SELECT billing_subscription_id FROM sonny.entitlement
       WHERE account_id = $1
-        AND revoked_at IS NULL
         AND billing_provider = $2
         AND billing_subscription_id IS NOT NULL`;
+
+/**
+ * The same rows, narrowed to the ones that are still live. **The narrowing clause is the whole of
+ * what separates this from the portal's question below**, and writing it as an extension rather
+ * than as a second `SELECT` is what stops the two drifting into disagreeing about what a
+ * subscription *is* while disagreeing only about `revoked_at`, which is what they mean to differ by.
+ */
+const LIVE_SUBSCRIPTION = `${SUBSCRIPTION_RECORD}
+        AND revoked_at IS NULL`;
 
 async function refuseForeignSubscription(
   client: pg.Client,
@@ -274,6 +288,47 @@ export async function hasLiveSubscription(
   accountId: string,
 ): Promise<boolean> {
   const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider]);
+  return existing.rows.length > 0;
+}
+
+/**
+ * Has this gateway recorded *any* subscription for this account with this provider — live or ended?
+ *
+ * **The portal route's guard, and it is deliberately not `hasLiveSubscription`** (SONNY-387). A
+ * cancelled subscriber is exactly who the hosted portal is for: they go there to read an invoice, to
+ * take a card off the account, or to subscribe again. `revoked_at` is set for them
+ * (`writeFor`'s `ended` and `paused` arms), so the checkout guard's question answers `false` — and a
+ * portal route asking that question would refuse the user the app is offering the control to. The
+ * app's own gate is the one this matches: `SubscriptionReading.read` renders `<Plan> · Ended` and a
+ * live Manage button off a claim whose plan is set and whose capabilities are empty, which is what a
+ * revoked row mints.
+ *
+ * **What this answers is what the gateway was told, not what is true at the provider now**, and the
+ * route is arranged so that only one direction of that gap can matter. A `true` here decides
+ * nothing: the provider is still called and its answer still wins, including its `noCustomer`. A
+ * `false` is what saves the call, and it is a refusal — so the question is whether this can be
+ * `false` while the provider does hold a customer.
+ *
+ * **It can, in three enumerated shapes, and none of them is reachable from the app.** A checkout
+ * whose webhook has not landed yet; a delivery this gateway recorded `unmatched`, `unmapped` or
+ * `unreadable`, so a customer exists at the provider and no row was ever written; and a customer
+ * created in the provider's own dashboard against this account's external id. In every one of them
+ * the same missing row is what `claimFactsFor` reads, so the claim this Mac holds says
+ * `plan: 'none'`, `SubscriptionReading.read` answers `nil`, and the Account section renders no
+ * Manage control at all — the user cannot reach this refusal, because the app already refuses
+ * itself, from the same row and for the same reason. The first shape closes itself when the delivery
+ * lands. **The second is the real residual**: a paying customer whose product `BILLING_PLANS` does
+ * not name could, before this guard, have been handed a portal link by a client that called the
+ * route directly, and now cannot. That is a support path narrowing, recorded rather than discovered
+ * later; the state it needs is already a support incident (`unmapped` is a paying customer with no
+ * entitlement), and the fix for it is the mapping, not the portal.
+ */
+export async function hasSubscriptionRecord(
+  client: pg.Client,
+  provider: string,
+  accountId: string,
+): Promise<boolean> {
+  const existing = await client.query(SUBSCRIPTION_RECORD, [accountId, provider]);
   return existing.rows.length > 0;
 }
 
@@ -469,6 +524,11 @@ export interface BillingStore {
   readonly apply: (input: BillingApplyInput) => Promise<BillingApplyResult>;
   /** The checkout route's guard. See `hasLiveSubscription` for what it closes and what it does not. */
   readonly hasLiveSubscription: (provider: string, accountId: string) => Promise<boolean>;
+  /**
+   * The portal route's guard. See `hasSubscriptionRecord` for why it is a different question from
+   * the one above, and for the gap between what this answers and what is true at the provider.
+   */
+  readonly hasSubscriptionRecord: (provider: string, accountId: string) => Promise<boolean>;
 }
 
 export function postgresBillingStore(withConnection: WithConnection): BillingStore {
@@ -476,5 +536,7 @@ export function postgresBillingStore(withConnection: WithConnection): BillingSto
     apply: (input) => withConnection((client) => applyBillingDelivery(client, input)),
     hasLiveSubscription: (provider, accountId) =>
       withConnection((client) => hasLiveSubscription(client, provider, accountId)),
+    hasSubscriptionRecord: (provider, accountId) =>
+      withConnection((client) => hasSubscriptionRecord(client, provider, accountId)),
   };
 }

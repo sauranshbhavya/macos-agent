@@ -90,9 +90,15 @@ const signedInConnection: WithConnection = async (work) => {
  * It deliberately does **not** model the entitlement: what this file proves is which deliveries
  * reach the store at all and what neutral event they arrive as. The state a delivery produces is
  * `billing.db.test.ts`'s, against the real statements.
+ *
+ * **Both guards default to `false`, which is the direction that fails loudly** (SONNY-387). A portal
+ * test that forgets `record` is answered `409` locally and never reaches the provider it meant to
+ * exercise, so it fails on the status it asserts; the opposite default would let such a test pass
+ * while proving nothing about the provider — which is what the 404 row of the mapping table below
+ * would have become.
  */
 function recordingStore(
-  live = false,
+  answers: { readonly live?: boolean; readonly record?: boolean } = {},
 ): BillingStore & { readonly calls: BillingApplyInput[] } {
   const calls: BillingApplyInput[] = [];
   return {
@@ -102,7 +108,10 @@ function recordingStore(
       return { outcome: "applied", accountId: ACCOUNT };
     },
     // The checkout guard's one question. `billing.db.test.ts` proves the SQL that answers it.
-    hasLiveSubscription: async () => live,
+    hasLiveSubscription: async () => answers.live ?? false,
+    // The portal guard's, which is a different question: an *ended* subscription answers `false`
+    // above and `true` here. `billing.db.test.ts` proves that divergence against the real column.
+    hasSubscriptionRecord: async () => answers.record ?? false,
   };
 }
 
@@ -716,7 +725,7 @@ describe("where a user is sent to subscribe", () => {
     // account was an ordinary user action rather than a contrivance. What this closes is the
     // sequential door; the concurrent races are not closed by any check here, because the link is
     // static and both tabs hold theirs from before the first subscription existed.
-    const store = recordingStore(true);
+    const store = recordingStore({ live: true });
     const app = build(store);
 
     const response = await app.inject({
@@ -995,7 +1004,7 @@ describe("where a subscriber manages the subscription", () => {
       async () =>
         new Response(sessionBody(), { status: 200, headers: { "content-type": "application/json" } }),
     );
-    const app = build(recordingStore());
+    const app = build(recordingStore({ record: true }));
 
     const response = await app.inject({
       method: "POST",
@@ -1011,6 +1020,85 @@ describe("where a subscriber manages the subscription", () => {
     await app.close();
   });
 
+  it("answers an account with no recorded subscription without asking the provider", async () => {
+    // **SONNY-387.** The ordinary case — a user who signed in and never checked out — and the whole
+    // of what this ticket buys. `expect(called)` is the assertion: the 409 alone passed before this
+    // guard existed, because the provider answered `noCustomer` and the route mapped it here.
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return new Response(sessionBody(), { status: 200 });
+    });
+    const app = build(recordingStore({ record: false }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/portal",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("entitlement.no_subscription");
+    expect(response.json().error.retryable).toBe(false);
+    expect(called).toBe(false);
+    await app.close();
+  });
+
+  it("asks the provider for a subscription that has ended, which the checkout guard calls dead", async () => {
+    // **The predicate is the assertion, and this is the mutant it exists for** (SONNY-387). A
+    // cancelled subscriber is exactly who the hosted portal is for — an invoice, a card, a
+    // resubscription — and `hasLiveSubscription` answers `false` for them, because `revoked_at` is
+    // set. A route that reused the checkout route's guard here would refuse the user the app is
+    // still rendering a live Manage button for, and every other portal test would stay green.
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return new Response(sessionBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = build(recordingStore({ live: false, record: true }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/portal",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(called).toBe(true);
+    await app.close();
+  });
+
+  it("says the same thing whichever side learned there is no subscription", async () => {
+    // The two arms are one answer (`noSubscriptionToManage`), and a client must not be able to tell
+    // which one answered: `BillingPortalCopy` writes one sentence for this code, and a second
+    // spelling would be a second sentence for the same fact about the same account. `request_id` is
+    // dropped because it is per-request by construction and is the one field that must differ.
+    const bodies: Record<string, unknown>[] = [];
+    for (const store of [recordingStore({ record: false }), recordingStore({ record: true })]) {
+      vi.stubGlobal(
+        "fetch",
+        async () => new Response(JSON.stringify({ error: "x" }), { status: 404 }),
+      );
+      const app = build(store);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/billing/portal",
+        headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+      });
+      expect(response.statusCode).toBe(409);
+      const { request_id: _ignored, ...rest } = response.json().error as Record<string, unknown>;
+      bodies.push(rest);
+      await app.close();
+    }
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(bodies[0]).toMatchObject({ code: "entitlement.no_subscription", retryable: false });
+  });
+
   it("refuses an unauthenticated caller before it calls the provider", async () => {
     // **The order is the assertion.** A route that minted a session and *then* checked the caller
     // would spend a provider call — and, on a route keyed by account id, would need the caller to
@@ -1021,7 +1109,10 @@ describe("where a subscriber manages the subscription", () => {
       called = true;
       return new Response(sessionBody(), { status: 200 });
     });
-    const app = build(recordingStore());
+    // **`record: true` is load-bearing** (SONNY-387): with no recorded subscription the local guard
+    // would answer before the provider was reached, and `called === false` would hold whether or not
+    // the caller was ever checked. The store says yes so that only the 401 can keep `fetch` unused.
+    const app = build(recordingStore({ record: true }));
 
     const response = await app.inject({ method: "POST", url: "/v1/billing/portal" });
 
@@ -1041,11 +1132,12 @@ describe("where a subscriber manages the subscription", () => {
     ];
 
     for (const [upstream, status, code, retryable] of cases) {
-      vi.stubGlobal(
-        "fetch",
-        async () => new Response(JSON.stringify({ error: "x" }), { status: upstream }),
-      );
-      const app = build(recordingStore());
+      let called = false;
+      vi.stubGlobal("fetch", async () => {
+        called = true;
+        return new Response(JSON.stringify({ error: "x" }), { status: upstream });
+      });
+      const app = build(recordingStore({ record: true }));
 
       const response = await app.inject({
         method: "POST",
@@ -1056,6 +1148,11 @@ describe("where a subscriber manages the subscription", () => {
       expect(response.statusCode, `upstream ${upstream}`).toBe(status);
       expect(response.json().error.code, `upstream ${upstream}`).toBe(code);
       expect(response.json().error.retryable, `upstream ${upstream}`).toBe(retryable);
+      // **The 404 row is the one this guards** (SONNY-387). Its answer is now reachable two ways —
+      // from the provider's 404 and from the local guard — and they are byte-identical by design, so
+      // without this the row would pass on a store that never let the request out and would say
+      // nothing about the mapping it exists to pin.
+      expect(called, `upstream ${upstream}`).toBe(true);
       await app.close();
     }
   });
@@ -1074,7 +1171,7 @@ describe("where a subscriber manages the subscription", () => {
       error.name = "TimeoutError";
       throw error;
     });
-    const app = build(recordingStore());
+    const app = build(recordingStore({ record: true }));
 
     const response = await app.inject({
       method: "POST",
