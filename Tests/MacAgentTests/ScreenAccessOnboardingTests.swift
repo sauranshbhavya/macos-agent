@@ -291,7 +291,7 @@ struct ScreenAccessOnboardingTests {
     @Test
     func theRealRelauncherTerminatesOnceTheReopenHasWorked() async throws {
         let collaborators = RelaunchCollaborators()
-        let bundle = URL(fileURLWithPath: "/Applications/Sonny.app")
+        let bundle = URL(fileURLWithPath: "/Fixtures/NotSonny.app")
         let relauncher = DefaultAppRelauncher(
             bundleURL: bundle,
             reopen: { collaborators.reopen($0) },
@@ -307,20 +307,24 @@ struct ScreenAccessOnboardingTests {
     /// **The failure SONNY-348 exists for, now asserted rather than read off the guard's text.**
     /// A reopen that was refused must leave this process alive and say so — terminating anyway is
     /// what left a user with no Sonny at all, seconds after they granted it a screen-recording
-    /// permission. The status travels into the error, so a guard that reported a fixed code would
-    /// fail here too.
+    /// permission. **The status travels into the error and the bundle handed in is the one reopened**,
+    /// which is why neither fixture value is a plausible hardcode: `42` is a status no guard would invent
+    /// and `/Fixtures/NotSonny.app` is a path nothing would reach for. Both were `1` and
+    /// `/Applications/Sonny.app` until PR #181's review, and both mutants — the status replaced by a
+    /// literal `1`, the injected bundle ignored for a literal `/Applications/Sonny.app` — survived the
+    /// whole suite (F7, F8).
     @Test
     func theRealRelauncherThrowsAndDoesNotTerminateWhenTheReopenIsRefused() async {
         let collaborators = RelaunchCollaborators()
-        collaborators.reopenStatus = 1
-        let bundle = URL(fileURLWithPath: "/Applications/Sonny.app")
+        collaborators.reopenStatus = 42
+        let bundle = URL(fileURLWithPath: "/Fixtures/NotSonny.app")
         let relauncher = DefaultAppRelauncher(
             bundleURL: bundle,
             reopen: { collaborators.reopen($0) },
             terminate: { collaborators.terminate() }
         )
 
-        await #expect(throws: AppRelaunchFailure.reopenRefused(status: 1)) {
+        await #expect(throws: AppRelaunchFailure.reopenRefused(status: 42)) {
             try await relauncher.relaunch()
         }
 
@@ -385,6 +389,17 @@ struct ScreenAccessOnboardingTests {
         #expect(MacAgentSource.count(
             of: "relauncher: any AppRelaunching = DefaultAppRelauncher.forTheRunningApp()",
             inText: source
+        ) == 1)
+        // **And the construction site, because the default is only half the door** (PR #181's review, F6).
+        // The line above holds what the model falls back to; it says nothing about what `main.swift` asks
+        // for, and passing a double there leaves that line byte-identical. `FirstRunSequenceTests`'
+        // construction-site scan does not see it either — it counts the token `ScreenAccessOnboardingModel(`
+        // per file, which an explicit argument leaves at one. A mutant wiring a no-op relauncher through
+        // `main.swift` passed all 2568 tests until this line: the shipping app never reopened its bundle
+        // and nothing anywhere was red.
+        #expect(MacAgentSource.count(
+            of: "let screenAccessModel = ScreenAccessOnboardingModel()",
+            inText: try MacAgentSource.read("main.swift")
         ) == 1)
     }
 
