@@ -561,6 +561,13 @@ public struct InstantCommandResolver: Sendable {
     /// The expression after `calc`, `calculate` or a leading `=`, read the way the evaluator will
     /// read it — a trailing `=` or `?` dropped along with the whitespace (SONNY-281) — so `= 2 + 2 =`
     /// plans as `2 + 2`, and `= =` is the question rather than a plan to calculate `=`.
+    ///
+    /// **It takes the sentence filler off too** (SONNY-284's fix round). This path plans whatever
+    /// follows the prefix without asking whether it is arithmetic, so `calculate 2 + 2 please` did
+    /// not fall through to a planner — it planned `2 + 2 please` and the evaluator answered
+    /// *"Could not calculate that expression: Unexpected token p."*, a parser message naming a
+    /// letter, on the same sentence `2 + 2 please` is answered on. The strip is the one the widened
+    /// path already does, so the two prefixes agree instead of one being the strict door.
     private func prefixedCalculatorExpression(in command: String) -> String? {
         let lowered = command.lowercased()
         for prefix in ["calc", "calculate"] {
@@ -568,13 +575,11 @@ public struct InstantCommandResolver: Sendable {
                 return ""
             }
             if lowered.hasPrefix("\(prefix) ") {
-                return CalculatorService.withoutTrailingEqualsOrQuestionMark(
-                    String(command.dropFirst(prefix.count))
-                )
+                return withoutCalculationFiller(String(command.dropFirst(prefix.count)))
             }
         }
         if command.hasPrefix("=") {
-            return CalculatorService.withoutTrailingEqualsOrQuestionMark(String(command.dropFirst()))
+            return withoutCalculationFiller(String(command.dropFirst()))
         }
         return nil
     }
@@ -598,6 +603,10 @@ public struct InstantCommandResolver: Sendable {
     /// lists are written alphabetically — which is *not* longest-first, deliberately, so the
     /// ordering is the sort's doing rather than a hand-kept invariant a later phrase can break
     /// silently — and `longestFirst` is one function so one test covers both.
+    ///
+    /// `sorted(by:)` is not stable, and it does not need to be: instability can only reorder phrases
+    /// of *equal* length, and two strings of equal length cannot be proper prefixes of one another,
+    /// so no tie in either list can flip a match (PR #176 review).
     private static let calculationLeadIns = longestFirst([
         "calc", "calculate", "compute", "convert", "how much", "how much is",
         "please", "solve", "what is", "what's", "whats", "work out"
@@ -627,11 +636,29 @@ public struct InstantCommandResolver: Sendable {
     /// stated boundary with a test on it (`CalculatorServiceTests.doesNotStripFillerWordsByDesign`).
     /// A resolver that hands over `two plus two` leaves that boundary exactly where it was.
     private func calculatorExpression(in command: String) -> String? {
+        let expression = withoutCalculationFiller(command)
+        let normalized = SpokenArithmeticNormalizer.normalize(expression)
+        guard looksLikeBareArithmetic(normalized) || looksLikeBareConversion(normalized) else {
+            return nil
+        }
+        return expression
+    }
+
+    /// The stripping half on its own, because `prefixedCalculatorExpression` wants it without the
+    /// recognition step — after `calc` the command has already said it is a calculation.
+    ///
+    /// **The trailing trim runs inside the loop, not once before it, and that placement is the
+    /// whole of why `what's 2+2? thanks` works** (PR #176 review, F2): the `?` is not at the end
+    /// until ` thanks` has come off, so a version that trimmed once up front would answer the
+    /// planner's refusal to a sentence a person plainly typed at a calculator. Every trailing-sign
+    /// case that predates this branch already has its sign at the end before any strip, so the
+    /// suite stays green under that rearrangement — which is exactly why it is pinned by name.
+    private func withoutCalculationFiller(_ command: String) -> String {
         var expression = command
         // Each pass removes at least one character, so the loop is bounded by the command's length;
         // the count is the guard against a phrase that could ever strip to itself.
         for _ in 0...command.count {
-            let trimmed = CalculatorService.withoutTrailingEqualsOrQuestionMark(expression)
+            let trimmed = withoutTrailingCalculationNoise(expression)
             if let shorter = withoutOneCalculationFillerPhrase(trimmed) {
                 expression = shorter
                 continue
@@ -639,15 +666,39 @@ public struct InstantCommandResolver: Sendable {
             expression = trimmed
             break
         }
-
-        guard !expression.isEmpty else {
-            return nil
-        }
-        let normalized = SpokenArithmeticNormalizer.normalize(expression)
-        guard looksLikeBareArithmetic(normalized) || looksLikeBareConversion(normalized) else {
-            return nil
-        }
         return expression
+    }
+
+    /// What a dictated or typed sentence may end with and still be the calculation it began as.
+    ///
+    /// Two rules, applied until neither changes anything. `withoutTrailingEqualsOrQuestionMark` is
+    /// the evaluator's own statement of what a *sum* may end with (SONNY-281) and stays exactly
+    /// that; `SpokenArithmeticNormalizer.trimmablePunctuation` is the one list of what a
+    /// transcriber appends to a *sentence*, read here rather than copied. They interleave — `2 + 2
+    /// =,` and `2 + 2 , =` are both reachable — so neither alone settles the text.
+    ///
+    /// **The trailing end only.** `trimmingCharacters` would take both, and a leading `.` is a
+    /// decimal point: `.5 + 1` trimmed at both ends is `6` rather than `1.5`.
+    ///
+    /// Trigger (PR #176 review, F1): `What is 5 times 5, please?` reached a planner with no
+    /// calculator and came back "Calculation is unsupported by the registered local tools" — the
+    /// exact sentence SONNY-284 exists to remove, on the phrasing its own manual-test row asks the
+    /// founders to speak. Its word-number twin `what is five times five, please` was answered, and
+    /// carried the comma into the card as `Calculate five times five,.`
+    private func withoutTrailingCalculationNoise(_ text: String) -> String {
+        var settled = text
+        while true {
+            var shortened = Substring(CalculatorService.withoutTrailingEqualsOrQuestionMark(settled))
+            while let last = shortened.last,
+                  last.unicodeScalars.allSatisfy(SpokenArithmeticNormalizer.trimmablePunctuation.contains) {
+                shortened.removeLast()
+            }
+            let next = String(shortened)
+            if next == settled {
+                return next
+            }
+            settled = next
+        }
     }
 
     /// One lead-in or one tail-off, or nil when the text begins and ends with neither. Matched

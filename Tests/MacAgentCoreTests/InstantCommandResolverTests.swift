@@ -179,8 +179,14 @@ struct InstantCommandResolverTests {
     ///
     /// `how much is 5 times 5` is the case that pins the longest-phrase-first ordering: stripped by
     /// `how much` it leaves `is 5 times 5`, which matches nothing.
+    ///
+    /// **The evaluation is not inside the `#expect`** (PR #176 review, F5). `#expect(try …)`
+    /// propagates, so one case whose expression throws would end the whole test and every case
+    /// after it would go unrun while the output showed a single failure — a table of this size can
+    /// lose most of itself and look like one defect. The `guard case .plan` arm above already had
+    /// this right with `Issue.record` plus `continue`.
     @Test
-    func aCalculationPhrasedAsASentenceResolvesToTheCalculator() throws {
+    func aCalculationPhrasedAsASentenceResolvesToTheCalculator() {
         let resolver = Self.hermeticResolver()
         let calculator = CalculatorService()
 
@@ -200,7 +206,44 @@ struct InstantCommandResolverTests {
             ("compute (2 + 2) * 3 thanks", "(2 + 2) * 3", "12"),
             ("what is two plus two", "two plus two", "4"),
             ("two plus two", "two plus two", "4"),
-            ("ten cm to in", "ten cm to in", "3.937007874 in")
+            ("ten cm to in", "ten cm to in", "3.937007874 in"),
+
+            // A comma before the politeness word, which is ordinary English typed and the default
+            // out of dictation (PR #176 review, F1). The first two reached the planner; the third
+            // was answered and carried the comma into the card as `Calculate five times five,.`
+            ("What is 5 times 5, please?", "5 times 5", "25"),
+            ("what is 2 + 2, please", "2 + 2", "4"),
+            ("what is five times five, please", "five times five", "25"),
+            // The rest of what a transcriber puts on the end of a sentence.
+            ("what is 5 times 5!", "5 times 5", "25"),
+            ("what is 2 + 2.", "2 + 2", "4"),
+
+            // The trailing trim runs inside the stripping loop, so a sign the tail-off was hiding
+            // still comes off (PR #176 review, F2). Hoisting that call above the loop leaves the
+            // rest of this table green and breaks exactly this row.
+            ("what's 2+2? thanks", "2+2", "4"),
+
+            // The three filler entries nothing exercised (PR #176 review, F6). Bare `how much` is
+            // also the only reason `longestFirst` has anything to do, so pruning it as dead weight
+            // would silently make mutant M1's property untestable.
+            ("please calc 2 + 2", "2 + 2", "4"),
+            ("how much 5 times 5", "5 times 5", "25"),
+            ("what is 2 + 2 thank you", "2 + 2", "4"),
+
+            // The `calc`/`calculate`/`=` prefixes take the filler off too. Before this round these
+            // planned `2 + 2 please` and answered "Could not calculate that expression: Unexpected
+            // token p." — a parser message naming a letter, on the sentence the row above answers.
+            ("calculate 2 + 2 please", "2 + 2", "4"),
+            ("calculate two plus two please", "two plus two", "4"),
+            ("calc 2 + 2, please", "2 + 2", "4"),
+            ("= 5 times 5, please", "5 times 5", "25"),
+
+            // A leading `.` is a decimal point, so the sentence trim takes the trailing end only —
+            // trimmed at both ends this is `5 + 1` and answers `6`.
+            ("what is .5 + 1", ".5 + 1", "1.5"),
+            // The two trailing rules interleave, so the trim runs to a fixed point: one pass leaves
+            // `2 + 2 ` and the card reads `Calculate 2 + 2 .`
+            ("2 + 2 .", "2 + 2", "4")
         ]
 
         for testCase in cases {
@@ -211,7 +254,18 @@ struct InstantCommandResolverTests {
             #expect(plan.steps.map(\.operation) == [.calculateUtility])
             #expect(plan.steps[0].searchQuery == testCase.expression)
             #expect(plan.summary == "Calculate \(testCase.expression).")
-            #expect(try calculator.evaluate(testCase.expression).result == testCase.result)
+            do {
+                let evaluated = try calculator.evaluate(testCase.expression)
+                #expect(
+                    evaluated.result == testCase.result,
+                    "\(testCase.command.debugDescription) planned \(testCase.expression.debugDescription)"
+                )
+            } catch {
+                let planned = testCase.expression.debugDescription
+                Issue.record(
+                    "\(testCase.command.debugDescription) planned \(planned), which the evaluator refused: \(error)"
+                )
+            }
         }
     }
 
@@ -251,7 +305,16 @@ struct InstantCommandResolverTests {
             "what is 2 + 2 = 4",
             "remind me in 5 minutes",
             "open 2 windows",
-            "switch to one two three four"
+            "switch to one two three four",
+            // Reading spoken words in the *resolver* is new on this path, so the boundary where a
+            // word-operator meets ordinary prose is newly load-bearing (PR #176 review, F4).
+            "take away the trash",
+            "5 minutes over lunch",
+            "put 3 into the folder called work",
+            // A single-letter unit abbreviation is the whole residual surface of the one-sided
+            // conversion guard; these are the shapes where it holds.
+            "5 tabs in chrome",
+            "move 3 files to Desktop"
         ]
 
         for command in mustReachThePlanner {
@@ -283,6 +346,20 @@ struct InstantCommandResolverTests {
         #expect(resolver.resolve(command: "5 docs to pdf") == nil)
         #expect(resolver.resolve(command: "convert 5 docs to pdf") == nil)
         #expect(resolver.resolve(command: "10 files in folder") == nil)
+
+        // **The class this guard removes from the calculator is not docs-shaped** (PR #176 review,
+        // F3). Every four-token conversion naming no unit `ConversionUnit` knows goes to the
+        // planner now, and most members of that class are ordinary conversion requests rather than
+        // commands: on `main` these reached the calculator and were told which token it did not
+        // understand. The trade is accepted and recorded in the changelog's Known limitations; it
+        // is pinned here so that widening the unit table is a deliberate act with a red test, not
+        // a side effect nobody notices.
+        for lostToThePlanner in ["10 gb to mb", "2 hours to minutes", "100 usd to eur"] {
+            #expect(
+                resolver.resolve(command: lostToThePlanner) == nil,
+                "\(lostToThePlanner.debugDescription) names no known unit, so it is the planner's."
+            )
+        }
     }
 
     /// No live catalog and no live app lookup: this suite's commands are about the calculator, and
