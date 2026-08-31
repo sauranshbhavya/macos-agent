@@ -73,6 +73,14 @@ final class ScreenAccessOnboardingModel: ObservableObject {
     /// Set when the last relaunch could not start a new instance, so this app is still the only
     /// Sonny there is and the guidance has to say so. Cleared when another attempt begins.
     @Published private(set) var relaunchFailed = false
+    /// True while a reopen is in flight, which is a window this branch created and the app did not
+    /// have before (SONNY-348, PR #180's review, F7). The old relaunch reached `NSApp.terminate`
+    /// synchronously, so there was no second press to make; now the button stays live for as long
+    /// as `/usr/bin/open` takes, and `-n` forces a *new* instance by design — so two presses are two
+    /// Sonnys sharing one Keychain, one set of encrypted stores and one menu bar, which
+    /// `WORKFLOW.md` names as a state to avoid. It also gives the button a pending state for the
+    /// case the async seam exists for, where `open` can sit on a Gatekeeper dialog indefinitely.
+    @Published private(set) var isRelaunching = false
 
     private let permissionChecker: any ScreenCapturePermissionChecking
     private let relauncher: any AppRelaunching
@@ -135,6 +143,9 @@ final class ScreenAccessOnboardingModel: ObservableObject {
     /// goes, so the flag is left where it was cleared and the guidance stays silent. A throw is the
     /// one thing that means the user is still looking at this app.
     func relaunchNow() async {
+        guard !isRelaunching else { return }
+        isRelaunching = true
+        defer { isRelaunching = false }
         relaunchFailed = false
         do {
             try await relauncher.relaunch()
@@ -285,6 +296,7 @@ struct ScreenAccessOnboardingView: View {
                 Label("Relaunch Sonny", systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(SonnyButtonStyle(tone: .secondary))
+            .disabled(model.isRelaunching)
             .accessibilityLabel("Relaunch Sonny")
 
             if model.relaunchFailed {
