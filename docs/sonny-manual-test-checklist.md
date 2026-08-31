@@ -2345,13 +2345,20 @@ list only fills up by answering the real per-app question in a real session.
 - [ ] **(SONNY-144)** Press Remove All again and **cancel** at the dialog. **Nothing is removed.**
 - [ ] **(SONNY-144)** With nothing approved and the mode set to **Safe**, read the whole Screen
       Control section. **The finding is a section that looks broken rather than deliberate** — an
-      empty block, a stray control, a Remove All with nothing to remove.
+      empty block, or a stray control. In *this* scenario there are no grants at all, so Remove All
+      should not be on screen; if it is, that is the finding. (A Remove All above a list with no rows
+      is not always wrong — there is one state the app ships deliberately where it is correct, and it
+      says so in its own words rather than "No allowed apps yet". You cannot reach that state by
+      hand, so it is not a row here; it is described in the changelog under G2.)
 - [ ] **(SONNY-144)** Narrow the Command Center window as far as it goes and re-read the list.
       **The finding is character-wrapping** — a name breaking one letter per line — **or a Remove
       button clipped off the right edge.** The rows should stack the button under the name rather
       than squeezing it.
-- [ ] **(SONNY-144)** Start a screen session in an approved app and, **while it is running**, remove
-      that app in Settings. **The session stops** at its next step, and it does not re-ask.
+- [ ] **(SONNY-144)** Start a screen session in an approved app and, **while it is running**, press
+      Remove on that app in Settings. **A confirmation appears** — the same one any other Remove
+      raises; nothing about a live session changes it. Confirm it. **The session then stops** at its
+      next step, and it does not re-ask. (The dialog is new since the review round; a founder
+      following the old wording would have met a step this row did not describe.)
 
 ## 8. How to report back
 

@@ -132,8 +132,21 @@ enum ApprovedAppRevocationPresentation {
     /// this row — *a control gated on entries existing is disabled exactly when it is needed*.
     ///
     /// So the count comes from before the filter. The visible consequence is that Remove All can
-    /// appear above an empty list, which happens **only** in the case the filter exists for: a file
-    /// holding grants no surface will show. That is the right moment for the control to be there.
+    /// appear above a list with no rows in it, which happens **only** in the case the filter exists
+    /// for: a store holding grants no surface will show. That is the right moment for the control to
+    /// be there, and ``emptyState(for:storedGrantCount:)`` is what stops the screen lying underneath
+    /// it.
+    ///
+    /// **That state is reachable by an ordinary release, and this branch first shipped saying it was
+    /// not** (PR #175 cycle 3, G2). The reasoning was that `approve()` refuses both grounds `eligible`
+    /// filters on, so only a hand-edited file could produce it. It misses the third route, which
+    /// needs no edited file at all: `ScreenControlPolicy.terminalBundleIdentifiers` is extensible by
+    /// design — *adding an entry is a one-line change with no other moving part* — and has already
+    /// grown once by founder decision (Termius, SONNY-102, 2026-08-17). The verdict is recomputed on
+    /// every load and the store never prunes, so a user allows an app, a later release adds that
+    /// app's identifier to the deny list, and their grant is hidden on next launch. That is exactly
+    /// what `eligible`'s own doc says it exists for — *a stored list outlives the code that filled
+    /// it* — so the filter's justification and "nobody will see this" were each other's contradiction.
     static func offersRemoveAll(storedGrantCount: Int) -> Bool {
         storedGrantCount > 0
     }
@@ -179,20 +192,47 @@ enum ApprovedAppRevocationPresentation {
     /// asserted the view picks the right one, and a swapped ternary would have left every test green.
     /// `MemoryDeletionCopy.confirmation(for:readability:)` is the same call made for the sheet.
     ///
-    /// Only the two states this list can reach. `.partlyUnreadable` needs a count above zero and this
-    /// runs only when the list is empty, so it cannot arrive; it takes the unreadable arm if it ever
-    /// does, which is the conservative direction — a file that will not open is news and an empty
-    /// list is not.
+    /// **Three states, not two** (PR #175 cycle 3, G2). A store that holds grants none of which can
+    /// be rendered is neither empty nor unreadable, and it used to be shown the empty one — so a user
+    /// whose allowed app had joined the terminal deny list in a release read "No allowed apps yet"
+    /// above "Allow Sonny to control an app… and it will appear here", with a Remove All beside it.
+    /// Both sentences were false for them: they had an allowed app, and allowing another would not
+    /// surface it. This is SONNY-239's defect on a third axis — that one was an *unreadable* store
+    /// reading as an empty one, and this is a *filtered* store doing it.
+    ///
+    /// **Not explanatory copy.** It names the condition and the command that ends it, which is what
+    /// the other two arms do and what `RoutinesView` and `WorkspacesView` established. It says
+    /// nothing about deny lists, filters or why the grant stopped counting.
+    ///
+    /// Order matters: a file that will not open is the bigger news, and its count is zero anyway
+    /// because `loadMemoryEntries` answers `[]` on a throw. `.partlyUnreadable` needs a count above
+    /// zero and this runs only when nothing is rendered, so it cannot arrive; it takes the unreadable
+    /// arm if it ever does, which is the conservative direction.
     static func emptyState(
-        for readability: MemoryRowReadability
+        for readability: MemoryRowReadability,
+        storedGrantCount: Int
     ) -> (systemImage: String, title: String, message: String) {
         switch readability {
-        case .readable:
-            return (emptySystemImage, emptyTitle, emptyMessage)
         case .partlyUnreadable, .unreadable:
             return (unreadableSystemImage, unreadableTitle, unreadableMessage)
+        case .readable where storedGrantCount > 0:
+            return (heldButNotHonouredSystemImage, heldButNotHonouredTitle, heldButNotHonouredMessage)
+        case .readable:
+            return (emptySystemImage, emptyTitle, emptyMessage)
         }
     }
+
+    static let heldButNotHonouredTitle = "Nothing here Sonny can control"
+
+    /// The condition, then the control that ends it — the same shape as the other two arms.
+    static let heldButNotHonouredMessage = "Sonny is holding permission for an app it will no longer control. Remove All clears it."
+
+    /// **Deliberately the unreadable state's icon rather than a new one.** Both are "something needs
+    /// your attention here" and neither is the ordinary empty tray; a third symbol would be a third
+    /// thing for a reader to learn, and an unvetted SF Symbols name is the shape that renders blank
+    /// on the deployment target while looking fine on a development machine. The title and the
+    /// message are what tell the two apart, and both are asserted by value.
+    static let heldButNotHonouredSystemImage = MemoryDeletionCopy.emptyStateSystemImage(for: .unreadable)
 
     // MARK: - Write failures
     //
