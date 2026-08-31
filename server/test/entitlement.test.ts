@@ -801,7 +801,8 @@ describe("what this ticket deliberately does not decide", () => {
     expect(record.plan).toBe("none");
     expect(record.capabilities).toEqual([]);
     expect(record.capUnits).toBeNull();
-    expect(claimFactsFor(record)).toEqual({ plan: "none", capabilities: [] });
+    expect(claimFactsFor(record, new Date("2026-08-30T00:00:00Z")))
+      .toEqual({ plan: "none", capabilities: [] });
   });
 });
 

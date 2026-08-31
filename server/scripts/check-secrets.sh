@@ -98,7 +98,16 @@ PATTERNS_CI=(
   # anyone holding it can mint a claim granting any capability to any account, on any deployment
   # still using that key. It carries no vendor prefix -- it is base64 of a DER key -- so the name is
   # the only thing that can catch it, exactly as for the three beside it.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  #
+  # `BILLING_WEBHOOK_SECRET` joined it with SONNY-211, and it is the SECOND on this list whose leak
+  # is a write. It is the HMAC secret every subscription webhook is signed with, so anyone holding it
+  # can sign a `subscription.active` delivery for any account and grant themselves a paid
+  # entitlement -- against a route that is, necessarily, reachable by anyone on the internet. The
+  # provider issues it as an opaque string with no vendor prefix, so the name is again the only thing
+  # that can catch it. `BILLING_CHECKOUT_URL` and `BILLING_PLANS` are deliberately NOT here: a
+  # checkout link is meant to be given to users and a plan map names products and capability keys,
+  # neither of which is a credential, and adding them would train people to baseline this scanner.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the

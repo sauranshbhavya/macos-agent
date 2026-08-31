@@ -106,6 +106,13 @@ export interface EntitlementRecord {
   readonly capabilities: readonly string[];
   readonly capUnits: number | null;
   readonly revokedAt: Date | null;
+  /**
+   * When an outstanding payment failure's grace window closes, or `null` when none is outstanding
+   * (SONNY-211). Spec §16.4.
+   */
+  readonly graceUntil: Date | null;
+  /** When that failure was first seen. Whole with `graceUntil` — both or neither, by CHECK. */
+  readonly pastDueSince: Date | null;
 }
 
 /**
@@ -121,7 +128,15 @@ export interface EntitlementRecord {
  * **`'none'` is not a tier name.** It is the absence of a plan record. SONNY-212 owns the real keys.
  */
 export function unprovisioned(accountId: string): EntitlementRecord {
-  return { accountId, plan: "none", capabilities: [], capUnits: null, revokedAt: null };
+  return {
+    accountId,
+    plan: "none",
+    capabilities: [],
+    capUnits: null,
+    revokedAt: null,
+    graceUntil: null,
+    pastDueSince: null,
+  };
 }
 
 /**
@@ -131,12 +146,34 @@ export function unprovisioned(accountId: string): EntitlementRecord {
  * A client that refreshes and receives a fresh, signed, capability-less claim stops allowing gated
  * features immediately; a client that receives an *error* keeps the claim it already has until that
  * one expires, which is the slower of the two and the wrong one for a cancellation.
+ *
+ * **A payment failure's grace window is evaluated here and nowhere else** (SONNY-211, spec §16.4).
+ * `sonny.entitlement.grace_until` is written when the provider reports a failed payment, and until
+ * that instant the account keeps every capability it had — §16.4's requirement is that billing never
+ * cuts a user off mid-task, so a failure sets a deadline rather than taking anything away. Past the
+ * deadline the account is treated exactly as a revoked one: the plan key stays, the capabilities go.
+ *
+ * **Read time rather than a sweeper**, and the reason is that this function has two consumers. The
+ * signed claim (`routes/entitlements.ts`) and the per-request capability check (`admitRequest`
+ * below) both derive from it, so a window that closed a minute ago closes for both of them at the
+ * same instant. A job that revoked on a timer would close it whenever it next ran, and until then
+ * each consumer would be answering from a row that no longer means what it says.
+ *
+ * **`now` is the server's clock and never a value a caller sent**, for the same reason `issuedAt` is
+ * in `mintEntitlementClaim`: a client-supplied instant reaching here would let the caller decide
+ * whether its own grace window had expired.
  */
-export function claimFactsFor(record: EntitlementRecord): {
+export function claimFactsFor(
+  record: EntitlementRecord,
+  now: Date,
+): {
   plan: string;
   capabilities: readonly string[];
 } {
   if (record.revokedAt !== null) return { plan: record.plan, capabilities: [] };
+  if (record.graceUntil !== null && now.getTime() >= record.graceUntil.getTime()) {
+    return { plan: record.plan, capabilities: [] };
+  }
   return { plan: record.plan, capabilities: record.capabilities };
 }
 
@@ -149,8 +186,10 @@ export async function readEntitlement(
     capabilities: string[];
     cap_units: string | null;
     revoked_at: Date | null;
+    grace_until: Date | null;
+    past_due_since: Date | null;
   }>(
-    `SELECT plan, capabilities, cap_units, revoked_at
+    `SELECT plan, capabilities, cap_units, revoked_at, grace_until, past_due_since
        FROM sonny.entitlement WHERE account_id = $1`,
     [accountId],
   );
@@ -165,6 +204,8 @@ export async function readEntitlement(
     // done once, at the boundary, rather than left for arithmetic elsewhere to trip over.
     capUnits: row.cap_units === null ? null : Number(row.cap_units),
     revokedAt: row.revoked_at,
+    graceUntil: row.grace_until,
+    pastDueSince: row.past_due_since,
   };
 }
 
@@ -450,7 +491,7 @@ export async function admitRequest(client: pg.Client, input: AdmitInput): Promis
 
   const entitlement = await readEntitlement(client, input.accountId);
   if (input.requiredCapability !== undefined) {
-    const { capabilities } = claimFactsFor(entitlement);
+    const { capabilities } = claimFactsFor(entitlement, input.now);
     if (!capabilities.includes(input.requiredCapability)) {
       return { kind: "not_entitled", capability: input.requiredCapability };
     }

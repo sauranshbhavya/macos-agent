@@ -87,6 +87,17 @@ entitlement_key="$(openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null |
 check "an entitlement signing key is refused" 1 "ENTITLEMENT_SIGNING_KEY=${entitlement_key}"
 check "its lowercase YAML spelling is refused" 1 "  entitlement_signing_key: \"${entitlement_key}\""
 check "the key ID beside it is not a secret"  0 "ENTITLEMENT_SIGNING_KEY_ID=entitlement-2026-08-28-a"
+# SONNY-211: the webhook endpoint secret. The second name on that list whose leak is a WRITE --
+# whoever holds it can sign a `subscription.active` delivery for any account, against a route that
+# has to be reachable by anyone on the internet. An opaque provider-issued string with no vendor
+# prefix, so the name is the only thing that can catch it. Both directions again: the secret is
+# refused, and the two billing variables that are NOT credentials are not.
+billing_secret="$(openssl rand -hex 24 2>/dev/null)"
+[[ -n "$billing_secret" ]] || billing_secret="$(printf 'b%.0s' {1..48})"
+check "a billing webhook secret is refused"   1 "BILLING_WEBHOOK_SECRET=${billing_secret}"
+check "its lowercase YAML spelling is refused" 1 "  billing_webhook_secret: \"${billing_secret}\""
+check "a checkout link is not a secret"       0 "BILLING_CHECKOUT_URL=https://buy.polar.sh/polar_cl_abcdefghijklmnop"
+check "a plan map is not a secret"            0 "BILLING_PLANS=prod_abcdefghijklmnop=paid:screen_control"
 # A lockfile-style hash must NOT be caught: a generic entropy rule would flag every one of them,
 # and this pattern is name-anchored precisely so it does not.
 check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"

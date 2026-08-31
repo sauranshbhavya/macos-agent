@@ -57,6 +57,14 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     // deployment that says nothing about it gets. A test that cares about the clock overrides them.
     contentRetentionDays: 30,
     contentExpirySweepSeconds: 3600,
+    // SONNY-211. Billing is off in the default test config, which is the shape of a deployment that
+    // takes no payments: naming no provider mounts no webhook route. `billing.test.ts` overrides
+    // these to mount it, so a test that says nothing about billing gets a server without one.
+    billingProvider: undefined,
+    billingWebhookSecret: undefined,
+    billingCheckoutUrl: undefined,
+    billingPlans: "",
+    billingGraceDays: 14,
     // SONNY-135. A key per process rather than a literal — `support/entitlement.ts` says why a
     // signing key is the one fixture this suite generates instead of writing down. The `Config`
     // carries the encoded form; `requireEntitlementSigningKey` is what turns it into a key object,

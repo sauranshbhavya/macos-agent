@@ -524,6 +524,11 @@ describeDb("the per-user spend cap, against a real Postgres", () => {
         capabilities: [],
         capUnits: null,
         revokedAt: null,
+        // SONNY-211. An account with no row has no outstanding payment failure either, which is a
+        // real answer rather than a gap: `claimFactsFor` reads both and an undefined here would make
+        // the grace check depend on a field that might not be there.
+        graceUntil: null,
+        pastDueSince: null,
       });
     });
 

@@ -72,6 +72,12 @@ describe("which routes the gate challenges", () => {
       "POST /v1/auth/oauth/apple",
       "POST /v1/auth/oauth/google",
       "POST /v1/auth/refresh",
+      // SONNY-211, and the one entry here that is not public in the sense the seven above are: the
+      // payment provider authenticates with an HMAC signature over the raw body instead of a Bearer
+      // token, so the gate cannot challenge it and `routes/billing.ts` refuses it. It is in §4.1's
+      // table with the mechanism written in the `Auth` cell, which is what keeps this assertion's
+      // own claim — that this list is exactly that column's no-Bearer-token set — true.
+      "POST /v1/billing/webhook",
     ]);
   });
 
