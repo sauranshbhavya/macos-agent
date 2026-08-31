@@ -371,6 +371,12 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   by construction. **Twice in one branch, the same shape**: a self-consistency check where a value
   assertion was needed, once caught by the lane's battery and once by the reviewer's. The lesson is
   not about floats. `runsFrom` rounds inside the floor now, and three catalogues pin it by value.
+  **And it is the second time this project has seen the shape, in a different medium** — PR #175's V3
+  was the same defect in a *source scan* rather than in arithmetic. So the general form is worth
+  stating apart from either instance: **a test that recomputes its expectation from the thing under
+  test cannot fail**, whatever the thing is, and it reads exactly like a test that holds the property
+  its name claims. The tell is that the assertion's right-hand side names the implementation. The
+  remedy is the same in both media — pin a value, on an input where the defect is visible.
 - **F2 is a third case for `upstream_duration_ms`, and it is the finding that most changes what this
   branch claims.** Recorded in full in the `upstream_duration_ms` bullet above. What is worth
   repeating here is where it came from: migration `0012`'s own column comment enumerates what a null
@@ -403,6 +409,29 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   number. It becomes real at SONNY-213. **A deployment that wants a non-gameable allowance already has
   one with no code change**: price on `perIteration` alone. That is what the weights being
   configuration buys.
+- **The fix round's battery: 6 mutants at `0c1c0c1`, 6 killed, 0 survived, 0 unattributed — and the
+  six are two different kinds, which a reader should not have to ask about.** **N1 and N2 are new
+  kills**, over the two production changes this round made: the quotient rounded inside the floor
+  (F1) and the cancellation clause added to the draw's filter (F2). **N3, N4, N5 and N6 are the four
+  mutants that SURVIVED the reviewer's battery** at `80c90f1` — its R1, R2, R5 and R8 — re-run here
+  because this round is what changed them. Neither of the earlier sets was re-run in full, and the
+  distinction is the reason: re-running a *kill* proves nothing new, while re-running a *survivor*
+  after fixing its coverage is the only way to show the fix worked, and it is a new kill rather than
+  a repeated one. Every killer is the test written for its own property, names read before counting.
+  (The instruction that produced this round said "do not re-run either of the earlier sets", which
+  the lane read as covering the kills only; the coordinator confirmed that reading and asked for the
+  two kinds to be labelled here — 2026-08-31.)
+- **F7's answer went into the manual-test checklist, not only into this entry.** The founders meet
+  `CREDIT_PLANS` when they set it, and "two of the three weights are self-reported, and you can price
+  on `perIteration` alone if you want an allowance nothing can talk down" is a **choice to make while
+  picking the numbers** rather than a fact to discover afterwards. It is the row directly under the
+  sanity-check row, with the bound, the gap and the cost of taking the option all stated
+  (coordinator instruction, 2026-08-31). **That row is why the section now holds nine and not
+  eight** — F10 corrected a "nine" that was a count of *mentions* when there were eight rows, and
+  this round then added a ninth real one; the current figure is
+  `awk '/^### How many screen-control runs are left this month/,/^### Prototype-limitation re-check/' docs/sonny-manual-test-checklist.md | grep -c '^- \[ \] \*\*(SONNY-212)\*\*'`
+  → **9**. Written with its command precisely because the number moved twice in one branch for two
+  different reasons.
 - **F8 was declined, and the reason is worth more than the finding.** The reviewer reported the
   read-time re-pricing hand-off as recorded on no ticket, having pulled SONNY-213, 214 and 215. All
   three carry it: the coordinator posted it on 2026-08-31 and each has exactly one comment stating it.

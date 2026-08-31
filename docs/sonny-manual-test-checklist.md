@@ -2204,6 +2204,24 @@ export CREDIT_PLANS='{"runCredits":100,"defaultPlan":"free","weights":{"perSessi
       for**: pick numbers where one run is worth roughly what a session costs, and check that a
       month's allowance reads like a sensible month. The figures then go into `CREDIT_PLANS` on the
       real deployment and nowhere in the repository.
+- [ ] **(SONNY-212)** **A choice to make while you are picking those numbers, not afterwards — two of
+      the three weights are priced on figures the app declares about itself** (PR #182's review, F7).
+      `perMegapixel` reads the pixel dimensions the request states, which the server checks are
+      positive integers and never compares against the image it actually decoded; `perSession` counts
+      session ids the app mints. A modified client can declare a tiny image while sending a large one,
+      or reuse one session id all month. **`perIteration` is the one weight nothing the client sends
+      can deflate**, because it counts requests the server logged whether the caller liked it or not.
+      - **What is still bounded:** the spend cap, which counts *calls* and is deliberately unweighted,
+        so a client doing all of that still gets at most `SPEND_CAP_UNITS` calls in a period.
+      - **What is not:** the revenue. `SPEND_CAP_UNITS` is an anti-abuse ceiling set so no ordinary
+        user ever reaches it, so it sits **far above any plan's allowance**, and under-declaring buys
+        extra runs anywhere in that gap. It buys nothing today, because nothing refuses on this
+        number yet; it becomes real the moment the gate lands (SONNY-213).
+      - **The decision:** if you want an allowance nothing can talk down, set `perSession` and
+        `perMegapixel` to **0** and put the whole price on `perIteration`. That is a `CREDIT_PLANS`
+        value and needs no code change. The cost of doing it is that a session sending huge images
+        pays the same as one sending small ones, so the weighting stops tracking real cost as closely.
+        Decide which you want here rather than meeting it later.
 
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
