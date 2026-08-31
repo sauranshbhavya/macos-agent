@@ -1316,6 +1316,33 @@ relaunch on the same sequence, so only the signed-in half is owed.
       notarization (row 20, SONNY-108): the first genuinely clean first run by someone who is not a
       founder happens after that, close to launch.
 
+#### The relaunch that cannot come back (new 2026-08-30, SONNY-348)
+
+**What changed:** pressing **Relaunch Sonny** used to quit this app whatever happened to the new one.
+If the new instance could not start, Sonny was simply gone — no window, no menu bar icon, nothing to
+say why, on a Mac where you had just granted it a screen-recording permission. It now quits only
+after the reopen has actually worked, and says **"Couldn't restart Sonny."** under the button when it
+has not.
+
+**Forcing the failure needs no special build**: rename the bundle out from under the running app.
+macOS keeps the running process alive, and `open` then has nothing at that path to reopen.
+
+- [ ] **(new 2026-08-30, SONNY-348) — the failed reopen. Reset (b) and (c)**, launch the packaged
+      app, and get to the screen-access step (decline sign-in if it appears). Press **Request access**
+      under Screen Recording so the relaunch guidance appears. **Leave Sonny running** and, in a
+      terminal, rename the bundle:
+      ```bash
+      mv .build/arm64-apple-macosx/debug/MacAgent.app .build/arm64-apple-macosx/debug/MacAgent-moved.app
+      ```
+      Now press **Relaunch Sonny**. Sonny must **stay running** — same window, same menu bar icon —
+      with **"Couldn't restart Sonny."** under the button, and nothing else: no second Sonny, no
+      error code, no URL, no advice about what to do next. Then rename the bundle back
+      (`mv ... MacAgent-moved.app ... MacAgent.app`) and press **Relaunch Sonny** again: the message
+      must clear, and this time the app must actually restart.
+- [ ] **(new 2026-08-30, SONNY-348) — the same control behind the other door.** Repeat the row above
+      from **Settings → Security & Access → Screen access** rather than from first run. It is one
+      model behind both doors, so the failure must read the same in both.
+
 ### Setup for every section behind the gateway (new 2026-08-28, SONNY-330)
 
 **Every section from here down that runs something against the gateway wants the same setup, and
