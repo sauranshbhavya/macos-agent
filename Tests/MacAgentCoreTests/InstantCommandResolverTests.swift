@@ -362,6 +362,36 @@ struct InstantCommandResolverTests {
         }
     }
 
+    /// **After `calc`, a word at the front is part of what the user wrote, not filler in front of
+    /// it** (PR #176 fix round). Found by a mutation battery's baseline going red on
+    /// `ResumableTaskRunTests.anAnswerThatRestatesTheCommandIsTakenAsTheWholeCommand`, which is in
+    /// the other target and about the clarification round trip rather than about the calculator:
+    /// when a user answers the `calc` question by restating the prefix, PR #118's F2 tries the
+    /// joined candidate `calc Calc 2 + 2` first and picks the answer alone **because the joined one
+    /// fails the dry run's evaluation**. A discrimination that works by one candidate failing is
+    /// defeated silently by anything that makes it succeed — so this pins the failure as a
+    /// property, next to the code that would take it away.
+    @Test
+    func thePrefixesTakeTrailingFillerOffAndLeaveTheFrontAlone() {
+        let resolver = Self.hermeticResolver()
+
+        guard case .plan(let restated) = resolver.resolve(command: "calc Calc 2 + 2") else {
+            Issue.record("Expected the prefixed form to plan whatever follows the prefix.")
+            return
+        }
+        #expect(restated.steps[0].searchQuery == "Calc 2 + 2")
+        #expect(throws: CalculatorError.self) {
+            try CalculatorService().evaluate("Calc 2 + 2")
+        }
+
+        // The trailing half still comes off, which is the half this round added.
+        guard case .plan(let polite) = resolver.resolve(command: "calculate 2 + 2 please") else {
+            Issue.record("Expected the prefixed form to drop the politeness word.")
+            return
+        }
+        #expect(polite.steps[0].searchQuery == "2 + 2")
+    }
+
     /// No live catalog and no live app lookup: this suite's commands are about the calculator, and
     /// the two defaults on the initializer reach the real machine.
     private static func hermeticResolver() -> InstantCommandResolver {
