@@ -2326,6 +2326,30 @@ are not calculations.
       identical), and it is recorded in the changelog. **Nothing here is a finding unless you
       disagree with the trade** — if you do, the fix is a wider unit table on its own ticket.
 
+### Taking an app back off the allowed list (new 2026-08-30, SONNY-144)
+
+Settings → Security & Access → **Screen Control** now lists the apps you have allowed Sonny to
+control, each with its own Remove, plus a Remove All. Nothing here can be checked by an agent — the
+list only fills up by answering the real per-app question in a real session.
+
+- [ ] **(SONNY-144)** Approve two apps through the flow — start a screen task on each and answer the
+      per-app question — then open Settings → Security & Access → Screen Control. **Both are listed**,
+      each by its real name, with the bundle identifier and when you allowed it underneath.
+- [ ] **(SONNY-144)** Press Remove on one of them. Ask Sonny to use that app again: **it asks.** Ask
+      it to use the other: **it does not.**
+- [ ] **(SONNY-144)** Press Remove All and confirm. The list is empty and the empty state reads
+      sensibly — it should say how an app gets onto the list, not offer you a way to add one.
+- [ ] **(SONNY-144)** Press Remove All again and **cancel** at the dialog. **Nothing is removed.**
+- [ ] **(SONNY-144)** With nothing approved and the mode set to **Safe**, read the whole Screen
+      Control section. **The finding is a section that looks broken rather than deliberate** — an
+      empty block, a stray control, a Remove All with nothing to remove.
+- [ ] **(SONNY-144)** Narrow the Command Center window as far as it goes and re-read the list.
+      **The finding is character-wrapping** — a name breaking one letter per line — **or a Remove
+      button clipped off the right edge.** The rows should stack the button under the name rather
+      than squeezing it.
+- [ ] **(SONNY-144)** Start a screen session in an approved app and, **while it is running**, remove
+      that app in Settings. **The session stops** at its next step, and it does not re-ask.
+
 ## 8. How to report back
 
 For each real finding, give me:

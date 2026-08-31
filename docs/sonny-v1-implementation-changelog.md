@@ -170,6 +170,62 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/an-approved-app-can-be-taken-back
+Status: complete
+Date: 2026-08-30
+Tickets: SONNY-144 — Settings → Security & Access → Screen Control lists the apps the user has allowed Sonny to control, each with its own Remove, plus a Remove All behind a confirmation.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending.
+
+**The branch name is not the one the ticket's Branch: line names.** SONNY-144 was written on
+2026-08-17 and says `feature/app-control-revocation`; the worktree this ran in was created on
+`feature/an-approved-app-can-be-taken-back`, which is the sentence-shaped convention every branch
+merged since has used. The founder created the worktree, so the name is the founder's; recorded here
+rather than silently reconciled, because a reader following the ticket's own line finds no such
+branch.
+
+Spec sections covered: §13.4 (screen control's per-app consent) — the revoke half, `docs/sonny-row-j-plan.md` §2.6. Roadmap row J's third and last piece.
+Files changed:
+- `Sources/MacAgent/ApprovedAppRevocationPresentation.swift` (new) — the rows, the words and the deny-list filter.
+- `Sources/MacAgent/CommandCenterView.swift` — `ApprovedAppRevocationList`, the section that hosts it, the page's two refresh calls, `CollectionEmptyState`'s `minHeight`, `MemoryDeletionCopy.unreadableRecoveryMessage`, and `TaskHistoryDateFormatter` losing `private`.
+- `Sources/MacAgent/AgentViewModel.swift` — `forgetAllApprovedApps()`, the deny-list filter on the published list, and `performMemoryStoreWrite` under the existing `performMemoryEntryDelete`.
+- `Sources/MacAgentCore/ApprovedAppStore.swift` — `forgetAll()`.
+- `Tests/MacAgentTests/ApprovedAppRevocationTests.swift` (new), `Tests/MacAgentTests/VisionSessionRunTests.swift`, `Tests/MacAgentCoreTests/ApprovedAppStoreTests.swift`.
+- `docs/sonny-manual-test-checklist.md`, `docs/sonny-v1-implementation-changelog.md`.
+
+Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2527 tests in 174 suites, 92.825s, 7 known issues, exit 0** at `b52cc81`. `scripts/warnings` -> **0 warnings**, its own report stamped `b52cc81 plus 2 uncommitted file(s)` (both `docs/`), 197s, exit 0.
+
+**Both figures were measured on this entry's own tree and carried across the docs commit above them**, per `WORKFLOW.md` step 5. A suite count depends on `Sources/`, `Tests/` and `Package.swift`; a `scripts/warnings` count on `Sources/` and `Tests/`. `git status --porcelain -- Sources Tests Package.swift` printed nothing at the head this entry sits on, so every path either figure depends on is byte-identical to the tree that produced it — the docs commit moves only `docs/`.
+
+
+Behavior added:
+- Settings → Security & Access → Screen Control lists every app the user has allowed, by name, with the bundle identifier and when it was allowed underneath, and a Remove on each row.
+- A Remove All beside the list heading, behind the same confirmation-dialog treatment routine and workspace deletion use.
+- A real empty state, and a separate unreadable state for a grants file that will not decrypt.
+
+Behavior preserved (required, no blanket claims):
+- **The Memory section's allowed-apps row and its entries sheet.** Both still list the same store and still delete through `forgetApprovedApp`; the sheet's rows are now *built from* the same value Settings renders (`ApprovedAppRevocationPresentation.row`) rather than from a second copy of the same three decisions, so the strings are unchanged and their source is not.
+- **The per-app gate and the asking flow.** Untouched. `readApprovedAppsForGate` is a separate read from the published list, so the filter added below changes nothing the resolver sees, and `AppControlResolver`, `RiskApprovalPolicy` and `ApprovalContext` are not in the diff.
+- **Mid-session revocation.** `revokingTheGrantMidSessionEndsTheSessionAtTheNextIteration` (the file-writing version, PR #88's) still passes beside the two new tests that reach the same mechanism through the product's own controls.
+- **Every other `SettingsAdaptiveControlRow` caller**, and both existing users of `CollectionEmptyState` — the height it always had is now the parameter's default.
+- **`unreadableSheetMessage`**, whose two sentences are unchanged; it now delegates to the standing-parameterised twin rather than switching on the routing itself.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **`SettingsAdaptiveControlRow` stays as it is — the decision the ticket asked to be made rather than discovered, and it had already been made.** The ticket says the type is `private` to `CommandCenterView.swift` at `:3960-3993`, so either the new rows live in that file or the access level changes. Neither is true any more: the type is internal today and its own doc comment says why (`SignInView.swift` uses it, and *a shared component the rest of the target cannot name is not a shared component*), which happened on a branch between the ticket being written and it being claimed. So there was nothing to widen. The rows live in `CommandCenterView.swift` regardless, because `SettingsSecurityAccessPage` does — the list is a view of that page's section rather than a component anything else will reuse. **What the ticket was actually protecting against still bit, one file over**: `TaskHistoryDateFormatter` *is* `private` to that file, and the shared row builder needs it, so that one is internal now with the same sentence recorded above it.
+- **The deny-list filter sits on the published list, not in either view.** Two surfaces render this store, so a filter in one of them is a filter the other does not have. `AgentViewModel.refreshMemoryEntries()` filters through `ApprovedAppRevocationPresentation.eligible`, and both the Memory row's count and Settings' list are downstream of it. It reads `ScreenControlPolicy.verdict` — the production comparison, not a second reading of `terminalBundleIdentifiers` — so it tracks the deny list rather than drifting from it. **The consequence is that a stored terminal grant has no per-row Remove**, by construction: nothing renders it. `forgetAll()` is what reaches it, which is one of the two reasons that method exists.
+- **`forgetAll()` is one write, and it refuses an unreadable file rather than overwriting it.** Looping `forget(bundleIdentifier:)` would be a load-and-write per grant and not atomic — a failure halfway leaves a half-emptied list nobody can reason about. The load sits *inside* the call, so an undecryptable store throws and the press fails with a message instead of writing `[]` over bytes a key migration may still recover; the user's route through an unreadable store is Memory's Delete, which sets the file aside, and Remove All must not become a second, quieter door onto destroying it.
+- **Per-row Remove has no confirmation and Remove All does.** Removing one app costs the user one ask and answering it puts the grant back, so a dialog would be a speed bump in front of a reversible press. Remove All is not reversible in that sense — the flow hands grants back one at a time, so re-granting five apps is five asks arriving over days. The reasoning is in the view's own doc comment and pinned by a test, per the ticket's requirement that the asymmetry not be left unexplained.
+- **The Settings page had to learn to refresh.** `approvedApps` is filled by `refreshMemoryEntries()`, whose only view-layer caller was Memory's own `.onAppear` — so without a call here the section would render whatever a previous Memory visit loaded, which for a user who never opens Memory is nothing. `refreshStoreReadability()` goes with it, or an undecryptable grants file reads as an empty one, which is exactly SONNY-239's defect on a new surface.
+- **An unreadable store needed a sentence written from where the reader is standing, and `MemoryRowDestination` could not supply it.** That type answers where a Memory row's View button goes; `.of(.approvedApps)` is `.entriesSheet`, so reusing it here would have told a reader in Settings to press a Delete on a row that is not on their screen. `unreadableRecoveryMessage(for:standing:)` splits the standing from the routing and `unreadableSheetMessage` now delegates to it.
+- **The ticket's "exercised the way the existing adaptive-row tests do" describes tests that do not exist.** `git grep -lE 'SettingsAdaptiveControlRow|ViewThatFits' -- Tests` printed nothing before this branch. What landed instead is a source scan bounded to `ApprovedAppRevocationList`'s own body, asserting it is built from `SettingsAdaptiveControlRow` twice and contains no `HStack(` — the shape that pattern replaced. That is the checkable half; the pixels are the founder's narrow-window manual item, because no agent can drive the real window.
+
+Known limitations / deferred scope:
+- **No add-an-app affordance, by ticket decision.** A Settings picker would be a second consent shape for the same consent, decided where the user cannot see what Sonny is about to do. The empty state names the flow instead.
+- **The built-in starter list is not editable here**, also by ticket decision; a user who wants an app off it is served by the mode control.
+- **A source scan is what holds the narrow-window property**, not a rendered measurement. Stated rather than implied: a row could use `SettingsAdaptiveControlRow` and still be laid out badly, and nothing in this repository can see that.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap. Row J is complete with this.
 ### Branch: fix/the-relaunch-that-cannot-come-back
 Status: complete — SONNY-348 Done; written 2026-08-30 before the PR opened
 Date: 2026-08-30
