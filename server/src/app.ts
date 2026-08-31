@@ -27,6 +27,9 @@ import { describeRouting, modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
 import { visionProviderFrom } from "./model/vision.js";
 import { registerScreenRoutes } from "./routes/screen.js";
+import { billingDepsFrom } from "./billing/deps.js";
+import { postgresBillingStore, type BillingStore } from "./billing/store.js";
+import { registerBillingRoutes } from "./routes/billing.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
 export const API_VERSION = "1.0";
@@ -116,6 +119,16 @@ export interface AppOverrides {
    * race underneath, against a real Postgres, because a race against a fake proves nothing.
    */
   readonly entitlementStore?: EntitlementStore;
+  /**
+   * **`billingStore` exists for the fifth time and the fifth identical reason** (SONNY-211). The
+   * subscription state is Postgres, so without a seam every behaviour this ticket is about — a
+   * signed delivery moving the entitlement to paid, a cancellation revoking it, a payment failure
+   * opening a grace window, a replay changing nothing, a customer this gateway cannot place granting
+   * nothing — would be verified only under `npm run test:db`, and the run this repository gates on
+   * would be silent about the route that grants paid entitlements. `billing.db.test.ts` proves the
+   * SQL, the replay bound and the out-of-order refusal underneath, against a real Postgres.
+   */
+  readonly billingStore?: BillingStore;
 }
 
 export function buildApp(
@@ -453,6 +466,33 @@ export function buildApp(
         }
       : undefined,
   );
+
+  /**
+   * The subscription webhook and the checkout link (SONNY-211).
+   *
+   * **Mounted on `BILLING_PROVIDER` rather than on `auth`**, so a deployment that does no billing
+   * carries no webhook endpoint at all — unlike the model routes above, which mount unconditionally
+   * because a missing credential there should read as `502` rather than `404`. The argument
+   * inverts here: an unmounted billing endpoint is not a degraded service, it is a gateway that was
+   * never told to take payments, and mounting a signature-checked endpoint whose secret is a
+   * placeholder would be a route that refuses everything while looking configured.
+   *
+   * `billingDepsFrom` refuses at startup when a provider is named and its secret, its checkout link
+   * or its plan map is not, which is `config.ts`'s standing property: a missing credential is a
+   * startup failure with a named variable.
+   */
+  const billing = billingDepsFrom(config);
+  const billingStore =
+    overrides.billingStore ?? (auth ? postgresBillingStore(auth.withConnection) : undefined);
+  if (billing && billingStore) {
+    registerBillingRoutes(app, {
+      provider: billing.provider,
+      store: billingStore,
+      plans: billing.plans,
+      graceMilliseconds: billing.graceMilliseconds,
+      now: auth?.now,
+    });
+  }
 
   if (auth) {
     requireRateLimitSalt(config);

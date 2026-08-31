@@ -125,7 +125,12 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       const before = await client.query<{ n: string }>(
         "SELECT count(*)::text AS n FROM sonny.identity_provider_user");
 
-      // Down twice: 0017 then 0016. `down()` rolls back the last applied migration each time.
+      // Down to 0016. `down()` rolls back the last applied migration each time, so this walks the
+      // ledger from the head — **which means every migration added after this file was written adds
+      // a step here**, and the failure it produces when one is forgotten is legible: the assertion
+      // says the head was some other file. 0018 is SONNY-211's and is rolled back only to get past
+      // it; nothing below is about it.
+      expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
       expect(await down(client)).toBe("0016_a_drain_discharges_the_obligation_it_claimed");
       const gone = await client.query<{ column_name: string }>(
@@ -143,6 +148,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       expect(await up(client)).toEqual([
         "0016_a_drain_discharges_the_obligation_it_claimed",
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
+        "0018_a_subscription_reaches_the_entitlement",
       ]);
       // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
       // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
@@ -195,6 +201,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
       // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
       // from the INSERT below.
+      expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
       const at = (hhmm: string) => new Date(`2026-08-30T${hhmm}:00.000Z`);
       const inherited = await client.query<{ id: string }>(
@@ -205,7 +212,10 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
          RETURNING id`,
         [at("12:00"), at("12:05"), at("12:09"), new Date("2099-01-01T00:00:00.000Z")]);
       const newestId = inherited.rows[2]!.id;
-      expect(await up(client)).toEqual(["0017_the_latest_sign_in_code_is_the_last_one_issued"]);
+      expect(await up(client)).toEqual([
+        "0017_the_latest_sign_in_code_is_the_last_one_issued",
+        "0018_a_subscription_reaches_the_entitlement",
+      ]);
 
       // All three carry the sentinel, so `issue_seq` separates none of them and only the second key
       // can answer. Without it the query returns the OLDEST of the three.
