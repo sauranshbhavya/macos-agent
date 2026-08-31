@@ -322,6 +322,18 @@ something up.)
   that is the rule working, not failing. (Trigger: three tail-end lanes of the 2026-08-27/28
   wave each re-ran a whole 17-to-19-mutant battery, 45 to 90 minutes under load, because
   *some* file in the merged range had changed.)
+  **The check is per mutant against these four, never per round against the diff — and they
+  govern any movement under a battery's evidence, a fix round as much as a rebase.** "What this
+  round changed" is the substitute a session reaches for, because it is visible from inside the
+  round and these four conditions are not: a round that edits a file *other* mutants target
+  leaves every one of those carrying a verdict measured before that file moved, and nothing in
+  the round's own diff says so. It happened twice on one branch, one round apart, the second
+  time inside the round that recorded the first, and that second one was a fix round rather
+  than a rebase. `CLAUDE.md`'s mutation section carries the measurement that settles it,
+  including the part that makes this hard to catch by instinct: the stale verdict
+  *understated* coverage, so mis-scoping does not fail in the reassuring direction reliably —
+  it produces an unmeasured number, wrong in whichever direction the tree moved. A carry you
+  have argued is worth less than a number you have measured. (SONNY-391.)
 - **Long runs go to a file in the background and are read once**, when the result is next
   needed. No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
   notifications, and twice in the 2026-08-27/28 wave reported results that had already been
