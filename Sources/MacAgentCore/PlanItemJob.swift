@@ -68,6 +68,28 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
     /// `AgentPlanDecoder.itemJobKeys`, so a model cannot name the forty paths a job will act on —
     /// the same rule, and the same reason, as `AgentStep.resolvedFromFinderSelection`.
     public var items: [String]
+    /// The items that could not even be **previewed**, and are therefore not in the plan's steps at
+    /// all (SONNY-235).
+    ///
+    /// **Why a job can lose an item before it starts, and why the loss is recorded here.** `prepare`
+    /// previews every unit before anything is approved, and a preview reaches into the item: a
+    /// document conversion scans the folder it was handed and refuses one with nothing to convert, a
+    /// zip enumerates the folder's files. So a forty-folder job in which one folder holds no Word
+    /// document used to die at `prepare` with a message about that one folder — no approval, no
+    /// partial run, thirty-nine folders untouched. That contradicts skip-and-continue in the
+    /// direction the user notices most, so an item that cannot be previewed is dropped from the plan
+    /// and recorded here instead, and the other thirty-nine are previewed, approved and run.
+    ///
+    /// **Dropped rather than merely reported, and the difference is a safety property.** Leaving the
+    /// item's steps in the plan would leave `assessRisk` to throw on them next — assessment reaches
+    /// the item too, `LargestFilesZipCapabilityAdapter.assessRisk` validates the folder it is about
+    /// to read — and isolating *that* would let an item the assessment never saw run under an
+    /// approval it was never part of, if the world moved between the two. With the steps gone,
+    /// preview, assessment and execution are all about exactly the items that will be attempted.
+    ///
+    /// **Resolver-written**: absent from `AgentPlanDecoder.itemJobKeys`, like `items`, so a model
+    /// cannot assert that an item was unavailable.
+    public var unavailableItems: [ItemJobFailure]
 
     /// The most items one job may hold.
     ///
@@ -99,7 +121,8 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
         itemKind: PlanItemKind,
         fileExtensions: [String]? = nil,
         itemField: PlanItemField,
-        items: [String] = []
+        items: [String] = [],
+        unavailableItems: [ItemJobFailure] = []
     ) {
         self.source = source
         self.folderPath = folderPath
@@ -107,6 +130,7 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
         self.fileExtensions = fileExtensions
         self.itemField = itemField
         self.items = items
+        self.unavailableItems = unavailableItems
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -116,6 +140,7 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
         case fileExtensions
         case itemField
         case items
+        case unavailableItems
     }
 
     /// Written out rather than synthesized so a record written before this field existed, or by a
@@ -130,7 +155,8 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
             itemKind: try container.decode(PlanItemKind.self, forKey: .itemKind),
             fileExtensions: try container.decodeIfPresent([String].self, forKey: .fileExtensions),
             itemField: try container.decode(PlanItemField.self, forKey: .itemField),
-            items: try container.decodeIfPresent([String].self, forKey: .items) ?? []
+            items: try container.decodeIfPresent([String].self, forKey: .items) ?? [],
+            unavailableItems: try container.decodeIfPresent([ItemJobFailure].self, forKey: .unavailableItems) ?? []
         )
     }
 
@@ -231,6 +257,10 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
     /// `AgentActionExecutor.prepare` — see `refuseUnresolvedItemJob(in:)` for why that is a refusal
     /// rather than a second resolution.
     case notPrepared
+    /// Not one item of the job could even be previewed, so there is nothing to ask approval for. The
+    /// associated value is the first item's own error, which is the message that explains what is
+    /// wrong with what the user pointed at.
+    case everyItemUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -246,6 +276,8 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
             return "That is \(count) items, and Sonny works through at most \(limit) in one job. Narrow it down and ask again."
         case .notPrepared:
             return "Sonny could not work out which items this job covers."
+        case .everyItemUnavailable(let detail):
+            return detail
         }
     }
 }
@@ -280,6 +312,18 @@ public struct ItemJobProgress: Equatable, Sendable {
         self.items = items
         self.completedItemIndexes = completedItemIndexes
         self.failures = failures
+    }
+
+    /// The two kinds of failure a job has, in item order and never counted twice: the items that
+    /// could not be prepared (`PlanItemJob.unavailableItems`, which the plan carries) and the items
+    /// that failed while running (which the run reports and the checkpoint stores). An item cannot be
+    /// both — an unavailable one has no steps to run — and the dedup is a belt on that rather than a
+    /// live case.
+    static func merged(_ unavailable: [ItemJobFailure], _ atRuntime: [ItemJobFailure]) -> [ItemJobFailure] {
+        var seen: Set<Int> = []
+        return (unavailable + atRuntime)
+            .filter { seen.insert($0.itemIndex).inserted }
+            .sorted { $0.itemIndex < $1.itemIndex }
     }
 
     public var itemCount: Int { items.count }
@@ -319,7 +363,7 @@ public struct ItemJobProgress: Equatable, Sendable {
             itemKind: job.itemKind,
             items: job.items,
             completedItemIndexes: completedIndexes,
-            failures: failures
+            failures: Self.merged(job.unavailableItems, failures)
         )
     }
 }

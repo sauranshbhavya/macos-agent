@@ -263,6 +263,116 @@ struct ItemJobTests {
         #expect(opener.opened.isEmpty)
     }
 
+    // MARK: - Items that cannot even be prepared
+
+    /// **The defect this section exists for, in the shape it was found in.** `prepare` previews every
+    /// unit before anything is approved, and a preview reaches into the item — a document conversion
+    /// refuses a folder with nothing to convert. So three folders, one of them without a Word
+    /// document, used to die at `prepare` with a message about that one folder: no approval prompt,
+    /// no partial run, the other two untouched. The item is dropped and named now, and the other two
+    /// are previewed, approved and run.
+    @Test
+    func aFolderThatCannotBePreviewedIsDroppedRatherThanKillingTheWholeJob() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma"] {
+            let folder = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // `beta` holds no Word document at all, which is what its preview refuses.
+            if name != "beta" {
+                try write("doc", to: folder.appendingPathComponent("report.docx"))
+            }
+        }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: docxJob(over: root))
+
+        // The item list is still the whole three — the job is over three folders, one of which
+        // cannot be done — and only its *steps* are gone.
+        #expect(prepared.plan.itemJob?.items.count == 3)
+        #expect(prepared.plan.itemJob?.unavailableItems.map(\.itemIndex) == [1])
+        #expect(prepared.plan.steps.map(\.itemIndex) == [0, 0, 2, 2])
+        let named = try #require(prepared.plan.itemJob?.unavailableItems.first)
+        #expect(named.item == root.appendingPathComponent("beta").path)
+        #expect(named.message.contains("beta"))
+
+        // And it runs: the two good folders are converted and the third is reported, not silently
+        // missing.
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+        #expect(result.itemJobFailures.map(\.itemIndex) == [1])
+        #expect(result.summary.contains("2 of 3 folders"))
+        #expect(result.summary.contains("beta"))
+    }
+
+    /// The control for the test above, and the one that makes "one was dropped" mean something: the
+    /// same job with a document in every folder drops nothing and runs all three.
+    @Test
+    func aJobWhoseEveryItemPreviewsKeepsEveryItem() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma"] {
+            let folder = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try write("doc", to: folder.appendingPathComponent("report.docx"))
+        }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: docxJob(over: root))
+
+        #expect(prepared.plan.itemJob?.unavailableItems.isEmpty == true)
+        #expect(prepared.plan.steps.map(\.itemIndex) == [0, 0, 1, 1, 2, 2])
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+        #expect(result.itemJobFailures.isEmpty)
+        #expect(result.summary == "Worked through all 3 folders.")
+    }
+
+    /// **A job in which nothing can be done says so at the door**, with the message that explains the
+    /// folder the user pointed at, rather than asking for approval to do nothing.
+    @Test
+    func aJobWhoseEveryItemIsUnavailableIsRefusedWithTheFirstItemsOwnReason() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta"] {
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent(name),
+                withIntermediateDirectories: true
+            )
+        }
+        let executor = makeExecutor(root: root)
+
+        do {
+            _ = try executor.prepare(plan: docxJob(over: root))
+            Issue.record("a job in which no item can be prepared should have been refused")
+        } catch let error as PlanItemJobError {
+            guard case .everyItemUnavailable(let detail) = error else {
+                Issue.record("expected everyItemUnavailable, got \(error)")
+                return
+            }
+            #expect(detail.contains("alpha"))
+            #expect(detail.contains(".docx"))
+        }
+    }
+
+    /// A job that is down to one item still takes the chain walk, so it keeps the job's own summary
+    /// and its own arithmetic instead of falling through to a single adapter call that knows nothing
+    /// about items.
+    @Test
+    func aJobWithOneItemLeftIsStillDispatchedAsAJob() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("one", to: root.appendingPathComponent("a.pdf"))
+        let invoker = RecordingShortcutInvoker()
+        let executor = makeExecutor(root: root, shortcutInvoker: invoker)
+
+        let prepared = try executor.prepare(plan: shortcutJob(over: root))
+        #expect(prepared.plan.steps.count == 1)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(invoker.inputs.count == 1)
+        // The job's sentence, not `InvokeShortcutCapabilityAdapter`'s "Ran Shortcut Summarise."
+        #expect(result.summary == "Worked through all 1 files.")
+    }
+
     // MARK: - Remembering its place
 
     /// The whole point of the ticket, on the real path: a job interrupted partway records which
@@ -645,10 +755,16 @@ struct ItemJobTests {
     private func makeExecutor(
         root: URL,
         shortcutInvoker: any ShortcutInvoking = RecordingShortcutInvoker(),
-        browserOpener: any BrowserOpening = RecordingBrowserOpener()
+        browserOpener: any BrowserOpening = RecordingBrowserOpener(),
+        // Injected rather than defaulted: the shipping `AutoDocumentConverter` needs Microsoft Word,
+        // so a test leaning on the default would be measuring whether Word is installed on the
+        // machine — which is how the first version of `aFolderThatCannotBePreviewedIsDropped…`
+        // reported all three folders as failures and looked briefly like the fix not working.
+        documentConverter: any DocumentConverting = WritingDocumentConverter()
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
+            documentConverter: documentConverter,
             browserOpener: browserOpener,
             permissionReadinessService: .deterministic(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
@@ -662,6 +778,23 @@ struct ItemJobTests {
                 fileURL: root.appendingPathComponent("shortcuts-history.json")
             )
         )
+    }
+}
+
+/// Writes a real file at each destination, so a job over folders exercises the conversion path
+/// rather than the absence of Word.
+private struct WritingDocumentConverter: DocumentConverting {
+    var isAvailable: Bool { true }
+    var modeName: String { "Writing fake converter" }
+    var usesMockNaming: Bool { false }
+
+    func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
+        var converted: [DocxRecord] = []
+        for record in records where !record.skippedBecausePDFExists {
+            try Data("fake pdf".utf8).write(to: record.destinationURL, options: .atomic)
+            converted.append(record)
+        }
+        return converted
     }
 }
 

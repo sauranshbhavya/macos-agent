@@ -259,8 +259,16 @@ public final class AgentActionExecutor {
         }
 
         do {
-            let previews = try preview(plan: resolvedPlan)
-            return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+            var unavailableItems: [ItemJobFailure] = []
+            let previews = try previewForPreparation(resolvedPlan, unavailableItems: &unavailableItems)
+            guard !unavailableItems.isEmpty else {
+                return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+            }
+            let (trimmedPlan, trimmedPreviews) = try droppingUnavailableItems(
+                unavailableItems,
+                from: resolvedPlan
+            )
+            return PreparedAgentRun(plan: trimmedPlan, previews: trimmedPreviews)
         } catch let error as AutomationStoreError {
             // Only a not-found target converts, and only *after* preview has run, so an earlier
             // step's real error still wins: previewing in step order is what decides which
@@ -275,6 +283,81 @@ public final class AgentActionExecutor {
             )
             return PreparedAgentRun(plan: clarifyPlan, previews: [preview], clarificationQuestion: question)
         }
+    }
+
+    /// `preview`, plus the one thing only `prepare` needs from it: which items of a job could not be
+    /// previewed at all (SONNY-235).
+    ///
+    /// A job always classifies as `.chain` (`workflow(in:)`), so this reaches `previewChain` directly
+    /// for one and delegates for everything else. Delegating rather than always calling
+    /// `previewChain` keeps every non-job plan on exactly the path it was on before this branch.
+    private func previewForPreparation(
+        _ plan: AgentPlan,
+        unavailableItems: inout [ItemJobFailure]
+    ) throws -> [ActionPreview] {
+        guard plan.itemJob != nil else {
+            return try preview(plan: plan)
+        }
+        return try previewChain(
+            plan,
+            namedByEnclosingPlan: .none,
+            unavailableItems: &unavailableItems
+        )
+    }
+
+    /// Removes an unavailable item's steps from a job's plan and previews what is left.
+    ///
+    /// **Every item unavailable is a refusal, not an empty job.** A plan of no steps is not something
+    /// any part of this executor is written for, and more to the point a job in which nothing can be
+    /// done should say so at the door rather than ask for approval to do nothing — so the first
+    /// item's own error is thrown, which is the message that would have been thrown before this
+    /// branch and is the one that explains the folder the user pointed at.
+    ///
+    /// The previews are recomputed over the trimmed plan rather than filtered from the first pass:
+    /// `claimed` and the carried artifact accumulate across units, so a pass that walked a unit which
+    /// is no longer there produced a set that is subtly not the trimmed plan's. This costs a second
+    /// preview pass **only when something was dropped**, which is the rare path; a job in which every
+    /// item previews cleanly pays exactly one pass, as before.
+    private func droppingUnavailableItems(
+        _ unavailableItems: [ItemJobFailure],
+        from plan: AgentPlan
+    ) throws -> (AgentPlan, [ActionPreview]) {
+        guard var job = plan.itemJob else {
+            return (plan, try preview(plan: plan))
+        }
+        let dropped = Set(unavailableItems.map(\.itemIndex))
+        let survivingSteps = plan.steps.filter { step in
+            guard let index = step.itemIndex else {
+                return true
+            }
+            return !dropped.contains(index)
+        }
+        guard !survivingSteps.isEmpty else {
+            throw PlanItemJobError.everyItemUnavailable(
+                unavailableItems.first?.message ?? "Sonny could not start any part of this job."
+            )
+        }
+
+        job.unavailableItems = ItemJobProgress.merged(job.unavailableItems, unavailableItems)
+        var trimmed = plan
+        trimmed.itemJob = job
+        trimmed.steps = survivingSteps
+
+        var stillUnavailable: [ItemJobFailure] = []
+        let previews = try previewForPreparation(trimmed, unavailableItems: &stillUnavailable)
+        // A second pass that drops *more* items is possible in principle — the trimmed plan's
+        // accumulated claims differ from the first pass's — and is not iterated on: one more round
+        // would have the same property, and an unbounded loop over a preview that reads the file
+        // system is worse than the residual. Whatever it names is recorded exactly like the first
+        // round's, so the item is still reported rather than lost; what it does not get is its steps
+        // removed, so it is attempted at execution and fails there through the ordinary path.
+        if !stillUnavailable.isEmpty {
+            trimmed.itemJob?.unavailableItems = ItemJobProgress.merged(
+                job.unavailableItems,
+                stillUnavailable
+            )
+        }
+        return (trimmed, previews)
     }
 
     /// Turns a planner-invented workspace/routine name into a clarification instead of a hard
@@ -792,10 +875,14 @@ public final class AgentActionExecutor {
         case .visionSession:
             return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
+            // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
+            // `prepare` has nothing to do with a job's unavailable items.
+            var ignoredUnavailableItems: [ItemJobFailure] = []
             return try previewChain(
                 plan,
                 claimedEarlierInThisRun: claimedEarlierInThisRun,
-                namedByEnclosingPlan: namedByEnclosingPlan
+                namedByEnclosingPlan: namedByEnclosingPlan,
+                unavailableItems: &ignoredUnavailableItems
             )
         }
     }
@@ -995,6 +1082,20 @@ public final class AgentActionExecutor {
             if workflows.contains(.clarify) {
                 throw AgentExecutionError.invalidPlan("Clarification must be the only planned step.")
             }
+            return .chain
+        }
+
+        // **A job over many items always takes the chain walk, even when only one item is left**
+        // (SONNY-235). The job's rules live in `executeChain` and `previewChain` — skip and continue,
+        // the per-item carry reset, the job's own summary — and a job that fell through to a single
+        // `executeCapability` call would silently lose all of them and report the adapter's own
+        // sentence instead of "worked through 1 of 40". One item is reachable in ordinary use: a
+        // forty-item job whose other thirty-nine could not be previewed, and a resumed job with one
+        // item left. `chainSegments(in:)` allows the single segment for the same reason.
+        //
+        // A `.clarify` job is not a thing a planner can produce — a clarification is asked instead of
+        // acting — and it falls through to the refusals below rather than being chained.
+        if plan.itemJob != nil, workflow != .clarify {
             return .chain
         }
 
@@ -1958,13 +2059,25 @@ public final class AgentActionExecutor {
     /// `claimed` when the routine is previewed and the outer draft's name is invisible to it. The
     /// union below is the same one `executeChain` computes, for the same reason and at the same
     /// altitude: a segment sees only its own steps, and the outer draft lives in a different one.
+    /// - Parameter unavailableItems: Collects the items of a job whose own preview threw
+    ///   (SONNY-235). Empty for every plan that is not a job. `prepare` is the caller that reads it —
+    ///   it drops those items from the plan and previews what is left; every other caller passes a
+    ///   local it ignores, which is honest because a job's `previewChain` is only ever reached from
+    ///   `prepare` (a segment carries no `itemJob`, and a stored routine has no plan to carry one).
     private func previewChain(
         _ plan: AgentPlan,
         claimedEarlierInThisRun: RunClaims = .none,
-        namedByEnclosingPlan: PlannedDestinations
+        namedByEnclosingPlan: PlannedDestinations,
+        unavailableItems: inout [ItemJobFailure]
     ) throws -> [ActionPreview] {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
+        // The preview-side halves of the three job rules `executeChain` states in full. Same reading
+        // of `AgentStep.itemIndex`, same inertness on a plan that is not a job.
+        let itemJob = plan.itemJob
+        var failedItemIndexes: Set<Int> = []
+        var currentItemIndex: Int?
+        var sawFirstSegment = false
 
         // The same accumulation as `executeChain`, over what each unit *says* it will do. Without it
         // the preview and the run disagree about the second unit — the panel names `report.pdf` and
@@ -1978,12 +2091,41 @@ public final class AgentActionExecutor {
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
         for segment in try chainSegments(in: plan) {
+            let segmentItemIndex = segment.steps.first?.itemIndex
+            if itemJob != nil, sawFirstSegment, segmentItemIndex != currentItemIndex {
+                previousArtifactPath = nil
+            }
+            currentItemIndex = segmentItemIndex
+            sawFirstSegment = true
+
+            if let segmentItemIndex, failedItemIndexes.contains(segmentItemIndex) {
+                continue
+            }
+
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let segmentPreviews = try preview(
-                plan: resolved,
-                claimedEarlierInThisRun: claimed,
-                namedByEnclosingPlan: namedByThisRun
-            )
+            let segmentPreviews: [ActionPreview]
+            do {
+                segmentPreviews = try preview(
+                    plan: resolved,
+                    claimedEarlierInThisRun: claimed,
+                    namedByEnclosingPlan: namedByThisRun
+                )
+            } catch {
+                guard let itemJob, let segmentItemIndex else {
+                    throw error
+                }
+                let item = segmentItemIndex < itemJob.items.count ? itemJob.items[segmentItemIndex] : ""
+                failedItemIndexes.insert(segmentItemIndex)
+                unavailableItems.append(
+                    ItemJobFailure(
+                        itemIndex: segmentItemIndex,
+                        item: item,
+                        message: error.localizedDescription,
+                        failedAt: now()
+                    )
+                )
+                continue
+            }
             previews.append(contentsOf: segmentPreviews)
             for written in segmentPreviews.flatMap(\.writes) {
                 claimed.recordWrite(written)
@@ -2052,8 +2194,12 @@ public final class AgentActionExecutor {
         // knowledge — the loop reads `AgentStep.itemIndex`, which the expansion wrote, and no
         // capability adapter is involved in any of it.
         let itemJob = plan.itemJob
-        var itemJobFailures: [ItemJobFailure] = []
-        var failedItemIndexes: Set<Int> = []
+        // **Seeded from the items `prepare` could not preview**, so the run's own report covers both
+        // kinds of failure a job has and the summary's arithmetic is over the whole item list rather
+        // than over the part that reached execution (SONNY-235). Seeding the skip set with them
+        // costs nothing and is correct on its own terms: a dropped item has no segments here.
+        var itemJobFailures: [ItemJobFailure] = itemJob?.unavailableItems ?? []
+        var failedItemIndexes = Set(itemJobFailures.map(\.itemIndex))
         var currentItemIndex: Int?
         var sawFirstSegment = false
 
@@ -2363,12 +2509,20 @@ public final class AgentActionExecutor {
     /// first records made while having enumerated only the middle case.
     private func chainSegments(in plan: AgentPlan) throws -> [AgentPlan] {
         let segments = try segmentPlans(in: plan)
-        guard segments.count != 1 else {
+        // A one-unit *job* is legitimate and a one-unit chain is still a bug — see `workflow(in:)`
+        // for why a job takes this walk however few items it has left (SONNY-235).
+        guard segments.count != 1 || plan.itemJob != nil else {
             throw AgentExecutionError.invalidPlan("A chained plan must contain more than one unit of work.")
         }
         return segments
     }
 
+    /// **A segment deliberately carries no `itemJob`** (SONNY-235). A unit of a job is one item's
+    /// ordinary work, and `previewChain`/`executeChain` re-enter `preview`/`execute` per segment — so
+    /// a segment that declared itself a job would classify as `.chain` again and recurse on itself
+    /// forever, now that `workflow(in:)` chains a job however few units it holds. The steps keep their
+    /// `itemIndex`, which is what the two chain walks read; the declaration stays with the plan that
+    /// owns the item list.
     private func segmentPlan(from plan: AgentPlan, steps: [AgentStep]) -> AgentPlan {
         AgentPlan(
             summary: plan.summary,
