@@ -431,16 +431,22 @@ struct ItemJobTests {
         #expect(cleanOpener.opened.count == 3)
     }
 
-    /// **The chain's carried artifact does not cross an item boundary.** A mutant removing the reset
-    /// survived the suite at `369cbc3` (R4), and the reachable case took some finding, so it is
-    /// written down: an item whose work *succeeds while writing nothing*, followed in the same item
-    /// by a step that opens "whatever the previous unit produced".
+    /// **An item that produces nothing is reported, not handed the previous item's file.**
     ///
-    /// A folder whose documents have all been converted already is exactly that — every record is
-    /// skipped, the unit succeeds, and its previews name no write. Without the reset, that item's
-    /// bare open reaches back and opens the **previous** item's PDF, and the run reports success.
+    /// **What this does and does not claim, because the difference was measured.** It pins the
+    /// outcome — one file opened, the item that produced nothing named as a failure — and it does
+    /// **not** pin the cross-item carry reset in `executeChain`, which a mutant deleted at `6976659`
+    /// with the whole suite still green (R4). Two mechanisms stand between these items and the wrong
+    /// file, and the one that actually holds here is the carry's own re-seeding from a unit's last
+    /// suggestion: the conversion unit returns one naming the folder it worked in, so this item's
+    /// carry is replaced by its own folder before its opening step ever runs. The reset is defensive
+    /// and `executeChain` says so at the line itself.
+    ///
+    /// A test that claimed to hold the reset would be worse than no test, so it does not: it holds
+    /// what a user would notice, which is that a folder whose documents were all converted already
+    /// is reported rather than silently handed the previous folder's PDF.
     @Test
-    func aJobsCarriedArtifactDoesNotLeakFromOneItemIntoTheNext() async throws {
+    func anItemThatProducesNothingIsReportedRatherThanHandedThePreviousItemsFile() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -473,8 +479,7 @@ struct ItemJobTests {
         let prepared = try executor.prepare(plan: plan)
         let result = try await executor.execute(plan: prepared.plan) { _, _ in }
 
-        // alpha's own PDF, once. Without the reset this list holds it twice — the second time as
-        // beta's "result", which beta never produced.
+        // alpha's own PDF, once, and beta's nothing.
         #expect(fileOpener.opened == [alpha.appendingPathComponent("report.pdf").path])
         // And beta is reported as an item that could not be done, rather than silently handed
         // somebody else's file.
