@@ -87,6 +87,37 @@ public struct SonnyAccountService: Sendable {
         return tokens.identity
     }
 
+    /// Ask the gateway for a hosted billing-portal link for this account (SONNY-216).
+    ///
+    /// **This account service rather than a billing one, because there is nothing else to it.** The
+    /// call is one authenticated `POST` that returns a URL; a `SonnyBillingService` holding one
+    /// method would be a type for the sake of a name, and the portal is reached from the Account
+    /// surface, whose model already holds this.
+    ///
+    /// **No idempotency key, deliberately.** §9.1 asks for one on a `POST` that changes something;
+    /// this changes nothing on Sonny's side and mints a fresh short-lived session at the provider,
+    /// so replaying a stored response is the one behaviour that would be wrong — a second press
+    /// after the first link expired would be answered with the dead link. It is not marked
+    /// retry-safe for the same reason: each attempt should mint its own.
+    public func hostedBillingPortalURL() async throws -> URL {
+        let response = try await client.send(SonnyBackendRequest(
+            method: "POST",
+            path: "/v1/billing/portal",
+            body: nil,
+            authentication: .bearer,
+            idempotencyKey: nil,
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: false
+        ))
+        guard
+            let envelope = try? JSONDecoder().decode(WireBillingPortal.self, from: response.data),
+            let url = URL(string: envelope.portal_url)
+        else {
+            throw SonnyBackendError.undecodableResponse("billing portal response")
+        }
+        return url
+    }
+
     /// Revoke the family server-side, then clear this Mac. **The local clear happens either way.**
     ///
     /// Order matters and cannot be the other one: clearing first destroys the very token the revoke
@@ -133,4 +164,13 @@ public struct SonnyAccountService: Sendable {
 private struct WireCodeRequest: Decodable {
     let request_id: String
     let expires_in: TimeInterval
+}
+
+/// §4.1's `POST /v1/billing/portal` response (SONNY-216).
+///
+/// `expires_at` is served beside the URL and is deliberately not read here: nothing on this Mac
+/// decides anything from it, because the link is fetched per press and opened immediately. Decoding
+/// a field no caller consumes would invite a later reader to cache on it.
+private struct WireBillingPortal: Decodable {
+    let portal_url: String
 }

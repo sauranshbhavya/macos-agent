@@ -1,9 +1,14 @@
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { parseBillingPlans, billingDepsFrom } from "../src/billing/deps.js";
-import { POLAR, polarProvider, readPolarDelivery } from "../src/billing/polar.js";
+import {
+  POLAR,
+  PORTAL_SESSION_TIMEOUT_MS,
+  polarProvider,
+  readPolarDelivery,
+} from "../src/billing/polar.js";
 import type { BillingApplyInput, BillingStore } from "../src/billing/store.js";
 import {
   WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
@@ -40,6 +45,10 @@ const SUPABASE_USER = "0f6c2c4e-8f2a-4a0f-9a11-2b6f5f2a77aa";
 const ACCOUNT = "8a1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77ab";
 const SECRET = "a-webhook-secret-that-is-not-a-real-one";
 const CHECKOUT = "https://buy.example.test/checkout/abc";
+/** SONNY-216. Not a credential — a literal chosen to look nothing like one; see check-secrets.sh. */
+const TOKEN = "an-access-token-that-is-not-a-real-one";
+/** SONNY-216. The provider API origin every portal test points at instead of the real one. */
+const API_BASE = "https://api.example.test";
 const PRODUCT = "prod_screen_control";
 const SUBSCRIPTION = "sub_123";
 const NOW = new Date("2026-08-30T12:00:00Z");
@@ -103,6 +112,10 @@ const BILLING_ENV = {
   billingCheckoutUrl: CHECKOUT,
   billingPlans: `${PRODUCT}=paid:screen_control`,
   billingGraceDays: 14,
+  // SONNY-216. `billingApiBaseUrl` points every portal test at a host that does not exist, so a
+  // stub that fails to intercept produces a connection error rather than a real call to Polar.
+  billingProviderAccessToken: TOKEN,
+  billingApiBaseUrl: API_BASE,
 };
 
 function build(store: BillingStore) {
@@ -609,7 +622,7 @@ describe("what a deployment has to configure", () => {
     await app.close();
   });
 
-  it("mounts exactly two billing routes, one challenged and one carried by its signature", async () => {
+  it("mounts exactly the billing routes, two challenged and one carried by its signature", async () => {
     // **The gate's own population scan cannot see either of these** (PR #178 review, F6):
     // `gate.test.ts` builds from `testConfig()`, which names no provider, so `app.ts` mounts neither
     // route and the scan that exists to catch a route added without thought is blind to anything
@@ -627,9 +640,18 @@ describe("what a deployment has to configure", () => {
       .map((route) => `${route.method} ${route.url}`)
       .filter((route) => route.includes("/v1/billing/"));
 
-    expect(routes.sort()).toEqual(["POST /v1/billing/checkout", "POST /v1/billing/webhook"]);
+    expect(routes.sort()).toEqual([
+      "POST /v1/billing/checkout",
+      "POST /v1/billing/portal",
+      "POST /v1/billing/webhook",
+    ]);
     expect(isPublicRoute("POST", "/v1/billing/webhook")).toBe(true);
     expect(isPublicRoute("POST", "/v1/billing/checkout")).toBe(false);
+    // **The portal route is challenged, and this is the assertion that says so.** It is the newest
+    // route in the highest-stakes scope in this repository, and the failure it guards against is a
+    // one-line one: an entry added to `PUBLIC_ROUTES` would make a route that mints a link to one
+    // customer's invoices reachable with no caller at all. SONNY-216.
+    expect(isPublicRoute("POST", "/v1/billing/portal")).toBe(false);
     await app.close();
   });
 
@@ -665,10 +687,10 @@ describe("what a deployment has to configure", () => {
     // The one Polar-specific detail with teeth, and it is asserted rather than left in prose: Polar's
     // SDK base64-encodes the secret into a standard-webhooks verifier that base64-decodes it, so the
     // key is the secret's own UTF-8 bytes. A wrong derivation here refuses every genuine delivery.
-    expect(polarProvider({ webhookSecret: SECRET, checkoutUrl: CHECKOUT }).webhookKey).toEqual(
+    expect(polarProvider({ webhookSecret: SECRET, checkoutUrl: CHECKOUT, accessToken: TOKEN }).webhookKey).toEqual(
       Buffer.from(SECRET, "utf8"),
     );
-    expect(polarProvider({ webhookSecret: SECRET, checkoutUrl: CHECKOUT }).name).toBe(POLAR);
+    expect(polarProvider({ webhookSecret: SECRET, checkoutUrl: CHECKOUT, accessToken: TOKEN }).name).toBe(POLAR);
   });
 });
 
@@ -725,9 +747,383 @@ describe("where a user is sent to subscribe", () => {
     const provider = polarProvider({
       webhookSecret: SECRET,
       checkoutUrl: "https://buy.example.test/checkout/abc?theme=dark",
+      accessToken: TOKEN,
     });
     const url = new URL(provider.checkoutUrlFor(ACCOUNT));
     expect(url.searchParams.get("theme")).toBe("dark");
     expect(url.searchParams.get("customer_external_id")).toBe(ACCOUNT);
+  });
+});
+
+/**
+ * Where a subscriber goes to manage what they pay for (SONNY-216).
+ *
+ * **This route is the first in the repository that calls the provider**, so what these tests are
+ * mostly about is the four ways that call can fail and the fact that each one reaches the client as
+ * a different, correct answer. The success case is the least interesting of the five.
+ *
+ * The provider is driven through `fetchImplementation` rather than by stubbing the global, because
+ * the request this gateway *sends* is half of what is being asserted — the credential, the path and
+ * the account id are the whole of the lookup, and a test that only read the response would pass with
+ * any of the three wrong.
+ */
+describe("where a subscriber manages the subscription", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A provider whose outbound call is answered by `respond`, recording what it was sent. */
+  function providerAnswering(respond: (request: Request) => Promise<Response> | Response) {
+    const sent: Request[] = [];
+    const provider = polarProvider({
+      webhookSecret: SECRET,
+      checkoutUrl: CHECKOUT,
+      accessToken: TOKEN,
+      apiBaseUrl: API_BASE,
+      fetchImplementation: (async (input: unknown, init: unknown) => {
+        const request = new Request(input as URL, init as RequestInit);
+        sent.push(request);
+        return respond(request);
+      }) as unknown as typeof fetch,
+    });
+    return { provider, sent };
+  }
+
+  function sessionBody(extra: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      token: "a-customer-session-token",
+      customer_portal_url: "https://polar.example.test/portal?token=a-customer-session-token",
+      expires_at: "2026-08-30T13:00:00Z",
+      ...extra,
+    });
+  }
+
+  it("asks the provider for a session keyed on the account id, with the credential attached", async () => {
+    const { provider, sent } = providerAnswering(
+      () => new Response(sessionBody(), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    const link = await provider.portalUrlFor(ACCOUNT);
+
+    expect(link).toEqual({
+      kind: "link",
+      url: "https://polar.example.test/portal?token=a-customer-session-token",
+      expiresAt: new Date("2026-08-30T13:00:00Z"),
+    });
+    expect(sent).toHaveLength(1);
+    const request = sent[0]!;
+    expect(request.method).toBe("POST");
+    // The path and the origin together: the origin is configuration, and pinning only the path
+    // would pass against a deployment pointed at the wrong host.
+    expect(request.url).toBe(`${API_BASE}/v1/customer-sessions/`);
+    expect(request.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+    // **The account id is the whole of the lookup.** `checkoutUrlFor` sends it as
+    // `customer_external_id`, so the provider's customer carries it as `external_id`, and this is
+    // the field that resolves it back. A mutant sending the wrong field mints nobody's portal.
+    expect(await request.json()).toEqual({ external_customer_id: ACCOUNT });
+  });
+
+  it("reports an account the provider has no customer for as having nothing to manage", async () => {
+    // The ordinary case: signed in, never subscribed. Not a fault, and — the half worth pinning —
+    // not confusable with one, because every other non-2xx below is a provider failure.
+    const { provider } = providerAnswering(
+      () => new Response(JSON.stringify({ error: "ResourceNotFound" }), { status: 404 }),
+    );
+
+    expect(await provider.portalUrlFor(ACCOUNT)).toEqual({ kind: "noCustomer" });
+  });
+
+  it("refuses a 404 that did not come from the provider, which is the misconfiguration case", async () => {
+    // **PR #183, F5 — the unexamined direction of the 422 judgement.** A 404 is also what a wrong
+    // origin or a dropped path prefix answers, and mapping every 404 to `noCustomer` means that
+    // under a misconfiguration EVERY PAYING SUBSCRIBER is told "This account holds no subscription
+    // to manage" — verbatim the outcome the 422 reasoning calls a support incident that reads like
+    // data loss. Those users hold claims, so the client's second defence does not help them: their
+    // row renders and they press.
+    //
+    // The discriminator is the body. A proxy or a framework answers HTML, plain text or nothing;
+    // the provider answers its own JSON envelope. Each of these is a 404 that must NOT read as a
+    // missing customer.
+    const html = providerAnswering(() => new Response("<html>404 Not Found</html>", { status: 404 }));
+    const empty = providerAnswering(() => new Response("", { status: 404 }));
+    const text = providerAnswering(() => new Response("not found", { status: 404 }));
+    const array = providerAnswering(() => new Response("[]", { status: 404 }));
+    // `null` is the one JSON literal that slips between the four above, because
+    // `typeof null === "object"` and `Array.isArray(null)` is false — so the `parsed !== null`
+    // clause is what refuses it, and a mutant dropping that clause survived until this line
+    // existed (cycle 3, C4). Not a live hazard — nothing plausibly answers `null` to a 404 — but
+    // this round's own lesson is that a guard nobody asserts is a guard.
+    const nullBody = providerAnswering(() => new Response("null", { status: 404 }));
+
+    expect(await html.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await empty.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await text.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await array.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await nullBody.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+  });
+
+  it("treats a throttled call as the provider's capacity, not as a bad request", async () => {
+    // **PR #183, F10.** 429 is the one 4xx that is retryable by definition, and this gateway had
+    // already decided that twice: `src/auth/supabase.ts:521-525` — "a rate limit and a server error
+    // are statements about the provider's ability to answer, never about whether the user's input
+    // was correct" — and `src/auth/revocation.ts`, "any 4xx but 429 is ProviderRejected". This
+    // adapter was the third and the only one to put 429 on the input-was-wrong side, which sent a
+    // throttled call to the Mac as not-retryable and made it give up on the one thing waiting fixes.
+    const throttled = providerAnswering(() => new Response("", { status: 429 }));
+
+    expect(await throttled.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
+  });
+
+  it("keeps the link when the provider sends an expiry that does not parse", async () => {
+    // **PR #183, F8.** Deleting the `Number.isNaN` half of this guard survived the whole suite: one
+    // existing test sends a valid instant and the other omits the field, and omission is caught by
+    // the `undefined` half — so the branch that matters was never reached. It is not cosmetic. The
+    // route calls `link.expiresAt.toISOString()`, and `new Date("nonsense").toISOString()` throws
+    // `RangeError: Invalid time value`, so without the guard a provider sending a malformed
+    // timestamp turns a successful portal mint into a 500 on a route that otherwise cannot make one.
+    const before = Date.now();
+    const { provider } = providerAnswering(
+      () => new Response(sessionBody({ expires_at: "not a date" }), { status: 200 }),
+    );
+
+    const link = await provider.portalUrlFor(ACCOUNT);
+
+    expect(link.kind).toBe("link");
+    const expiresAt = (link as { expiresAt: Date }).expiresAt;
+    expect(Number.isNaN(expiresAt.getTime())).toBe(false);
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before);
+    // And the route can serialise it, which is the actual consequence the guard prevents.
+    expect(() => expiresAt.toISOString()).not.toThrow();
+  });
+
+  it("keeps its outbound budget under the Mac's own, which is a relation neither side can see", async () => {
+    // **PR #183, F6/S2.** `PORTAL_SESSION_TIMEOUT_MS` appeared on three lines of `polar.ts` and zero
+    // lines of `server/test/`, and was not exported, so no test could reach it — a mutant raising it
+    // to 30 000, past the Mac's own 20 s, survived the whole suite.
+    //
+    // **Both numbers are literals here, following `ModelRouteNumbersTests`' precedent**, because the
+    // rule is a relation *between* the halves and neither side can read the other's code. The Mac's
+    // number is `SonnyBackendTimeouts.auth`, asserted as 20 on its own side in that suite; moving
+    // either without the other now fails on that side.
+    //
+    // What the relation buys is not a retry — this route passes `isRetrySafe: false`, so nothing is
+    // retried, which is the correction F6 is about. It is that the user meets the gateway's typed
+    // `504 provider.timeout`, which is logged and worded, rather than the Mac's own transport
+    // timeout, which reports a generic unreachable backend about a gateway that was working.
+    const macAuthTimeoutMs = 20_000;
+    expect(PORTAL_SESSION_TIMEOUT_MS).toBe(8_000);
+    expect(PORTAL_SESSION_TIMEOUT_MS).toBeLessThan(macAuthTimeoutMs);
+  });
+
+  it("separates a provider that is down from one that refused, because only one is worth retrying", async () => {
+    // **500 is here because it is the boundary, and its absence was a real hole** (SONNY-216's
+    // mutation battery, R3). This test first covered 503 alone, so a mutant moving the branch from
+    // `>= 500` to `>= 501` survived the whole suite — and what that mutant does is send the
+    // commonest server error there is down the not-retryable path, so a transient 500 from the
+    // provider reaches the Mac as `provider.rejected` and the client gives up instead of retrying.
+    // A boundary test that does not sit on the boundary is not a boundary test.
+    const boundary = providerAnswering(() => new Response("", { status: 500 }));
+    const down = providerAnswering(() => new Response("", { status: 503 }));
+    const refused = providerAnswering(() => new Response("", { status: 401 }));
+
+    expect(await boundary.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
+    expect(await down.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
+    // A revoked or wrong access token lands here. An identical retry fails identically, which is
+    // why this is not `unavailable` and why the route answers it not-retryable.
+    expect(await refused.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    // And the other side of the boundary still refuses, so a mutant *widening* the branch downwards
+    // fails here too rather than only the one narrowing it upwards.
+    const clientError = providerAnswering(() => new Response("", { status: 499 }));
+    expect(await clientError.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+  });
+
+  it("treats a 422 as a refusal rather than as a missing customer, which is the safe direction", async () => {
+    // **Deliberate, and recorded rather than assumed.** Nobody on this project has run this request
+    // against real Polar, and 422 is the other plausible answer for an unknown external id. If it
+    // turns out to be 422, this test is what changes with the branch in `polar.ts`. Until then the
+    // loud answer is right: telling a paying subscriber they have no subscription is the worse of
+    // the two ways to be wrong.
+    const { provider } = providerAnswering(() => new Response("", { status: 422 }));
+
+    expect(await provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+  });
+
+  it("refuses a 200 that carries no portal URL rather than inventing one", async () => {
+    const missing = providerAnswering(
+      () => new Response(JSON.stringify({ token: "t" }), { status: 200 }),
+    );
+    const unparseable = providerAnswering(() => new Response("not json", { status: 200 }));
+
+    expect(await missing.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await unparseable.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+  });
+
+  it("keeps the link when the provider names no expiry, and dates it now rather than inventing a window", async () => {
+    // The instant is for the client's benefit and nothing here decides on it, so a missing field
+    // must not cost a working URL. Dating it `now` makes a client that caches on it re-mint, which
+    // is the direction that cannot serve a dead page.
+    const before = Date.now();
+    const { provider } = providerAnswering(
+      () => new Response(sessionBody({ expires_at: undefined }), { status: 200 }),
+    );
+
+    const link = await provider.portalUrlFor(ACCOUNT);
+
+    expect(link.kind).toBe("link");
+    const expiresAt = (link as { expiresAt: Date }).expiresAt.getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(before);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("reports this gateway's own budget being spent as a timeout, not as the provider being down", async () => {
+    // The two are told apart by the rejection's name, and they must be: 7.2 gives them different
+    // codes and the client retries them differently.
+    const timedOut = providerAnswering(() => {
+      const error = new Error("The operation was aborted due to timeout");
+      error.name = "TimeoutError";
+      return Promise.reject(error);
+    });
+    const dropped = providerAnswering(() => Promise.reject(new TypeError("fetch failed")));
+
+    expect(await timedOut.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "timedOut" });
+    expect(await dropped.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
+  });
+
+  it("hands an authenticated caller the minted link", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(sessionBody(), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const app = build(recordingStore());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/portal",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      portal_url: "https://polar.example.test/portal?token=a-customer-session-token",
+      expires_at: "2026-08-30T13:00:00.000Z",
+    });
+    await app.close();
+  });
+
+  it("refuses an unauthenticated caller before it calls the provider", async () => {
+    // **The order is the assertion.** A route that minted a session and *then* checked the caller
+    // would spend a provider call — and, on a route keyed by account id, would need the caller to
+    // have been read to know whose. `expect(called)` is what pins it; the 401 alone would pass
+    // either way.
+    let called = false;
+    vi.stubGlobal("fetch", async () => {
+      called = true;
+      return new Response(sessionBody(), { status: 200 });
+    });
+    const app = build(recordingStore());
+
+    const response = await app.inject({ method: "POST", url: "/v1/billing/portal" });
+
+    expect(response.statusCode).toBe(401);
+    expect(called).toBe(false);
+    await app.close();
+  });
+
+  it("maps every provider failure onto its own status and retryable flag", async () => {
+    // One table rather than five tests, because what is being asserted is that the mapping is
+    // total and that no two cases collapse onto one answer. A mutant merging any pair fails here.
+    const cases: readonly (readonly [number, number, string, boolean])[] = [
+      // The body matters as well as the status now (F5), so this row carries a provider-shaped one.
+      [404, 409, "entitlement.no_subscription", false],
+      [503, 502, "provider.unavailable", true],
+      [401, 502, "provider.rejected", false],
+    ];
+
+    for (const [upstream, status, code, retryable] of cases) {
+      vi.stubGlobal(
+        "fetch",
+        async () => new Response(JSON.stringify({ error: "x" }), { status: upstream }),
+      );
+      const app = build(recordingStore());
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/billing/portal",
+        headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+      });
+
+      expect(response.statusCode, `upstream ${upstream}`).toBe(status);
+      expect(response.json().error.code, `upstream ${upstream}`).toBe(code);
+      expect(response.json().error.retryable, `upstream ${upstream}`).toBe(retryable);
+      await app.close();
+    }
+  });
+
+  it("answers a provider timeout with its own typed code rather than a generic failure", async () => {
+    // Separated from the table above because it is produced by a rejection rather than a status.
+    //
+    // **This test's name used to end "with the code the client retries once", and that was false**
+    // (PR #183, F6). This route passes `isRetrySafe: false`, and `SonnyBackendClient.send` gates
+    // every retry on that flag before it reaches the error's ceiling, so a 504 here is retried
+    // **zero** times. What the eight-second budget actually buys is that the user meets *this* code
+    // — typed, logged, and worded by the app — instead of the Mac's own transport timeout, which
+    // reports a generic unreachable backend about a gateway that was working fine.
+    vi.stubGlobal("fetch", async () => {
+      const error = new Error("aborted");
+      error.name = "TimeoutError";
+      throw error;
+    });
+    const app = build(recordingStore());
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/portal",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(504);
+    expect(response.json().error.code).toBe("provider.timeout");
+    expect(response.json().error.retryable).toBe(true);
+    await app.close();
+  });
+
+  it("requires the access token wherever a provider is named", async () => {
+    // The same rule the other three carry: a deployment that named a provider but no token would
+    // mount a Manage-subscription route that fails on every press, which is worse than not starting.
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingProviderAccessToken: undefined })),
+    ).toThrow(ConfigError);
+  });
+
+  it("refuses a malformed provider API origin at startup rather than on the first press", () => {
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "not a url" })),
+    ).toThrow(ConfigError);
+  });
+
+  it("refuses an API origin that is not https, because it decides where a credential is sent", () => {
+    // **PR #183, F12, and the arm my own fix shipped without** — the battery's U6 survived because
+    // nothing asserted it. `new URL` accepts any scheme, so `http://api.polar.sh` passed the
+    // parseability check and the adapter would then put `authorization: Bearer <OAT>` on the wire in
+    // cleartext. A route that throws on the first press is recoverable; a credential that has
+    // already travelled unencrypted is not.
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "http://api.example.test" })),
+    ).toThrow(ConfigError);
+    // And the valid form still starts, so the guard cannot be satisfied by refusing everything —
+    // which is the direction a test asserting only the throw would miss.
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "https://api.example.test" })),
+    ).not.toThrow();
+  });
+
+  it("refuses an API origin carrying a path, because the request path is appended from the root", () => {
+    // `new URL("/v1/customer-sessions/", "https://host/gw")` is `https://host/v1/...`, so a prefix
+    // is silently dropped rather than honoured — and the 404 that wrong path produces is exactly
+    // what `looksLikeAMissingCustomer` exists to keep from reading as "no customer".
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "https://api.example.test/gw" })),
+    ).toThrow(ConfigError);
   });
 });

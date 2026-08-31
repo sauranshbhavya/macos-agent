@@ -2125,6 +2125,67 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       answer if somebody writes it down. If no new `billing_event` row appears at all within a
       minute, that is its own finding — the webhook endpoint is not subscribed to the event type the
       plan change produces.
+- [ ] **(new 2026-08-31, SONNY-216) — the portal opens, and it opens for the right person.** Do this
+      immediately after SONNY-211's end-to-end subscription row, on the same test account, with
+      `BILLING_PROVIDER_ACCESS_TOKEN` set to an Organization Access Token carrying
+      `customer_sessions:write` (Polar dashboard) and the app's entitlement key pointed at the
+      gateway (`defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "<kid>:<key>"`, from
+      `npm run entitlements -- public-key`). In the app: open **Account** from the bottom-left row of
+      Command Center. The dialog must show a line reading `<plan> · Active` under the email address,
+      and a **Manage subscription** button beside it. Press it. A browser opens Polar's customer
+      portal **already signed in as that customer** — no email prompt, no one-time code. **The email
+      prompt appearing is the finding**, and it means the pre-authenticated session was not used;
+      that is the failure the whole design exists to avoid, because Sonny's identity key is never the
+      email address and a Hide My Email user has no address to type.
+- [ ] **(new 2026-08-31, SONNY-216) — the control is absent for someone who never paid, and this is
+      the row that matters most.** Sign in on a **fresh** account that has never subscribed. Open
+      Account. There must be **no subscription line and no Manage subscription button at all** — not
+      a greyed-out one, not one that shows an error when pressed. **Any visible Manage control here
+      is the finding.** The gateway also refuses this account with `409
+      entitlement.no_subscription`, so a control that appears and then fails would look like it
+      nearly worked; not offering it is the requirement.
+- [ ] **(new 2026-08-31, SONNY-216) — what Polar answers for a customer it does not have, and it
+      settles a mapping that was chosen without evidence.** With the gateway configured, call
+      `POST /v1/billing/portal` **as the fresh never-subscribed account** from the row above and
+      record **both the upstream status and the response body verbatim** — the body is now half the
+      check (PR #183, F5) and the reason is the row below this one. The code treats **404 with a
+      JSON-object body** as "no customer" and **everything else 4xx, including 422, as a provider
+      refusal**. **If it is a 404 with a JSON body**, nothing changes and this row is discharged.
+      **If it is 422**, the mapping must flip: `server/src/billing/polar.ts`'s `polarPortalSession`
+      is where the branch lives, and `treats a 422 as a refusal rather than as a missing customer` in
+      `server/test/billing.test.ts` is the test whose reasoning inverts with it. **If it is a 404
+      whose body is not a JSON object**, the mapping is right and `looksLikeAMissingCustomer` needs
+      widening to that shape. **The consequence of leaving it wrong is one-directional and that is
+      why it was chosen this way**: an unknown id answered 422 today reports a loud fault to a user
+      who has nothing to manage, which is harmless; the opposite mistake would tell a **paying
+      subscriber** they have no subscription, which is a support incident that reads like data loss.
+- [ ] **(new 2026-08-31, SONNY-216) — the 404 that is not about a customer, which is the direction
+      the row above cannot reach.** The row above provokes an unknown customer against a *correctly
+      configured* gateway, so it can only ever settle what Polar answers for a missing customer — it
+      is blind to a 404 that arrives for any other reason, and that is the dangerous one (PR #183,
+      F5). Set `BILLING_API_BASE_URL` to a valid https origin that is not Polar and answers a 404
+      **with HTML or an empty body — not with a JSON object**. `https://example.com` is one that
+      does; **do not use a JSON API**, because many answer `{"detail":"Not Found"}`, which
+      `looksLikeAMissingCustomer` accepts by design, so the app would say "There's no subscription
+      on this account." and that would be the code working correctly rather than the finding this
+      row is looking for. **Record the body either way** — it is what tells a real pass from a
+      coincidence. Restart the gateway and press **Manage subscription**
+      as a **real paying subscriber**. The app must say **"Sonny couldn't open your billing page."**
+      and the gateway must log `billing portal refused by provider` at `error`. **The finding is the
+      app saying "There's no subscription on this account."** — that is a paying customer being told
+      their subscription does not exist because an operator mistyped a hostname, and it is the exact
+      outcome the 422 reasoning calls a support incident that reads like data loss. Note that
+      `BILLING_API_BASE_URL` now refuses a non-https origin and one carrying a path, so use an https
+      origin with no path.
+- [ ] **(new 2026-08-31, SONNY-216) — the access token rotates without taking the portal down.**
+      Follow `server/README.md`'s three steps in order: create a **second** Organization Access Token
+      in the Polar dashboard, redeploy the gateway with `BILLING_PROVIDER_ACCESS_TOKEN` set to it,
+      and only then revoke the old one. Press **Manage subscription** after each step; the portal
+      must open all three times. Then, deliberately, do it the wrong way round on a throwaway token —
+      revoke before deploying — and confirm the symptom the runbook names: `POST /v1/billing/portal`
+      answers **502 `provider.rejected`** and logs at `error`, while subscriptions, webhooks and
+      entitlements all keep working. **That asymmetry is the whole point of the row**: nothing else
+      breaks, so nobody watching a dashboard would notice, which is why the order is written down.
 - [ ] **(new 2026-08-30, SONNY-211) — the refusal, and this one needs no Polar account.** With the
       gateway running and billing configured, `curl -X POST` the webhook path with any JSON body and
       no signature headers. It must answer **401**, and `SELECT count(*) FROM sonny.billing_event`

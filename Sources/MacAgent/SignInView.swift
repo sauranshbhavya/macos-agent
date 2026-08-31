@@ -1,3 +1,4 @@
+import AppKit
 import MacAgentCore
 import SwiftUI
 
@@ -39,8 +40,30 @@ final class SonnyAccountModel: ObservableObject {
     @Published private(set) var notice: String?
     @Published private(set) var isBusy = false
     @Published private(set) var isConfigured = true
+    /// What this Mac can currently prove about the account's subscription, or `nil` when it can
+    /// prove nothing (SONNY-216).
+    ///
+    /// **`nil` is what a user who has never subscribed looks like, and it is why the Account
+    /// section shows them no subscription line and no Manage control.** The gateway also refuses
+    /// that account with `409 entitlement.no_subscription`, but a control that only fails when
+    /// pressed is a broken control; not offering it is the requirement (founder direction,
+    /// 2026-08-31). `SubscriptionReading` carries the four situations that produce `nil`.
+    @Published private(set) var subscription: SubscriptionSnapshot?
+    /// Why the portal did not open, in the portal's own vocabulary (PR #183, F4).
+    ///
+    /// **Its own published value rather than `failure`**, because `failure` is a `SignInFailure` and
+    /// `SignInCopy` is documented as the sentences *the sign-in flow* can show. Routing a portal
+    /// press through it told a signed-in user that Sonny "couldn't finish signing you in", and told
+    /// a user hitting a revoked provider credential to "try again in a moment" on the one failure
+    /// whose definition is that a retry fails identically.
+    @Published private(set) var portalFailure: BillingPortalFailure?
 
     private let service: SonnyAccountService
+    /// Read for the subscription line only. **This model asks it nothing about permission** —
+    /// `EntitlementService.decision(for:)` remains the one way that question is asked, and
+    /// `currentSubscription()` deliberately returns no capability list, so this surface cannot
+    /// become a second answer to it.
+    private let entitlements: EntitlementService
 
     /// Called after this Mac's session changes — a sign-in that succeeded, or a sign-out that
     /// cleared it (SONNY-136, PR #153's F4).
@@ -82,9 +105,25 @@ final class SonnyAccountModel: ObservableObject {
     /// Takes the client rather than the service, because the client is the thing that is shared and
     /// the service is a thin wrapper over it. Building the service here keeps "one client, one
     /// service" true by construction rather than by two call sites agreeing.
-    init(client: SonnyBackendClient) {
+    /// **`entitlementStore` and `entitlementKeys` have no defaults**, for the reason `client` has
+    /// none: a default store here would reach the one Keychain every packaged build on this Mac
+    /// shares, and a fixture that inherited it would read and delete the founder's real entitlement.
+    /// `atItsRealKeychainLocation()` is the one named place that asks for the real pair.
+    init(
+        client: SonnyBackendClient,
+        entitlementStore: any EntitlementStoring,
+        entitlementKeys: EntitlementKeySet
+    ) {
         self.backendClient = client
         self.service = SonnyAccountService(client: client)
+        // Built here rather than injected whole, for the reason the account service is: the client
+        // is the thing that is shared and must be one instance, and building both from it keeps
+        // "one client, one service" true by construction rather than by call sites agreeing.
+        self.entitlements = EntitlementService(
+            client: client,
+            store: entitlementStore,
+            keys: entitlementKeys
+        )
     }
 
     /// The shipping app's one request for the real Keychain and the real host resolution.
@@ -97,14 +136,22 @@ final class SonnyAccountModel: ObservableObject {
     /// `SignInReleaseSwitchScanTests`, whose population is the five staging-pointer tokens and not
     /// this one; PR #133, F7.)
     static func atItsRealKeychainLocation() -> SonnyAccountModel {
-        SonnyAccountModel(client: SonnyBackendClient(
-            environment: SonnyBackendHost.resolve(),
-            tokenStore: KeychainAccountTokenStore(),
-            // Named rather than defaulted: the client's `= .shared` default is a session backed by
-            // a 20 MB disk cache that nobody chose, which SONNY-130 and SONNY-134's authenticated
-            // `GET`s would fill with the user's own data (PR #133, F11).
-            session: SonnyBackendSession.forBackendCalls()
-        ))
+        SonnyAccountModel(
+            client: SonnyBackendClient(
+                environment: SonnyBackendHost.resolve(),
+                tokenStore: KeychainAccountTokenStore(),
+                // Named rather than defaulted: the client's `= .shared` default is a session backed by
+                // a 20 MB disk cache that nobody chose, which SONNY-130 and SONNY-134's authenticated
+                // `GET`s would fill with the user's own data (PR #133, F11).
+                session: SonnyBackendSession.forBackendCalls()
+            ),
+            entitlementStore: KeychainEntitlementStore(secretStore: KeychainSecretStore()),
+            // **The shipped set is empty in every release build**, so no claim verifies and the
+            // subscription line renders for nobody until a gateway exists to have signed one — which
+            // is `SonnyEntitlementKeys`' own recorded state, not a gap this ticket introduces. The
+            // debug override is what a founder's manual pass points at a real gateway with.
+            entitlementKeys: SonnyEntitlementKeys.resolve()
+        )
     }
 
     var isSignedIn: Bool { identity != nil }
@@ -171,11 +218,129 @@ final class SonnyAccountModel: ObservableObject {
         if identity != nil { sessionDidChange?() }
     }
 
+    /// Re-read what the cached claim says about the subscription (SONNY-216).
+    ///
+    /// **Not routed through `run`**, and the difference is what `run` is for: it sets `isBusy`,
+    /// clears the previous outcome and turns a throw into a named failure, all of which are right
+    /// for something the user pressed a control for. This is a read that happens *because a dialog
+    /// opened*, so a failure is not news — it is the ordinary state of a Mac with no gateway to have
+    /// signed a claim — and reporting one would put a warning under a sign-in the user just
+    /// completed. It cannot throw either: `currentSubscription()` answers `nil` rather than failing.
+    ///
+    /// ## Why this reads twice
+    ///
+    /// **Because one read cannot show a row on the first open, which is the branch's own headline
+    /// manual item** (PR #183, F1). `currentSubscription()` is local and instant by design: it reads
+    /// the cache, and when the cache is empty it starts a detached refresh and returns `nil`
+    /// immediately. Nothing re-read when that refresh landed. And this is the *only* writer of the
+    /// entitlement store — `decision(for:)` has no caller anywhere in `Sources/` — so on any Mac
+    /// that has not previously opened Account the cache is empty **by construction**, and the trace
+    /// was: open Account → nothing cached → refresh starts → row absent → claim arrives → nothing
+    /// reads it → row stays absent until the dialog is closed and reopened.
+    ///
+    /// So: read, and if there was nothing, wait once for the fetch that read started and look
+    /// again. The second read is skipped entirely when the first one answered, so the common case —
+    /// a Mac with a valid cached claim — still never waits on the network.
+    ///
+    /// ## Three things about the wait that are true and are not obvious
+    ///
+    /// **The guard's condition is "the answer was `nil`", which is a larger set than "the cache was
+    /// empty."** A never-subscribed account holds a real, verifying claim whose plan is the absence
+    /// sentinel, so `currentSubscription()` answers `nil` for it — and once that claim passes the
+    /// gateway's 8-hour refresh mark, the first read starts a refresh and this waits on the network
+    /// on **every** Account open, for a row that will be absent either way. Not a defect: the wait
+    /// is off the render path and the answer is correct. Worth knowing before someone reads the
+    /// sentence above as "only on a first run".
+    ///
+    /// **`await refreshTask?.value` cannot be cancelled.** The task is `Task<Void, Never>`, so the
+    /// wait has no cancellation point, and closing the Account sheet does not stop it. It would not
+    /// have stopped the *refresh* either — that task is detached by design — so what is bounded here
+    /// is only how long this method sits, and that bound is the client's: `refreshNow()` uses
+    /// `SonnyBackendTimeouts.auth` (20 s) and is not retried on a transport timeout, so roughly 20 s
+    /// realistically and about 100 s worst case across the retryable codes' three attempts.
+    ///
+    /// **Nothing on screen awaits this.** Both call sites are off the render path — `.task`, and an
+    /// unstructured `Task` in `onChange` — and this does not set `isBusy`, so the row appears late
+    /// rather than the dialog hanging.
+    func refreshSubscription() async {
+        // **Cleared here because this is what runs every time the Account sheet is presented**
+        // (PR #183's cycle 3, C3). `portalFailure` is set by a press and was cleared by nothing on
+        // appear, so a failed press left its sentence under the row, and closing and reopening
+        // Account showed it again with no press behind it. `run()`'s own doc comment states the
+        // standard this missed — "no path can forget to unset `isBusy` or leave a stale message
+        // under a new result" — and this method is deliberately not routed through `run`, so it is
+        // the path that has to do it itself.
+        portalFailure = nil
+        subscription = await entitlements.currentSubscription()
+        // **This guard is the whole difference between the design above and a wait on every open.**
+        // Removing it made every Account open await any refresh in flight — including for a
+        // subscribed user whose cached claim had already answered — and it survived the whole suite
+        // until `theCachedAnswerWinsAndDoesNotWaitForTheRefreshItStarted` was written for it
+        // (cycle 3, C2; the third survivor in three rounds, all of them a guard nothing asserted).
+        guard subscription == nil else { return }
+        // **`awaitPendingRefresh()` rather than `refreshNow()`**, which would be a second request
+        // beside the one already in flight: `startRefresh` is single-flighted and this joins it.
+        // When no refresh is pending there is nothing to await and this returns immediately.
+        await entitlements.awaitPendingRefresh()
+        subscription = await entitlements.currentSubscription()
+    }
+
+    /// Open the provider's hosted portal for this account (SONNY-216).
+    ///
+    /// **The link is fetched per press and never cached**, because the gateway mints a session token
+    /// scoped to one customer that expires within the hour — a held link is a dead page later, and a
+    /// link held across a sign-out would be the previous user's invoices.
+    ///
+    /// **`openURL` is handed a URL the gateway chose, and that is the whole of the trust here.** It
+    /// arrives over TLS from Sonny's own gateway on an authenticated call, so it is not screen
+    /// content and not model output — the untrusted-content rules that govern those do not reach it.
+    /// It is still checked before it is opened, because "the server would never" is the assumption
+    /// every deserialization bug is made of, and a `file:` URL handed to `NSWorkspace.open` is a
+    /// different kind of action entirely.
+    ///
+    /// **The check is `SafeURL.validateWebURL` plus an https narrowing, and it is both rather than
+    /// either** (PR #183, F7). This was a hand-rolled scheme comparison, and it was the only one of
+    /// this repository's four such sites not to use the shared helper — which additionally requires
+    /// a host and blocks loopback, RFC1918, link-local and `.local`, the same class of argument the
+    /// `file:` sentence above already makes. The helper alone is not enough because it permits
+    /// `http`, and a billing portal reached over cleartext is not one this app should open; the
+    /// narrowing alone is not enough because it was what let a mutant weakening the guard to
+    /// `scheme != "file"` survive the whole suite.
+    func openBillingPortal() async {
+        isBusy = true
+        portalFailure = nil
+        // The sign-in surface's own outcome is cleared too: the two share a dialog, and leaving a
+        // stale sign-in notice above a fresh portal failure reads as one message about both.
+        failure = nil
+        notice = nil
+        defer { isBusy = false }
+        do {
+            let response = try await service.hostedBillingPortalURL()
+            let validated = try SafeURL.validateWebURL(response.absoluteString)
+            guard validated.scheme?.lowercased() == "https" else {
+                throw SonnyBackendError.undecodableResponse("billing portal URL")
+            }
+            openPortalURL(validated)
+        } catch let error as SonnyBackendError {
+            portalFailure = BillingPortalFailure(error)
+        } catch {
+            // `SafeURL.validateWebURL` throws its own error type for a URL with no host, a private
+            // host, or an unsupported scheme. All of them mean the same thing to the user and none
+            // of them is fixed by pressing again.
+            portalFailure = .cannotBeOpened
+        }
+    }
+
+    /// Injected so a test can assert the URL that would have opened without a browser launching on
+    /// the machine running the suite. `main.swift` leaves it at the default.
+    var openPortalURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+
     func useAnotherAddress() {
         step = .address
         code = ""
         failure = nil
         notice = nil
+        portalFailure = nil
     }
 
     /// **Signs out even when the revoke could not happen**, and says which of the two occurred.
@@ -186,6 +351,15 @@ final class SonnyAccountModel: ObservableObject {
             identity = nil
             code = ""
             step = .address
+            // **Cleared here, synchronously, and not left to the next `refreshSubscription()`**
+            // (PR #183, F13). When a second user signs in, `onChange(of: step)` fires and
+            // `signedInStep` renders immediately with whatever this holds, while the refresh behind
+            // it awaits an actor hop, a Keychain read and a signature verification — so the previous
+            // user's `<Plan> · Active` line and a live Manage subscription button are on screen in
+            // the meantime. `SubscriptionReading`'s session check is what stops that being
+            // permanent; this is what stops it happening at all.
+            subscription = nil
+            portalFailure = nil
             if case .clearedLocallyOnly = outcome {
                 notice = SignInCopy.signedOutLocallyOnly
             }
@@ -288,6 +462,15 @@ struct SignInDialogView: View {
                 .stroke(SonnyTheme.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        // **Read on appear and again when a sign-in completes**, and both are needed. The dialog is
+        // a sheet, so a user who signs in inside it never re-appears it — without the second the row
+        // would stay absent until the next time they opened Account, which is the same staleness
+        // `sessionDidChange` exists for on the readiness row (SONNY-136, PR #153's F4).
+        .task { await model.refreshSubscription() }
+        .onChange(of: model.step) { _, step in
+            guard step == .signedIn else { return }
+            Task { await model.refreshSubscription() }
+        }
     }
 
     private var addressStep: some View {
@@ -383,8 +566,51 @@ struct SignInDialogView: View {
                 .disabled(model.isBusy)
                 .accessibilityLabel(SignInCopy.signOutLabel)
             }
+
+            subscriptionRow
         }
         .padding(.top, 12)
+    }
+
+    /// The subscription state and the way to the provider's hosted portal (SONNY-216).
+    ///
+    /// **The whole row is absent, not disabled, when this Mac cannot prove a subscription exists.**
+    /// A user who signed in and never subscribed has no plan record — the gateway sends
+    /// `plan: "none"` for exactly that — and the portal has no customer to open for them. The
+    /// gateway does refuse that with `409 entitlement.no_subscription`, but a control that only
+    /// fails when pressed is a broken control, so this does not offer one (founder direction,
+    /// 2026-08-31). The same absence covers a claim that is stale, unreadable or somebody else's:
+    /// in every one of those the honest answer is that this Mac currently knows nothing, and a line
+    /// is worse than no line.
+    @ViewBuilder
+    private var subscriptionRow: some View {
+        if let subscription = model.subscription {
+            SettingsAdaptiveControlRow {
+                Text(SubscriptionCopy.line(for: subscription))
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(SubscriptionCopy.line(for: subscription))
+            } trailing: {
+                Button(SubscriptionCopy.manageLabel) {
+                    Task { await model.openBillingPortal() }
+                }
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 160))
+                .disabled(model.isBusy)
+                .accessibilityLabel(SubscriptionCopy.manageLabel)
+            }
+
+            // **Rendered here rather than in `messages`**, which is the sign-in surface's channel:
+            // this sentence is about the control directly above it, and a portal failure appearing
+            // under the sign-in form would read as a statement about signing in (PR #183, F4).
+            if let portalFailure = model.portalFailure {
+                Text(BillingPortalCopy.message(for: portalFailure))
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     @ViewBuilder

@@ -20,11 +20,22 @@ import MacAgentTestSupport
 func makeHermeticAccountModel(
     keychain: InMemoryKeychainSecretStore = InMemoryKeychainSecretStore(),
     environment: SonnyBackendEnvironment? = nil,
-    session: URLSession? = nil
+    session: URLSession? = nil,
+    /// SONNY-216. Defaults to the shipped (empty) set, so a fixture that says nothing about
+    /// entitlements gets the shipping build's answer — no claim verifies, and the subscription row
+    /// is absent — rather than a key set no release build holds.
+    entitlementKeys: EntitlementKeySet = SonnyEntitlementKeys.shipped
 ) -> SonnyAccountModel {
-    SonnyAccountModel(client: makeHermeticBackendClient(
-        environment: environment,
-        keychain: keychain,
-        session: session
-    ))
+    SonnyAccountModel(
+        client: makeHermeticBackendClient(
+            environment: environment,
+            keychain: keychain,
+            session: session
+        ),
+        // **The same in-memory keychain the client is given**, so a fixture's claim and its session
+        // live in one place and neither reaches the real Keychain. There is no default on the model
+        // for this, which is what forces every fixture through here.
+        entitlementStore: KeychainEntitlementStore(secretStore: keychain),
+        entitlementKeys: entitlementKeys
+    )
 }
