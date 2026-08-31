@@ -2027,6 +2027,77 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       offline. Everything Sonny does on this Mac still works."* rather than with an allowance
       message, because being offline and being out of allowance are different states and the app
       must not confuse them.
+- [ ] **(new 2026-08-30, SONNY-211) — the end-to-end subscription, and it is the founders' row that
+      nothing else can stand in for.** In the Polar dashboard, create the product, create a webhook
+      endpoint pointing at the gateway's `POST /v1/billing/webhook`, and copy its signing secret.
+      Start the gateway with `BILLING_PROVIDER=polar`, that secret in `BILLING_WEBHOOK_SECRET`, the
+      product's hosted checkout link in `BILLING_CHECKOUT_URL`, and
+      `BILLING_PLANS=<product id>=paid:screen_control`. Then, signed in: call
+      `POST /v1/billing/checkout`, open the URL it returns, and **complete a real test subscription**.
+      Within seconds `npm run entitlements -- show <account-id>` must report the plan and the
+      capability, and `SELECT event_type, outcome FROM sonny.billing_event` must show the delivery
+      with outcome `applied`. **A `subscription.active` delivery landing as anything but `applied` is
+      the finding**, and the outcome column says which of the five other things it was —
+      `unmatched` most likely, which means the account id did not survive the round trip through the
+      checkout link.
+- [ ] **(new 2026-08-30, SONNY-211) — the cancellation half, immediately after the row above.** In
+      the Polar dashboard, **cancel** the test subscription. `sonny.billing_event` gains a row; the
+      entitlement's `revoked_at` is set; and the next `GET /v1/account/entitlements` the app makes
+      returns a claim with **no capabilities** while still naming the plan. What would be a finding:
+      the capability surviving, the row not arriving at all (which means the endpoint or its secret
+      is wrong, not that the code is), or the account losing its plan key as well as its capability.
+      **Note that Polar cancels in two steps** — clicking cancel usually keeps access to the end of
+      the paid period and only later revokes it — so the *immediate* correct answer may be "nothing
+      changed yet", and that is the behaviour, not a bug. The revocation follows when Polar says
+      access has ended.
+- [ ] **(new 2026-08-30, SONNY-211) — the plan-change question, and it is one action that settles a
+      code decision.** Run it after the end-to-end row above, on the same live test subscription.
+      **Before you change anything**, record the current subscription id:
+      `SELECT billing_subscription_id FROM sonny.entitlement WHERE account_id = '<account-id>';`
+      — write the value down verbatim. Then, in the Polar dashboard, **change that subscription's
+      plan** (switch it to a different product or price; create a second product first if there is
+      only one). Wait a few seconds, then run the same `SELECT` again and also
+      `SELECT event_type, outcome FROM sonny.billing_event ORDER BY received_at;`.
+
+      **The whole question is whether the two subscription ids are the same string.** It is not a
+      judgement about whether things "look right" — copy both ids and compare them character by
+      character.
+
+      - **Same id** → the provider modifies the subscription in place. Record that. It means the
+        out-of-order plan-change regression recorded on this branch is **unreachable**, and the
+        finding closes with no code change. Expect the new delivery's `outcome` to be `applied`.
+      - **Different id** → the provider cancels and creates. Record that too. **The two ids are the
+        whole answer, and this one means the regression is reachable — whatever else you see in the
+        same run.** The fix is then code rather than a note: the refusal has to tell "a foreign
+        subscription while mine is live" from "the replacement for mine".
+
+        **Two things this can look like, and both are normal.** Which one you get depends only on the
+        order the two webhook deliveries happened to arrive in, which nobody controls:
+
+        - `billing_event` shows a **`conflict`** row and the entitlement is **wrong** afterwards
+          (no capabilities). The new subscription arrived before the old one's cancellation. This is
+          the regression happening in front of you, and **wrong is the *expected* result in this
+          branch — do not file it as a new bug.**
+        - `billing_event` shows **only `applied`** rows and the entitlement is **correct**. The two
+          deliveries happened to arrive in order. This is **equally** a cancel-and-create and equally
+          means "different id": it does **not** mean the regression is absent, only that this run did
+          not hit the ordering that triggers it.
+
+        So a working entitlement here is not a passing result and not a mis-run — record "different
+        id" either way, and note which of the two you saw.
+
+      **Report the two ids and the `outcome` column either way**, including when nothing looks
+      broken: "same id, outcome applied" is the answer that closes the finding, and it is only an
+      answer if somebody writes it down. If no new `billing_event` row appears at all within a
+      minute, that is its own finding — the webhook endpoint is not subscribed to the event type the
+      plan change produces.
+- [ ] **(new 2026-08-30, SONNY-211) — the refusal, and this one needs no Polar account.** With the
+      gateway running and billing configured, `curl -X POST` the webhook path with any JSON body and
+      no signature headers. It must answer **401**, and `SELECT count(*) FROM sonny.billing_event`
+      must be **unchanged** — an unauthenticated caller must not be able to write a row into that
+      table by posting at it. Repeat with a plausible-looking but wrong `webhook-signature` header:
+      same answer. If either one returns 200, or if the row count moves, stop and report it before
+      the gateway is ever deployed anywhere reachable.
 - [ ] **(new 2026-08-28, SONNY-135) — the clock row, and it is the one most likely to surprise.**
       Signed in, with the container running, open System Settings → General → Date & Time, turn off
       "Set time and date automatically", and move the Mac's clock **forward one day**. Then use the

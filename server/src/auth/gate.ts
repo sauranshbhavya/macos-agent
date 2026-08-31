@@ -73,6 +73,13 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
   "POST /v1/auth/oauth/google",
   "POST /v1/auth/oauth/apple",
   "POST /v1/auth/refresh",
+  // **Not public in the sense the six above are: authenticated, by a different mechanism.** The
+  // payment provider signs each delivery with an HMAC over the exact request bytes and holds no
+  // Supabase token to send, so this gateway cannot challenge it here — `routes/billing.ts` verifies
+  // the signature before it reads a byte of the payload, and refuses with 401 when it fails. It is
+  // named in this list because the list is derived from the contract's §4.1 `Auth` column and that
+  // column now carries the route, with the mechanism in the cell rather than `none` (SONNY-211).
+  "POST /v1/billing/webhook",
 ]);
 
 /**
