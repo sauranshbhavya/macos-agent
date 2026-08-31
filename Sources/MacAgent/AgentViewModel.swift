@@ -86,6 +86,18 @@ final class AgentViewModel: ObservableObject {
     /// Reloaded from the store after every write this view model makes to it, so the offer can never
     /// name a record the file no longer holds.
     @Published private(set) var resumableTasks: [ResumableTask] = []
+    /// How far the running job over many items has got, or `nil` when the run in flight is not one
+    /// (row 13, SONNY-235).
+    ///
+    /// **Published from the run rather than read off the checkpoint, and that is deliberate.** The
+    /// obvious source is `activeResumableTask`, which already carries the plan, the completed step
+    /// ids and the failures — and it is `nil` whenever the user has unfinished-task memory switched
+    /// off, so a job would then run with no progress shown at all. Progress is the founder's own
+    /// condition on approving a whole job in one press ("visible progress and a stop control while it
+    /// runs", 2026-08-31); it is what the user watches, not something Sonny remembers, so it must not
+    /// be gated on a memory switch. The two are computed by the same `ItemJobProgress.of` from the
+    /// same three inputs, so they cannot disagree about what they both cover.
+    @Published private(set) var itemJobProgress: ItemJobProgress?
     /// Every store whose file will not read, as of the last probe (SONNY-239).
     ///
     /// **The one source both the Memory page's words and its Delete read**, which is the whole of
@@ -636,6 +648,15 @@ final class AgentViewModel: ObservableObject {
     /// the id. One slot answers all three, and the alternative — an id plus a re-read per unit — is
     /// a decrypt on the hot path to recover something this object already had.
     private var activeResumableTask: ResumableTask?
+    /// The three inputs `itemJobProgress` is computed from, for the run in flight (SONNY-235).
+    ///
+    /// Reset by `initializeStepStatuses(for:)`, which is the single site every dispatch passes with
+    /// the plan it is about to run — so a run that is not a job clears what the last one left, and a
+    /// finished job's final "38 of 40" stays readable beside its result until the next dispatch
+    /// rather than blanking the moment the run returns.
+    private var activeItemJobPlan: AgentPlan?
+    private var activeItemJobCompletedStepIDs: [String] = []
+    private var activeItemJobFailures: [ItemJobFailure] = []
     /// The record the **next dispatch** carries on, or `nil` when that dispatch is a task of its
     /// own (row 13, SONNY-210; the second kind added by PR #105 review F1).
     ///
@@ -4613,9 +4634,11 @@ final class AgentViewModel: ObservableObject {
         // The wipe has just deleted the set-aside files too (`deleteAllLocalData` sweeps them), so a
         // surviving record would leave a Reveal in Finder control pointing at files that are gone.
         lastPerRowDelete = nil
-        // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
-        // a surviving checkpoint would write its task straight back on the next unit boundary, and a
-        // surviving decline set would silently suppress an offer for a record whose id can only
+        // Row 13's three in-memory slots (SONNY-210; this said "two" while clearing three, corrected
+        // by SONNY-235 while extending the block). The wipe has just erased the file all three
+        // describe: a surviving checkpoint would write its task straight back on the next unit
+        // boundary, a surviving arm would let a dispatch continue a record that no longer exists, and
+        // a surviving decline set would silently suppress an offer for a record whose id can only
         // now belong to a different task.
         activeResumableTask = nil
         pendingResumableContinuation = nil
@@ -4637,6 +4660,13 @@ final class AgentViewModel: ObservableObject {
         // The ids go with the records the wipe just deleted; keeping them would silence the first
         // notice of a watcher created afterwards that happened to reuse an id.
         notifiedWatcherIDs = []
+        // And SONNY-235's four, for the reason `plan` and `stepStatuses` are cleared above rather
+        // than for row 13's: this is what a surface renders about the run in flight, so a surviving
+        // "17 of 40" would sit on a page where everything it counted has just been deleted.
+        itemJobProgress = nil
+        activeItemJobPlan = nil
+        activeItemJobCompletedStepIDs = []
+        activeItemJobFailures = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
@@ -5633,7 +5663,12 @@ final class AgentViewModel: ObservableObject {
             // `@MainActor` like this type, and it is weak so that a view model torn down mid-run
             // cannot be resurrected by an executor still unwinding.
             onUnitCompleted: { [weak self] unit in
-                self?.recordResumableTaskUnit(unit)
+                self?.recordRunUnit(unit)
+            },
+            // SONNY-235's half of the same channel: an item of a job that could not be done. Weak and
+            // main-actor for the identical reasons.
+            onItemFailed: { [weak self] failure in
+                self?.recordRunItemFailure(failure)
             }
         )
         markAllSteps(.complete)
@@ -6244,6 +6279,53 @@ final class AgentViewModel: ObservableObject {
     /// function directly: such a test would assert a state the app cannot reach, and the conjunction
     /// is kept because it fails closed and because a per-site subtraction of a term is exactly the
     /// shape `allowsRecording(to:)` exists to stop anyone writing.
+    /// One finished unit of the run in flight, on its way to two places that are not the same place.
+    ///
+    /// Progress is updated unconditionally; the durable checkpoint is written only if the user's
+    /// memory switches allow it. Both from one call site, because a unit reaching one of them and not
+    /// the other is exactly the kind of divergence that is invisible until somebody turns a switch
+    /// off (SONNY-235).
+    private func recordRunUnit(_ unit: CompletedRunUnit) {
+        activeItemJobCompletedStepIDs.append(contentsOf: unit.stepIDs)
+        refreshItemJobProgress()
+        recordResumableTaskUnit(unit)
+    }
+
+    /// One item of a job that could not be done. Same two destinations, same split (SONNY-235).
+    private func recordRunItemFailure(_ failure: ItemJobFailure) {
+        activeItemJobFailures.append(failure)
+        refreshItemJobProgress()
+        recordResumableTaskItemFailure(failure)
+    }
+
+    /// Appends a failed item to this run's checkpoint, so a job interrupted at item thirty still
+    /// tells the user that item three failed when they come back to it.
+    ///
+    /// The guard is `recordResumableTaskUnit`'s, for its reasons: a run with no checkpoint — a
+    /// suppressed run, or unfinished-task memory switched off — has nothing to append to, and the
+    /// failure is still on the run's own result and in `itemJobProgress` either way.
+    private func recordResumableTaskItemFailure(_ failure: ItemJobFailure) {
+        guard var task = activeResumableTask, allowsRecording(to: .resumableTasks) else {
+            return
+        }
+        task.itemJobFailures.append(failure)
+        task.updatedAt = Date()
+        activeResumableTask = task
+        writeResumableTask(task, describing: "could not save which items this task could not do")
+    }
+
+    private func refreshItemJobProgress() {
+        guard let plan = activeItemJobPlan else {
+            itemJobProgress = nil
+            return
+        }
+        itemJobProgress = ItemJobProgress.of(
+            plan: plan,
+            completedStepIDs: activeItemJobCompletedStepIDs,
+            failures: activeItemJobFailures
+        )
+    }
+
     private func recordResumableTaskUnit(_ unit: CompletedRunUnit) {
         guard var task = activeResumableTask, allowsRecording(to: .resumableTasks) else {
             return
@@ -6388,7 +6470,12 @@ final class AgentViewModel: ObservableObject {
             // of what gets assessed. A no-op for every remainder that does not begin with such a
             // step, and `ChainedArtifactCarry` is the one place that rule lives.
             prebuiltPlan: ChainedArtifactCarry.applying(
-                task.chainedArtifactPath,
+                // Not `chainedArtifactPath` — see `ResumableTask.chainedArtifactPathForRemainder`.
+                // For an ordinary plan the two are the same value; for a job the carry is withheld
+                // when it would cross an item boundary, because applying it here puts it in the plan
+                // before `executeChain` runs and no reset inside that loop can take it back out
+                // (PR #185, F2(b)).
+                task.chainedArtifactPathForRemainder,
                 toLeadingStepOf: task.remainingPlan()
             ),
             prebuiltPlanSource: .resumedTask
@@ -7335,6 +7422,20 @@ final class AgentViewModel: ObservableObject {
 
     private func initializeStepStatuses(for plan: AgentPlan) {
         stepStatuses = Dictionary(uniqueKeysWithValues: plan.steps.map { ($0.id, AgentStepStatus.pending) })
+        // Beside the step statuses because it is the same fact at the job's granularity, and because
+        // this is the one place every dispatch passes with the plan it is about to run — including a
+        // resumed one, whose plan is what is *left* of the job (SONNY-235).
+        //
+        // **This comment used to describe behaviour the code could not produce**, which is how PR
+        // #185's F1 stayed invisible: it said a remainder reports "0 of 40 done" and climbs, while
+        // `remainingPlan()` was dropping `itemJob` so a remainder produced no progress at all. Both
+        // are fixed, and the count is the remainder's own — `ItemJobProgress` is scoped to the items
+        // *this plan* is responsible for, so a resume of the last two of forty reports "0 of 2" and
+        // climbs to "2 of 2" rather than either claiming forty or saying nothing.
+        activeItemJobPlan = plan.itemJob == nil ? nil : plan
+        activeItemJobCompletedStepIDs = []
+        activeItemJobFailures = []
+        refreshItemJobProgress()
     }
 
     private func markAllSteps(_ status: AgentStepStatus) {

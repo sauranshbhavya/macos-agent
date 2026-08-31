@@ -774,11 +774,28 @@ private struct CommandCenterRunningIndicator: View {
                 .controlSize(.small)
                 .tint(SonnyTheme.accent)
 
-            Text(statusText)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(statusText)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                // **A job over many items says how far it has got, here and on the widget, from one
+                // sentence** (SONNY-235). The founder's decision of 2026-08-31 approves a whole job
+                // in one press on the condition that the user can see it moving and stop it; the
+                // stop is the Cancel beside this, and this is the seeing. Absent for every run that
+                // is not a job, and while a job has settled nothing — see
+                // `ItemJobProgressPresentation.progressLine`.
+                if let progressLine = viewModel.itemJobProgress
+                    .flatMap(ItemJobProgressPresentation.progressLine(for:)) {
+                    Text(progressLine)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
 
             Spacer(minLength: 12)
 

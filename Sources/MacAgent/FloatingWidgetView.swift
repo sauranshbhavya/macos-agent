@@ -1047,7 +1047,11 @@ private extension FloatingWidgetView {
         case .idle:
             EmptyView()
         case .working:
-            WidgetWorkingPanel(plan: viewModel.plan, stepStatuses: viewModel.stepStatuses)
+            WidgetWorkingPanel(
+                plan: viewModel.plan,
+                stepStatuses: viewModel.stepStatuses,
+                itemJobProgress: viewModel.itemJobProgress
+            )
         case .clarification(let question):
             WidgetClarificationPanel(
                 plan: viewModel.plan,
@@ -1196,6 +1200,43 @@ private struct WidgetStepRow: View {
     }
 }
 
+/// **One row for a job over many items, in place of one row per item** (SONNY-235).
+///
+/// A forty-item job's plan holds forty step groups, and every panel below renders one row per step —
+/// so an approval prompt would be forty rows to scroll, which is the per-item prompt the founder's
+/// decision of 2026-08-31 rejected wearing different clothes. `ItemJobProgressPresentation` is where
+/// the sentence lives, shared with Command Center so the two surfaces cannot say different things
+/// about one run.
+private struct WidgetItemJobRow: View {
+    let title: String
+    let progressLine: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .frame(width: 13, height: 13)
+                Text(title)
+                    .font(WidgetType.caption)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+            }
+            if let progressLine {
+                Text(progressLine)
+                    .font(WidgetType.caption)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, 21)
+            }
+        }
+    }
+}
+
 /// Real steps only — no fallback row, since this is reused by panels (permission/clarification/
 /// failure) that append their own specific content below whatever steps exist, including zero.
 private struct WidgetExistingStepRows: View {
@@ -1203,12 +1244,19 @@ private struct WidgetExistingStepRows: View {
     let stepStatuses: [String: AgentStepStatus]
 
     var body: some View {
-        if let plan, !plan.steps.isEmpty {
+        // `progress: nil` on purpose: these panels are the ones that raise a *question* —
+        // permission, clarification, failure — and none of them is a report of how far a run got.
+        switch ItemJobProgressPresentation.rows(for: plan, progress: nil) {
+        case .job(let title, let progressLine):
+            WidgetItemJobRow(title: title, progressLine: progressLine)
+        case .steps(let steps):
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(plan.steps) { step in
+                ForEach(steps) { step in
                     WidgetStepRow(step: step, status: stepStatuses[step.id] ?? .pending)
                 }
             }
+        case nil:
+            EmptyView()
         }
     }
 }
@@ -1218,15 +1266,20 @@ private struct WidgetExistingStepRows: View {
 private struct WidgetWorkingPanel: View {
     let plan: AgentPlan?
     let stepStatuses: [String: AgentStepStatus]
+    /// How far a job over many items has got, or `nil` for every run that is not one (SONNY-235).
+    let itemJobProgress: ItemJobProgress?
 
     var body: some View {
-        if let plan, !plan.steps.isEmpty {
+        switch ItemJobProgressPresentation.rows(for: plan, progress: itemJobProgress) {
+        case .job(let title, let progressLine):
+            WidgetItemJobRow(title: title, progressLine: progressLine)
+        case .steps(let steps):
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(plan.steps) { step in
+                ForEach(steps) { step in
                     WidgetStepRow(step: step, status: stepStatuses[step.id] ?? .pending)
                 }
             }
-        } else {
+        case nil:
             HStack(spacing: 8) {
                 WidgetSpinner()
                 Text("Understanding your request\u{2026}")

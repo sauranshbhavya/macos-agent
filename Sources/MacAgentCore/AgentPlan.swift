@@ -4,11 +4,51 @@ public struct AgentPlan: Codable, Equatable, Sendable {
     public var summary: String
     public var requiresConfirmation: Bool
     public var steps: [AgentStep]
+    /// Set when this plan is one piece of work repeated over many items — "summarise each of these
+    /// forty PDFs" (SONNY-235). `nil` on every plan that is not, which is nearly all of them.
+    ///
+    /// **Plan-level rather than a step operation or a step property**, and `PlanItemJob`'s doc
+    /// comment is where that decision and the two rejected alternatives are recorded. `steps` holds
+    /// the *template* — the work done to one item — until `AgentActionExecutor.prepare` resolves the
+    /// items and replaces it with one copy per item; after that this field is the declaration the
+    /// expansion came from, and the record of which items the run is walking.
+    public var itemJob: PlanItemJob?
 
-    public init(summary: String, requiresConfirmation: Bool, steps: [AgentStep]) {
+    public init(
+        summary: String,
+        requiresConfirmation: Bool,
+        steps: [AgentStep],
+        itemJob: PlanItemJob? = nil
+    ) {
         self.summary = summary
         self.requiresConfirmation = requiresConfirmation
         self.steps = steps
+        self.itemJob = itemJob
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case summary
+        case requiresConfirmation
+        case steps
+        case itemJob
+    }
+
+    /// Written out rather than synthesized for one reason: an `itemJob` object whose `source` is
+    /// null is how the wire says "this is not a job", and it has to become `nil` here rather than a
+    /// half-filled value (SONNY-235).
+    ///
+    /// The encode side stays synthesized, so a stored plan writes the nested object exactly as this
+    /// type holds it and a plan that is not a job writes no key at all.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.summary = try container.decode(String.self, forKey: .summary)
+        self.requiresConfirmation = try container.decode(Bool.self, forKey: .requiresConfirmation)
+        self.steps = try container.decode([AgentStep].self, forKey: .steps)
+        do {
+            self.itemJob = try container.decodeIfPresent(PlanItemJob.self, forKey: .itemJob)
+        } catch PlanItemJobDecodingSignal.notAJob {
+            self.itemJob = nil
+        }
     }
 }
 
@@ -57,6 +97,15 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// never touches, so a stored routine cannot carry a stale answer about a Finder read that
     /// happened once, long ago.
     public var resolvedFromFinderSelection: Bool?
+    /// Which of `AgentPlan.itemJob`'s items this step belongs to, zero-based, or `nil` on every step
+    /// of a plan that is not a job (SONNY-235).
+    ///
+    /// **Written only by `PlanItemJobResolver.expanding`**, and resolver-only in exactly the sense
+    /// `resolvedFromFinderSelection` is: absent from `AgentPlanDecoder.stepKeys` and from the planner
+    /// schema, so a model cannot assert it at any nesting depth. It is what lets the chain walk say
+    /// "this failure belongs to item 17" — and what lets SONNY-210's `completedStepIDs`, which knows
+    /// nothing about items, be read back as item progress without storing that progress twice.
+    public var itemIndex: Int?
     public var routineName: String?
     public var routineSteps: [AgentStep]?
     public var workspaceName: String?
@@ -180,6 +229,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         resolvedAppName: String? = nil,
         resolvedBundleIdentifier: String? = nil,
         resolvedFromFinderSelection: Bool? = nil,
+        itemIndex: Int? = nil,
         visionGoal: String? = nil
     ) {
         self.id = id
@@ -214,6 +264,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.resolvedAppName = resolvedAppName
         self.resolvedBundleIdentifier = resolvedBundleIdentifier
         self.resolvedFromFinderSelection = resolvedFromFinderSelection
+        self.itemIndex = itemIndex
         self.visionGoal = visionGoal
     }
 }
@@ -327,6 +378,7 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
     case invalidJSON
     case unexpectedTopLevelKey(String)
     case unexpectedStepKey(String)
+    case unexpectedItemJobKey(String)
     case missingOutputText
     case malformedPlan(String)
 
@@ -338,6 +390,8 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
             return "Planner returned an unexpected top-level key: \(key)."
         case .unexpectedStepKey(let key):
             return "Planner returned an unexpected step key: \(key)."
+        case .unexpectedItemJobKey(let key):
+            return "Planner returned an unexpected job key: \(key)."
         case .missingOutputText:
             return "Planner response did not include output text."
         case .malformedPlan(let detail):
@@ -350,7 +404,24 @@ public enum AgentPlanDecoder {
     private static let topLevelKeys: Set<String> = [
         "summary",
         "requiresConfirmation",
-        "steps"
+        "steps",
+        "itemJob"
+    ]
+
+    /// The keys a planner may name **inside** an `itemJob` (SONNY-235).
+    ///
+    /// `items` is deliberately absent, and that is the same rule `stepKeys` applies to
+    /// `resolvedFromFinderSelection` and the two app pins: the list of forty paths a job will act on
+    /// is *resolved* from the machine by `PlanItemJobResolver`, never asserted by a model. Without
+    /// this check a planner could name any forty paths it liked and have them written into forty
+    /// steps' `inputPath` — which the whitelist would still refuse, but only after the plan had
+    /// already been previewed and assessed as something the user might approve.
+    private static let itemJobKeys: Set<String> = [
+        "source",
+        "folderPath",
+        "itemKind",
+        "fileExtensions",
+        "itemField"
     ]
 
     private static let stepKeys: Set<String> = [
@@ -405,6 +476,19 @@ public enum AgentPlanDecoder {
 
         for step in steps {
             try validateStepKeys(step)
+        }
+
+        if let itemJob = dictionary["itemJob"] {
+            // `null` is how a strict-schema provider says "not a job", so it is not an object and is
+            // not an error either.
+            if !(itemJob is NSNull) {
+                guard let itemJobDictionary = itemJob as? [String: Any] else {
+                    throw AgentPlanDecodingError.invalidJSON
+                }
+                for key in itemJobDictionary.keys where !itemJobKeys.contains(key) {
+                    throw AgentPlanDecodingError.unexpectedItemJobKey(key)
+                }
+            }
         }
 
         // The key allowlist above only inspects key *names*. An unknown operation value or a
@@ -515,7 +599,7 @@ public enum AgentPlanSchema {
         [
             "type": "object",
             "additionalProperties": false,
-            "required": ["summary", "requiresConfirmation", "steps"],
+            "required": ["summary", "requiresConfirmation", "steps", "itemJob"],
             "properties": [
                 "summary": [
                     "type": "string",
@@ -529,6 +613,66 @@ public enum AgentPlanSchema {
                     "type": "array",
                     "minItems": 1,
                     "items": stepSchema(allowsRoutineSteps: true)
+                ],
+                "itemJob": itemJobSchema()
+            ]
+        ]
+    }
+
+    /// The declaration that turns one group of steps into the same work repeated over many items
+    /// (SONNY-235).
+    ///
+    /// **`items` is not here and must never be**, for the reason `AgentPlanDecoder.itemJobKeys`
+    /// states: the paths a job acts on are read from the machine at prepare time, and a model that
+    /// could name them would be choosing forty files to act on. The schema and the decode allowlist
+    /// have to agree about that, and `aPlannerMayDeclareAJobAndMayNotNameItsItems` holds the decode
+    /// half.
+    ///
+    /// **Always an object, never a nullable one, and "not a job" is a null `source` inside it.** The
+    /// obvious spelling is `"type": ["object", "null"]`, and it is one the gateway cannot send: the
+    /// Anthropic prune rewrites a type union into an `anyOf` and leaves every sibling keyword on the
+    /// parent, so a nullable object comes out as a bare `{"type": "object"}` branch with no
+    /// `additionalProperties` — which `server/test/anthropic.test.ts` refuses, correctly, because the
+    /// structured-output subset requires it on object nodes. Teaching the prune to carry
+    /// `properties`, `required` and `additionalProperties` into that branch is a redesign of
+    /// `withoutTypeUnions` for a shape nothing else sends, which its own comment warns against; and
+    /// putting `additionalProperties: false` on a branch that carries no `properties` would forbid
+    /// the very object it is describing. So the nesting stays and the nullability moves inside it,
+    /// which is a shape the prune already handles everywhere else in this schema.
+    ///
+    /// Named in the top-level `required` list beside the other three, because the structured-output
+    /// subset requires every property to be required. `AgentPlan.init(from:)` is what turns an object
+    /// with a null `source` back into "no job" — see `PlanItemJobDecodingSignal`.
+    private static func itemJobSchema() -> [String: Any] {
+        [
+            "type": "object",
+            "description": "Set ONLY when the user asked for the same work to be done to every item in one folder or in the Finder selection — \"summarise each of these\", \"convert all of these folders\". Null for every other command, including one that names two or three things explicitly, which is an ordinary multi-step plan. When set, steps describes the work done to ONE item and Sonny repeats it for each item it finds.",
+            "additionalProperties": false,
+            "required": ["source", "folderPath", "itemKind", "fileExtensions", "itemField"],
+            "properties": [
+                "source": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemSource.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Where the items come from: folder for a folder the user named, finder_selection for whatever they have selected in Finder. NULL when this is not a job over many items, which is almost every command."
+                ],
+                "folderPath": [
+                    "type": ["string", "null"],
+                    "description": "The folder to read when source is folder, otherwise null."
+                ],
+                "itemKind": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemKind.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Whether each item is a file or a folder. Required when source is set; null otherwise."
+                ],
+                "fileExtensions": [
+                    "type": ["array", "null"],
+                    "items": ["type": "string"],
+                    "description": "File extensions without dots, such as pdf or docx, when the user named a kind of file. Null for every file, and null whenever itemKind is folders."
+                ],
+                "itemField": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemField.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Which field of each repeated step the item is written into: inputPath for a capability that reads a file or folder, shortcutInput for running a Shortcut on each item. Required when source is set; null otherwise."
                 ]
             ]
         ]

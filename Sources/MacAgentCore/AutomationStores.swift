@@ -183,6 +183,12 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             stripped.resolvedAppName = nil
             stripped.resolvedBundleIdentifier = nil
             stripped.resolvedFromFinderSelection = nil
+            // SONNY-235. A job's item index is written by `PlanItemJobResolver.expanding` and is
+            // meaningless outside the plan whose `itemJob` holds the items it points into — a routine
+            // carrying one would name item 17 of a list that no longer exists. Cleared for the same
+            // reason as the three above it: resolver-written, decode-excluded, and never a thing a
+            // stored routine should be able to assert.
+            stripped.itemIndex = nil
             if let nested = step.routineSteps {
                 stripped.routineSteps = strippingResolverPins(nested)
             }
@@ -191,7 +197,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// How many steps in `steps` carry a pin, counted the same way `strippingResolverPins` clears
-    /// them — recursively, and a step counting once however many of its three pins are set.
+    /// them — recursively, and a step counting once however many of its pins are set.
     ///
     /// Separate from the strip so the read door can say whether it actually removed anything without
     /// diffing two routine dictionaries, and so the decision behind the log line is a value a test
@@ -201,6 +207,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             let carriesAPin = step.resolvedAppName != nil
                 || step.resolvedBundleIdentifier != nil
                 || step.resolvedFromFinderSelection != nil
+                || step.itemIndex != nil
             let selfCount = carriesAPin ? 1 : 0
             return total + selfCount + resolverPinnedStepCount(step.routineSteps ?? [])
         }

@@ -2662,6 +2662,83 @@ what you will see is the storage banner rather than a watcher.
       Read the sentence **before** pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
       stops notifying.
 
+### A job over many items, and its progress (new 2026-08-31, SONNY-235; scenario reworked after PR #185 R2)
+
+**Why these rows exist at all.** The founders decided on 2026-08-31 that a job over many items asks
+**once**, for the whole job — "Rename all 40?" — rather than once per item, *on the condition* that
+the user can see it moving and can stop it partway. The approval is the part no agent can verify; so
+is whether the progress line is legible while it moves.
+
+**Read this before the set-up, because the rows below are unrunnable without it.** A folder whose
+Word document has *already* been converted is **skipped** — Sonny sees the PDF sitting there and does
+not convert it again. So a second run of the same job over the same folders converts nothing and
+finishes almost instantly. Three of the rows below need the job to still be *running* when you reach
+for a control, and one of them needs it running when you quit. **Each of those rows therefore gets
+its own untouched copy of the folders.** The first version of this section did not, and a founder
+following it would have found no window to quit in, no offer to continue afterwards, and would have
+filed a bug against working code.
+
+**Set up (about three minutes).** Make a folder on your Desktop called `job-master`. Inside it make
+**twelve** subfolders, each holding one `.docx` file — any Word file will do, the same one copied
+twelve times is fine — and a **thirteenth** subfolder with nothing in it at all. Then select
+`job-master` in Finder and press **⌘D three times**, so you end up with four folders side by side:
+
+```
+~/Desktop/job-master          <- rows 1, 2, 3, 7 and 8
+~/Desktop/job-master copy     <- row 4 (Command Center)
+~/Desktop/job-master copy 2   <- row 5 (Cancel)
+~/Desktop/job-master copy 3   <- row 9 (quit and continue)
+```
+
+Each row below says which one to point at. **Do not reuse a folder a row has already run to
+completion** — if you lose track, delete every `.pdf` under it and it is as good as new.
+
+- [ ] **(SONNY-235)** In the widget, ask Sonny to **convert the Word documents in each of the folders
+      in `~/Desktop/job-master`**. **One approval appears, not thirteen.** Read what it says. **The
+      finding is an approval that lists thirteen rows, one per folder** — it should describe the work
+      once and say how many folders it covers.
+- [ ] **(SONNY-235)** Approve it and watch the widget while it runs. **A line under the job says how
+      far it has got** — "1 of 13 folders done", climbing. **The finding is no line at all, a line
+      that never changes, or a count that is wrong.** (It will not say "13 of 13" at the very end; the
+      last unit of a run is deliberately not reported, so it stops one short and the summary settles
+      it. That is expected, not a finding.)
+- [ ] **(SONNY-235)** Read the final summary. **It names both halves** — how many folders were done
+      *and* that one could not be, naming the empty folder. **The finding is a flat "Done" that says
+      nothing about the thirteenth**, or a flat failure that hides the twelve that worked.
+- [ ] **(SONNY-235)** Ask for the same work over **`~/Desktop/job-master copy`**, and open Command
+      Center while it runs. **The running line there shows the same count as the widget**, and a
+      **Cancel** beside it. **The finding is the two surfaces disagreeing**, or Command Center showing
+      no count.
+- [ ] **(SONNY-235)** Ask for the same work over **`~/Desktop/job-master copy 2`** and press
+      **Cancel** part-way. **It stops.** **The finding is Sonny carrying on through the remaining
+      folders**, or reporting the ones it never reached as failures. (If it finishes before you can
+      press Cancel, you are pointing at a folder an earlier row already converted — use a fresh copy.)
+- [ ] **(SONNY-235)** After cancelling, look at the widget when it next opens, and at
+      **Command Center → Memory → Unfinished tasks**. **The cancelled job is not offered to continue**
+      — cancelling means the user stopped it, and offering it back is the product arguing with them.
+      (A job stopped by *quitting the app* is a different case and **is** offered; that is the last
+      row in this section.)
+- [ ] **(SONNY-235)** Point the request at a folder that contains **nothing at all** — make an empty
+      one anywhere. **Sonny says there is nothing to work through, in plain words, and asks for no
+      approval.** **The finding is a prompt to approve a job over nothing**, or a technical error.
+- [ ] **(SONNY-235)** Ask for the same work over a folder holding **more than fifty** subfolders.
+      **Sonny refuses and says how many it will take.** **The finding is Sonny starting anyway**, or
+      quietly doing the first fifty without saying so.
+- [ ] **(SONNY-235)** **The one this ticket is named for, and it needs its own untouched copy.** Ask
+      for the work over **`~/Desktop/job-master copy 3`**, approve it, let the progress line reach
+      two or three, then **quit Sonny outright** (menu bar → Quit, not Cancel). Relaunch it. **The
+      widget offers to continue that job.** Press Continue. **The finding is any of these:** no offer
+      at all; an approval prompt listing one row per remaining folder rather than describing the job
+      once; no progress line while it runs; a progress line counting the *whole* job rather than what
+      is left (say "0 of 13" instead of "0 of 10"); or a final summary claiming it worked through all
+      thirteen when it only did the ones that were left. **Sonny should not redo the folders it
+      already finished** — their PDFs' modified times should still be from before you quit.
+- [ ] **(SONNY-235)** **Not a pass/fail row — tell us what you saw.** In that same resumed run, was
+      the **empty folder** mentioned anywhere in the final summary? It was named in the first run's
+      summary as one that could not be done; whether the *resumed* run should name it again is an
+      open question the founders are deciding (PR #185's R1), and what a real run says is the input to
+      that decision. Report the exact sentence either way.
+
 ## 8. How to report back
 
 For each real finding, give me:
