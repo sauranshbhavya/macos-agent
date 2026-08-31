@@ -237,7 +237,19 @@ struct ScreenAccessOnboardingTests {
             settingsOpener: { _ in }
         )
         #expect(!model.isRelaunching)
-        relauncher.pending = { await model.relaunchNow() }
+        relauncher.pending = {
+            await model.relaunchNow()
+            // **The refused press must not close the window it was refused by** (PR #180's cycle-3
+            // review, G1). The shipped order returns from the `guard` *before* the `defer` is
+            // registered, so a refused press runs no cleanup. Moving the `defer` above the guard is
+            // behaviourally identical for one press and wrong for three: the second press would
+            // clear `isRelaunching` on its way out, and a third would proceed while the first
+            // reopen is still in flight and run a second `open -n` — the two Sonnys over one
+            // Keychain that this guard exists to prevent, reached one press later. Nothing else
+            // here can see it, because `pending` fires exactly once and there is no press after
+            // the refused one.
+            #expect(model.isRelaunching)
+        }
 
         await model.relaunchNow()
 
@@ -269,6 +281,13 @@ struct ScreenAccessOnboardingTests {
         // the same hole from the other side: every exit code and every signal number is
         // non-negative, so the guard can never fire. Both survived the whole suite until this line.
         #expect(MacAgentSource.count(of: "guard reopen.terminationStatus == 0 else {", inText: relaunchBody) == 1)
+        // **The other condition guarding the same decision** (cycle-3 review, G2). This one wraps
+        // the whole reopen, and inverting it is this ticket's original symptom exactly: a packaged
+        // app skips the reopen and falls straight to `NSApp.terminate(nil)`, for every real user, on
+        // the first-run path — while a bare `swift run` binary tries to `open` its own executable.
+        // Pre-existing and untouched by SONNY-348's diff, which is why nothing held it; this scan
+        // block is the first thing in the repository that can.
+        #expect(MacAgentSource.count(of: "if bundleURL.pathExtension == \"app\" {", inText: relaunchBody) == 1)
         // **The mechanism, which no behavioural test in this repository can see** (F5): a fake
         // relauncher is what every other test here injects, so `/usr/bin/open` and its `-n` are
         // reachable only as source. Dropping `-n` makes the relaunch reuse the running instance
