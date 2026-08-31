@@ -174,8 +174,15 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: in progress
 Date: 2026-08-31
 Tickets: SONNY-212 — the credit/allowance model: a per-account monthly credit pool derived from row 12's metering, screen control as the only line that draws on it, and `GET /v1/account/credits` serving "screen-control runs left this month" for the Mac to read.
-Reviewed by: fresh session per WORKFLOW.md step 7, on PR #182 — ten findings at full adversarial
-depth, **eight taken, one recorded as answered, one declined as incorrect.** F1 and F2 were
+Reviewed by: fresh session per WORKFLOW.md step 7, on PR #182 — **two cycles.** Cycle 2: ten findings
+at full adversarial depth, **eight taken, one recorded as answered, one declined as incorrect.**
+Cycle 3 (step 7's last search round, taken because the fix round changed production code in the money
+path): **verdict holds** — both fixes attacked in the direction each *creates* rather than the one it
+closes and both clean, all four coverage fixes shown to close their mutants because the new assertion
+is the only thing in each test capable of going red, and a nine-mutant battery at `9a7ad23` returning
+8 killed / 1 survived. Its two findings were **R2**, that one half of `runsFrom`'s own stated guard
+was unheld, and **R1**, that the F1 generalisation this entry ships had a mislabelled instance. Both
+taken; four recorded residuals, none a reason for another round. F1 and F2 were
 correctness defects and both are fixed; F3–F6 were the reviewer's own battery survivors and all four
 are closed; F7 is a design consequence now recorded with its answer; F8 was wrong on a checkable
 fact; F9 and F10 were stale figures in the PR body.
@@ -232,7 +239,7 @@ tracked file and is therefore re-run at the head rather than carried**:
 - Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1022 passed (1022)**, exit 0, **0 skipped**. 659 + 363 = 1022, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
 - `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
 - App half: `swift build` exit 0; the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 51.197 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
-- `scripts/warnings` → **0 warnings**, every file in `Sources/` and `Tests/` recompiled. Its own header stamps the tree as **`0c1c0c1` plus 1 uncommitted file**, and the uncommitted file is this changelog: a `.md` the Swift compiler never reads, so the count is a measurement of `0c1c0c1`'s code. Said rather than hidden, because the script prints that line precisely so a figure cannot be quoted apart from the tree it came from.
+- `scripts/warnings` → **0 warnings**, every file in `Sources/` and `Tests/` recompiled. Measured twice: by this lane at **`0c1c0c1` plus 1 uncommitted `.md`** — stated rather than rounded to "clean", because the script prints that line precisely so a figure cannot be quoted apart from its tree — and independently by cycle 3's reviewer at **`9a7ad23 (clean)`**, which needs no such qualification. **The clean one is the figure this entry carries**, and it holds at the head under WORKFLOW.md step 5's tree-identity rule: the figure depends on `Sources/`, `Tests/` and `Package.swift` (the script builds `--build-tests`), and `git diff --stat 9a7ad23 HEAD -- Sources Tests Package.swift` prints nothing — every commit since touches `server/` and `docs/` only.
 
 Behavior added:
 - A per-account monthly credit pool, derived from `sonny.metering_event`, with screen control as the only line that draws on it.
@@ -368,15 +375,24 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   `CREDIT_PRECISION`'s own comment promised the two would agree "at the boundary, which is exactly
   where somebody checking it would look". The test that claimed to hold it asserted
   `runsLeft === Math.floor(remaining / perRun)` — the implementation restated, true under the defect
-  by construction. **Twice in one branch, the same shape**: a self-consistency check where a value
-  assertion was needed, once caught by the lane's battery and once by the reviewer's. The lesson is
-  not about floats. `runsFrom` rounds inside the floor now, and three catalogues pin it by value.
-  **And it is the second time this project has seen the shape, in a different medium** — PR #175's V3
-  was the same defect in a *source scan* rather than in arithmetic. So the general form is worth
-  stating apart from either instance: **a test that recomputes its expectation from the thing under
-  test cannot fail**, whatever the thing is, and it reads exactly like a test that holds the property
-  its name claims. The tell is that the assertion's right-hand side names the implementation. The
-  remedy is the same in both media — pin a value, on an input where the defect is visible.
+  by construction. **Twice in one branch, the same shape**: an assertion whose expected value
+  re-executes the operation under test, on the output being checked, so it cannot fail — once caught
+  by the lane's battery and once by the reviewer's. **Both were found only by mutation**, which is
+  the point worth keeping: a green suite says nothing about a tautology, and neither does reading the
+  test, because it reads exactly like one that holds the property its name claims. The lesson is not
+  about floats.
+
+  **`runsFrom` rounds inside the floor now, and four catalogues pin it — two of the defect and two of
+  the fix's own failure mode.** The `0.1`/`0.5` and `0.07`/`7` rows fail under the old shape; the
+  `0.2`/`0.5` row reads `2` either way and is there to catch the fix over-applying, which it does
+  (cycle 3's Y2, `Math.round` in place of `Math.floor(round(…))`, dies to it). **The fourth arrived in
+  cycle 3 and is the third blind assertion in this branch's rounding** (its R2): the doc comment
+  promised the fix "leaves a genuine `2.999999` at 2", a mutant loosening the rounding to three
+  places turned it into `3` — the exact over-grant that sentence forbids — and the whole suite passed.
+  The `2.5` half was held and the `2.999999` half was not, which is the direction that costs revenue
+  rather than the one that costs a user a run. `runCredits: 1` is load-bearing in that fixture and the
+  obvious alternative does not work: `runCredits 0.1` with `monthlyCredits [0.2999999]` rounds the
+  *allowance* to `0.3` before the division and lands back on the float-noise case.
 - **F2 is a third case for `upstream_duration_ms`, and it is the finding that most changes what this
   branch claims.** Recorded in full in the `upstream_duration_ms` bullet above. What is worth
   repeating here is where it came from: migration `0012`'s own column comment enumerates what a null
@@ -432,6 +448,30 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   `awk '/^### How many screen-control runs are left this month/,/^### Prototype-limitation re-check/' docs/sonny-manual-test-checklist.md | grep -c '^- \[ \] \*\*(SONNY-212)\*\*'`
   → **9**. Written with its command precisely because the number moved twice in one branch for two
   different reasons.
+- **The pricing history runs backwards from the same missing snapshot, and it is recorded in
+  `balance.ts` rather than only in a PR comment** (cycle 3). The metering rows are permanent so a past
+  period's *draw* is reconstructable; the catalogue in force at that moment is not, because every
+  number lives in `CREDIT_PLANS`, an environment variable. That is the property `usage_period.cap_units`
+  has and this does not — the cap in force is recoverable from a row, the price in force is not. **It is
+  a second reason to prefer the first of the three options SONNY-213 was already given** (pinning the
+  weights for a period) rather than a separate constraint, because forward drift and backward
+  unreconstructability are one missing snapshot seen from two ends. **The stronger version of this was
+  withdrawn by the reviewer who filed it**: a top-up is a payment-provider charge with its own amount
+  and record, so what would be missing at SONNY-215 is the justification for the trigger, not the
+  charge. **Where it was written down is the finding rather than the fact** — it existed only in a PR
+  comment, swept to zero across the entry, `server/src/credit/`, the README and the contract with a
+  positive control on each. That is the exact shape F8's decline is about, arriving inside the
+  correction of F8.
+- **F7's multiplier is measured and it is in the checklist, not only here.** "Under-declaring buys
+  extra runs" reads as a footnote without a number. At this repository's own placeholder weights
+  (`perSession 10, perIteration 5, perMegapixel 2, runCredits 100`), a 12-iteration session at a real
+  capture's dimensions costs **148.19 credits honestly against 60.00 deflated — a 2.47× multiplier**,
+  because `perIteration` carries **40%** of the honest price and is the only component a client cannot
+  talk down. **It grows as the weights get more accurate**, since `catalogue.ts` says `perMegapixel` is
+  what vision cost actually tracks, so a well-calibrated set puts more weight on the deflatable
+  component: at a 10% `perIteration` share it is 10×. It stays a record — nothing refuses on this
+  number today, the cap bounds the absolute exposure regardless, and the no-code remedy is already the
+  founders' to take — but the size belongs in the row where the numbers get chosen.
 - **F8 was declined, and the reason is worth more than the finding.** The reviewer reported the
   read-time re-pricing hand-off as recorded on no ticket, having pulled SONNY-213, 214 and 215. All
   three carry it: the coordinator posted it on 2026-08-31 and each has exactly one comment stating it.

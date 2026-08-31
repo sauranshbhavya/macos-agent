@@ -33,6 +33,18 @@ import { planFor, type CreditCatalogue, type CreditWeights } from "./catalogue.j
  * than the alternative, which is a period whose old sessions are priced at numbers no longer in
  * force. **The one thing that must not follow from this file** is a *refusal* derived the same way
  * without snapshotting — that is SONNY-213's decision to make, and it should make it deliberately.
+ *
+ * **And the same missing snapshot runs backwards.** The metering rows are permanent, so a past
+ * period's *draw* is fully reconstructable; the catalogue in force at that moment is not, because the
+ * weights, `runCredits` and every plan's allowance live in `CREDIT_PLANS`, an environment variable.
+ * So after a weight change nobody can answer "how many runs did this account have on the 14th?" from
+ * the database — which is precisely the property `usage_period.cap_units` has and this does not: the
+ * cap in force is recoverable from a row, the price in force is not. **That is a second reason to
+ * prefer the first of the three options SONNY-213 was given** — pinning the weights for a period —
+ * rather than a separate constraint: forward drift and backward unreconstructability are the same
+ * missing snapshot seen from two ends, and one option closes both. (PR #182's cycle 3, which also
+ * withdrew the stronger version of this: a top-up is a payment-provider charge with its own amount
+ * and record, so what would be missing there is the justification for the trigger, not the charge.)
  */
 
 /**
