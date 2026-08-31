@@ -348,9 +348,14 @@ public final class AgentActionExecutor {
         // A second pass that drops *more* items is possible in principle — the trimmed plan's
         // accumulated claims differ from the first pass's — and is not iterated on: one more round
         // would have the same property, and an unbounded loop over a preview that reads the file
-        // system is worse than the residual. Whatever it names is recorded exactly like the first
-        // round's, so the item is still reported rather than lost; what it does not get is its steps
-        // removed, so it is attempted at execution and fails there through the ordinary path.
+        // system is worse than the residual.
+        //
+        // **What happens to such an item, stated once and correctly** (PR #185, F4(a); this comment
+        // and `executeChain`'s seeding comment used to say two different things, both wrong). Its
+        // steps stay in the plan, because the trim has already happened. But it is recorded here in
+        // `unavailableItems`, and `executeChain` seeds `failedItemIndexes` from exactly that list — so
+        // its segments are present and are skipped by the loop's own guard. It is reported once, with
+        // its prepare-time message, and nothing about it is attempted.
         if !stillUnavailable.isEmpty {
             trimmed.itemJob?.unavailableItems = ItemJobProgress.merged(
                 job.unavailableItems,
@@ -2195,9 +2200,14 @@ public final class AgentActionExecutor {
         // capability adapter is involved in any of it.
         let itemJob = plan.itemJob
         // **Seeded from the items `prepare` could not preview**, so the run's own report covers both
-        // kinds of failure a job has and the summary's arithmetic is over the whole item list rather
-        // than over the part that reached execution (SONNY-235). Seeding the skip set with them
-        // costs nothing and is correct on its own terms: a dropped item has no segments here.
+        // kinds of failure a job has and the summary's arithmetic covers every item this plan is
+        // responsible for rather than only the part that reached execution (SONNY-235).
+        //
+        // **Seeding the skip set with them is load-bearing rather than free, and this comment used to
+        // claim the opposite** (PR #185, F4(a)): it said "a dropped item has no segments here", which
+        // is true of the *first* preview round's drops and false of the second's. The second round
+        // runs after the trim, so an item it names still has its steps — and this seeding is the only
+        // thing that stops them being attempted.
         var itemJobFailures: [ItemJobFailure] = itemJob?.unavailableItems ?? []
         var failedItemIndexes = Set(itemJobFailures.map(\.itemIndex))
         var currentItemIndex: Int?
@@ -2352,6 +2362,7 @@ public final class AgentActionExecutor {
         if let itemJob {
             summary = Self.itemJobSummary(
                 job: itemJob,
+                plan: plan,
                 failures: itemJobFailures,
                 fallback: summaries.joined(separator: " ")
             )
@@ -2376,10 +2387,17 @@ public final class AgentActionExecutor {
     /// a user who is told two of forty failed and not which two has to go and find them.
     static func itemJobSummary(
         job: PlanItemJob,
+        plan: AgentPlan,
         failures: [ItemJobFailure],
         fallback: String
     ) -> String {
-        let total = job.items.count
+        // **The items this plan is responsible for, not the whole list** (PR #185, F1). A resume
+        // carries the job's declaration and its whole item list — a failure's index has to keep
+        // meaning what it meant — so counting `job.items.count` would make a resume that did the last
+        // two of forty report "Worked through all 40 files." `ItemJobProgress` scopes the same way
+        // from the same two inputs, so the summary and the progress line cannot disagree.
+        let total = ItemJobProgress.of(plan: plan, completedStepIDs: [], failures: [])?.itemCount
+            ?? job.items.count
         guard total > 0 else {
             return fallback
         }

@@ -28,6 +28,7 @@ public enum PlanItemJobResolver {
         guard !job.isResolved else {
             return plan
         }
+        try validateTemplateReadsTheItemField(job, steps: plan.steps)
 
         let items = try resolveItems(
             for: job,
@@ -127,7 +128,7 @@ public enum PlanItemJobResolver {
                 var copy = step
                 copy.id = "\(step.id)#\(index + 1)"
                 copy.itemIndex = index
-                if position == 0 || !ChainedArtifactCarry.consumesPreviousArtifact(step) {
+                if writesTheItem(into: step, at: position, field: job.itemField) {
                     switch job.itemField {
                     case .inputPath:
                         copy.inputPath = item
@@ -145,7 +146,62 @@ public enum PlanItemJobResolver {
         return expanded
     }
 
+    /// Whether this template step gets the item written into it.
+    ///
+    /// **Two terms, and each was a defect on its own.**
+    ///
+    /// *It has to read the field.* Writing the item into a field the operation never reads is how a
+    /// job touches none of its items and reports every one of them done (PR #185, F2). The narrower
+    /// half of the same hole is a *leading* consuming step handed a field it does not read: it keeps
+    /// both path fields blank, so it stays a live consumer of an artifact from outside its own item —
+    /// which the resume door can now supply, since `ChainedArtifactCarry.applying` bakes the stored
+    /// path onto a remainder's leading step and no in-loop reset can undo a value already in the plan.
+    ///
+    /// *A trailing consuming step is skipped even though it reads the field.* `open_generated_artifact`
+    /// and `reveal_in_finder` read `outputPath ?? inputPath`, so an item written there is read — and
+    /// that is precisely the problem: `ChainedArtifactCarry.consumesPreviousArtifact` tests for *blank*
+    /// path fields, so filling one in stops the step consuming what the unit before it produced. The
+    /// exemption stops at the template's first step, because a consuming step leading the template has
+    /// no previous unit inside its own item.
+    private static func writesTheItem(into step: AgentStep, at position: Int, field: PlanItemField) -> Bool {
+        guard step.operation.itemFieldsRead.contains(field) else {
+            return false
+        }
+        return position == 0 || !ChainedArtifactCarry.consumesPreviousArtifact(step)
+    }
+
     // MARK: - Declaration
+
+    /// **A job in which the item would be written into no step at all is refused before its items are
+    /// even read** (PR #185, F2).
+    ///
+    /// One step is enough, and asking for more would refuse legitimate shapes: a template may
+    /// perfectly well hold a step that is the same for every item, and a trailing step that takes what
+    /// the unit before it produced reads the item through the chain rather than from the field. What
+    /// cannot happen is *none* of them taking it, because then the item reaches nothing and every item
+    /// is reported done.
+    ///
+    /// **Asked through `writesTheItem` rather than `itemFieldsRead` alone**, and the difference is a
+    /// real shape rather than a nicety: `[create_local_draft, open_generated_artifact]` declaring
+    /// `.inputPath` has a step that *reads* the field — the trailing `open_generated_artifact`, which
+    /// reads `outputPath ?? inputPath` — and that step is precisely the one the expansion skips, so
+    /// the item still reaches nothing. Reading the field is necessary and being written into is what
+    /// the check has to be about.
+    ///
+    /// Checked against the template rather than the expansion, so the refusal arrives before the
+    /// folder or the Finder selection is read — a declaration that cannot work should not first go
+    /// looking at the user's files.
+    private static func validateTemplateReadsTheItemField(_ job: PlanItemJob, steps: [AgentStep]) throws {
+        let written = steps.enumerated().contains { position, step in
+            writesTheItem(into: step, at: position, field: job.itemField)
+        }
+        guard !written else {
+            return
+        }
+        throw PlanItemJobError.noStepReadsTheItemField(
+            "Sonny cannot do this to each item: nothing in this task reads the \(job.itemField.displayNoun) it would put each item in."
+        )
+    }
 
     private static func validateDeclaration(_ job: PlanItemJob) throws {
         switch job.source {

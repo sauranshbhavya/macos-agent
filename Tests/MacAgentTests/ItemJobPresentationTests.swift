@@ -66,6 +66,7 @@ struct ItemJobPresentationTests {
         let progress = ItemJobProgress(
             itemKind: .files,
             items: (1...40).map { "/tmp/report-\($0).pdf" },
+            coveredItemIndexes: Array(0..<40),
             completedItemIndexes: Array(0..<12),
             failures: []
         )
@@ -107,6 +108,7 @@ struct ItemJobPresentationTests {
         let done = ItemJobProgress(
             itemKind: .files,
             items: (1...40).map { "/tmp/report-\($0).pdf" },
+            coveredItemIndexes: Array(0..<40),
             completedItemIndexes: Array(0..<38),
             failures: [
                 failure(at: 38, "Word would not open it."),
@@ -120,6 +122,7 @@ struct ItemJobPresentationTests {
         let clean = ItemJobProgress(
             itemKind: .files,
             items: (1...40).map { "/tmp/report-\($0).pdf" },
+            coveredItemIndexes: Array(0..<40),
             completedItemIndexes: Array(0..<38),
             failures: []
         )
@@ -133,6 +136,7 @@ struct ItemJobPresentationTests {
         let starting = ItemJobProgress(
             itemKind: .folders,
             items: ["/tmp/a", "/tmp/b"],
+            coveredItemIndexes: [0, 1],
             completedItemIndexes: [],
             failures: []
         )
@@ -142,6 +146,7 @@ struct ItemJobPresentationTests {
         let started = ItemJobProgress(
             itemKind: .folders,
             items: ["/tmp/a", "/tmp/b"],
+            coveredItemIndexes: [0, 1],
             completedItemIndexes: [0],
             failures: []
         )
@@ -155,6 +160,7 @@ struct ItemJobPresentationTests {
         let progress = ItemJobProgress(
             itemKind: .files,
             items: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"],
+            coveredItemIndexes: [0, 1, 2],
             completedItemIndexes: [],
             failures: [failure(at: 0, "The file is locked.")]
         )
