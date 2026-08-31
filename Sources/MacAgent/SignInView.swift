@@ -241,8 +241,42 @@ final class SonnyAccountModel: ObservableObject {
     /// So: read, and if there was nothing, wait once for the fetch that read started and look
     /// again. The second read is skipped entirely when the first one answered, so the common case —
     /// a Mac with a valid cached claim — still never waits on the network.
+    ///
+    /// ## Three things about the wait that are true and are not obvious
+    ///
+    /// **The guard's condition is "the answer was `nil`", which is a larger set than "the cache was
+    /// empty."** A never-subscribed account holds a real, verifying claim whose plan is the absence
+    /// sentinel, so `currentSubscription()` answers `nil` for it — and once that claim passes the
+    /// gateway's 8-hour refresh mark, the first read starts a refresh and this waits on the network
+    /// on **every** Account open, for a row that will be absent either way. Not a defect: the wait
+    /// is off the render path and the answer is correct. Worth knowing before someone reads the
+    /// sentence above as "only on a first run".
+    ///
+    /// **`await refreshTask?.value` cannot be cancelled.** The task is `Task<Void, Never>`, so the
+    /// wait has no cancellation point, and closing the Account sheet does not stop it. It would not
+    /// have stopped the *refresh* either — that task is detached by design — so what is bounded here
+    /// is only how long this method sits, and that bound is the client's: `refreshNow()` uses
+    /// `SonnyBackendTimeouts.auth` (20 s) and is not retried on a transport timeout, so roughly 20 s
+    /// realistically and about 100 s worst case across the retryable codes' three attempts.
+    ///
+    /// **Nothing on screen awaits this.** Both call sites are off the render path — `.task`, and an
+    /// unstructured `Task` in `onChange` — and this does not set `isBusy`, so the row appears late
+    /// rather than the dialog hanging.
     func refreshSubscription() async {
+        // **Cleared here because this is what runs every time the Account sheet is presented**
+        // (PR #183's cycle 3, C3). `portalFailure` is set by a press and was cleared by nothing on
+        // appear, so a failed press left its sentence under the row, and closing and reopening
+        // Account showed it again with no press behind it. `run()`'s own doc comment states the
+        // standard this missed — "no path can forget to unset `isBusy` or leave a stale message
+        // under a new result" — and this method is deliberately not routed through `run`, so it is
+        // the path that has to do it itself.
+        portalFailure = nil
         subscription = await entitlements.currentSubscription()
+        // **This guard is the whole difference between the design above and a wait on every open.**
+        // Removing it made every Account open await any refresh in flight — including for a
+        // subscribed user whose cached claim had already answered — and it survived the whole suite
+        // until `theCachedAnswerWinsAndDoesNotWaitForTheRefreshItStarted` was written for it
+        // (cycle 3, C2; the third survivor in three rounds, all of them a guard nothing asserted).
         guard subscription == nil else { return }
         // **`awaitPendingRefresh()` rather than `refreshNow()`**, which would be a second request
         // beside the one already in flight: `startRefresh` is single-flighted and this joins it.

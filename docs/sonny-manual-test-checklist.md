@@ -2163,8 +2163,13 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       the row above cannot reach.** The row above provokes an unknown customer against a *correctly
       configured* gateway, so it can only ever settle what Polar answers for a missing customer — it
       is blind to a 404 that arrives for any other reason, and that is the dangerous one (PR #183,
-      F5). Set `BILLING_API_BASE_URL` to a **valid https origin that is not Polar** and serves a 404
-      (any host with no such path will do), restart the gateway, and press **Manage subscription**
+      F5). Set `BILLING_API_BASE_URL` to a valid https origin that is not Polar and answers a 404
+      **with HTML or an empty body — not with a JSON object**. `https://example.com` is one that
+      does; **do not use a JSON API**, because many answer `{"detail":"Not Found"}`, which
+      `looksLikeAMissingCustomer` accepts by design, so the app would say "There's no subscription
+      on this account." and that would be the code working correctly rather than the finding this
+      row is looking for. **Record the body either way** — it is what tells a real pass from a
+      coincidence. Restart the gateway and press **Manage subscription**
       as a **real paying subscriber**. The app must say **"Sonny couldn't open your billing page."**
       and the gateway must log `billing portal refused by provider` at `error`. **The finding is the
       app saying "There's no subscription on this account."** — that is a paying customer being told
