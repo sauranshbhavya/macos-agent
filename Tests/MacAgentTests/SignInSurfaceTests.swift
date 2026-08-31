@@ -40,7 +40,7 @@ struct SignInSurfaceTests {
         onboarding.requestScreenRecording()
         #expect(onboarding.needsRelaunchGuidance)
 
-        onboarding.relaunchNow()
+        await onboarding.relaunchNow()
 
         #expect(relauncher.relaunchCount == 1)
         #expect(relauncher.keychainHeldASessionAtRelaunch == true)
@@ -576,7 +576,7 @@ struct SignInSurfaceTests {
         }
 
         @MainActor
-        func relaunch() {
+        func relaunch() async throws {
             relaunchCount += 1
             keychainHeldASessionAtRelaunch = keychain.contains(
                 service: KeychainAccountTokenStore.defaultService,
