@@ -4,11 +4,25 @@ import SwiftUI
 import Testing
 import MacAgentTestSupport
 @testable import MacAgent
-// `@testable` rather than a plain import so this target can reach
-// `RoutineStore.saveBypassingStepValidation`, the module-internal test-only write path SONNY-52
-// added. Keeping that method internal is the point — nothing outside `MacAgentCore` may write a
-// routine the store would refuse, and a test target reaching in through `@testable` is not the
-// same thing as the app being able to.
+// `@testable` rather than a plain import, because this file reaches members that are internal to
+// `MacAgentCore`. **What it names has changed, and the reason it changed is worth the two lines**
+// (PR #177's R2). This used to cite `RoutineStore.saveBypassingStepValidation`, the module-internal
+// test-only write path SONNY-52 added — and SONNY-186 removed this file's only call to it, because
+// `.openWorkspace` left `StoredRoutine.forbiddenStepOperations` and the routine below is one the
+// product can now author through the real `save`. So the justification outlived the call by exactly
+// one commit: the branch's own rule that a comment naming a reachability guarantee goes stale in
+// the commit that removes the guarantee, arriving inside the fix for the previous instance of it.
+// (`grep -c "\.saveBypassingStepValidation(" Tests/MacAgentTests/ProductShellTests.swift` → 0,
+// exit 1, with the same command over `ScheduledRoutineRunTests.swift` → 1 as the control that makes
+// that zero a measurement.)
+//
+// **The attribute is still required, and that is the compiler's answer rather than a scan's.**
+// Dropping it fails the build of this target at `SonnyAccountTokens(accessToken:refreshToken:…)`:
+// the type is `public` but its stored `accessToken`/`refreshToken` and its memberwise `init` are
+// internal (`SonnyAccountTokenStore.swift:16-26`). A grep-style scan for internal *types* answers
+// zero here and would have said the attribute could go — an internal member on a public type is
+// invisible to it — so the probe was to remove `@testable`, build, and read what the compiler
+// named. Three errors, all at that initializer.
 @testable import MacAgentCore
 
 @Suite(.serialized)
