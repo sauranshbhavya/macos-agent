@@ -5806,16 +5806,35 @@ private struct SettingsSecurityAccessPage: View {
 ///
 /// **The first `ForEach` over a stored list on any Settings page**, which is why it follows an
 /// existing pattern instead of establishing one. The row is `WorkspaceDetailView`'s scope-entry row
-/// in everything that matters — `SettingsAdaptiveControlRow` with a trailing
+/// in its layout — `SettingsAdaptiveControlRow` with a trailing
 /// `CommandCenterRowActionStyle(tone: .danger)` — and never a hand-rolled `HStack`, which is the
-/// shape that caused the narrow-width character-wrapping bug that pattern exists to fix.
+/// shape that caused the narrow-width character-wrapping bug that pattern exists to fix. It is
+/// deliberately *not* that row in what a press costs: `entryRow`'s Remove dispatches a task through
+/// `prepare → assessRisk → approval`, which is why that one is `.disabled(isTaskInFlight)`; this one
+/// commits straight to a store.
 ///
-/// **Per-row Remove has no confirmation and Remove All does, and the asymmetry is reasoned.**
-/// Removing one app costs the user one ask: the next time Sonny needs that app it asks again, and
-/// answering yes puts the grant back. There is nothing to undo, so a dialog would be a speed bump in
-/// front of a reversible press. Remove All is not reversible in that sense — the flow hands grants
-/// back one at a time, so re-granting five apps means five separate asks arriving over days — and it
-/// is the destructive-action shape the routine and workspace deletions already confirm.
+/// **Both controls confirm.** Remove All did from the start; per-row Remove did not until PR #175's
+/// review, which is where the reasoning for the asymmetry fell over — see
+/// `ApprovedAppRevocationPresentation.removeConfirmationTitle(for:)` for what was wrong with it.
+/// Command Center's own invariant, on the Memory entries sheet in this file, is that nothing in the
+/// app deletes a row on one press, and it names a revoked app grant as its example.
+///
+/// **Neither control is disabled while a task runs, and that is an answer rather than an omission**
+/// (PR #175 review, F3). Per-row Remove *cannot* be: removing the app a session is controlling is
+/// how a user stops that session, which is this ticket's acceptance criterion and the last item on
+/// its manual checklist, so the control has to be live in exactly the state a gate would switch it
+/// off. Remove All follows it rather than splitting the section, and the precedent this lands
+/// against is split by page role rather than by destructiveness — every control on Settings → Data
+/// is gated because it operates on Sonny's whole local data (the founder decision at PR #117's F3),
+/// while every delete in the Memory section is live, including the per-type Delete that empties an
+/// entire store. These two do what the Memory section's do, to the same store.
+///
+/// **What that accepts, stated rather than left to be found:** a revocation write that *fails*
+/// during a run reports on `errorMessage`, which the widget picks ahead of `.result`, so it replaces
+/// the result of a task that ran and succeeded. That cannot be routed elsewhere —
+/// `recordLocalStorageWriteFailure` is for bookkeeping a task did on its own, and this is a control
+/// the user pressed. If the founders would rather pay the other cost, the change is
+/// `.disabled(viewModel.isRunning)` on the Remove All button and nothing else.
 ///
 /// **There is no Add.** A picker here would be a second consent shape for the same consent, decided
 /// somewhere the user cannot see what Sonny is about to do; approval happens by being asked, in the
@@ -5843,10 +5862,12 @@ private struct ApprovedAppRevocationList: View {
                     detail: ApprovedAppRevocationPresentation.listDetail
                 )
             } trailing: {
-                // Hidden rather than disabled when there is nothing to remove. A greyed control asks
-                // the user to work out why it is greyed; the empty state directly below already says
-                // there are no grants, and the two together would say it twice.
-                if !rows.isEmpty {
+                // **On the store's count, not on the rendered list.** Gating this on `rows` hid the
+                // one control that reaches a grant the deny-list filter refuses to render, which is
+                // the only thing that could reach it (PR #175 review, F1).
+                if ApprovedAppRevocationPresentation.offersRemoveAll(
+                    storedGrantCount: viewModel.storedApprovedAppCount
+                ) {
                     Button(ApprovedAppRevocationPresentation.removeAllLabel) {
                         showRemoveAllConfirmation = true
                     }
@@ -5861,47 +5882,21 @@ private struct ApprovedAppRevocationList: View {
                 // **Empty and unreadable are different facts and used to render identically**
                 // (SONNY-239). A grants file that will not decrypt loads as zero grants, so without
                 // this split a user who has allowed apps would be told they have allowed none, under
-                // a sentence inviting them to go and allow one.
+                // a sentence inviting them to go and allow one. One call rather than a ternary per
+                // field, or nothing holds which arm the view takes (PR #175 review, F4).
+                let state = ApprovedAppRevocationPresentation.emptyState(for: readability)
                 CollectionEmptyState(
-                    systemImage: readability == .readable
-                        ? ApprovedAppRevocationPresentation.emptySystemImage
-                        : ApprovedAppRevocationPresentation.unreadableSystemImage,
-                    title: readability == .readable
-                        ? ApprovedAppRevocationPresentation.emptyTitle
-                        : ApprovedAppRevocationPresentation.unreadableTitle,
-                    message: readability == .readable
-                        ? ApprovedAppRevocationPresentation.emptyMessage
-                        : ApprovedAppRevocationPresentation.unreadableMessage,
+                    systemImage: state.systemImage,
+                    title: state.title,
+                    message: state.message,
                     minHeight: 120
                 )
             } else {
                 ForEach(rows) { row in
                     SettingsDivider()
 
-                    SettingsAdaptiveControlRow {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(row.title)
-                                .font(SonnyType.caption)
-                                .foregroundStyle(SonnyTheme.text)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            // The identifier beside the name, not instead of it: the name is what a
-                            // person recognises, and the identifier is what the grant is matched on.
-                            Text(row.detail)
-                                .font(SonnyType.micro)
-                                .foregroundStyle(SonnyTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    } trailing: {
-                        Button(ApprovedAppRevocationPresentation.removeLabel) {
-                            remove(row)
-                        }
-                        .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                        .sonnyPointerCursor()
-                        .accessibilityLabel(row.removeAccessibilityLabel)
-                        .help(row.removeAccessibilityLabel)
+                    ApprovedAppRevocationRow(row: row) {
+                        remove(row)
                     }
                 }
             }
@@ -5909,7 +5904,9 @@ private struct ApprovedAppRevocationList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // On the container rather than on the Remove All button, for the reason the Data page's
         // set-aside-files dialog gives: the button sits inside a `ViewThatFits` candidate, and this
-        // is the node that is rendered exactly once.
+        // is the node that is rendered exactly once. The per-row dialogs are on the rows for the same
+        // reason, and on the rows rather than here because two `confirmationDialog`s on one node is
+        // the shape SwiftUI has dropped one of before — the split the Data page already makes.
         .confirmationDialog(
             ApprovedAppRevocationPresentation.removeAllConfirmationTitle,
             isPresented: $showRemoveAllConfirmation,
@@ -5929,11 +5926,13 @@ private struct ApprovedAppRevocationList: View {
 
     /// Resolves the row back to the grant it came from before committing.
     ///
-    /// **By identifier through the store's own comparison, not by position.** The rendered list is a
-    /// filtered view of `approvedApps`, so an index into it is not an index into the published array
-    /// — the shape `deleteMemoryEntry(in:at:)` gets away with only because that sheet renders the
-    /// array unfiltered. A row whose grant is no longer there is a no-op: the array can shrink under
-    /// a page that is still on screen.
+    /// **By identifier through the store's own comparison, not by position.** A row that no longer
+    /// has a grant behind it is a no-op: the array can shrink under a page that is still on screen,
+    /// and a confirmation dialog holds a row across exactly that window. (This used to say the
+    /// rendered list is a filtered view of `approvedApps` so an index into one is not an index into
+    /// the other; that was true while the filter ran here and stopped being true when it moved to the
+    /// load — `rows` re-applies `eligible` to an already-eligible array, so the two are
+    /// index-identical today. The choice is still right, for the reason above. PR #175 review, F7.)
     private func remove(_ row: ApprovedAppRowPresentation) {
         guard let app = viewModel.approvedApps.first(where: {
             $0.matches(bundleIdentifier: row.id)
@@ -5941,6 +5940,62 @@ private struct ApprovedAppRevocationList: View {
             return
         }
         viewModel.forgetApprovedApp(app)
+    }
+}
+
+/// One allowed app and the Remove that takes it back, with the confirmation that press needs.
+///
+/// **Its own view because the dialog needs its own `@State`**, which a `ForEach` body cannot hold,
+/// and because the dialog belongs on the row rather than on the list: two `confirmationDialog`s on
+/// one node is the shape SwiftUI has dropped one of before, and the list already carries Remove
+/// All's. On the row rather than on the button for the reason the Data page records — the button
+/// sits inside a `ViewThatFits` candidate and is built twice; the row is rendered once.
+private struct ApprovedAppRevocationRow: View {
+    let row: ApprovedAppRowPresentation
+    let onRemove: () -> Void
+
+    @State private var showRemoveConfirmation = false
+
+    var body: some View {
+        SettingsAdaptiveControlRow {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.title)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                // The identifier beside the name, not instead of it: the name is what a person
+                // recognises, and the identifier is what the grant is matched on.
+                Text(row.detail)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } trailing: {
+            Button(ApprovedAppRevocationPresentation.removeLabel) {
+                showRemoveConfirmation = true
+            }
+            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            .sonnyPointerCursor()
+            .accessibilityLabel(row.removeAccessibilityLabel)
+            .help(row.removeAccessibilityLabel)
+        }
+        .confirmationDialog(
+            ApprovedAppRevocationPresentation.removeConfirmationTitle(for: row),
+            isPresented: $showRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                ApprovedAppRevocationPresentation.removeConfirmButtonLabel,
+                role: .destructive,
+                action: onRemove
+            )
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(ApprovedAppRevocationPresentation.removeConfirmationMessage)
+        }
     }
 }
 

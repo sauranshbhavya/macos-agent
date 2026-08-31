@@ -194,6 +194,90 @@ struct ApprovedAppRevocationTests {
         #expect(settingsRow.detail.hasPrefix("com.apple.Notes · allowed "))
     }
 
+    // MARK: - Whether Remove All is offered, and the route it keeps open
+
+    /// **The gate is on the store's count, not on the rendered list** (PR #175 review, F1).
+    ///
+    /// The pair that carries the whole finding: a file holding only grants the deny list refuses
+    /// renders no rows, so a gate on the rendered list hides Remove All — and Remove All is then the
+    /// one control that could have reached them. The first expectation is the positive control, so a
+    /// filter that removed everything cannot make this pass as "no rows, correctly".
+    @Test
+    func removeAllIsOfferedWheneverTheStoreHoldsSomethingEvenWhenNoRowIsRendered() throws {
+        let terminal = try #require(ScreenControlPolicy.terminalBundleIdentifiers.sorted().first)
+        let stored = [Self.app(terminal, "A Terminal")]
+
+        #expect(stored.count == 1)
+        #expect(ApprovedAppRevocationPresentation.rows(for: stored).isEmpty)
+        #expect(ApprovedAppRevocationPresentation.offersRemoveAll(storedGrantCount: stored.count))
+    }
+
+    /// The other direction, so the gate is not simply "always true": an empty store offers nothing.
+    @Test
+    func removeAllIsNotOfferedWhenTheStoreHoldsNothing() {
+        #expect(!ApprovedAppRevocationPresentation.offersRemoveAll(storedGrantCount: 0))
+        #expect(ApprovedAppRevocationPresentation.offersRemoveAll(storedGrantCount: 1))
+    }
+
+    /// The view reads the gate rather than re-deriving one, and reads it off the pre-filter count.
+    @Test
+    func theViewGatesRemoveAllOnTheStoresCountAndNotOnTheRenderedList() throws {
+        let list = try Self.revocationListSource()
+
+        #expect(list.contains("ApprovedAppRevocationPresentation.offersRemoveAll("))
+        #expect(list.contains("storedGrantCount: viewModel.storedApprovedAppCount"))
+        #expect(
+            !list.contains("if !rows.isEmpty"),
+            "gating on the rendered list is the defect PR #175's F1 is about"
+        )
+    }
+
+    // MARK: - The two states that are not a list
+
+    /// **Both arms, asserted** (PR #175 review, F4). The view picked icon, title and message with
+    /// three separate ternaries and a mutant forcing all three to the empty arm survived the whole
+    /// suite. One function, and both of its answers pinned.
+    @Test
+    func theEmptyAndUnreadableStatesAreDifferentInAllThreeFields() {
+        let empty = ApprovedAppRevocationPresentation.emptyState(for: .readable)
+        let unreadable = ApprovedAppRevocationPresentation.emptyState(for: .unreadable)
+
+        #expect(empty.systemImage == ApprovedAppRevocationPresentation.emptySystemImage)
+        #expect(empty.title == ApprovedAppRevocationPresentation.emptyTitle)
+        #expect(empty.message == ApprovedAppRevocationPresentation.emptyMessage)
+
+        #expect(unreadable.systemImage == ApprovedAppRevocationPresentation.unreadableSystemImage)
+        #expect(unreadable.title == ApprovedAppRevocationPresentation.unreadableTitle)
+        #expect(unreadable.message == ApprovedAppRevocationPresentation.unreadableMessage)
+
+        #expect(empty.systemImage != unreadable.systemImage)
+        #expect(empty.title != unreadable.title)
+        #expect(empty.message != unreadable.message)
+    }
+
+    /// `.partlyUnreadable` cannot reach this list — it needs a count above zero and the empty state
+    /// runs only at zero — and if it ever does it takes the unreadable arm, which is the conservative
+    /// direction: a file that will not open is news and an empty list is not.
+    @Test
+    func theUnreachablePartlyUnreadableStateFailsTowardsTheNewsRatherThanTheSilence() {
+        let partly = ApprovedAppRevocationPresentation.emptyState(for: .partlyUnreadable)
+
+        #expect(partly.title == ApprovedAppRevocationPresentation.unreadableTitle)
+        #expect(partly.message == ApprovedAppRevocationPresentation.unreadableMessage)
+    }
+
+    /// The view calls the one function rather than re-deriving the choice per field.
+    @Test
+    func theViewAsksForTheWholeStateRatherThanTernaryingEachField() throws {
+        let list = try Self.revocationListSource()
+
+        #expect(list.contains("ApprovedAppRevocationPresentation.emptyState(for: readability)"))
+        #expect(
+            !list.contains("readability == .readable"),
+            "a ternary per field is the shape whose swapped arm no test could see"
+        )
+    }
+
     // MARK: - The section that renders them
 
     /// The file's text with comment markers and runs of whitespace collapsed, so an assertion is
@@ -210,6 +294,27 @@ struct ApprovedAppRevocationTests {
             .joined(separator: " ")
     }
 
+    /// Whether any file in `Sources/MacAgent/` contains `token`.
+    ///
+    /// The positive control for the System A guard below: it forbids a set of System B tokens from
+    /// this section, and a token the tree does not contain anywhere cannot appear here either, so
+    /// forbidding it is a clean zero dressed as a check.
+    private static func appSourcesContain(_ token: String) throws -> Bool {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let directory = packageRoot.appendingPathComponent("Sources/MacAgent")
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        for name in names where name.hasSuffix(".swift") {
+            let text = try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
+            if text.contains(token) {
+                return true
+            }
+        }
+        return false
+    }
+
     private static func commandCenterSource() throws -> String {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -221,17 +326,45 @@ struct ApprovedAppRevocationTests {
         )
     }
 
-    /// The body of `ApprovedAppRevocationList`, isolated from the rest of the file.
+    /// The body of one of the two views this section is built from, isolated from the rest of the
+    /// file.
     ///
-    /// **Bounded by the next type declaration rather than by brace counting**, which a scan over
-    /// SwiftUI cannot do reliably; a scan that silently read the whole file would pass on evidence
-    /// from anywhere in six thousand lines.
-    private static func revocationListSource() throws -> String {
+    /// **Bounded by the next declaration rather than by brace counting**, which a scan over SwiftUI
+    /// cannot do reliably; a scan that silently read the whole file would pass on evidence from
+    /// anywhere in six thousand lines. **A bound that matches nothing is a failure, not a fall back
+    /// to the rest of the file** — the earlier version defaulted to `endIndex`, so the split of this
+    /// section into two views would have silently widened every scan below instead of failing.
+    private static func sectionSource(
+        from declaration: String,
+        until terminator: String
+    ) throws -> String {
         let source = try commandCenterSource()
-        let start = try #require(source.range(of: "private struct ApprovedAppRevocationList: View {"))
+        let start = try #require(
+            source.range(of: declaration),
+            "\(declaration) is not in CommandCenterView.swift"
+        )
         let rest = source[start.upperBound...]
-        let end = rest.range(of: "\n/// Split out of Security & Access")
-        return String(rest[..<(end?.lowerBound ?? rest.endIndex)])
+        let end = try #require(
+            rest.range(of: terminator),
+            "the scan's end marker \(terminator) is gone, so this scan would have read the whole file"
+        )
+        return String(rest[..<end.lowerBound])
+    }
+
+    /// The list: the heading row, Remove All and its dialog, the empty state, the `ForEach`.
+    private static func revocationListSource() throws -> String {
+        try sectionSource(
+            from: "private struct ApprovedAppRevocationList: View {",
+            until: "\n/// One allowed app and the Remove that takes it back"
+        )
+    }
+
+    /// One row: the labels, its Remove, and the confirmation that press needs.
+    private static func revocationRowSource() throws -> String {
+        try sectionSource(
+            from: "private struct ApprovedAppRevocationRow: View {",
+            until: "\n/// Split out of Security & Access"
+        )
     }
 
     /// **Rows survive a narrow, non-fullscreen window, and that is structural rather than visual.**
@@ -248,10 +381,17 @@ struct ApprovedAppRevocationTests {
     @Test
     func theListIsBuiltFromTheAdaptiveRowAndNeverFromAHandRolledStack() throws {
         let list = try Self.revocationListSource()
+        let row = try Self.revocationRowSource()
 
-        // Two: the header carrying Remove All, and the per-app row inside the `ForEach`.
-        #expect(list.components(separatedBy: "SettingsAdaptiveControlRow").count - 1 == 2)
-        #expect(!list.contains("HStack("), "a hand-rolled HStack is the shape SettingsAdaptiveControlRow replaced")
+        // One each: the heading row carrying Remove All, and the per-app row.
+        #expect(list.components(separatedBy: "SettingsAdaptiveControlRow").count - 1 == 1)
+        #expect(row.components(separatedBy: "SettingsAdaptiveControlRow").count - 1 == 1)
+        for (name, source) in [("the list", list), ("the row", row)] {
+            #expect(
+                !source.contains("HStack("),
+                "\(name) hand-rolls an HStack, which is the shape SettingsAdaptiveControlRow replaced"
+            )
+        }
     }
 
     /// Every rendered app has its own Remove, and the list is a `ForEach` over the rows rather than
@@ -259,11 +399,12 @@ struct ApprovedAppRevocationTests {
     @Test
     func eachRowCarriesItsOwnRemoveAndTheListIsDrivenByTheRows() throws {
         let list = try Self.revocationListSource()
+        let row = try Self.revocationRowSource()
 
         #expect(list.contains("ForEach(rows) { row in"))
-        #expect(list.contains("ApprovedAppRevocationPresentation.removeLabel"))
-        #expect(list.contains("row.removeAccessibilityLabel"))
         #expect(list.contains("remove(row)"))
+        #expect(row.contains("ApprovedAppRevocationPresentation.removeLabel"))
+        #expect(row.contains("row.removeAccessibilityLabel"))
     }
 
     /// **Remove All confirms first, and Cancel is a real second button.**
@@ -297,29 +438,105 @@ struct ApprovedAppRevocationTests {
     /// unexplained asymmetry** — the ticket's own requirement. Removing one app costs the user one
     /// ask and answering it puts the grant back; removing all of them is not something the flow
     /// hands back in one press.
+    /// **Per-row Remove confirms, like every other row delete in Command Center** (PR #175 review,
+    /// F2). It shipped as a single press, which contradicted an invariant written in this same file
+    /// — *nothing else in the app deletes a row on one press* — that names a revoked app grant as its
+    /// own example of an unrecoverable misclick.
     ///
-    /// Scanned over the whole file rather than over `revocationListSource()`, deliberately: the
-    /// reasoning belongs in the view's doc comment, which sits *above* the declaration that helper
-    /// bounds itself by. Narrowing the scan to the body would have forced the sentence into the body
-    /// to satisfy the test, which is the test choosing where product reasoning lives.
+    /// The commit is reachable only through the dialog's destructive button, which is what makes
+    /// cancelling remove nothing: the row's own Remove raises the dialog and does not commit. Counted
+    /// rather than eyeballed, because a second call site added outside the dialog is exactly the
+    /// defect and would leave every behavioural test green.
     @Test
-    func theMissingPerRowConfirmationIsReasonedInTheCodeRatherThanLeftUnexplained() throws {
+    func perRowRemoveConfirmsFirstAndCommitsOnlyFromInsideItsDialog() throws {
+        let row = try Self.revocationRowSource()
+
+        #expect(row.contains(".confirmationDialog("))
+        #expect(row.contains("Button(\"Cancel\", role: .cancel) {}"))
+        // Twice: the stored closure, and the one place it is called — the dialog's destructive
+        // button. A third occurrence is a second commit path, which is the defect.
+        #expect(row.components(separatedBy: "onRemove").count - 1 == 2)
+
+        let flat = Self.normalized(row)
+        let dialog = try #require(flat.range(of: ".confirmationDialog("))
+        #expect(
+            !flat[..<dialog.lowerBound].contains("action: onRemove"),
+            "the commit sits inside the dialog, not on the button that raises it"
+        )
+        #expect(flat[..<dialog.lowerBound].contains("showRemoveConfirmation = true"))
+    }
+
+    /// **The invariant this branch broke and now honours, quoted from the file that states it.**
+    ///
+    /// It is asserted here rather than trusted because the whole failure was that the ticket's
+    /// premise — per-row Remove is reversible so it needs no dialog — was written four days before
+    /// the invariant landed and was implemented from its letter anyway. A test that reads both means
+    /// a future branch cannot re-open the same gap on this row without seeing the rule.
+    @Test
+    func commandCentersOwnRuleThatNothingDeletesARowOnOnePressStillCoversThisRow() throws {
         let flat = Self.normalized(try Self.commandCenterSource())
 
-        #expect(flat.contains("Per-row Remove has no confirmation and Remove All does"))
-        #expect(flat.contains("Removing one app costs the user one ask"))
+        #expect(flat.contains("nothing else in the app deletes a row on one press"))
+        #expect(flat.contains("a revoked app grant"))
+        // And the reason the branch's original argument was wrong, recorded where the copy lives.
+        #expect(
+            Self.normalized(
+                try String(
+                    contentsOf: URL(fileURLWithPath: #filePath)
+                        .deletingLastPathComponent()
+                        .deletingLastPathComponent()
+                        .deletingLastPathComponent()
+                        .appendingPathComponent("Sources/MacAgent/ApprovedAppRevocationPresentation.swift"),
+                    encoding: .utf8
+                )
+            ).contains("stops that session")
+        )
+    }
+
+    /// **Neither control is disabled while a task runs, and the reasoning is written down** (PR #175
+    /// review, F3). Per-row Remove cannot be gated — removing the app a session is controlling is how
+    /// a user stops that session, which is this ticket's acceptance criterion — and Remove All follows
+    /// it rather than splitting one section into two answers.
+    ///
+    /// Asserted as an absence *plus* its recorded reason, because an unexplained absence is exactly
+    /// what F2 caught: the scan below would pass just as well on a branch that had never thought
+    /// about it, so the sentence is what distinguishes the two.
+    @Test
+    func neitherControlIsRunGatedAndTheAnswerIsRecordedRatherThanLeftAsAnAbsence() throws {
+        let list = try Self.revocationListSource()
+        let row = try Self.revocationRowSource()
+        let flat = Self.normalized(try Self.commandCenterSource())
+
+        #expect(!list.contains(".disabled(viewModel.isRunning)"))
+        #expect(!row.contains(".disabled("))
+        #expect(flat.contains("Neither control is disabled while a task runs, and that is an answer rather than an omission"))
+        #expect(flat.contains("how a user stops that session"))
     }
 
     /// The section is System A: the row action is `CommandCenterRowActionStyle(tone: .danger)`, the
     /// same danger treatment every other in-place remove in Command Center uses, and nothing from
     /// System B's glass/shadow set appears.
+    ///
+    /// **The forbidden set is only the tokens the tree actually holds** (PR #175 review, F6). It
+    /// included `.ultraThinMaterial`, which appears nowhere in `Sources/` and never has — a negative
+    /// assertion over a string that cannot occur is a clean zero that reads like a guard. Every entry
+    /// below is checked against a positive control first, in this test, so the set cannot go vacuous
+    /// again without failing.
     @Test
     func theListUsesSystemATokensAndBorrowsNothingFromTheWidgetsSet() throws {
         let list = try Self.revocationListSource()
+        let row = try Self.revocationRowSource()
 
-        #expect(list.components(separatedBy: "CommandCenterRowActionStyle(tone: .danger)").count - 1 == 2)
-        for widgetToken in ["WidgetTheme", "WidgetType", "shadow(", "NSVisualEffectView", ".ultraThinMaterial"] {
+        #expect(list.components(separatedBy: "CommandCenterRowActionStyle(tone: .danger)").count - 1 == 1)
+        #expect(row.components(separatedBy: "CommandCenterRowActionStyle(tone: .danger)").count - 1 == 1)
+        for widgetToken in ["WidgetTheme", "WidgetType", "shadow(", "NSVisualEffectView"] {
+            // The positive control: a token the tree has never held is a guard about nothing.
+            #expect(
+                try Self.appSourcesContain(widgetToken),
+                "\(widgetToken) is nowhere in Sources/MacAgent, so forbidding it here proves nothing"
+            )
             #expect(!list.contains(widgetToken), "\(widgetToken) is System B and may not enter Settings")
+            #expect(!row.contains(widgetToken), "\(widgetToken) is System B and may not enter Settings")
         }
     }
 

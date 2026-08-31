@@ -87,6 +87,26 @@ enum ApprovedAppRevocationPresentation {
 
     static let removeAllAccessibilityLabel = "Remove all allowed apps"
 
+    /// **Per-row Remove confirms too, since PR #175's review** (F2). The branch shipped it as a
+    /// single press on the reasoning that one Remove costs the user one ask and answering it puts the
+    /// grant back. Both halves of that were wrong. `CommandCenterView.swift`'s Memory entries sheet
+    /// carries an invariant, written four days after this ticket was: *a misclick here is
+    /// unrecoverable — a revoked app grant, a snippet, a copied item — and nothing else in the app
+    /// deletes a row on one press*, which names this exact record as its example. And a Remove does
+    /// not cost one ask while a session is running: it **stops that session**, which is this branch's
+    /// own tested behaviour and the last item on its manual checklist.
+    static func removeConfirmationTitle(for row: ApprovedAppRowPresentation) -> String {
+        "Remove \(row.title)?"
+    }
+
+    static let removeConfirmButtonLabel = "Remove"
+
+    /// The sentence the Memory sheet already uses for removing one of these — one store, two
+    /// surfaces, one wording, which is the rule the missing dialog had broken in the first place.
+    static var removeConfirmationMessage: String {
+        MemoryDeletionCopy.entryMessage(for: .approvedApps)
+    }
+
     static let removeAllConfirmationTitle = "Remove all allowed apps?"
 
     static let removeAllConfirmButtonLabel = "Remove All"
@@ -96,6 +116,26 @@ enum ApprovedAppRevocationPresentation {
     /// consequence is how they start disagreeing.
     static var removeAllConfirmationMessage: String {
         MemoryDeletionCopy.message(for: .approvedApps)
+    }
+
+    // MARK: - Whether Remove All is offered
+
+    /// Whether the section offers Remove All, given how many grants the **store** holds.
+    ///
+    /// **Not `!rows.isEmpty`, and the difference is a route rather than a nicety** (PR #175 review,
+    /// F1). ``eligible(_:)`` hides a grant the deny list refuses, so a file holding only ineligible
+    /// entries renders no rows — and gating this control on the rendered list hid the one control
+    /// that reaches them. Everything else was already shut: the Memory row's Delete is disabled at a
+    /// count of zero while the file reads fine, and the entries sheet reads the same filtered array.
+    /// The grant was then removable only by Settings → Data's whole-app wipe, which is a regression
+    /// against the unfiltered list this branch replaced, and the exact shape `CLAUDE.md` records for
+    /// this row — *a control gated on entries existing is disabled exactly when it is needed*.
+    ///
+    /// So the count comes from before the filter. The visible consequence is that Remove All can
+    /// appear above an empty list, which happens **only** in the case the filter exists for: a file
+    /// holding grants no surface will show. That is the right moment for the control to be there.
+    static func offersRemoveAll(storedGrantCount: Int) -> Bool {
+        storedGrantCount > 0
     }
 
     // MARK: - The states that are not a list
@@ -130,6 +170,29 @@ enum ApprovedAppRevocationPresentation {
     }
 
     static let unreadableSystemImage = MemoryDeletionCopy.emptyStateSystemImage(for: .unreadable)
+
+    /// What the list shows instead of rows, whichever of the two states it is in.
+    ///
+    /// **One function rather than three ternaries in a view body** (PR #175 review, F4, and the
+    /// shape PR #110's F7 named). The view had `readability == .readable ?` written three times, once
+    /// per field, and a mutant forcing all three to the empty arm survived the whole suite: nothing
+    /// asserted the view picks the right one, and a swapped ternary would have left every test green.
+    /// `MemoryDeletionCopy.confirmation(for:readability:)` is the same call made for the sheet.
+    ///
+    /// Only the two states this list can reach. `.partlyUnreadable` needs a count above zero and this
+    /// runs only when the list is empty, so it cannot arrive; it takes the unreadable arm if it ever
+    /// does, which is the conservative direction — a file that will not open is news and an empty
+    /// list is not.
+    static func emptyState(
+        for readability: MemoryRowReadability
+    ) -> (systemImage: String, title: String, message: String) {
+        switch readability {
+        case .readable:
+            return (emptySystemImage, emptyTitle, emptyMessage)
+        case .partlyUnreadable, .unreadable:
+            return (unreadableSystemImage, unreadableTitle, unreadableMessage)
+        }
+    }
 
     // MARK: - Write failures
     //
