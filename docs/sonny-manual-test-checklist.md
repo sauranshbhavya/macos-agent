@@ -2513,6 +2513,97 @@ list only fills up by answering the real per-app question in a real session.
       next step, and it does not re-ask. (The dialog is new since the review round; a founder
       following the old wording would have met a step this row did not describe.)
 
+### A standing watcher tells you something changed (new 2026-08-31, SONNY-236)
+
+A watcher is the one feature in Sonny whose entire output is a notification, hours or days after you
+asked. **No agent can verify that a banner fires** — the wiring is pinned by a source scan, and that
+scan proves the code posts into the right category, not that macOS drew anything.
+
+**Read this whole paragraph before you start, because two things make these rows expensive if you
+don't.**
+
+- **You must run a packaged build.** `swift run MacAgent` has no bundle identity, so
+  `SonnyNotificationService.init?` returns nil and *no notification path exists at all* — you would
+  see nothing and correctly conclude the feature was broken. Run `./scripts/package-app.sh` and open
+  `.build/arm64-apple-macosx/debug/MacAgent.app`. This is CLAUDE.md's standing rule; it is repeated
+  here because the symptom of ignoring it is silence, which looks exactly like a defect.
+- **Shorten the check interval in your local build first.** A watcher checks every 15 minutes and a
+  change is only reported on the **second** consecutive matching reading, so the shortest honest path
+  to a notification is **half an hour of waiting per attempt**. Before packaging, edit
+  `StandingWatcherLimits.standard` in `Sources/MacAgentCore/StandingWatcher.swift`: change
+  `checkInterval: 15 * 60` to `checkInterval: 30` and, for the expiry row below, `maxLifetime:
+  7 * 24 * 60 * 60` to `maxLifetime: 120`. **Change both back to `15 * 60` and `7 * 24 * 60 * 60`
+  before committing anything** — `theShippedCapIsTheOneRecordedOnTheTicket` fails if you don't, which
+  is the backstop rather than the reminder.
+- **There is deliberately no shipped override for this** — no environment variable, no debug menu.
+  The cap is a founder decision and it should not ship with a documented bypass; and since a
+  packaged build is required regardless, editing one constant before that build costs nothing.
+
+**Seeding a watcher, and why that is the right way to test this half rather than a workaround.**
+SONNY-236 builds a watcher that gets checked and fires; **SONNY-382** builds the part where a *user*
+creates one by asking. So these rows deliberately start from a watcher that already exists — that is
+this ticket's actual subject — and SONNY-382 adds its own row that starts from a spoken command.
+**Both are worth having, and this row is worth re-running once SONNY-382 lands**, from the other end.
+
+Seed it in the same local build where you shortened the two constants above. In
+`Sources/MacAgent/AppDelegate.swift`, add `import MacAgentCore` at the top — **that file does not
+import it today**, and without the import none of the four types below resolve — then paste this
+immediately after `viewModel.startRoutineScheduling()` (line 153 at `e0dfa00`), setting the URL and
+the subject to a page you can edit:
+
+```swift
+Task { @MainActor in
+    let watched = URL(string: "https://example.com/the-page-you-can-edit")!
+    let reading = try? await LiveStandingWatcherObserver().readableText(at: watched)
+    try? ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()).saveWatcher(
+        StandingWatcher(
+            subject: "the page I am testing",
+            url: watched,
+            createdAt: Date(),
+            baselineDigest: StandingWatcherEvaluator.digest(of: reading ?? "")
+        )
+    )
+}
+```
+
+It reads the page once and uses that as the baseline, which is what SONNY-382's real creation path
+will do. **Remove the line once you have a watcher** — it seeds a fresh one on every launch, and the
+fifth is where the cap starts refusing.
+
+**Do not try to write the store file by hand.** `resumable-tasks.json` is encrypted through
+`LocalStorageEncryption` like every other local store, so hand-written JSON will not decrypt, and
+what you will see is the storage banner rather than a watcher.
+
+- [ ] **(SONNY-236)** With a watcher running against a page you can edit, **change the page once and
+      leave it changed**. At the next check **nothing happens** — this is correct, not a bug. At the
+      check after that, a notification appears reading **“<what you asked>” changed.** Confirm the
+      one-interval delay is what you saw: a first difference is never reported.
+- [ ] **(SONNY-236)** Click that notification. **Command Center comes forward.** It offers no button
+      of its own — no Retry, no Allow. A watcher may not act, so a button here would be a defect
+      rather than a nicety.
+- [ ] **(SONNY-236)** Check the same page again after the notification. **Sonny has stopped watching
+      it** — a watcher is one-shot, and a second notification for the same change is a finding.
+- [ ] **(SONNY-236)** Point a watcher at a page whose content changes on **every** load — a site with
+      a rotating advertisement, a visible clock, or a shuffled "related" strip. Leave it. Within
+      about four checks a notification says Sonny **stopped watching it because the page reads
+      differently every time**. It must **not** say the page did not change, and it must not fire a
+      "changed" notification.
+- [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first several checks say **nothing**.
+      After eight, one notification says **the page could not be read**. A notification per failed
+      fetch is a finding.
+- [ ] **(SONNY-236)** With `maxLifetime` shortened, start a watcher on a page you leave alone and
+      wait it out. A notification says Sonny **stopped watching it after N days and it did not
+      change**. The number of days must match the shortened constant's value, not read "7".
+- [ ] **(SONNY-236)** While a watcher is running, start an ordinary task and let it run. The watcher
+      **still checks** — a routine would refuse here, a watcher does not, because it starts no task.
+- [ ] **(SONNY-236)** Command Center → Memory. With at least one unfinished task **and** one watcher,
+      press **Delete** on the Unfinished tasks row and confirm. **The unfinished tasks go and the
+      watcher keeps running.** The result line reads `Deleted unfinished tasks.` with **no file
+      count**. A watcher silently disappearing here is the exact defect this branch was told to fix.
+- [ ] **(SONNY-236)** Settings → Data → the whole local-data wipe. Read the sentence **before**
+      pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
+      stops notifying.
+
 ## 8. How to report back
 
 For each real finding, give me:
