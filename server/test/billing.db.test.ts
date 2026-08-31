@@ -1,6 +1,10 @@
 import pg from "pg";
 import { describe, expect } from "vitest";
-import { applyBillingDelivery, type BillingPlans } from "../src/billing/store.js";
+import {
+  applyBillingDelivery,
+  hasLiveSubscription,
+  type BillingPlans,
+} from "../src/billing/store.js";
 import { POLAR } from "../src/billing/polar.js";
 import type { SubscriptionEvent, SubscriptionState, WebhookReading } from "../src/billing/provider.js";
 import { claimFactsFor, readEntitlement } from "../src/entitlement/store.js";
@@ -424,6 +428,35 @@ describeDb("a subscription reaches the entitlement", () => {
     expect(second.outcome).toBe("conflict");
     const record = await readEntitlement(client, account);
     expect(record.pastDueSince).not.toBeNull();
+  });
+
+  itUnderHangBackstop("theCheckoutGuardSeesALiveSubscriptionAndNotARevokedOne", async () => {
+    // The predicate the checkout route's 409 rests on, in both directions, against the real column
+    // rather than the fake the route test uses. Same liveness rule as the foreign-subscription
+    // refusal, and deliberately the same SQL — two spellings of "live" would let the webhook refuse a
+    // delivery the checkout route had just handed someone a link for.
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
+
+    await apply(event({ state: "active" }));
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(true);
+
+    // In grace is still live, which is what stops a past-due account opening a second subscription.
+    await apply(
+      event({ eventId: "msg_2", state: "past_due", occurredAt: new Date(NOW.getTime() + 60_000) }),
+    );
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(true);
+
+    // Revoked is not, so a cancelled account can subscribe again — the same door
+    // `aResubscriptionAfterACancellationIsNotAConflict` walks through from the webhook side.
+    await apply(
+      event({
+        eventId: "msg_3",
+        eventType: "subscription.revoked",
+        state: "ended",
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
   });
 
   itUnderHangBackstop("aSubscriptionCannotBeMovedOntoASecondAccount", async () => {

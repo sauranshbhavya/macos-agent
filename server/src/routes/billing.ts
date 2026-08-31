@@ -126,6 +126,31 @@ export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDe
 
   app.post(BILLING_CHECKOUT_PATH, async (request, reply) => {
     const caller = callerOf(request);
+    /**
+     * **The second defence beside F1's, never instead of it** (founder direction, 2026-08-30). This
+     * route had no guard at all: three lines that read the caller and returned a link, so a second
+     * checkout on one account was an ordinary user action. The entitlement-side refusal is what
+     * actually holds the property — the gateway must not rest on a belief about what the provider
+     * does with a plan change — and this narrows the door in front of it.
+     *
+     * **It closes the sequential case and not the concurrent one**, and the reason is the static
+     * link rather than this check: both tabs obtained their URL before any subscription existed, so
+     * neither asks this route again. `billing/store.ts`'s `hasLiveSubscription` carries the whole of
+     * that reasoning, and the complete answer is the per-user checkout session already recorded as a
+     * residual.
+     */
+    if (await deps.store.hasLiveSubscription(deps.provider.name, caller.accountId)) {
+      return reply
+        .status(409)
+        .send(
+          errorBody(
+            "entitlement.already_subscribed",
+            "This account already holds a live subscription.",
+            request.id,
+            { retryable: false },
+          ),
+        );
+    }
     return reply.send({ checkout_url: deps.provider.checkoutUrlFor(caller.accountId) });
   });
 }

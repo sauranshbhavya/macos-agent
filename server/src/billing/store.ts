@@ -185,21 +185,58 @@ function writeFor(
  * wins is the same "who wins" reasoning the two-accounts-on-one-subscription residual already needs,
  * and both belong on one ticket rather than being improvised in a fix round.
  */
+/**
+ * What "this account is already live on a subscription" means, as **one** definition with two
+ * consumers — the refusal below, and the checkout route's guard.
+ *
+ * Two spellings of this would be the defect one layer up: the webhook would refuse a delivery the
+ * checkout route had just handed someone a link for, or the reverse, and which of the two was wrong
+ * would depend on which one a reader happened to open. The parameterised subscription id is what the
+ * two disagree about and nothing else — `refuseForeignSubscription` passes the incoming one so the
+ * row's *own* subscription does not count against it, and `hasLiveSubscription` passes `null` so
+ * every live subscription counts.
+ */
+const LIVE_SUBSCRIPTION = `SELECT billing_subscription_id FROM sonny.entitlement
+      WHERE account_id = $1
+        AND revoked_at IS NULL
+        AND billing_provider = $2
+        AND billing_subscription_id IS NOT NULL
+        AND ($3::text IS NULL OR billing_subscription_id <> $3)`;
+
 async function refuseForeignSubscription(
   client: pg.Client,
   provider: string,
   accountId: string,
   subscriptionId: string,
 ): Promise<boolean> {
-  const existing = await client.query<{ billing_subscription_id: string | null }>(
-    `SELECT billing_subscription_id FROM sonny.entitlement
-      WHERE account_id = $1
-        AND revoked_at IS NULL
-        AND billing_provider = $2
-        AND billing_subscription_id IS NOT NULL
-        AND billing_subscription_id <> $3`,
-    [accountId, provider, subscriptionId],
-  );
+  const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider, subscriptionId]);
+  return existing.rows.length > 0;
+}
+
+/**
+ * Does this account already hold a live subscription with this provider?
+ *
+ * **The checkout route's guard, and it is the second defence rather than the first** (founder
+ * direction, 2026-08-30, on PR #178's F1). The gateway must not depend on a belief about what the
+ * provider does with a plan change, so the entitlement-side refusal stands whatever this answers.
+ *
+ * **What it closes, and what it cannot**, stated because the difference decides how much weight this
+ * carries. It closes the *sequential* door: an account that is already subscribed asks for a checkout
+ * link and is refused instead of handed one. It does **not** close the concurrent races — two tabs, a
+ * double-click, a retry after a slow response — and the reason is the shape of the link rather than
+ * the shape of the check. `checkoutUrlFor` returns a **static** checkout link with the account id
+ * appended, so possession of it predates any check: both tabs obtained their link while the account
+ * still had no subscription, and both can complete afterwards without asking this route again. The
+ * complete checkout-side answer is a per-user checkout **session** minted per request, which is the
+ * residual this branch already records against `BillingProvider.checkoutUrlFor`. Until then, F1's
+ * refusal is what actually holds the property, and this narrows the door.
+ */
+export async function hasLiveSubscription(
+  client: pg.Client,
+  provider: string,
+  accountId: string,
+): Promise<boolean> {
+  const existing = await client.query(LIVE_SUBSCRIPTION, [accountId, provider, null]);
   return existing.rows.length > 0;
 }
 
@@ -393,10 +430,14 @@ async function settle(
  */
 export interface BillingStore {
   readonly apply: (input: BillingApplyInput) => Promise<BillingApplyResult>;
+  /** The checkout route's guard. See `hasLiveSubscription` for what it closes and what it does not. */
+  readonly hasLiveSubscription: (provider: string, accountId: string) => Promise<boolean>;
 }
 
 export function postgresBillingStore(withConnection: WithConnection): BillingStore {
   return {
     apply: (input) => withConnection((client) => applyBillingDelivery(client, input)),
+    hasLiveSubscription: (provider, accountId) =>
+      withConnection((client) => hasLiveSubscription(client, provider, accountId)),
   };
 }

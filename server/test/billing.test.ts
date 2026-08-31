@@ -82,7 +82,9 @@ const signedInConnection: WithConnection = async (work) => {
  * reach the store at all and what neutral event they arrive as. The state a delivery produces is
  * `billing.db.test.ts`'s, against the real statements.
  */
-function recordingStore(): BillingStore & { readonly calls: BillingApplyInput[] } {
+function recordingStore(
+  live = false,
+): BillingStore & { readonly calls: BillingApplyInput[] } {
   const calls: BillingApplyInput[] = [];
   return {
     calls,
@@ -90,6 +92,8 @@ function recordingStore(): BillingStore & { readonly calls: BillingApplyInput[] 
       calls.push(input);
       return { outcome: "applied", accountId: ACCOUNT };
     },
+    // The checkout guard's one question. `billing.db.test.ts` proves the SQL that answers it.
+    hasLiveSubscription: async () => live,
   };
 }
 
@@ -681,6 +685,30 @@ describe("where a user is sent to subscribe", () => {
     expect(response.statusCode).toBe(200);
     // The account id on this URL is the only reason a later webhook can be attributed at all.
     expect(response.json().checkout_url).toBe(`${CHECKOUT}?customer_external_id=${ACCOUNT}`);
+    await app.close();
+  });
+
+  it("refuses a second checkout while the account is already live on a subscription", async () => {
+    // **The second defence beside F1's** (founder direction, 2026-08-30). This route had no guard at
+    // all — three lines that read the caller and returned a link — so a second checkout on one
+    // account was an ordinary user action rather than a contrivance. What this closes is the
+    // sequential door; the concurrent races are not closed by any check here, because the link is
+    // static and both tabs hold theirs from before the first subscription existed.
+    const store = recordingStore(true);
+    const app = build(store);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/billing/checkout",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("entitlement.already_subscribed");
+    expect(response.json().error.retryable).toBe(false);
+    // And no link is handed out, which is the whole point — a body carrying one beside a 409 would
+    // be a refusal a client could ignore by reading the field it wanted.
+    expect(response.json().checkout_url).toBeUndefined();
     await app.close();
   });
 
