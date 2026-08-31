@@ -827,13 +827,25 @@ describe("where a subscriber manages the subscription", () => {
   });
 
   it("separates a provider that is down from one that refused, because only one is worth retrying", async () => {
+    // **500 is here because it is the boundary, and its absence was a real hole** (SONNY-216's
+    // mutation battery, R3). This test first covered 503 alone, so a mutant moving the branch from
+    // `>= 500` to `>= 501` survived the whole suite — and what that mutant does is send the
+    // commonest server error there is down the not-retryable path, so a transient 500 from the
+    // provider reaches the Mac as `provider.rejected` and the client gives up instead of retrying.
+    // A boundary test that does not sit on the boundary is not a boundary test.
+    const boundary = providerAnswering(() => new Response("", { status: 500 }));
     const down = providerAnswering(() => new Response("", { status: 503 }));
     const refused = providerAnswering(() => new Response("", { status: 401 }));
 
+    expect(await boundary.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
     expect(await down.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "unavailable" });
     // A revoked or wrong access token lands here. An identical retry fails identically, which is
     // why this is not `unavailable` and why the route answers it not-retryable.
     expect(await refused.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    // And the other side of the boundary still refuses, so a mutant *widening* the branch downwards
+    // fails here too rather than only the one narrowing it upwards.
+    const clientError = providerAnswering(() => new Response("", { status: 499 }));
+    expect(await clientError.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
   });
 
   it("treats a 422 as a refusal rather than as a missing customer, which is the safe direction", async () => {
