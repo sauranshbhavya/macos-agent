@@ -1977,6 +1977,7 @@ struct ScheduledRoutineRunTests {
                     fileURL: root.appendingPathComponent("output-locations.json")
                 ),
                 resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+                standingWatcherObserver: UnreachableStandingWatcherObserver(),
                 clipboardHistoryMonitor: ClipboardHistoryMonitor(
                     reader: FakePasteboardReader(),
                     store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),

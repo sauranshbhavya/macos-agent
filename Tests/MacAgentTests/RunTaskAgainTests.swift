@@ -342,6 +342,7 @@ private func makeRunAgainFixture() throws -> RunAgainFixture {
         resumableTaskStore: ResumableTaskStore(
             fileURL: root.appendingPathComponent("resumable-tasks.json")
         ),
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: HermeticPasteboardReader(),
             store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),

@@ -1,0 +1,429 @@
+import Foundation
+import MacAgentCore
+import MacAgentTestSupport
+import Testing
+@testable import MacAgent
+
+/// The standing watcher as the app actually runs it (SONNY-236): the checker on the shared pulse,
+/// what it fetches, what it writes back, and what it says.
+///
+/// **Driven through `checkStandingWatchers`, the method the timer calls, rather than through the
+/// evaluator.** The evaluator's own state machine is asserted in `MacAgentCoreTests` where it has no
+/// clock and no disk; what this suite is for is the wiring around it — that the record is written
+/// back, that a finished watcher is deleted, that the notice reaches the channel the notification
+/// sinks, and that a not-due watcher costs no request.
+@MainActor
+struct StandingWatcherRunTests {
+    /// A watcher that is due is read, and a page that has not moved leaves it running with nothing
+    /// said.
+    ///
+    /// **The control is the observer's own call count.** "No notice was published" is satisfied just
+    /// as well by a check that never happened, which is the failure this whole suite is most exposed
+    /// to — every other assertion here would still pass.
+    @Test
+    func anUnchangedPageIsReadAndSaysNothing() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.answer(with: "Price: £40  In stock")
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "Price: £40 In stock")))
+
+        await fixture.check()
+
+        #expect(observer.callCount == 1)
+        #expect(fixture.viewModel.watcherNotice == nil)
+        let remaining = try fixture.store.loadWatchers()
+        #expect(remaining.count == 1)
+        let updated = try #require(remaining.first)
+        #expect(updated.candidateDigest == nil)
+        #expect(updated.lastCheckedAt != nil)
+    }
+
+    /// **The ad-slot property, through the real path.** A first difference writes a candidate and
+    /// says nothing; the second identical reading fires and the watcher is gone.
+    @Test
+    func aChangeFiresOnlyOnTheSecondIdenticalReadingAndThenTheWatcherIsGone() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "Price: £40")))
+
+        observer.answer(with: "Price: £45")
+        await fixture.check()
+
+        #expect(fixture.viewModel.watcherNotice == nil, "a first difference must not notify")
+        let pending = try #require(try fixture.store.loadWatchers().first)
+        #expect(pending.candidateDigest == digest(of: "Price: £45"))
+
+        // Past the check interval, or the second check is simply not due.
+        await fixture.check(now: Date().addingTimeInterval(StandingWatcherLimits.standard.checkInterval + 1))
+
+        #expect(fixture.viewModel.watcherNotice == "“the pricing page” changed.")
+        #expect(try fixture.store.loadWatchers().isEmpty)
+        #expect(observer.callCount == 2)
+    }
+
+    /// A page that reads differently every time is given up on rather than polled for a week and
+    /// then reported as unchanged, which would be false about a page that never stopped moving.
+    @Test
+    func aChurningPageIsGivenUpOnAndSaysWhy() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "steady")))
+
+        var clock = Date()
+        for index in 0..<StandingWatcherLimits.standard.maxUnstableReadings {
+            observer.answer(with: "advertisement \(index)")
+            await fixture.check(now: clock)
+            clock = clock.addingTimeInterval(StandingWatcherLimits.standard.checkInterval + 1)
+        }
+
+        let notice = try #require(fixture.viewModel.watcherNotice)
+        #expect(notice.contains("reads differently every time"))
+        #expect(notice.contains("did not change") == false, "that would be false about a page that kept moving")
+        #expect(try fixture.store.loadWatchers().isEmpty)
+    }
+
+    /// A failed fetch is tolerated and says nothing; enough of them in a row stops the watcher and
+    /// says the page could not be read.
+    ///
+    /// **The tolerance half is the assertion that matters.** A notification per flaky fetch would be
+    /// worse than the silence it replaced, and nothing else in the suite would catch it.
+    @Test
+    func failedReadsAreSilentUntilTheyAreNotAndThenSayThePageCouldNotBeRead() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "steady")))
+        observer.answerByFailing()
+
+        var clock = Date()
+        for _ in 0..<(StandingWatcherLimits.standard.maxConsecutiveFailures - 1) {
+            await fixture.check(now: clock)
+            #expect(fixture.viewModel.watcherNotice == nil, "a tolerated failure must say nothing")
+            clock = clock.addingTimeInterval(StandingWatcherLimits.standard.checkInterval + 1)
+        }
+        // Still running, and its failure run has been recorded rather than forgotten each time.
+        let stillThere = try #require(try fixture.store.loadWatchers().first)
+        #expect(stillThere.consecutiveFailures == StandingWatcherLimits.standard.maxConsecutiveFailures - 1)
+
+        await fixture.check(now: clock)
+
+        #expect(fixture.viewModel.watcherNotice == "Sonny stopped watching “the pricing page”. The page could not be read.")
+        #expect(try fixture.store.loadWatchers().isEmpty)
+    }
+
+    /// A watcher whose lifetime ran out is retired with a sentence, and **without a fetch** — the
+    /// property that keeps an expired watcher from costing a request.
+    @Test
+    func anExpiredWatcherIsRetiredWithoutReadingThePage() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        let created = Date().addingTimeInterval(-(StandingWatcherLimits.standard.maxLifetime + 60))
+        try fixture.store.saveWatcher(watcher(baselineDigest: "base", createdAt: created))
+
+        await fixture.check()
+
+        #expect(observer.callCount == 0, "an expired watcher must not cost a request")
+        let notice = try #require(fixture.viewModel.watcherNotice)
+        #expect(notice == "Sonny stopped watching “the pricing page” after 7 days. It did not change.")
+        #expect(try fixture.store.loadWatchers().isEmpty)
+    }
+
+    /// A watcher that is not due yet costs no request either — the other half of the same property,
+    /// and the one that runs on every one of the 30-second pulses between checks.
+    @Test
+    func aWatcherThatIsNotDueCostsNoRequest() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.answer(with: "Price: £40")
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "Price: £40")))
+
+        let start = Date()
+        await fixture.check(now: start)
+        #expect(observer.callCount == 1)
+
+        // A minute later — a pulse, but not a check.
+        await fixture.check(now: start.addingTimeInterval(60))
+        #expect(observer.callCount == 1)
+    }
+
+    /// **A watcher is not blocked by a task in flight, and that is the decision rather than an
+    /// oversight** (SONNY-236). `checkScheduledRoutines` refuses while `isRunning`, because it starts
+    /// a task; a watcher starts none, and inheriting that guard would make every watcher blind for
+    /// the length of every command the user runs.
+    ///
+    /// The control is `checkScheduledRoutines` in the same state, which really does refuse.
+    @Test
+    func aWatcherIsCheckedWhileATaskIsRunningEvenThoughARoutineWouldNotBe() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.answer(with: "Price: £40")
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "Price: £40")))
+        fixture.viewModel.isRunning = true
+
+        await fixture.check()
+
+        #expect(observer.callCount == 1, "a watcher does not start a task and must not be gated on one")
+
+        // The control: the same state, the same pulse, and the routine checker declines to act.
+        try fixture.routineStore.save(scheduledRoutineDueNow())
+        fixture.viewModel.checkScheduledRoutines()
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+    }
+
+    /// A watcher notice never reaches `errorMessage`, because there is no task to have failed and the
+    /// widget ranks a failure above a result — a notice routed there would blank the result of
+    /// whatever the user actually ran.
+    @Test
+    func aWatcherNoticeNeverLandsOnTheTasksOwnFailureChannel() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.answerByFailing()
+        try fixture.store.saveWatcher(watcher(baselineDigest: "base"))
+
+        var clock = Date()
+        for _ in 0..<StandingWatcherLimits.standard.maxConsecutiveFailures {
+            await fixture.check(now: clock)
+            clock = clock.addingTimeInterval(StandingWatcherLimits.standard.checkInterval + 1)
+        }
+
+        // The control: the notice really was published, so `errorMessage` being nil is about the
+        // channel rather than about nothing having happened.
+        #expect(fixture.viewModel.watcherNotice != nil)
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// One watcher per pulse, oldest first — five coming due together are five requests spread over
+    /// five pulses rather than five at once against somebody else's server.
+    @Test
+    func onlyOneWatcherIsCheckedPerPulseAndTheOldestGoesFirst() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.answer(with: "unchanged")
+        let start = Date()
+        try fixture.store.saveWatcher(
+            watcher(id: "old", subject: "the older page", baselineDigest: digest(of: "unchanged"), createdAt: start.addingTimeInterval(-100))
+        )
+        try fixture.store.saveWatcher(
+            watcher(id: "new", subject: "the newer page", baselineDigest: digest(of: "unchanged"), createdAt: start)
+        )
+
+        await fixture.check(now: start)
+
+        #expect(observer.callCount == 1)
+        #expect(observer.urlsRead.count == 1)
+        // The oldest is the one that was checked: it now has a `lastCheckedAt` and the other does not.
+        let watchers = try fixture.store.loadWatchers()
+        #expect(try #require(watchers.first { $0.id == "old" }).lastCheckedAt != nil)
+        #expect(try #require(watchers.first { $0.id == "new" }).lastCheckedAt == nil)
+    }
+
+    // MARK: - The notification channel
+
+    /// **The watcher notice posts through its own actionless category, and the actionless part is a
+    /// founder decision rather than a UI preference** (SONNY-236).
+    ///
+    /// A watcher notifies and does nothing else — it may not open, write, send, file, delete or run
+    /// anything — so a button on this banner is not a nicety somebody forgot, it is the route to
+    /// acting the founders declined. The `error` category's Retry would have supplied one without
+    /// anybody choosing to, and it runs `retryLastCommand()`, which re-dispatches the user's own last
+    /// submitted command: a task with no relationship to the watched page.
+    ///
+    /// Asserted by reading the wiring because it cannot be asserted by running it, the same reason
+    /// `theScheduledNoticePostsThroughItsOwnActionlessCategory` gives: `SonnyNotificationService.init?`
+    /// returns nil without bundle identity, so the subscription this pins does not exist in a test
+    /// process at all. This is the one manual-test row a founder owes that no agent can stand in for.
+    @Test
+    func theWatcherNoticePostsThroughItsOwnCategoryAndThatCategoryOffersNothingToPress() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let subscription = try MacAgentSource.region(
+            of: delegate,
+            from: "viewModel.$watcherNotice",
+            to: ".store(in: &cancellables)"
+        )
+        #expect(subscription.contains("postWatcherNotification"))
+        #expect(!subscription.contains("postErrorNotification"))
+        #expect(!subscription.contains("postScheduledRunNotification"))
+
+        let service = try MacAgentSource.read("SonnyNotificationService.swift")
+        let watcherCategory = try MacAgentSource.region(
+            of: service,
+            from: "identifier: SonnyNotificationCategory.watcher,",
+            to: ")"
+        )
+        #expect(watcherCategory.contains("actions: [],"))
+        #expect(!watcherCategory.contains("retryAction"))
+        #expect(!watcherCategory.contains("allowAction"))
+
+        // The click opens Command Center — a place to look, rather than a thing done on the user's
+        // behalf, which is the only kind of response this notification may have.
+        #expect(service.contains("case SonnyNotificationCategory.watcher:"))
+        #expect(service.contains("self?.onOpenWatcherNotice()"))
+        let wiring = try MacAgentSource.region(
+            of: delegate,
+            from: "onOpenWatcherNotice: { [weak self] in",
+            to: "}"
+        )
+        #expect(wiring.contains("showCommandCenter()"))
+    }
+
+    // MARK: - Fixtures
+
+    private func digest(of text: String) -> String {
+        StandingWatcherEvaluator.digest(of: text)
+    }
+
+    private func watcher(
+        id: String = "w1",
+        subject: String = "the pricing page",
+        baselineDigest: String,
+        createdAt: Date = Date()
+    ) -> StandingWatcher {
+        StandingWatcher(
+            id: id,
+            subject: subject,
+            url: URL(string: "https://example.com/pricing")!,
+            createdAt: createdAt,
+            baselineDigest: baselineDigest
+        )
+    }
+
+    private func scheduledRoutineDueNow() -> StoredRoutine {
+        StoredRoutine(
+            name: "Morning",
+            steps: [
+                AgentStep(id: "calc", operation: .calculateUtility, description: "Add them up.", searchQuery: "2 + 2")
+            ],
+            schedule: RoutineSchedule(
+                cadence: .daily,
+                hour: 0,
+                minute: 0,
+                isEnabled: true,
+                unattendedTrusted: false,
+                lastRunAt: nil
+            )
+        )
+    }
+}
+
+/// The view model, its watcher store and the observer it reads through, all at a temporary root.
+///
+/// **`check(now:)` is the whole reason this is a type rather than a function.** `checkStandingWatchers`
+/// starts the fetch in a `Task` and returns, because the pulse that calls it must not block the main
+/// actor for the length of an HTTP request — so a test that called it and asserted immediately would
+/// be asserting against a check that had not happened yet. Waiting on the view model's own task
+/// handle is what makes the assertions describe a finished check rather than a race the test usually
+/// wins.
+@MainActor
+private struct WatcherFixture {
+    let viewModel: AgentViewModel
+    let store: ResumableTaskStore
+    let routineStore: RoutineStore
+    let observer: WatcherObserverStub
+    let root: URL
+
+    func check(now: Date = Date()) async {
+        viewModel.checkStandingWatchers(now: now)
+        await viewModel.awaitStandingWatcherCheck()
+    }
+
+    func cleanUp() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+@MainActor
+private func makeWatcherFixture() throws -> WatcherFixture {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("StandingWatcherRunTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let encryption = LocalStorageEncryption(keyManager: WatcherFixtureKeyManager())
+    let store = ResumableTaskStore(
+        fileURL: root.appendingPathComponent("resumable-tasks.json"),
+        encryption: encryption
+    )
+    let routineStore = RoutineStore(
+        fileURL: root.appendingPathComponent("routines.json"),
+        encryption: encryption
+    )
+    let observer = WatcherObserverStub()
+    let clipboardSettingsStore = ClipboardHistorySettingsStore(
+        fileURL: root.appendingPathComponent("clipboard-history-settings.json"),
+        encryption: encryption
+    )
+    let viewModel = AgentViewModel(
+        routineStore: routineStore,
+        // Everything this suite does not exercise goes to an unreachable root rather than to this
+        // fixture's own: a store named here is one an assertion could accidentally be about.
+        workspaceStore: UnreachableLocalStores.workspaces(),
+        snippetStore: UnreachableLocalStores.snippets(),
+        recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+        finderRevealer: { _ in },
+        shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+        taskHistoryStore: TaskHistoryStore(fileURL: UnreachableLocalStores.fileURL("task-history.json")),
+        taskPlanDetailStore: TaskPlanDetailStore(fileURL: UnreachableLocalStores.fileURL("task-plan-details.json")),
+        visionSessionJournalStore: VisionSessionJournalStore(fileURL: UnreachableLocalStores.fileURL("vision-sessions.json")),
+        clipboardHistorySettingsStore: clipboardSettingsStore,
+        approvedAppStore: ApprovedAppStore(fileURL: UnreachableLocalStores.fileURL("approved-apps.json")),
+        outputLocationStore: OutputLocationStore(fileURL: UnreachableLocalStores.fileURL("output-locations.json")),
+        resumableTaskStore: store,
+        standingWatcherObserver: observer,
+        clipboardHistoryMonitor: ClipboardHistoryMonitor(
+            store: UnreachableLocalStores.clipboardHistory(),
+            settingsStore: clipboardSettingsStore
+        ),
+        localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        backendClient: makeHermeticBackendClient(),
+        userDefaults: UserDefaults(suiteName: "StandingWatcherRunTests-\(UUID().uuidString)") ?? .standard
+    )
+    return WatcherFixture(
+        viewModel: viewModel,
+        store: store,
+        routineStore: routineStore,
+        observer: observer,
+        root: root
+    )
+}
+
+private struct WatcherFixtureKeyManager: LocalStorageKeyManaging {
+    func keyData() throws -> Data {
+        Data(repeating: 0x3C, count: 32)
+    }
+}
+
+/// An observer a test drives, counting what it was asked for.
+///
+/// **`@MainActor`, because `StandingWatcherObserving` is.** An `actor` would have been the reflex for
+/// a stub with a mutable counter read from a spawned task, and it does not compile here — an actor
+/// cannot conform to a globally-isolated protocol. It is also unnecessary: the protocol's isolation
+/// is `PublicWebPageLoader.load`'s own, the checker's task hops to the main actor to call it, and the
+/// test reads the counter there too, so there is one actor and no race to protect against.
+@MainActor
+final class WatcherObserverStub: StandingWatcherObserving {
+    private var reply: Result<String, any Error> = .failure(StubError.notConfigured)
+    private(set) var callCount = 0
+    private(set) var urlsRead: [URL] = []
+
+    enum StubError: Error, Equatable { case notConfigured, refused }
+
+    func answer(with text: String) {
+        reply = .success(text)
+    }
+
+    func answerByFailing() {
+        reply = .failure(StubError.refused)
+    }
+
+    func readableText(at url: URL) async throws -> String {
+        callCount += 1
+        urlsRead.append(url)
+        return try reply.get()
+    }
+}

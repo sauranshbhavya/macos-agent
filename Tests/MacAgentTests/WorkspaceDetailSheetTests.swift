@@ -1376,6 +1376,7 @@ private func makeSheetTestViewModel(root: URL, workspaceStore: WorkspaceStore) t
             fileURL: root.appendingPathComponent("output-locations.json")
         ),
         resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: SheetTestPasteboardReader(),
             store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),

@@ -46,6 +46,22 @@ private enum SonnyNotificationCategory {
     /// and posting it in the failure category, with a failure's action, is that same confusion
     /// arriving through the notification instead of the widget.
     static let storage = "SONNY_STORAGE"
+    /// What a standing watcher had to say — the page changed, or the watcher stopped and why
+    /// (SONNY-236).
+    ///
+    /// **The fourth category added for the same reason as the three above it, and the first where
+    /// the notification is the entire feature.** A watcher notifies and does nothing else, so this
+    /// banner is not a fallback for a surface the user missed — it *is* the delivery, arriving hours
+    /// or days after the user asked, when by definition they are not looking at Sonny.
+    ///
+    /// Posting it through `error` would have been wrong three times over, one more than
+    /// `scheduled` and `storage` each were. A page changing is not a failure. The Retry button that
+    /// category carries runs `retryLastCommand()`, which re-dispatches the user's own last submitted
+    /// command — a task with no relationship to the watched page. And a watcher may not act, by
+    /// founder decision, so a button that dispatches anything is precisely the route to acting that
+    /// decision declined; leaving it on the category would have put one on screen without anybody
+    /// choosing to.
+    static let watcher = "SONNY_WATCHER"
 }
 
 private enum SonnyNotificationUserInfo {
@@ -86,6 +102,12 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// storage notice renders as a row and where Settings' local-data controls are; the widget shows
     /// the same notice but has nothing to do about it beyond dismissing it.
     private let onOpenStorageNotice: () -> Void
+    /// The default action for a watcher notification (SONNY-236). A fifth destination, landing where
+    /// the storage and scheduled ones do rather than sharing their closures, for the reason
+    /// `onOpenStorageNotice` gives about the fourth: separate decisions about separate notices that
+    /// happen to agree today. Command Center is where a watcher is listed and where its Stop control
+    /// will be; the widget has nothing to do about one.
+    private let onOpenWatcherNotice: () -> Void
 
     /// Fails when the current process has no real app-bundle identity — e.g. `swift run`'s bare
     /// executable (no `Info.plist`/`CFBundleIdentifier`), as opposed to a packaged `.app`.
@@ -98,7 +120,8 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         onOpen: @escaping () -> Void,
         onOpenTask: @escaping (String?) -> Void = { _ in },
         onOpenScheduledRun: @escaping () -> Void = {},
-        onOpenStorageNotice: @escaping () -> Void = {}
+        onOpenStorageNotice: @escaping () -> Void = {},
+        onOpenWatcherNotice: @escaping () -> Void = {}
     ) {
         guard Bundle.main.bundleIdentifier != nil else {
             return nil
@@ -110,6 +133,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         self.onOpenTask = onOpenTask
         self.onOpenScheduledRun = onOpenScheduledRun
         self.onOpenStorageNotice = onOpenStorageNotice
+        self.onOpenWatcherNotice = onOpenWatcherNotice
         super.init()
         center.delegate = self
         registerCategories()
@@ -171,6 +195,18 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
             // with the file that would not save. The click opens Command Center instead.
             UNNotificationCategory(
                 identifier: SonnyNotificationCategory.storage,
+                actions: [],
+                intentIdentifiers: [],
+                options: []
+            ),
+            // No actions, and here the empty array is not merely load-bearing but required by a
+            // founder decision (SONNY-236). A watcher notifies and does nothing else — it may not
+            // open, write, send, file, delete or run anything — so there is no action for this
+            // category to offer, and adding one later is not a UI change but a reversal of the
+            // decision. The click opens Command Center, which is a place to look rather than a thing
+            // done on the user's behalf.
+            UNNotificationCategory(
+                identifier: SonnyNotificationCategory.watcher,
                 actions: [],
                 intentIdentifiers: [],
                 options: []
@@ -238,6 +274,20 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         deliver(content)
     }
 
+    /// What a standing watcher had to say, for a user who by definition was somewhere else
+    /// (SONNY-236).
+    ///
+    /// Carries every ending, not only the change the user was waiting for: a watcher that expired or
+    /// gave up in silence leaves them believing Sonny is still watching. `StandingWatcherNoticeCopy`
+    /// decides which sentence; this only delivers it.
+    func postWatcherNotification(message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Sonny"
+        content.body = message
+        content.categoryIdentifier = SonnyNotificationCategory.watcher
+        deliver(content)
+    }
+
     private func deliver(_ content: UNMutableNotificationContent) {
         center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
             if let error {
@@ -281,6 +331,8 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                     self?.onOpenScheduledRun()
                 case SonnyNotificationCategory.storage:
                     self?.onOpenStorageNotice()
+                case SonnyNotificationCategory.watcher:
+                    self?.onOpenWatcherNotice()
                 default:
                     self?.onOpen()
                 }

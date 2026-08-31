@@ -608,6 +608,7 @@ struct BackendOutageTests {
                 fileURL: root.appendingPathComponent("resumable-tasks.json"),
                 encryption: encryption
             ),
+            standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),
                 store: ClipboardHistoryStore(

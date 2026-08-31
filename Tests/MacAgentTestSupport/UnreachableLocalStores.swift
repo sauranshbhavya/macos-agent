@@ -60,3 +60,30 @@ public enum UnreachableLocalStores {
         ShortcutRunHistoryStore(fileURL: fileURL("shortcuts-run-history.json"))
     }
 }
+
+/// A standing-watcher observer that reaches no network, for the fixtures that have never heard of
+/// watchers (SONNY-236).
+///
+/// **The same argument as `UnreachableLocalStores` above, one parameter along.**
+/// `AgentViewModel.standingWatcherObserver` has no default, because a defaulted live observer would
+/// put every fixture one 30-second pulse away from a real HTTP request — the shape SONNY-240 removed
+/// from the store parameters, applied to something that fetches rather than writes. A test that
+/// actually exercises watching passes its own stub and asserts against it; everything else passes
+/// this.
+///
+/// **It throws rather than returning empty text, and that is the decision.** Empty text is a
+/// *reading*: it would digest to a real value, differ from any baseline, and drive the change
+/// machinery — so a fixture that accidentally ticked a watcher would exercise the promotion path
+/// with fabricated content and pass. A throw is what "this fixture cannot read pages" means, and it
+/// lands on the failure-tolerance path where nothing is claimed about the page at all.
+public struct UnreachableStandingWatcherObserver: StandingWatcherObserving {
+    public init() {}
+
+    public func readableText(at url: URL) async throws -> String {
+        throw UnreachableStandingWatcherObserverError.noNetworkInThisFixture(url)
+    }
+}
+
+public enum UnreachableStandingWatcherObserverError: Error, Equatable {
+    case noNetworkInThisFixture(URL)
+}

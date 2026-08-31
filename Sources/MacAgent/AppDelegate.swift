@@ -55,6 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // that happen to agree today.
         onOpenStorageNotice: { [weak self] in
             self?.windowCoordinator.showCommandCenter()
+        },
+        // A watcher notice's click, and it is deliberately a fifth closure rather than a reuse of the
+        // fourth (SONNY-236). Command Center is where a watcher is listed and where its Stop control
+        // will be, so the two agree today — and they are still separate decisions about separate
+        // notices, which is the reason `onOpenStorageNotice` gives for not sharing the third.
+        onOpenWatcherNotice: { [weak self] in
+            self?.windowCoordinator.showCommandCenter()
         }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
@@ -327,6 +334,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 notificationService.postScheduledRunNotification(message: message)
+            }
+            .store(in: &cancellables)
+
+        // A standing watcher (SONNY-236). Like the scheduled channel above, this fires with nobody
+        // watching — but here that is the feature rather than a case the fallback covers: a watcher
+        // exists precisely because the user is not going to be present when the thing happens, and a
+        // notification is the whole of what it may do.
+        //
+        // **The `isUserWorkingInSonny` gate is kept, and its cost is real here in a way it is not
+        // elsewhere.** For every other channel the gate is free, because whatever it suppresses is
+        // already on a Sonny surface the user is looking at. A watcher notice suppressed this way is
+        // visible only as `watcherNotice` in Command Center, so a user sitting in Sonny with the
+        // widget closed can miss it — which is the gate's existing behaviour applied consistently
+        // rather than a new hole, and the Command Center surface is SONNY-382's to complete.
+        viewModel.$watcherNotice
+            .compactMap { $0 }
+            .sink { [weak self] message in
+                guard let self, !isUserWorkingInSonny else {
+                    return
+                }
+                notificationService.postWatcherNotification(message: message)
             }
             .store(in: &cancellables)
     }

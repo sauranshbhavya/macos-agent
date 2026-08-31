@@ -3788,6 +3788,7 @@ private func makeProductShellFixture(
             fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
         ),
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
             store: ClipboardHistoryStore(
