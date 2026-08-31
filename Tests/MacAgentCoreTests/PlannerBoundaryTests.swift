@@ -57,6 +57,7 @@ struct PlannerBoundaryTests {
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
         - For opening a saved workspace, produce one open_workspace step with workspaceName.
         - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
+        - When the user asks for the same work to be done to every item in one folder or in the Finder selection — "summarise each of these", "convert all of these folders" — set itemJob and write steps as the work done to ONE item, which Sonny then repeats for each item it finds. Leave itemJob null for every other command, including one that names two or three things explicitly: that is an ordinary multi-step plan. Never write the items themselves; Sonny reads them from the folder or the selection.
         - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
         - For any unsupported request, return one unsupported step and explain why.
         - Never include shell commands, AppleScript, or code.
@@ -85,7 +86,23 @@ struct PlannerBoundaryTests {
         #expect(AgentPlanSchema.name == "agent_plan")
         #expect(schema["type"] as? String == "object")
         #expect(schema["additionalProperties"] as? Bool == false)
-        #expect(schema["required"] as? [String] == ["summary", "requiresConfirmation", "steps"])
+        #expect(schema["required"] as? [String] == ["summary", "requiresConfirmation", "steps", "itemJob"])
+
+        // SONNY-235. Named by value rather than checked for presence, because the two things that
+        // must not drift are what a model may say inside a job and what it may not: `items` is
+        // absent here and from `AgentPlanDecoder.itemJobKeys`, so the forty paths a job acts on are
+        // read from the machine and never asserted by a model.
+        let itemJob = try #require((schema["properties"] as? [String: Any])?["itemJob"] as? [String: Any])
+        #expect(itemJob["type"] as? String == "object")
+        #expect(itemJob["additionalProperties"] as? Bool == false)
+        #expect(itemJob["required"] as? [String] == [
+            "source",
+            "folderPath",
+            "itemKind",
+            "fileExtensions",
+            "itemField"
+        ])
+        #expect((itemJob["properties"] as? [String: Any])?["items"] == nil)
 
         let properties = try #require(schema["properties"] as? [String: Any])
         let steps = try #require(properties["steps"] as? [String: Any])

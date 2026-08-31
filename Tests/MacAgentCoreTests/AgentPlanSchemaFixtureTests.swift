@@ -55,15 +55,24 @@ struct AgentPlanSchemaFixtureTests {
         #expect(text.contains("\"minItems\""))
         // Type unions, which are not a documented form of that subset.
         //
-        // **53 in the serialized schema, against 27 occurrences in the source, and the difference
+        // **58 in the serialized schema, against 32 occurrences in the source, and the difference
         // is not a discrepancy.** PR #143's F9 counted the source
-        // (`grep -c '"type": [' Sources/MacAgentCore/AgentPlan.swift` → 27); what reaches a provider
+        // (`grep -c '"type": [' …/AgentPlan.swift` → 27 when it was written; the same command answers
+        // 33 today and **32** is the honest figure — one of those matches is a doc comment quoting
+        // the spelling `["object", "null"]` rather than a schema node, which
+        // `grep '"type": [' …/AgentPlan.swift | grep -vc '///'` separates); what reaches a provider
         // is the serialized form, and `AgentPlanSchema.stepSchema` is embedded twice — once for
         // `steps` and once for the nested `routineSteps` — so every union inside it appears twice on
         // the wire. The wire figure is the one `prunedSchema` has to survive, so it is the one
         // asserted here. Counted with a walker rather than a substring scan on the server side
         // (`test/anthropic.test.ts`); this side uses the pretty-printed spelling the fixture has.
+        //
+        // **53 until SONNY-235 and 58 since.** The five it added are the five fields inside
+        // `itemJob`, every one of them nullable; `itemJob` itself is a plain object and contributes
+        // none, for the reason `AgentPlanSchema.itemJobSchema` records. They appear once each rather
+        // than twice: that schema is embedded at the top level only, unlike `stepSchema`, because a
+        // job is a property of a plan and a routine's nested steps are not a plan.
         let unions = text.components(separatedBy: "\"type\" : [").count - 1
-        #expect(unions == 53, "expected 53 serialized type-union nodes, found \(unions)")
+        #expect(unions == 58, "expected 58 serialized type-union nodes, found \(unions)")
     }
 }

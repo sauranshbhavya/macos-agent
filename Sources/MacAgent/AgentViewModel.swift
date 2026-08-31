@@ -4634,9 +4634,11 @@ final class AgentViewModel: ObservableObject {
         // The wipe has just deleted the set-aside files too (`deleteAllLocalData` sweeps them), so a
         // surviving record would leave a Reveal in Finder control pointing at files that are gone.
         lastPerRowDelete = nil
-        // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
-        // a surviving checkpoint would write its task straight back on the next unit boundary, and a
-        // surviving decline set would silently suppress an offer for a record whose id can only
+        // Row 13's three in-memory slots (SONNY-210; this said "two" while clearing three, corrected
+        // by SONNY-235 while extending the block). The wipe has just erased the file all three
+        // describe: a surviving checkpoint would write its task straight back on the next unit
+        // boundary, a surviving arm would let a dispatch continue a record that no longer exists, and
+        // a surviving decline set would silently suppress an offer for a record whose id can only
         // now belong to a different task.
         activeResumableTask = nil
         pendingResumableContinuation = nil
@@ -4658,6 +4660,13 @@ final class AgentViewModel: ObservableObject {
         // The ids go with the records the wipe just deleted; keeping them would silence the first
         // notice of a watcher created afterwards that happened to reuse an id.
         notifiedWatcherIDs = []
+        // And SONNY-235's four, for the reason `plan` and `stepStatuses` are cleared above rather
+        // than for row 13's: this is what a surface renders about the run in flight, so a surviving
+        // "17 of 40" would sit on a page where everything it counted has just been deleted.
+        itemJobProgress = nil
+        activeItemJobPlan = nil
+        activeItemJobCompletedStepIDs = []
+        activeItemJobFailures = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()

@@ -1,6 +1,73 @@
 {
   "additionalProperties" : false,
   "properties" : {
+    "itemJob" : {
+      "additionalProperties" : false,
+      "description" : "Set ONLY when the user asked for the same work to be done to every item in one folder or in the Finder selection — \"summarise each of these\", \"convert all of these folders\". Null for every other command, including one that names two or three things explicitly, which is an ordinary multi-step plan. When set, steps describes the work done to ONE item and Sonny repeats it for each item it finds.",
+      "properties" : {
+        "fileExtensions" : {
+          "description" : "File extensions without dots, such as pdf or docx, when the user named a kind of file. Null for every file, and null whenever itemKind is folders.",
+          "items" : {
+            "type" : "string"
+          },
+          "type" : [
+            "array",
+            "null"
+          ]
+        },
+        "folderPath" : {
+          "description" : "The folder to read when source is folder, otherwise null.",
+          "type" : [
+            "string",
+            "null"
+          ]
+        },
+        "itemField" : {
+          "description" : "Which field of each repeated step the item is written into: inputPath for a capability that reads a file or folder, shortcutInput for running a Shortcut on each item. Required when source is set; null otherwise.",
+          "enum" : [
+            "inputPath",
+            "shortcutInput",
+            null
+          ],
+          "type" : [
+            "string",
+            "null"
+          ]
+        },
+        "itemKind" : {
+          "description" : "Whether each item is a file or a folder. Required when source is set; null otherwise.",
+          "enum" : [
+            "files",
+            "folders",
+            null
+          ],
+          "type" : [
+            "string",
+            "null"
+          ]
+        },
+        "source" : {
+          "description" : "Where the items come from: folder for a folder the user named, finder_selection for whatever they have selected in Finder. NULL when this is not a job over many items, which is almost every command.",
+          "enum" : [
+            "folder",
+            "finder_selection",
+            null
+          ],
+          "type" : [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required" : [
+        "source",
+        "folderPath",
+        "itemKind",
+        "fileExtensions",
+        "itemField"
+      ],
+      "type" : "object"
+    },
     "requiresConfirmation" : {
       "description" : "True when the action writes files, opens apps, or converts documents.",
       "type" : "boolean"
@@ -606,7 +673,8 @@
   "required" : [
     "summary",
     "requiresConfirmation",
-    "steps"
+    "steps",
+    "itemJob"
   ],
   "type" : "object"
 }
