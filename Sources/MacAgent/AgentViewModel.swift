@@ -422,6 +422,18 @@ final class AgentViewModel: ObservableObject {
     /// that on a slow page, so without this a stalled request would have a second check start on top
     /// of it, and a third — one watcher, N concurrent fetches at somebody else's server.
     private var standingWatcherCheck: Task<Void, Never>?
+    /// The watcher that check is about, and when it started — the two facts that make the slot
+    /// recoverable instead of permanent (PR #184 review, F3). Written and cleared together with the
+    /// task handle; `standingWatcherCheckIsInFlight` is the one predicate that reads all three.
+    private var standingWatcherCheckSubject: StandingWatcher?
+    private var standingWatcherCheckStartedAt: Date?
+    /// Bumped whenever a check is abandoned, so a stalled task that answers later cannot write back.
+    ///
+    /// **Cancelling the task is not enough on its own**, which is the half of F2's fix that is not in
+    /// `clearInMemoryLocalDataState`: a cancelled `Task` still runs its continuation, and
+    /// `observeStandingWatcher` awaits an observer that may ignore cancellation entirely. This is
+    /// what makes a late answer inert rather than merely discouraged.
+    private var standingWatcherCheckGeneration = 0
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
@@ -4589,6 +4601,20 @@ final class AgentViewModel: ObservableObject {
         activeResumableTask = nil
         pendingResumableContinuation = nil
         declinedResumeOfferIDs = []
+        // **Row 13's third in-memory slot, and it is the only one that can put a deleted file back**
+        // (PR #184 review, F2). `deleteLocalData` guards on `!isRunning`, and a watcher check
+        // deliberately does not set `isRunning` because it starts no task — so a wipe pressed while
+        // a fetch is open is followed by that fetch's own write-back, and `saveWatcher` on a missing
+        // file creates the directory and the file again. A user who presses delete-all-local-data
+        // and gets their watchers back is a privacy failure rather than a bug in ordering, and this
+        // branch is what makes it matter twice: the wipe's own sentence now promises to take
+        // watchers.
+        //
+        // **Cancelling is half the fix and the other half is in `observeStandingWatcher`.** A
+        // cancelled `Task` still runs its continuation, so the check must also *check* for
+        // cancellation before it writes. Neither half works alone.
+        abandonStandingWatcherCheck()
+        watcherNotice = nil
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
@@ -6619,6 +6645,19 @@ final class AgentViewModel: ObservableObject {
     /// backlog and for the same reason: five watchers coming due together should be five requests
     /// spread over two and a half minutes, not five at once.
     func checkStandingWatchers(now: Date = Date()) {
+        // **A stalled check is abandoned before the guard is consulted, or the guard is permanent**
+        // (PR #184 review, F3). The slot exists so a slow fetch does not accumulate checks behind
+        // it; it must not become a way for one page that never answers to stop every watcher. The
+        // abandoned check is recorded as a *failed reading* against the watcher it was about, so
+        // `maxConsecutiveFailures` can still end it — without that the cap written to stop a dead
+        // page occupying a watcher is unreachable through this door.
+        if let startedAt = standingWatcherCheckStartedAt,
+           now.timeIntervalSince(startedAt) >= StandingWatcherLimits.standard.checkTimeout,
+           let stalled = standingWatcherCheckSubject {
+            abandonStandingWatcherCheck()
+            apply(StandingWatcherEvaluator.applyFailure(to: stalled, now: now))
+        }
+
         guard standingWatcherCheck == nil else {
             return
         }
@@ -6661,9 +6700,19 @@ final class AgentViewModel: ObservableObject {
                 // It also means `lastCheckedAt` records when the check *began* rather than when the
                 // page answered, which is the more honest of the two: the interval this feeds is
                 // "how often Sonny asks", and a slow page should not buy itself a longer gap.
+                standingWatcherCheckSubject = watcher
+                standingWatcherCheckStartedAt = now
+                let generation = standingWatcherCheckGeneration
                 standingWatcherCheck = Task { [weak self] in
-                    await self?.observeStandingWatcher(watcher, now: now)
-                    self?.standingWatcherCheck = nil
+                    await self?.observeStandingWatcher(watcher, now: now, generation: generation)
+                    // Only the check that is still current clears the slot. An abandoned one
+                    // answering late must not clear a slot a *newer* check is holding.
+                    guard let self, generation == standingWatcherCheckGeneration else {
+                        return
+                    }
+                    standingWatcherCheck = nil
+                    standingWatcherCheckSubject = nil
+                    standingWatcherCheckStartedAt = nil
                 }
                 return
             }
@@ -6688,7 +6737,7 @@ final class AgentViewModel: ObservableObject {
     /// mean the same thing to a watcher: this check did not happen. `applyFailure` decides how many
     /// of those in a row is enough to give up, and until then nothing is said to the user — a
     /// notification per flaky fetch would be worse than the silence it replaced.
-    private func observeStandingWatcher(_ watcher: StandingWatcher, now: Date) async {
+    private func observeStandingWatcher(_ watcher: StandingWatcher, now: Date, generation: Int) async {
         let decision: StandingWatcherDecision
         do {
             let text = try await standingWatcherObserver.readableText(at: watcher.url)
@@ -6701,6 +6750,24 @@ final class AgentViewModel: ObservableObject {
             decision = StandingWatcherEvaluator.applyFailure(to: watcher, now: now)
         }
 
+        // **Nothing is written by a check that has been abandoned** (PR #184 review, F2 and F3).
+        // This is the half of F2's fix that cancellation cannot do: a cancelled `Task` still runs
+        // its continuation, and the observer may not be cancellable at all — so a wipe that unlinked
+        // the file would otherwise be followed by this line recreating it. It is also what keeps a
+        // stalled check that answers eventually from overwriting the failure already recorded
+        // against its watcher, or from resurrecting a watcher a later check has finished.
+        guard generation == standingWatcherCheckGeneration else {
+            return
+        }
+        apply(decision)
+    }
+
+    /// Applies one check's decision: save what is still running, finish what is not.
+    ///
+    /// Split out so the stalled-check path in `checkStandingWatchers` reaches exactly the same two
+    /// doors rather than a second copy of the same `switch` — the shape this repository consolidates
+    /// away, because the copy that does not get updated is the one that matters.
+    private func apply(_ decision: StandingWatcherDecision) {
         switch decision {
         case .notDue:
             return
@@ -6709,6 +6776,20 @@ final class AgentViewModel: ObservableObject {
         case .stopped(let stopped, let reason):
             finishStandingWatcher(stopped, reason: reason)
         }
+    }
+
+    /// Forgets the check in flight without waiting for it, and makes whatever it eventually returns
+    /// inert.
+    ///
+    /// Called by the wipe (F2) and by the stalled-check path (F3). Both halves are needed: the
+    /// cancel stops a cancellation-aware observer promptly, and the generation bump is what a
+    /// continuation — cancelled or not — is checked against before it writes.
+    private func abandonStandingWatcherCheck() {
+        standingWatcherCheckGeneration += 1
+        standingWatcherCheck?.cancel()
+        standingWatcherCheck = nil
+        standingWatcherCheckSubject = nil
+        standingWatcherCheckStartedAt = nil
     }
 
     /// Tells the user what this watcher had to say, then forgets it.

@@ -57,6 +57,28 @@ public struct StandingWatcherLimits: Equatable, Sendable {
     /// watch this one" is the honest answer and it is available within the hour.
     public var maxUnstableReadings: Int
 
+    /// How long one check may be in flight before it is abandoned and counted as a failed reading.
+    ///
+    /// **Sixty seconds, and this exists because without it one hung page stopped every watcher
+    /// forever** (PR #184 review, F3). The checker holds a single slot so that a slow fetch does not
+    /// accumulate checks behind it, and that slot was cleared only by the task body finishing —
+    /// nothing bounded the fetch, so a page that never answers parked the slot permanently. Every
+    /// later pulse returned at the guard, no failure was ever recorded, and `maxConsecutiveFailures`
+    /// could not end the stalled watcher either: the cap written to stop a dead page occupying a
+    /// watcher was unreachable through that door. The URL is user-named and the user is by
+    /// definition absent, so "the watched site is slow or hostile" is the ordinary case here.
+    ///
+    /// **Abandonment is decided on the injected clock, on the next pulse, rather than by racing a
+    /// timer.** A wall-clock race in the checker would be a bet a test has to win — the shape
+    /// `asyncProcessRunnerCancelsRunningProcess` is written down for — while a start time compared
+    /// against the pulse's own `now` is a function of its arguments and can be driven exactly. The
+    /// cost is granularity: abandonment lands on the first pulse at or past the bound, so the real
+    /// ceiling is this plus one tick.
+    ///
+    /// A minute rather than the check interval: a page that has not answered in sixty seconds is not
+    /// about to, and reusing `checkInterval` would tie two decisions that move for different reasons.
+    public var checkTimeout: TimeInterval
+
     /// How many consecutive failed fetches before the watcher stops and says the page is
     /// unreachable.
     ///
@@ -68,7 +90,7 @@ public struct StandingWatcherLimits: Equatable, Sendable {
     /// user nothing changed. That sentence would be a lie about a page Sonny never read.
     public var maxConsecutiveFailures: Int
 
-    /// The shipped values. `noProductionPathPassesStandingWatcherLimits` pins that nothing in
+    /// The shipped values. `noProductionPathBuildsItsOwnStandingWatcherLimits` pins that nothing in
     /// `Sources/` constructs any others — the injectability below is for tests, the same way
     /// `ResumableTaskStore.idleExpiry` is, and is not a second way to change what ships.
     public static let standard = StandingWatcherLimits(
@@ -76,7 +98,8 @@ public struct StandingWatcherLimits: Equatable, Sendable {
         checkInterval: 15 * 60,
         maxLifetime: 7 * 24 * 60 * 60,
         maxUnstableReadings: 4,
-        maxConsecutiveFailures: 8
+        maxConsecutiveFailures: 8,
+        checkTimeout: 60
     )
 
     /// Every field floored, for the reason `ResumableTaskStore.init` gives for flooring its own two:
@@ -89,13 +112,19 @@ public struct StandingWatcherLimits: Equatable, Sendable {
         checkInterval: TimeInterval,
         maxLifetime: TimeInterval,
         maxUnstableReadings: Int,
-        maxConsecutiveFailures: Int
+        maxConsecutiveFailures: Int,
+        // Required rather than defaulted to `.standard`'s own value: `standard` is built by this
+        // initializer, so a default reading it back is a lazy static referring to itself — sound
+        // today only because `standard` passes it explicitly, which is a property of one call site
+        // rather than of the type.
+        checkTimeout: TimeInterval
     ) {
         self.maxActive = max(1, maxActive)
         self.checkInterval = max(1, checkInterval)
         self.maxLifetime = max(1, maxLifetime)
         self.maxUnstableReadings = max(1, maxUnstableReadings)
         self.maxConsecutiveFailures = max(1, maxConsecutiveFailures)
+        self.checkTimeout = max(1, checkTimeout)
     }
 }
 
@@ -156,12 +185,34 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
 
     /// A reading that differs from the baseline and has been seen exactly once.
     ///
-    /// **The whole of the ad-slot answer.** A first difference is never a notification; it becomes
-    /// this, and only a second consecutive reading equal to it promotes it. A rotating advertisement,
-    /// a served-through clock or a shuffled "related articles" strip differs from the baseline on
-    /// every fetch *and differs from itself*, so it never produces the pair. A real edit does, at the
-    /// next check. The cost is stated rather than hidden: notification is one `checkInterval` later
-    /// than the change.
+    /// **The ad-slot answer, and it is a filter with a known failure rate rather than an absolute**
+    /// (PR #184 review, F4; this comment claimed the absolute and the claim was false in both
+    /// directions). A first difference is never a notification; it becomes this, and only a second
+    /// consecutive reading equal to it promotes it. That defeats content which never repeats
+    /// consecutively — a clock, a nonce, a shuffle over many items — and it is genuinely most of
+    /// what a page's chrome does.
+    ///
+    /// **What it does not defeat, stated because the earlier wording promised otherwise.** A
+    /// rotation over a small pool of `k` variants supplies two consecutive equal readings with
+    /// probability about `1/k` on each check while a candidate is held, and a watcher gets up to
+    /// `maxLifetime / checkInterval` checks — so for a small pool a false "changed" is likely rather
+    /// than remote. `maxUnstableReadings` is the only thing racing it, and it is the weaker of the
+    /// two: it needs four consecutive readings each differing from the last, and any reading equal to
+    /// the baseline resets it — which a rotation whose pool includes the baseline's own variant
+    /// supplies regularly. The two mechanisms pull against each other and the reset weakens the one
+    /// that protects the user.
+    ///
+    /// **And a page alternating between the baseline and one other reading is neither.** It is never
+    /// `.changed`, because the two never land consecutively, and never `.unwatchable`, because every
+    /// return to the baseline resets the count — so it runs to `maxLifetime` and then says "It did
+    /// not change", which is the sentence `.unwatchable` exists to avoid.
+    ///
+    /// Whether to strengthen this — counting a reading that differs from the *previous* reading
+    /// toward instability rather than resetting on any baseline match, or requiring three consecutive
+    /// readings — is a founder decision recorded on SONNY-236 rather than a session's to take.
+    ///
+    /// The cost that is certain is stated rather than hidden: notification is one `checkInterval`
+    /// later than the change.
     public var candidateDigest: String?
 
     /// How many readings in a row have differed from the baseline and from each other. Reset by any

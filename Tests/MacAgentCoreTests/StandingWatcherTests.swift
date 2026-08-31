@@ -506,13 +506,15 @@ struct StandingWatcherTests {
             checkInterval: 0,
             maxLifetime: -1,
             maxUnstableReadings: 0,
-            maxConsecutiveFailures: -5
+            maxConsecutiveFailures: -5,
+            checkTimeout: 0
         )
         #expect(zeroed.maxActive == 1)
         #expect(zeroed.checkInterval == 1)
         #expect(zeroed.maxLifetime == 1)
         #expect(zeroed.maxUnstableReadings == 1)
         #expect(zeroed.maxConsecutiveFailures == 1)
+        #expect(zeroed.checkTimeout == 1)
     }
 
     /// The shipped numbers, pinned by value.
@@ -527,6 +529,7 @@ struct StandingWatcherTests {
         #expect(StandingWatcherLimits.standard.maxLifetime == 7 * 24 * 60 * 60)
         #expect(StandingWatcherLimits.standard.maxUnstableReadings == 4)
         #expect(StandingWatcherLimits.standard.maxConsecutiveFailures == 8)
+        #expect(StandingWatcherLimits.standard.checkTimeout == 60)
     }
 
     /// And nothing in `Sources/` builds a `StandingWatcherLimits` of its own — the shipped cap is
@@ -609,14 +612,16 @@ struct StandingWatcherTests {
         checkInterval: TimeInterval = 900,
         maxLifetime: TimeInterval = 7 * 24 * 60 * 60,
         maxUnstableReadings: Int = 4,
-        maxConsecutiveFailures: Int = 8
+        maxConsecutiveFailures: Int = 8,
+        checkTimeout: TimeInterval = 60
     ) -> StandingWatcherLimits {
         StandingWatcherLimits(
             maxActive: maxActive,
             checkInterval: checkInterval,
             maxLifetime: maxLifetime,
             maxUnstableReadings: maxUnstableReadings,
-            maxConsecutiveFailures: maxConsecutiveFailures
+            maxConsecutiveFailures: maxConsecutiveFailures,
+            checkTimeout: checkTimeout
         )
     }
 

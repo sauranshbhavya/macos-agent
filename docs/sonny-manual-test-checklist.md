@@ -2527,14 +2527,24 @@ don't.**
   see nothing and correctly conclude the feature was broken. Run `./scripts/package-app.sh` and open
   `.build/arm64-apple-macosx/debug/MacAgent.app`. This is CLAUDE.md's standing rule; it is repeated
   here because the symptom of ignoring it is silence, which looks exactly like a defect.
-- **Shorten the check interval in your local build first.** A watcher checks every 15 minutes and a
-  change is only reported on the **second** consecutive matching reading, so the shortest honest path
-  to a notification is **half an hour of waiting per attempt**. Before packaging, edit
-  `StandingWatcherLimits.standard` in `Sources/MacAgentCore/StandingWatcher.swift`: change
-  `checkInterval: 15 * 60` to `checkInterval: 30` and, for the expiry row below, `maxLifetime:
-  7 * 24 * 60 * 60` to `maxLifetime: 120`. **Change both back to `15 * 60` and `7 * 24 * 60 * 60`
-  before committing anything** — `theShippedCapIsTheOneRecordedOnTheTicket` fails if you don't, which
-  is the backstop rather than the reminder.
+- **Shorten two constants in your local build first, and these two values are chosen so every row
+  below fits one build.** A watcher checks every 15 minutes and reports a change only on the
+  **second** consecutive matching reading, so unedited the shortest row is half an hour and the
+  longest is two hours. Before packaging, in `Sources/MacAgentCore/StandingWatcher.swift`, edit
+  `StandingWatcherLimits.standard`: `checkInterval: 15 * 60` → `checkInterval: 30`, and
+  `maxLifetime: 7 * 24 * 60 * 60` → `maxLifetime: 600`.
+
+  The arithmetic, so you can see nothing here is arbitrary and so a row that behaves differently is a
+  real finding: at a 30-second interval a **change** needs 2 checks (about a minute), a **churning**
+  page needs 4 (two minutes), an **unreachable** page needs 8 (four minutes), and the lifetime is ten
+  minutes — comfortably longer than the longest row, which matters because expiry is checked *before*
+  due-ness, so too short a lifetime retires a watcher before it can reach any other ending.
+  **`maxLifetime: 120` does not work** and was what this section first said: the unreachable row needs
+  210 seconds and the watcher would expire at 120.
+
+  **Change both back to `15 * 60` and `7 * 24 * 60 * 60` before committing anything** —
+  `theShippedCapIsTheOneRecordedOnTheTicket` fails if you don't, which is the backstop rather than the
+  reminder.
 - **There is deliberately no shipped override for this** — no environment variable, no debug menu.
   The cap is a founder decision and it should not ship with a documented bypass; and since a
   packaged build is required regardless, editing one constant before that build costs nothing.
@@ -2585,23 +2595,35 @@ what you will see is the storage banner rather than a watcher.
       it** — a watcher is one-shot, and a second notification for the same change is a finding.
 - [ ] **(SONNY-236)** Point a watcher at a page whose content changes on **every** load — a site with
       a rotating advertisement, a visible clock, or a shuffled "related" strip. Leave it. Within
-      about four checks a notification says Sonny **stopped watching it because the page reads
-      differently every time**. It must **not** say the page did not change, and it must not fire a
-      "changed" notification.
-- [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first several checks say **nothing**.
-      After eight, one notification says **the page could not be read**. A notification per failed
-      fetch is a finding.
-- [ ] **(SONNY-236)** With `maxLifetime` shortened, start a watcher on a page you leave alone and
-      wait it out. A notification says Sonny **stopped watching it after N days and it did not
-      change**. The number of days must match the shortened constant's value, not read "7".
+      two minutes a notification says Sonny **stopped watching it because the page reads differently
+      every time**, and it must **not** say the page did not change.
+
+      **A "changed" notification here is not automatically a finding**, and this row used to say it
+      was. The two-reading rule is a filter, not an absolute: a page rotating over a small pool can
+      supply two consecutive equal readings by chance, and a page that alternates between two
+      readings reaches neither ending. Report what you saw and how many checks it took rather than
+      pass/fail — the design permits this, and how often it happens in practice is the thing nobody
+      has measured. A page with a *visible clock* or a per-load nonce is the case the filter really
+      does defeat, and is the better one to try first.
+- [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first seven checks say **nothing**.
+      After the eighth — about **four minutes** at a 30-second interval — one notification says
+      *Sonny stopped watching “…”. The page could not be read.* A notification per failed fetch is a
+      finding, and so is the watcher expiring first (that would mean `maxLifetime` is too short).
+- [ ] **(SONNY-236)** Start a watcher on a page you leave alone and wait out the ten minutes. The
+      notification reads, literally: *Sonny stopped watching “…” after **1 day**. It did not change.*
+      **"1 day" is correct at this setting and is not a finding** — the sentence renders
+      `max(1, round(maxLifetime / 86400))`, so any lifetime under about a day and a half floors to
+      one. Seeing "7 days" would be the finding, because that would mean the constant is being read
+      from somewhere other than the one you edited.
 - [ ] **(SONNY-236)** While a watcher is running, start an ordinary task and let it run. The watcher
       **still checks** — a routine would refuse here, a watcher does not, because it starts no task.
-- [ ] **(SONNY-236)** Command Center → Memory. With at least one unfinished task **and** one watcher,
+- [ ] **(SONNY-236)** Do this one **within ten minutes of seeding**, or the watcher expires while you
+      are reading the dialog. Command Center → Memory. With at least one unfinished task **and** one watcher,
       press **Delete** on the Unfinished tasks row and confirm. **The unfinished tasks go and the
       watcher keeps running.** The result line reads `Deleted unfinished tasks.` with **no file
       count**. A watcher silently disappearing here is the exact defect this branch was told to fix.
-- [ ] **(SONNY-236)** Settings → Data → the whole local-data wipe. Read the sentence **before**
-      pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
+- [ ] **(SONNY-236)** Also within ten minutes of seeding. Settings → Data → the whole local-data wipe.
+      Read the sentence **before** pressing. It names **watchers** among the things it deletes. Press it: the watcher is gone and
       stops notifying.
 
 ## 8. How to report back

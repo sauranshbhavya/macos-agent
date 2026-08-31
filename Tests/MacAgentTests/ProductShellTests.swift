@@ -772,6 +772,15 @@ struct ProductShellTests {
             "taskHistoryRecords",
             "taskHistoryQuery",
             "completedRunNotice",
+            // **`watcherNotice` moved here from `outsideTheWipe` in PR #184's fix round, and the
+            // earlier reasoning is superseded rather than merely wrong.** It said clearing the
+            // sentence would erase the record of a thing the user was told — true while the wipe left
+            // a watcher check running, because the notice was then the only surviving trace. F2 made
+            // the wipe abandon that check, so what is left is residue naming a watcher the same press
+            // just deleted, which is exactly `completedRunNotice`'s case one line above. The user is
+            // present at a wipe by construction, so F1's concern — a notice destroyed while nobody
+            // could see it — does not arise here.
+            "watcherNotice",
             "taskDetailRequest",
             // Row J's grants, cached for one vision iteration. The grants file is one of the
             // stores the wipe erases, so its in-memory copy is erased with it (SONNY-202).
@@ -891,17 +900,19 @@ struct ProductShellTests {
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
-            // `watcherNotice` sits beside `scheduledRunNotice` and for the same reason (SONNY-236):
-            // it is news about something that already happened, not a view of stored data. The wipe
-            // does delete the watcher it names — `resumable-tasks.json` holds them — but clearing
-            // the sentence would erase the record of a thing the user was told, which is the one
-            // part of a watcher that cannot be recovered from anywhere.
-            "watcherNotice",
-            // `standingWatcherObserver` is a collaborator and `standingWatcherCheck` a task handle:
-            // neither is state a surface renders, and neither holds anything a wipe could find. The
-            // observer belongs with the injected seams above rather than here on the merits, and is
-            // listed here because this is the group that means "not local data".
+            // `standingWatcherObserver` is a collaborator; `standingWatcherCheck` and the three
+            // beside it are one check's bookkeeping — a task handle, the watcher it is about, when it
+            // started, and the generation that makes a late answer inert. None is state a surface
+            // renders and none holds anything a wipe could find.
+            //
+            // **All four are in fact cleared by the wipe, through `abandonStandingWatcherCheck()`**
+            // (PR #184 review, F2). They are not in `clearedByTheWipe` because that list is the
+            // *direct* assignments in `clearInMemoryLocalDataState`, which is what
+            // `assignmentsInClearInMemoryLocalDataState()` can read — the classification is about
+            // what a property holds, not about which door clears it.
             "standingWatcherObserver", "standingWatcherCheck",
+            "standingWatcherCheckSubject", "standingWatcherCheckStartedAt",
+            "standingWatcherCheckGeneration",
             // `memorySettings` sits here for the sharpest version of the group's reason: a wipe
             // that switched memory back on would re-enable recording for the user who reached for
             // the most privacy-minded control in the app. It lives in `UserDefaults`, which the
