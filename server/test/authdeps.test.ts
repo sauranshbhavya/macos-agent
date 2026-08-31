@@ -4,6 +4,7 @@ import { buildApp } from "../src/app.js";
 import { authWiringFrom, intendsAuth } from "../src/auth/deps.js";
 import { ServiceRoleKeyNotConfigured, SupabaseAuthProvider } from "../src/auth/supabase.js";
 import { ConfigError, loadConfig, type Config } from "../src/config.js";
+import { TEST_CREDIT_PLANS } from "./support/credit.js";
 import { testDatabaseUrl } from "./support/database.js";
 
 /** `fetch`'s first parameter, named without `RequestInfo` — the lib here is ES2023, not DOM. */
@@ -74,6 +75,11 @@ const AUTH_ENV = {
   ENTITLEMENT_SIGNING_KEY: signingKey,
   ENTITLEMENT_SIGNING_KEY_ID: "test-key-1",
   SPEND_CAP_UNITS: "1000",
+  // SONNY-212's. Fixture numbers and not allowances — `support/credit.ts` carries the distinction —
+  // and a *real* catalogue rather than a placeholder for the reason the signing key above is real:
+  // `requireCreditCatalogue` parses it, so a stand-in would make these tests fail on the parse
+  // instead of on the shape they are about.
+  CREDIT_PLANS: TEST_CREDIT_PLANS,
 } as NodeJS.ProcessEnv;
 
 /**
@@ -198,12 +204,15 @@ describe("a half-configured sign-in refuses at startup", () => {
       "ENTITLEMENT_SIGNING_KEY",
       "ENTITLEMENT_SIGNING_KEY_ID",
       "SPEND_CAP_UNITS",
+      // SONNY-212's, and it is here for the same reason: an operator learns about it in this message
+      // rather than one restart later.
+      "CREDIT_PLANS",
     ]) {
       expect(error!.message).toContain(name);
     }
-    // The count is asserted, not just the names: a message that listed an eighth would still
-    // contain all seven of the above.
-    expect(error!.message).toContain("7 variables are missing");
+    // The count is asserted, not just the names: a message that listed a ninth would still
+    // contain all eight of the above.
+    expect(error!.message).toContain("8 variables are missing");
     // The one that IS set is not listed as missing.
     expect(error!.message).not.toContain("SUPABASE_ANON_KEY,");
     // **And the one that is no longer required is not listed either** (founder decision 2026-08-27,

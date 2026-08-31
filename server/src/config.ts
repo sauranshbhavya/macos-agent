@@ -3,6 +3,11 @@ import { z } from "zod";
 import type { SupabaseJwtPolicy } from "./auth/token.js";
 import { entitlementSigningKeyFrom, type EntitlementSigningKey } from "./entitlement/claim.js";
 import {
+  CreditCatalogueError,
+  parseCreditCatalogue,
+  type CreditCatalogue,
+} from "./credit/catalogue.js";
+import {
   parseRouteChain,
   providerDataPolicies,
   type ModelRoute,
@@ -163,6 +168,37 @@ const schema = z.object({
    * not apply is that cost with a mechanism in front of it.
    */
   SPEND_CAP_UNITS: z.coerce.number().int().min(0).optional(),
+
+  /**
+   * The plan catalogue: every tier, every allowance and every credit weight this deployment bills
+   * against, as one JSON document (SONNY-212).
+   *
+   * **No default, and this is the variable the whole of row 13's pricing arrives through.** Twelve
+   * files under `server/src` promise that the numbers land on SONNY-212 rather than in them, and
+   * this is where they land — outside the repository. An operator writes it; nothing here writes a
+   * tier name, an allowance or a weight.
+   *
+   * The shape, parsed and argued in `credit/catalogue.ts`:
+   *
+   * ```json
+   * {
+   *   "runCredits": <credits one screen-control run is worth>,
+   *   "defaultPlan": "<the key an account with no plan falls to>",
+   *   "weights": { "perSession": <n>, "perIteration": <n>, "perMegapixel": <n> },
+   *   "plans": [{ "key": "<opaque key>", "monthlyCredits": <n> }]
+   * }
+   * ```
+   *
+   * `plans` is a list of **any** length. The product decision today is free plus one paid tier
+   * (founder, 2026-08-16), and the tier *count* is still configuration because a decision that is
+   * true today is exactly the kind that becomes a release-time input.
+   *
+   * Required wherever an authenticated route is mounted, for `SPEND_CAP_UNITS`' reason: an unset
+   * catalogue has no safe reading. Treating it as "no allowance" locks every user out of the one
+   * paid feature and treating it as "unlimited" is SONNY-16's leaked-token cost with a mechanism in
+   * front of it doing nothing.
+   */
+  CREDIT_PLANS: nonEmpty.optional(),
 
   /**
    * The Supabase project's **JWT secret**, which is what every access token this gateway accepts is
@@ -390,6 +426,7 @@ export interface Config {
   readonly entitlementSigningKey: string | undefined;
   readonly entitlementSigningKeyId: string | undefined;
   readonly spendCapUnits: number | undefined;
+  readonly creditPlans: string | undefined;
   readonly supabaseJwtSecret: string | undefined;
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
@@ -585,6 +622,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     entitlementSigningKey: value.ENTITLEMENT_SIGNING_KEY,
     entitlementSigningKeyId: value.ENTITLEMENT_SIGNING_KEY_ID,
     spendCapUnits: value.SPEND_CAP_UNITS,
+    creditPlans: value.CREDIT_PLANS,
     supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
@@ -696,6 +734,35 @@ export function requireSpendCapUnits(config: Config): number {
     );
   }
   return config.spendCapUnits;
+}
+
+/**
+ * The deployment's credit catalogue, or a startup failure naming it.
+ *
+ * **`requireSpendCapUnits`' shape and `requireEntitlementSigningKey`'s parse-at-startup rule, in one
+ * function**, because this variable needs both: it may not be absent, and a value that is present
+ * and malformed must fail here rather than on the first user who asks how many runs they have left.
+ * `parseCreditCatalogue` is what refuses; this adds the name of the variable to fix.
+ */
+export function requireCreditCatalogue(config: Config): CreditCatalogue {
+  if (config.creditPlans === undefined) {
+    throw new ConfigError(
+      "CREDIT_PLANS is required wherever an authenticated route is mounted: it carries every tier, " +
+        "allowance and credit weight this deployment bills against, and an unset one has no safe " +
+        "reading -- no allowance locks every user out of screen control, and unlimited is an " +
+        "uncapped bill. This repository sets no plan, no price and no allowance of its own. See " +
+        "server/.env.example for the expected shape.",
+    );
+  }
+  try {
+    return parseCreditCatalogue(config.creditPlans);
+  } catch (error) {
+    throw new ConfigError(
+      error instanceof CreditCatalogueError
+        ? error.message
+        : `CREDIT_PLANS could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /**
