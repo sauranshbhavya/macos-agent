@@ -118,13 +118,38 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // is the other half of this decision and reads the same way.
         //
         // **Nothing outside a routine changes**, and the reason is a one-site enumeration rather
-        // than a survey: the only thing that can put a non-nil value in `preferredBrowser` is
-        // `executeNestedPlan`, whose sole call site is the routine adapter
-        // (`git grep -n 'executeNestedPlan(' -- Sources | wc -l` → **1**,
-        // `RunRoutineCapabilityAdapter.swift:93`, at `740876c`). Every other site either threads the
-        // parameter it was given or takes the `MacApp? = nil` default on `execute`. So a standalone
-        // workspace open still resolves its own browser and a Safari workspace opened on its own
-        // still opens in Safari, byte for byte.
+        // than a survey: exactly one site in `Sources` puts a non-nil value into
+        // `preferredBrowser` — `AgentActionExecutor.swift:1885`, inside the `executeNestedPlan`
+        // closure, whose own sole caller is `RunRoutineCapabilityAdapter.swift:93`. Every other
+        // site either threads the parameter it was given or declares one. So a standalone workspace
+        // open still resolves its own browser and a Safari workspace opened on its own still opens
+        // in Safari, byte for byte.
+        //
+        // The pipeline below is what measures it: **1**, naming that line, at `a82ae04` and on any
+        // later tree — the second stage drops comment lines, so this citation cannot inflate its
+        // own count. The control is deliberately not stamped, because it is a property of the
+        // command rather than of a commit: drop that second stage on whatever tree you are reading
+        // and the answer becomes **2**, the extra hit being this very block. That is what proves
+        // the stage is doing the excluding rather than the pattern failing to match.
+        //
+        //     git grep -n 'preferredBrowser: ' -- Sources \
+        //       | grep -vE ':[0-9]+: *[/][/]' \
+        //       | grep -v 'preferredBrowser: preferredBrowser' \
+        //       | grep -v 'preferredBrowser: MacApp?'
+        //
+        // **Two things about that command are the point, and both are corrections** (PR #177's R1).
+        // It is written to be un-matchable by its own text — the second stage drops comment lines,
+        // and the slashes are bracketed so this block is not a line comment opening a span the
+        // source-scanning tests would read to the end of the file (`CLAUDE.md`'s slash-star gotcha,
+        // same family). And it measures the claim: **`preferredBrowser` argument sites**, which is
+        // what "no other door sets it" is about. The citation this replaces counted call sites of
+        // `executeNestedPlan(` instead, which establishes only that *that* door has one caller —
+        // one half of the claim, with nothing telling a reader which half. It also answered **2**
+        // rather than the 1 it reported, because the second hit was its own line.
+        //
+        // The narrower fact the old command did measure is kept above as a sentence rather than a
+        // count, since it is still true and still load-bearing: the setting site is reached only
+        // through the routine adapter.
         //
         // A browser named on the *step* is deliberately still not read here. `context.browser(for:in:)`
         // would honour one, and the precedence it documents would put it above the routine's binding;
