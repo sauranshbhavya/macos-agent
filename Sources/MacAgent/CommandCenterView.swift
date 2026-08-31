@@ -4658,6 +4658,16 @@ enum MemoryDeletionCopy {
     /// unchanged, so a row with nothing wrong with it reports exactly what it always did.
     static func outcome(for category: MemoryCategory, deletedFileCount: Int, keptFileCount: Int) -> String {
         guard keptFileCount > 0 else {
+            // **A row that owns no file counts none** (SONNY-236). The file figure is the whole point
+            // of this sentence for twelve of the thirteen stores — a destructive press reporting a
+            // concrete, checkable fact about the disk — and it is a falsehood for a row whose delete
+            // rewrites a file it shares rather than removing one. Without this branch a successful
+            // press on Unfinished tasks reported "0 files", which reads as a delete that did nothing.
+            guard category.stores.contains(where: { $0.rowDeletionScope == .wholeFile }) else {
+                // No count and no "starts over": the row's title is a plural noun phrase, so the
+                // sibling sentence below would render "Unfinished tasks starts over."
+                return "Deleted \(category.title.lowercased())."
+            }
             let noun = deletedFileCount == 1 ? "file" : "files"
             return "Deleted \(category.title.lowercased()) — \(deletedFileCount) \(noun)."
         }

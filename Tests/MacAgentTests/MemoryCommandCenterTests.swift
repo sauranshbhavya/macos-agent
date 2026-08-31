@@ -1320,6 +1320,84 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
     }
 
+    /// **The Memory row's delete is scoped to its own collection, and the watchers sharing its file
+    /// survive it** (SONNY-236, founder decision 2026-08-31).
+    ///
+    /// The row is labelled *Unfinished tasks*, and until this ticket it deleted through
+    /// `deleteStoreFilesOnly()`, which unlinks `resumable-tasks.json` — so the press would have
+    /// destroyed every standing watcher the user had, with nothing failing and nothing on screen
+    /// saying so. This is the behavioural half of that fix; the store's own half is
+    /// `deletingEveryTaskKeepsTheWatchersAndTheWholeFileDoorTakesBoth`.
+    ///
+    /// **The control is the task assertion beside it**: "the watchers survived" is satisfied just as
+    /// well by a delete that did nothing at all, so the tasks have to be gone in the same run.
+    @Test
+    func deletingUnfinishedTasksFromMemoryKeepsTheWatchersSharingTheirFile() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.resumableTaskStore.save(
+            ResumableTask(
+                id: "t1",
+                command: "Convert the report",
+                plan: planCalculating("2 + 2"),
+                // `Date()`, not a fixed instant: this store expires a record after fourteen idle
+                // days, so a 2023 timestamp is filtered out of `loadAll` and the precondition below
+                // would fail for a reason that has nothing to do with what is under test.
+                startedAt: Date(),
+                updatedAt: Date()
+            )
+        )
+        try fixture.resumableTaskStore.saveWatcher(
+            StandingWatcher(
+                id: "w1",
+                subject: "the pricing page",
+                url: URL(string: "https://example.com/pricing")!,
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                baselineDigest: "baseline"
+            )
+        )
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+
+        fixture.viewModel.deleteMemory(in: .resumableTasks)
+
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(try fixture.resumableTaskStore.loadWatchers().map(\.id) == ["w1"])
+        // The file is rewritten rather than unlinked — the property the whole split rests on.
+        #expect(FileManager.default.fileExists(atPath: fixture.resumableTaskStore.fileURL.path))
+    }
+
+    /// And the press reports honestly. A collection-scoped delete removes no file, so the sentence
+    /// every other row gets — "Deleted X — N files." — would have read "0 files" on a delete that
+    /// worked.
+    @Test
+    func aCollectionScopedDeleteDoesNotReportAFileCount() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.resumableTaskStore.save(
+            ResumableTask(
+                id: "t1",
+                command: "Convert the report",
+                plan: planCalculating("2 + 2"),
+                // `Date()`, not a fixed instant: this store expires a record after fourteen idle
+                // days, so a 2023 timestamp is filtered out of `loadAll` and the precondition below
+                // would fail for a reason that has nothing to do with what is under test.
+                startedAt: Date(),
+                updatedAt: Date()
+            )
+        )
+
+        fixture.viewModel.deleteMemory(in: .resumableTasks)
+
+        let message = try #require(fixture.viewModel.memoryDeletionStatusMessage)
+        #expect(message == "Deleted unfinished tasks.")
+        #expect(message.contains("files") == false)
+        // The control: a whole-file row in the same fixture still carries its count, so the absence
+        // above is this row's scope rather than the figure having gone everywhere.
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        fixture.viewModel.deleteMemory(in: .snippets)
+        #expect(try #require(fixture.viewModel.memoryDeletionStatusMessage).contains("1 file"))
+    }
+
     /// Both halves of the guard, and the approval half is the one that matters: a run paused at its
     /// approval has `isRunning == false` and is about to write into the very file this deletes.
     @Test
@@ -2312,7 +2390,7 @@ struct MemoryCommandCenterTests {
         // checked for absence in one: a literal that came back would raise a count here, and a
         // comment cannot talk one back down — `MacAgentSource`'s own doc records why a scan leans on
         // counts rather than on a token being missing.
-        for name in LocalStore.allCases.map(\.deletionCopyName) {
+        for name in LocalStore.allCases.flatMap(\.deletionCopyNames) {
             // The list form, "<name>," — what a hand-written enumeration looks like on either
             // surface, and what both of these literals looked like before this ticket.
             #expect(MacAgentSource.count(of: "\(name),", inText: page) == 0, "\(name) is written out again")

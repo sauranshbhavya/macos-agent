@@ -241,6 +241,43 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// The collections `resumable-tasks.json` holds, and what Settings' wipe sentence calls each of
+/// them.
+///
+/// **This exists because one derivation is not reachable and the gap it leaves is a data-loss
+/// disclosure** (SONNY-236). The wipe's sentence is built from `LocalStore.allCases`, and a second
+/// collection inside an existing store's file adds no case there — so watchers would be deleted by a
+/// press whose own sentence never named them, which is exactly the defect
+/// `theWipesOwnSentenceNamesEveryStoreItDeletes` was written to make impossible for a *store*.
+/// Nothing in the type system connects "this file gained a stored property" to "the sentence gained
+/// a phrase", so this enum is the declaration that stands in for it, and
+/// `theWipesOwnSentenceNamesEveryCollectionInEveryStore` binds the two by counting
+/// `ResumableTaskFile`'s stored properties against these cases: a third collection makes the counts
+/// disagree and fails there rather than arriving unnamed.
+///
+/// **The count assertion is the load-bearing half, not the switch.** An exhaustive switch only
+/// guarantees that every *case* has a name; it says nothing about a stored property that never
+/// became a case, which is the direction this actually has to cover. `ProductShellTests`' stored-
+/// property classifier is the same trick against the same blindness.
+enum ResumableTaskFileCollection: CaseIterable {
+    case tasks
+    case watchers
+
+    /// Lower case and standing alone, the rule `LocalStore.deletionCopyNames` states: each of these
+    /// lands mid-list in a sentence naming fourteen things.
+    var wipeCopyName: String {
+        switch self {
+        case .tasks:
+            return "unfinished tasks"
+        case .watchers:
+            // "watchers", not "standing watchers": the neighbouring items in that sentence are bare
+            // plurals of the product's own nouns — routines, workspaces, snippets — and "standing"
+            // is the ticket's word for the shape rather than the user's word for the thing.
+            return "watchers"
+        }
+    }
+}
+
 /// What `resumable-tasks.json` holds: unfinished runs, and standing watchers beside them.
 ///
 /// **Two collections in one file, because this store stays the thirteenth.** SONNY-210 built it,
