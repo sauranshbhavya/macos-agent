@@ -479,7 +479,37 @@ struct ApprovedAppRevocationTests {
         #expect(list.contains("ForEach(rows) { row in"))
         #expect(list.contains("remove(row)"))
         #expect(row.contains("ApprovedAppRevocationPresentation.removeLabel"))
-        #expect(row.contains("row.removeAccessibilityLabel"))
+    }
+
+    /// **The row's Remove is named for its own app, at both places that name it** (PR #175's
+    /// verification round, V3).
+    ///
+    /// `row.removeAccessibilityLabel` is applied twice — to `.accessibilityLabel` and to `.help` —
+    /// and this used to be a bare presence check that either use satisfied. So replacing the
+    /// *screen-reader* label with a literal `"Remove"`, leaving the tooltip alone, passed all 2541
+    /// tests: the exact defect `ApprovedAppRowPresentation.removeAccessibilityLabel`'s own doc exists
+    /// to prevent — *a list of identical "Remove" buttons is a list of buttons a screen reader cannot
+    /// tell apart.* The two presentation tests that pin the label's *value* cannot see the view stop
+    /// applying it.
+    ///
+    /// **This is S3's shape, third instance.** A presence check over a token two sites share stands
+    /// in for a property of one of them, and passes while that one has stopped holding it. Each site
+    /// is sliced from its own modifier and asked separately, with the occurrence count pinned so a
+    /// third application arrives here rather than silently.
+    @Test
+    func theRowsRemoveIsNamedForItsAppInBothPlacesThatNameIt() throws {
+        let row = try Self.revocationRowSource()
+        let token = "row.removeAccessibilityLabel"
+
+        #expect(row.components(separatedBy: token).count - 1 == 2)
+        #expect(
+            try Self.callSite(".accessibilityLabel(", in: row).contains(token),
+            "the screen-reader label is what tells one row's Remove from another's"
+        )
+        #expect(
+            try Self.callSite(".help(", in: row).contains(token),
+            "the tooltip names the same app the screen reader is told about"
+        )
     }
 
     /// **Remove All confirms first, and Cancel is a real second button.**
