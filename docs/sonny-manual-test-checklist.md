@@ -2200,16 +2200,32 @@ are not calculations.
       `4`, `4`, `25`, `3.1068559612 mi`, `3.1068559612 mi`, `4` — with no planner round trip.**
       The finding is any of them coming back "Calculation is unsupported by the registered local
       tools", or taking a visible moment to think.
-- [ ] **(SONNY-284, spoken)** Hold the push-to-talk hotkey and say "what is two plus two", then
-      "how much is five times five", then "convert ten centimeters to inches". Same answers,
-      same instant local path. (Dictation writes a curly apostrophe in "what's"; that is handled,
-      and this row is where it gets seen for real.)
+- [ ] **(SONNY-284, typed, the comma and the politeness word)** `What is 5 times 5, please?` →
+      **`25`**, and `calculate 2 + 2 please` → **`4`**. Both were broken when PR #176 opened — the
+      first came back "Calculation is unsupported by the registered local tools" and the second
+      answered "Could not calculate that expression: Unexpected token p." — so this row is the one
+      most worth doing. Also check the card itself on `what is five times five, please`: the
+      summary must read **`Calculate five times five.`** with no stray comma before the period.
+- [ ] **(SONNY-284, spoken)** Hold the push-to-talk hotkey and say "what is two plus two" → **`4`**,
+      then "how much is five times five" → **`25`**, then "convert ten centimeters to inches" →
+      **`3.937007874 in`**. Same instant local path. Dictation writes a curly apostrophe in
+      "what's" and puts a full stop or a comma on the end of a sentence; all three are handled, and
+      this row is where they get seen for real, so **say one of them with a trailing "please" too**.
 - [ ] **(SONNY-284, the direction that must NOT have changed)** Ask for things that merely *look*
       like the shapes above and confirm each still goes to the planner and does its real job:
-      **`convert <a real file>.docx to pdf`** on a document you have — this must still convert the
-      document, never a calculator error about `pdf` not being a unit — plus `what is the weather
-      today`, `what's on my calendar`, `how much is left on my disk` and `remind me in 5 minutes`.
+      `what is the weather today`, `what's on my calendar`, `how much is left on my disk`,
+      `remind me in 5 minutes`, and **`convert <a real file>.docx to pdf`** on a document you have.
       **The finding is any of these answering with a calculator error or a "Calculate ..." card.**
+      (On the docx one: PR #176's review established this branch never moved it — it was five
+      tokens and reached the planner before and after — so it is a regression check on the verb
+      that became strippable, not a behaviour this branch changed.)
+- [ ] **(SONNY-284, the direction that DID change, and the founders' call to make)** Type
+      `10 gb to mb` and `2 hours to minutes`. Before this branch each reached the calculator and
+      said **"gb is not a supported conversion unit"** — naming the word Sonny did not understand.
+      Now they reach the planner and get its generic refusal instead. That is the accepted cost of
+      the guard that keeps `5 docs to pdf` out of the calculator (the two are structurally
+      identical), and it is recorded in the changelog. **Nothing here is a finding unless you
+      disagree with the trade** — if you do, the fix is a wider unit table on its own ticket.
 
 ## 8. How to report back
 

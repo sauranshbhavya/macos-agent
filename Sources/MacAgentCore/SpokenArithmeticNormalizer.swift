@@ -44,7 +44,13 @@ enum SpokenArithmeticNormalizer {
     /// Punctuation Whisper transcription actually appends (sentence-ending marks) — deliberately not
     /// the full `.punctuationCharacters` set, which also contains "(" / ")" and would otherwise
     /// silently swallow parentheses glued to a word-number token (e.g. "(two" → "two").
-    private static let trimmablePunctuation = CharacterSet(charactersIn: ".,!?;:")
+    ///
+    /// **`InstantCommandResolver` reads this too** (SONNY-284's fix round, F1), for the end of a
+    /// dictated *sentence* rather than the end of a token — so there is one list of what a
+    /// transcriber appends rather than two that drift. It is trimmed off the trailing end only
+    /// there: a leading `.` is a decimal point, and `.5 + 1` trimmed at both ends is `6` instead
+    /// of `1.5`.
+    static let trimmablePunctuation = CharacterSet(charactersIn: ".,!?;:")
 
     static func normalize(_ expression: String) -> String {
         let rawTokens = expression
