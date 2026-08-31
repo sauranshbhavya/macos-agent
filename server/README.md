@@ -870,6 +870,44 @@ rather than a `primary`/`secondary` pair: with two named fields, retiring the pr
 two variables at once, and a deploy that catches them half-applied has either a duplicated key or
 none. `test/config.test.ts` walks all three steps and asserts a usable key at every one.
 
+### Rotating the payment provider's access token, which does not get the table above
+
+`BILLING_PROVIDER_ACCESS_TOKEN` (SONNY-216) is an Organization Access Token, and it is the one
+credential in this gateway that **cannot** be rotated by the three-deploy overlap. It is a single
+name, not an ordered list, and the reason is the provider rather than a shortcut here: Polar issues
+these from its dashboard and this gateway does not choose when one stops working. A token an
+operator revokes in the dashboard is dead the instant they press the button, whatever this
+deployment has in its environment.
+
+**So the rotation is ordered around the provider's side, not ours, and it has one rule: create
+before you revoke.**
+
+| step | where | what |
+|---|---|---|
+| 1 | Polar dashboard | Create a **second** token with `customer_sessions:write`. Both now work. |
+| 2 | this gateway | Deploy with `BILLING_PROVIDER_ACCESS_TOKEN` set to the new one. |
+| 2a | **verify** | `curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/billing/portal" -H "Authorization: Bearer $TOKEN"` for a real subscriber's session — or press **Manage subscription** in the app. **Require a `200`.** |
+| 3 | Polar dashboard | Revoke the old one, **only after 2a passed**. |
+
+**Step 2a is not optional and it is not the deploy check** (PR #183, F11). Nothing in this gateway
+validates the token at startup: `billingDepsFrom` requires the *name* to be present and never makes a
+call. So a token pasted with a typo deploys cleanly, `/v1/health` reports the new build, and every
+signal an operator has says step 2 is serving — while the only thing that would have noticed is a
+portal press nobody has made. Revoke the old token at that point and both are dead. "Serving" is
+ambiguous between *the deploy finished* and *the new credential works*, and only the second makes
+revoking safe; 2a is the difference.
+
+Doing steps 1 and 3 together — "rotate" as a single dashboard action — takes the portal route down
+from that instant until step 2 finishes deploying. **What that outage looks like is worth knowing,
+because it is quiet**: `POST /v1/billing/portal` answers `502 provider.rejected` and logs at `error`
+with the provider's status. Nothing else breaks. Subscriptions keep working, the webhook keeps
+arriving, entitlements keep being granted and revoked — the only thing that stops is a subscriber's
+ability to reach their own billing portal, which is exactly the failure nobody is watching a
+dashboard for.
+
+**This is written down because a credential that cannot be rotated without downtime is a credential
+nobody rotates.** The three steps above make the downtime zero, and they only work in that order.
+
 ## The five model routes (SONNY-130, and SONNY-131's vision row)
 
 `POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions`, `POST /v1/search` and

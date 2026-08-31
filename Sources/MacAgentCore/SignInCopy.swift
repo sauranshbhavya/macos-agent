@@ -72,8 +72,9 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
         case .providerUnavailable, .providerTimeout, .providerRejected, .serverError,
              .serverUnavailable:
             self = .backendUnreachable
-        case .entitlementRequired, .entitlementExpired, .requestTooLarge, .resourceNotFound,
-             .idempotencyConflict, .versionUnsupported, .unknown:
+        case .entitlementRequired, .entitlementExpired, .entitlementNoSubscription,
+             .requestTooLarge, .resourceNotFound, .idempotencyConflict, .versionUnsupported,
+             .unknown:
             // None of these is reachable on the three unauthenticated auth routes, and a code this
             // build has never heard of is not something to guess at in front of a user.
             self = .unexpected

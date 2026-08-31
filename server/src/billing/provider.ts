@@ -81,6 +81,46 @@ export type WebhookReading =
    */
   | { readonly kind: "unreadable"; readonly eventId: string; readonly reason: string };
 
+/**
+ * Where to send a subscriber to manage what they are paying for, or why there is nowhere to send
+ * them (SONNY-216).
+ *
+ * **A result type rather than a thrown error, for the reason `WebhookReading` is one.** Three of the
+ * four cases below are ordinary, expected answers rather than faults — most of all `noCustomer`,
+ * which is every signed-in user who has never subscribed. A `throw` would flatten those into one
+ * shape at the route, and the route has a different status and a different client behaviour for
+ * each.
+ *
+ * **The failure cases are named for what the caller must do, not for what went wrong upstream.**
+ * `unavailable` and `timedOut` are worth retrying and `rejected` is not, which is exactly the
+ * distinction contract 7.2 draws between `provider.unavailable`, `provider.timeout` and
+ * `provider.rejected` — so the mapping at the route is one line per case with nothing to decide.
+ */
+export type PortalLink =
+  /** A link for this customer. Short-lived: see `expiresAt`, and see `polar.ts` on why it is not cached. */
+  | { readonly kind: "link"; readonly url: string; readonly expiresAt: Date }
+  /**
+   * The provider has no customer for this account.
+   *
+   * **The ordinary case, not an error.** An account reaches it by signing in and never subscribing,
+   * which is the majority of accounts. It is distinct from every failure below because the answer to
+   * the user is different in kind: there is nothing wrong, and there is nothing to manage.
+   */
+  | { readonly kind: "noCustomer" }
+  /** The provider could not be reached, or answered `5xx`. Worth retrying. */
+  | { readonly kind: "unavailable"; readonly reason: string }
+  /** The provider did not answer inside this gateway's own budget. Worth retrying. */
+  | { readonly kind: "timedOut"; readonly reason: string }
+  /**
+   * The provider answered, and refused. A credential this gateway holds is wrong or has been
+   * revoked, or the request shape is not one this provider accepts.
+   *
+   * **Not retryable, and that is the useful half**: an identical retry fails identically, so the
+   * only thing a retry buys is a second failed request. What this case actually calls for is an
+   * operator reading the log line, which is why the reason is carried.
+   */
+  | { readonly kind: "rejected"; readonly reason: string };
+
 /** A delivery whose signature has already been checked, as the adapter receives it. */
 export interface VerifiedDelivery {
   /** `webhook-id`, which the signature covers. The provider's own id for this delivery. */
@@ -112,4 +152,13 @@ export interface BillingProvider {
   readonly read: (delivery: VerifiedDelivery) => WebhookReading;
   /** Where to send this account to subscribe. */
   readonly checkoutUrlFor: (accountId: string) => string;
+  /**
+   * Where to send this account to manage an existing subscription (SONNY-216).
+   *
+   * **Asynchronous, and `checkoutUrlFor` beside it is not — the asymmetry is the whole design
+   * decision and is argued in `polar.ts`.** A checkout link is configuration: the same URL for every
+   * user, with an account id appended. A portal link cannot be, because a portal shows one
+   * customer's invoices and payment methods and therefore has to be minted for that customer.
+   */
+  readonly portalUrlFor: (accountId: string) => Promise<PortalLink>;
 }

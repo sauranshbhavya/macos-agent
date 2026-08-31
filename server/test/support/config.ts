@@ -64,6 +64,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     billingProvider: undefined,
     billingWebhookSecret: undefined,
     billingCheckoutUrl: undefined,
+    billingProviderAccessToken: undefined,
+    billingApiBaseUrl: undefined,
     billingPlans: "",
     billingGraceDays: 14,
     // SONNY-135. A key per process rather than a literal — `support/entitlement.ts` says why a

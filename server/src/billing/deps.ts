@@ -80,6 +80,10 @@ const BILLING_REQUIREMENTS: readonly (readonly [name: string, read: (config: Con
   [
     ["BILLING_WEBHOOK_SECRET", (config) => config.billingWebhookSecret],
     ["BILLING_CHECKOUT_URL", (config) => config.billingCheckoutUrl],
+    // SONNY-216. Required on the same terms as the three beside it: the portal route mints a
+    // customer session through the provider's API, and a deployment that named a provider but no
+    // token would mount a Manage-subscription route that fails on every press.
+    ["BILLING_PROVIDER_ACCESS_TOKEN", (config) => config.billingProviderAccessToken],
     ["BILLING_PLANS", (config) => (config.billingPlans === "" ? undefined : config.billingPlans)],
   ];
 
@@ -91,9 +95,11 @@ export function billingDepsFrom(config: Config): BillingDeps | undefined {
   if (missing.length > 0) {
     throw new ConfigError(
       `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required wherever ` +
-        `BILLING_PROVIDER is set: naming a provider is what mounts the subscription webhook, and a ` +
-        `webhook endpoint with no secret would refuse every delivery the provider sends. Values are ` +
-        `omitted deliberately; see server/.env.example for the expected shape.`,
+        `BILLING_PROVIDER is set: naming a provider is what mounts the subscription webhook and the ` +
+        `billing routes, and each of these is load-bearing for one of them — a webhook endpoint ` +
+        `with no secret would refuse every delivery the provider sends, and a portal route with no ` +
+        `access token would fail on every press. Values are omitted deliberately; see ` +
+        `server/.env.example for the expected shape.`,
     );
   }
   // `new URL` refuses a malformed checkout link here, at startup, rather than on the first user who
@@ -106,10 +112,48 @@ export function billingDepsFrom(config: Config): BillingDeps | undefined {
         `dashboard, and the account id is appended to it as a query parameter.`,
     );
   }
+  // Same reasoning as the checkout link directly above, applied to the optional override: a
+  // malformed origin here is a startup failure that names itself rather than a portal route that
+  // throws on the first user who presses Manage subscription.
+  if (config.billingApiBaseUrl !== undefined) {
+    // **The scheme is checked as well as the parse, because this variable decides where a bearer
+    // credential is sent** (PR #183, F12). `new URL` accepts anything with a scheme, so
+    // `http://api.polar.sh` passed and the adapter would then put `authorization: Bearer <token>`
+    // on the wire in cleartext. A route that throws on the first press is recoverable; a credential
+    // that has already travelled unencrypted is not, which makes this the half of the guard worth
+    // more than the half that was here.
+    let origin: URL;
+    try {
+      origin = new URL(config.billingApiBaseUrl);
+    } catch {
+      throw new ConfigError(
+        `BILLING_API_BASE_URL is not a URL. It is the provider's API origin, and it is optional — ` +
+          `leave it unset to use the provider adapter's own default.`,
+      );
+    }
+    if (origin.protocol !== "https:") {
+      throw new ConfigError(
+        `BILLING_API_BASE_URL must be https. It is the origin an Organization Access Token is sent ` +
+          `to, and any other scheme puts that credential on the wire in the clear.`,
+      );
+    }
+    // A path here is silently dropped rather than honoured, because the adapter's request path is
+    // root-anchored: `new URL("/v1/customer-sessions/", "https://host/gw")` is `https://host/v1/...`.
+    // Refusing it is better than dropping it, because the resulting 404 from the wrong path is the
+    // status `looksLikeAMissingCustomer` exists to keep from reading as "no customer".
+    if (origin.pathname !== "/") {
+      throw new ConfigError(
+        `BILLING_API_BASE_URL must be an origin with no path. The provider's request path is ` +
+          `appended from the root, so a prefix here would be silently dropped rather than used.`,
+      );
+    }
+  }
   return {
     provider: polarProvider({
       webhookSecret: config.billingWebhookSecret!,
       checkoutUrl: config.billingCheckoutUrl!,
+      accessToken: config.billingProviderAccessToken!,
+      apiBaseUrl: config.billingApiBaseUrl,
     }),
     plans: parseBillingPlans(config.billingPlans),
     graceMilliseconds: config.billingGraceDays * 24 * 60 * 60 * 1000,
