@@ -1320,6 +1320,27 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
     }
 
+    /// **F5's half: the unreadable row says the one consequence Sonny knows without opening the
+    /// file** (founder decision, PR #184).
+    ///
+    /// Moving `resumable-tasks.json` aside takes it out of the path the checker reads, so every
+    /// watcher in it stops permanently and none of the four endings fires. The rest of that sentence
+    /// is honest about *contents* being unknowable and was silent about that. A notification was the
+    /// declined option — it would put something the user cannot act on in front of them.
+    ///
+    /// **The control is a row whose file holds no watchers**, which must not gain the clause.
+    @Test
+    func theUnreadableUnfinishedTasksRowSaysItsWatchersHaveStopped() {
+        let unfinished = MemoryDeletionCopy.confirmation(for: .resumableTasks, readability: .unreadable)
+        #expect(unfinished.contains("Any watchers in it have stopped."))
+        // Still honest about the half it cannot know.
+        #expect(unfinished.contains("can't tell you what's in it"))
+
+        let snippets = MemoryDeletionCopy.confirmation(for: .snippets, readability: .unreadable)
+        #expect(snippets.contains("watchers") == false, "a row with no watchers gained the clause")
+        #expect(snippets.contains("can't tell you what's in it"))
+    }
+
     /// **The Memory row's delete is scoped to its own collection, and the watchers sharing its file
     /// survive it** (SONNY-236, founder decision 2026-08-31).
     ///

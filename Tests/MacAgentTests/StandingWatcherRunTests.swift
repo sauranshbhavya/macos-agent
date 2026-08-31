@@ -412,6 +412,66 @@ struct StandingWatcherRunTests {
         await fixture.settle()
         let afterTimeout = try #require(try fixture.store.loadWatchers().first)
         #expect(afterTimeout.consecutiveFailures == 1, "the abandonment did not record exactly one failure")
+
+        // **The third step, which this test's own doc comment promised and its body did not assert**
+        // (PR #184 cycle 3, N2). The abandonment stamps `lastCheckedAt`, and due-ness is measured
+        // from that — so the next check is `checkTimeout + checkInterval` after the last one, not
+        // `checkTimeout`. The missing assertion is exactly what let the manual row say "retried on
+        // the timeout" for a round.
+        let abandonedAt = try #require(afterTimeout.lastCheckedAt)
+        #expect(abandonedAt == start.addingTimeInterval(60), "the abandonment stamps the pulse it happened on")
+        let interval = StandingWatcherLimits.standard.checkInterval
+        #expect(
+            StandingWatcherEvaluator.isDue(afterTimeout, now: abandonedAt.addingTimeInterval(interval - 1)) == false,
+            "a hanging page became due before a full interval had passed since its abandonment"
+        )
+        #expect(
+            StandingWatcherEvaluator.isDue(afterTimeout, now: abandonedAt.addingTimeInterval(interval)),
+            "a hanging page never becomes due again"
+        )
+    }
+
+    /// **N1 — a watcher whose delete keeps failing says its sentence once, not once per pulse**
+    /// (PR #184 cycle 3).
+    ///
+    /// The reviewer measured 11 notices across 11 pulses against a read-only store directory: the
+    /// delete throws, the record survives, and because expiry is decided *before* due-ness the
+    /// expired branch re-fires on the 30-second pulse rather than the check interval. Nothing
+    /// downstream coalesces them, and F1 removed the gate that had been damping it.
+    ///
+    /// The **control** is the first pulse: the notice really is published once, so a count of one is
+    /// the guard working rather than the notice never arriving.
+    @Test
+    func aWatcherWhoseDeleteKeepsFailingSaysItOnce() async throws {
+        let fixture = try makeWatcherFixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.root.path)
+            fixture.cleanUp()
+        }
+        let start = Date(timeIntervalSince1970: 1_900_000_000)
+        try fixture.store.saveWatcher(
+            watcher(
+                id: "expired",
+                subject: "a page nobody came back to",
+                baselineDigest: "base",
+                createdAt: start.addingTimeInterval(-(StandingWatcherLimits.standard.maxLifetime + 60))
+            )
+        )
+        // Reads still work; the rewrite the delete needs does not.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.root.path)
+
+        var notices = 0
+        for tick in stride(from: 0, through: 300, by: 30) {
+            fixture.viewModel.watcherNotice = nil
+            await fixture.check(now: start.addingTimeInterval(Double(tick)))
+            if fixture.viewModel.watcherNotice != nil {
+                notices += 1
+            }
+        }
+
+        #expect(notices == 1, "the watcher notified \(notices) times across 11 pulses")
+        // And the record really did survive, so this is the guard rather than a delete that worked.
+        #expect(try fixture.store.loadWatchers().count == 1)
     }
 
     // MARK: - The notification channel

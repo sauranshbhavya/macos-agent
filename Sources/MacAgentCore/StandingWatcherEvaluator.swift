@@ -153,6 +153,11 @@ public enum StandingWatcherEvaluator {
         }
 
         updated.candidateDigest = reading
+        // Set once and never cleared — `.expired`'s sentence reads it, and every other record of a
+        // difference on this type is reset by a reading equal to the baseline (F4).
+        if updated.firstDifferenceAt == nil {
+            updated.firstDifferenceAt = now
+        }
         updated.unstableReadings = watcher.unstableReadings + 1
         guard updated.unstableReadings < limits.maxUnstableReadings else {
             return .stopped(updated, .unwatchable)

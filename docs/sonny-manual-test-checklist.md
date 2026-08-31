@@ -2570,9 +2570,16 @@ don't.**
   page.** `checkTimeout` is 60 seconds and is *not* shortened, so in a build with
   `checkInterval: 30` a check may outlive two intervals. That is harmless and is asserted by the last
   test named above: a pulse while a check is in flight starts no second fetch, and the check is
-  abandoned at 60 seconds. The visible effect is that a **slow** page is retried on the timeout rather
-  than on the interval — so if you are counting 30-second intervals against a sluggish site and one
-  seems to be missing, that is this and not a defect.
+  abandoned at 60 seconds.
+
+  **The retry cadence of a hanging page is `checkTimeout + checkInterval`, which is 90 seconds in this
+  build — not 60.** The abandonment stamps the watcher's last-checked time, and due-ness is measured
+  from that, so the next check is one whole interval after the abandonment. Measured directly at the
+  shipped numbers: fetches at t=0 and t=960, which is 60 + 900. So against a sluggish site you will
+  see **two** 30-second pulses pass with nothing happening, not one; that is this and not a defect.
+  (This bullet said "retried on the timeout rather than on the interval" until PR #184's cycle-3
+  re-check measured it — the same class of defect as the row arithmetic F6 was filed for, in the fix
+  for F6.)
 
 - **There is deliberately no shipped override for this** — no environment variable, no debug menu.
   The cap is a founder decision and it should not ship with a documented bypass; and since a
