@@ -321,7 +321,15 @@ struct BackendOutageTests {
         )
         let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost), client: client)
         defer { fixture.tearDown() }
-        let account = SonnyAccountModel(client: client)
+        // SONNY-216: the two entitlement parameters have no defaults, for the reason `client` has
+        // none — a default store would reach the one Keychain every packaged build here shares. This
+        // suite is about a backend outage and asks nothing of the subscription row, so it takes an
+        // in-memory store and the shipped (empty) key set, under which no claim verifies.
+        let account = SonnyAccountModel(
+            client: client,
+            entitlementStore: KeychainEntitlementStore(secretStore: InMemoryKeychainSecretStore()),
+            entitlementKeys: SonnyEntitlementKeys.shipped
+        )
         account.sessionDidChange = { [weak viewModel = fixture.viewModel] in viewModel?.refreshPermissions() }
 
         // Signed out to begin with: nothing is in the Keychain.

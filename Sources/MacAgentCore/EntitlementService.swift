@@ -142,6 +142,47 @@ public actor EntitlementService {
         )
     }
 
+    /// What the cached claim says about this account's subscription, or `nil` when it says nothing
+    /// (SONNY-216).
+    ///
+    /// ## This is a second public reader on this actor, and it is deliberately not a claim accessor
+    ///
+    /// `decision(for:)` is a narrow surface on purpose: a caller names one capability and gets one
+    /// answer, and cannot enumerate what the account has. **Handing out the `EntitlementClaim`
+    /// itself would widen that**, and in the direction that matters — a caller holding the claim can
+    /// read `capabilities` directly and decide entitlement for itself, without `judge`, without the
+    /// session check and without `effectiveNow`'s clock defence. Every one of those is a rule this
+    /// type exists to apply, and none of them is enforceable on a value that has left it.
+    ///
+    /// **So what this returns is a purpose-built value and not the claim**: a plan key and one of
+    /// two states, both of which are already true of what the user is looking at. It answers a
+    /// question about *billing*, which is what Command Center's Account section asks;
+    /// `decision(for:)` still answers the only question about *permission*, and it remains the only
+    /// thing that does. Adding this does not make a second way to ask whether a capability is
+    /// granted, and `SubscriptionSnapshot` carries no capability list so that it cannot become one.
+    ///
+    /// **Local and instant, exactly as `decision(for:)` is.** It reads the cache, verifies it against
+    /// a held public key and makes no network call — so the Account section renders with the Wi-Fi
+    /// off, which is §16.3's guarantee applied to a screen rather than to a capability. A stale
+    /// claim starts the same background refresh the decision path starts, and changes the *next*
+    /// answer rather than this one.
+    public func currentSubscription() async -> SubscriptionSnapshot? {
+        guard let session = try? await client.restoredIdentity() else { return nil }
+        guard let stored = ((try? store.load()) ?? nil) else {
+            startRefresh()
+            return nil
+        }
+        guard case .success(let claim) = EntitlementVerifier.verify(stored.compactClaim, against: keys) else {
+            startRefresh()
+            return nil
+        }
+        let instant = await effectiveNow(floor: stored.observedServerTime)
+        if EntitlementJudgement.shouldRefresh(claim: claim, now: instant) {
+            startRefresh()
+        }
+        return SubscriptionReading.read(claim: claim, session: session, now: instant)
+    }
+
     /// The instant a claim is judged at, and **the half of the clock defence that was missing**.
     ///
     /// **What was wrong** (PR #152's review, F1). The persisted mark had exactly one writer, `adopt`,
