@@ -83,10 +83,21 @@ public enum PlanItemJobResolver {
             throw PlanItemJobError.tooManyItems(count: matching.count, limit: PlanItemJob.maxItems)
         }
 
-        // Every item is whitelisted on its own terms, not on its parent's. A folder inside the
-        // whitelist can hold a child the whitelist would refuse — the resolver excludes symbolic
-        // links below, and this is what catches anything else `validateInsideWhitelist` knows about
-        // that a parent check cannot see.
+        // Every item is whitelisted on its own terms rather than on its parent's.
+        //
+        // **Defensive, and measured to be so** (PR #185, F3; a mutant replacing this with `matching`
+        // survived the whole suite at `08db3aa`). Two guards reach every escape first: `children(of:)`
+        // excludes symbolic links, which is the only shape a child of a validated directory can take
+        // whose canonical path leaves it; and the Finder source's items come through
+        // `FinderSelectionResolver.whitelistedSelection`, which validates each URL before this
+        // resolver sees it. This comment used to claim the line "catches anything else
+        // `validateInsideWhitelist` knows about that a parent check cannot see", which nothing
+        // demonstrates and which a reviewer was right to call out.
+        //
+        // Kept for R4's reason rather than removed: the three cover for each other, which is exactly
+        // the arrangement in which deleting one later — believing another covers it — opens a hole
+        // with a green suite. A new item source that does not validate, or a filter narrowed to let
+        // some link through, would make this the only thing standing.
         return try matching.map { try whitelist.validateInsideWhitelist($0).path }
     }
 
