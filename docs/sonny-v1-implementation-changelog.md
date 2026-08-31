@@ -225,12 +225,23 @@ Files changed:
 - `Sources/MacAgentCore/ScreenControlAllowance.swift` (new) — the Mac's reading, and nothing more.
 - `server/test/credit.test.ts`, `server/test/credit.db.test.ts`, `server/test/support/credit.ts` (all new); `server/test/authdeps.test.ts`, `server/test/gate.test.ts`, `server/test/support/config.ts`; `Tests/MacAgentCoreTests/ScreenControlAllowanceTests.swift` (new).
 
-Tests, **re-measured at `f38f623`, the head carrying PR #182's cycle-3 round** — the server half
-re-run there in full because that round touched `server/src/credit/balance.ts` and
-`server/test/credit.test.ts`, and the app half carried from `9a7ad23 (clean)` under WORKFLOW.md step
-5's tree-identity rule, `git diff --stat 9a7ad23 HEAD -- Sources Tests Package.swift` printing
-**nothing — 0 bytes**, with a positive control over `80c90f1..HEAD` on the same paths answering 7
-files so the zero is a measurement rather than a command that cannot find anything.
+**Rebased once, at merge time, onto `886d373` (PR #181's merge), per WORKFLOW.md step 3's
+one-hop rule.** One conflict, in this file, and it was the ordinary both-sides-added-an-entry shape:
+resolved with this entry above `chore/the-three-records-this-wave-owes`, main's entries left in the
+order they had, `git log --first-parent --merges` the authority. `docs/sonny-manual-test-checklist.md`
+merged clean.
+
+**The app-half figures are re-measured at `d363eea` and the server-half figures are carried, and the
+split is the rule rather than a convenience.** PR #181 carried SONNY-379, which moved
+`Sources/MacAgent/ScreenAccessOnboarding.swift` and `Tests/MacAgentTests/ScreenAccessOnboardingTests.swift`
+— **206 insertions across the two** — so `Sources/` and `Tests/` moved under this branch even though
+nothing of this branch's conflicted, and every app-half figure taken before the rebase describes a
+tree that no longer exists. **The suite count moved with it: 2569 → 2573.** Nothing was translated.
+The server half did not move: `git diff --stat fe17a94 886d373 -- server` prints **nothing — 0
+bytes**, positive control `git diff --stat fe17a94 HEAD -- server` on the same path answering 16
+files; and this branch's own replay left it byte-identical, `git diff --stat a0ca4aa HEAD -- server`
+also 0 bytes with a control over `docs` answering 2 files. So those figures are measurements of the
+merging tree and carry with a proof scoped to exactly the path they depend on.
 Earlier in the branch the figures were carried across two documentation commits under the same rule,
 and that proof stopped holding the moment the fix round touched both halves — so those were taken
 again rather than repointed, which is the rule's own distinguishing question: whether the tree moved,
@@ -241,11 +252,38 @@ two figures depend on.
 The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
 which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
 tracked file and is therefore re-run at the head rather than carried**:
-- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 659 passed | 363 skipped (1022) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
+- Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 659 passed | 363 skipped (1022) tests**, exit 0, at `f38f623`, **carried across the rebase under the proof above rather than re-run** — the merged range changed no file under `server/` and the replay left this branch's own `server/` byte-identical, so this is a measurement of the merging tree. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
 - Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1022 passed (1022)**, exit 0, **0 skipped**. 659 + 363 = 1022, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
 - `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
-- App half: `swift build` exit 0; the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 51.197 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
-- `scripts/warnings` → **0 warnings**, every file in `Sources/` and `Tests/` recompiled. Measured twice: by this lane at **`0c1c0c1` plus 1 uncommitted `.md`** — stated rather than rounded to "clean", because the script prints that line precisely so a figure cannot be quoted apart from its tree — and independently by cycle 3's reviewer at **`9a7ad23 (clean)`**, which needs no such qualification. **The clean one is the figure this entry carries**, and it holds at the head under WORKFLOW.md step 5's tree-identity rule: the figure depends on `Sources/`, `Tests/` and `Package.swift` (the script builds `--build-tests`), and `git diff --stat 9a7ad23 HEAD -- Sources Tests Package.swift` prints nothing — every commit since touches `server/` and `docs/` only.
+- App half, **re-measured after the rebase**: `swift build` exit 0; the flagged command from `CLAUDE.md` → **2573 tests in 175 suites passed after 85.526 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0), at `d363eea`. The four extra tests are SONNY-379's, arriving from `main`. **This is the run WORKFLOW.md's PR #111 gotcha exists for**: nothing of this branch conflicted, `swift build` does not build the test targets, and the conflict list says where git needed help rather than where two trees stopped agreeing — so a branch that merges clean and compiles can still be the one that finds a moved declaration. **Checked, and the zero is controlled:** the merged range's changed declarations (`RelaunchCollaborators`, `forTheRunningApp`, `AppRelauncher`, `ScreenAccessOnboardingModel`, `relaunch`, `reopen`, `terminate` and the rest) appear **0 times** in this branch's two Swift files, against a positive control on `ScreenControlAllowanceService` answering 6 across the same pair; the only hits anywhere in this branch's touched files are in `docs/`, which is prose. A first pass at that check returned ten zeros from an unexpanded shell variable and was caught by the control exiting 2 rather than 0.
+- `scripts/warnings` → **0 warnings**, every file in `Sources/` and `Tests/` recompiled, its own report reading `measured at : d363eea (clean)`. **Re-measured after the rebase, not carried**, for the reason above: the script builds `--build-tests`, so `Tests/` is in scope and `Tests/` is exactly what the merged range moved. (The pre-rebase readings were 0 at `0c1c0c1` plus one uncommitted `.md` and, independently, 0 at `9a7ad23 (clean)` by cycle 3's reviewer; both described the pre-rebase tree and neither is carried forward.)
+
+**Every SHA this entry cites was orphaned by the rebase, and each is recorded beside its replay
+rather than re-stamped or dropped.** A rebased-away commit does not dangle — it stays in this Mac's
+object store, `git show` prints it, and a reader who checks it that way has verified nothing about
+this history; `git merge-base --is-ancestor <sha> HEAD` is the one command that separates the cases,
+read with nothing between it and `$?`. All ten pre-rebase commits exit **1** and all ten replays exit
+**0**:
+
+| figure taken at | orphaned | replayed as | ancestral |
+|---|---|---|---|
+| the implementation | `e367c4d` | `f243aa3` | yes |
+| the first battery, and P4's survival | `00b8fcc` | `3115dfd` | yes |
+| P4's coverage fix and its re-run | `4c7d6b0` | `8af67ce` | yes |
+| the reviewer's eight-mutant battery | `80c90f1` | `781a3c5` | yes |
+| the fix round and its six mutants | `0c1c0c1` | `f3a4b75` | yes |
+| the reviewer's cycle-3 battery, and its clean `scripts/warnings` | `9a7ad23` | `404d172` | yes |
+| cycle 3's round, its one mutant, and the server figures | `f38f623` | `6b40d6a` | yes |
+
+The three docs-only commits `ea19230`, `a8ba8f4` and `a0ca4aa` carry no figures and replayed as
+`3d7ccd4`, `75f5666` and `d363eea`. **The one commit above `d363eea` is this record itself and moves
+nothing any figure reads** — `git diff --stat d363eea HEAD -- Sources Tests Package.swift server`
+prints nothing, 0 bytes, against a control over `docs` on the same pair answering 1 file — so every
+figure above describes the merging tree as well as the head it was taken at. **The figures themselves are not re-stamped onto the replays** —
+a stamp records when a measurement was taken, and translating one across a rebase attaches it to a
+tree it was never measured on. What crosses is either a re-measurement (the app half) or a figure
+with a tree-identity proof of the right scope beside it (the server half); the orphaned names are
+kept because they are what the batteries' own reports say.
 
 Behavior added:
 - A per-account monthly credit pool, derived from `sonny.metering_event`, with screen control as the only line that draws on it.
