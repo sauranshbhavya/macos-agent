@@ -1327,6 +1327,13 @@ has not.
 **Forcing the failure needs no special build**: rename the bundle out from under the running app.
 macOS keeps the running process alive, and `open` then has nothing at that path to reopen.
 
+**Note added 2026-08-31 (SONNY-379):** the code behind these two rows was rewired — `DefaultAppRelauncher` is handed its bundle, its reopen and its terminate rather than naming them
+itself — with no change to what either row should do, so they are that ticket's manual test unchanged.
+The second half of the first row (rename the bundle back, press again, and the app actually restarts) is
+the part that proves the shipping app got the real wiring rather than a test double: nothing automated in
+this repository can run `/usr/bin/open` or `NSApp.terminate`, so a founder pressing the button is the only
+check there is.
+
 - [ ] **(new 2026-08-30, SONNY-348) — the failed reopen. Reset (b) and (c)**, launch the packaged
       app, and get to the screen-access step (decline sign-in if it appears). Press **Request access**
       under Screen Recording so the relaunch guidance appears. **Leave Sonny running** and, in a
