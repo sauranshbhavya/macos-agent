@@ -164,7 +164,16 @@ export function readPolarDelivery(delivery: VerifiedDelivery): WebhookReading {
   if (status === undefined) {
     return { kind: "unreadable", eventId: delivery.eventId, reason: `${eventType} carried no status` };
   }
-  const state = STATUS[status];
+  // **`Object.hasOwn` rather than a bare lookup, because the bare one reaches `Object.prototype`**
+  // (PR #178 review, F4). `STATUS["constructor"]` is a function, not `undefined`, so a payload whose
+  // status is any inherited key — `constructor`, `toString`, `valueOf`, `__proto__`,
+  // `hasOwnProperty`, `isPrototypeOf` — walked straight past the refusal below carrying a `state`
+  // that is not a `SubscriptionState`. `writeFor`'s exhaustive switch then matched nothing, returned
+  // `undefined`, and the delivery became a `TypeError` and a 500 instead of the recorded `unreadable`
+  // row this table's own doc comment promises. Same reachability as F3 — it needs the signing secret,
+  // so this is robustness rather than an exploit — and the table's "no default arm" claim is only
+  // true with this guard in front of it.
+  const state = Object.hasOwn(STATUS, status) ? STATUS[status] : undefined;
   if (state === undefined) {
     // Named in the reason, because the fix is one entry in the table above and the reason is the
     // only place the missing word appears.

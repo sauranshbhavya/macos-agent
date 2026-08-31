@@ -51,6 +51,11 @@ export type BillingOutcome =
   | "unmatched"
   | "unmapped"
   | "unreadable"
+  /**
+   * A delivery about a different subscription than the one this account's entitlement is already
+   * live on. Nothing moves. See `refuseForeignSubscription` below.
+   */
+  | "conflict"
   /** The event id was already recorded. Nothing was read and nothing was written. */
   | "duplicate";
 
@@ -142,6 +147,63 @@ function writeFor(
 }
 
 /**
+ * Is this delivery about a subscription other than the one this account is already live on?
+ *
+ * **The gap this closes is the mirror of the one the unique index already covers, and it is the half
+ * that costs the customer their access** (PR #178 review, F1). `entitlement_billing_subscription_idx`
+ * refuses two accounts on one subscription. Nothing refused **two subscriptions on one account** —
+ * `sonny.entitlement` is keyed on the account and holds exactly one `billing_subscription_id`, and
+ * every delivery resolved by the payload's account id, so the second subscription's events simply
+ * overwrote the first's. Proved against a real Postgres before the fix: subscribe twice, then cancel
+ * the *first*, and `revoked_at` is set with the capabilities emptied **while the second subscription
+ * is still active and still billing** — and `sonny.billing_event` records that revocation as
+ * `applied`, so the audit table says nothing is wrong either.
+ *
+ * **This is not hypothetical user behaviour.** The hosted checkout is a static link with the account
+ * id appended, so opening it twice is an ordinary thing a person does. Whether the *provider* permits
+ * a second concurrent subscription for one customer and product is a dashboard question the founders
+ * are answering separately; the gateway-side gap is real whatever that answer turns out to be, which
+ * is why the fix is not scoped to it.
+ *
+ * **Refusing the foreign delivery is the direction that does not lose access, and both directions
+ * cost something.** Refused: a customer who somehow holds two subscriptions keeps the access the
+ * first one grants, pays twice, and the second subscription is visible in `sonny.billing_event` as
+ * `conflict` for a human to unpick. Accepted, which is what shipped: the two subscriptions overwrite
+ * each other and a cancellation of either revokes access the other is still paying for. Losing money
+ * silently is bad; losing money *and* access, with an audit row that says `applied`, is worse — and
+ * only the second is invisible to everyone.
+ *
+ * **Liveness is the whole of the test, and it is what keeps resubscription working.** A row whose
+ * subscription is revoked is not live, so a new subscription takes it over exactly as before — which
+ * is the ordinary cancel-then-resubscribe path and must not become a conflict. A row in grace is
+ * live (`revoked_at` is still `NULL`), so a second subscription arriving beside a past-due one is
+ * refused, which is correct: two live subscriptions is the anomaly whatever state either is in.
+ *
+ * **What this does NOT do**, said plainly rather than left to be discovered: it does not merge the
+ * two, does not decide which one *should* win, and does not refund or cancel anything at the
+ * provider. It records the collision and refuses to let it corrupt the entitlement. Deciding who
+ * wins is the same "who wins" reasoning the two-accounts-on-one-subscription residual already needs,
+ * and both belong on one ticket rather than being improvised in a fix round.
+ */
+async function refuseForeignSubscription(
+  client: pg.Client,
+  provider: string,
+  accountId: string,
+  subscriptionId: string,
+): Promise<boolean> {
+  const existing = await client.query<{ billing_subscription_id: string | null }>(
+    `SELECT billing_subscription_id FROM sonny.entitlement
+      WHERE account_id = $1
+        AND revoked_at IS NULL
+        AND billing_provider = $2
+        AND billing_subscription_id IS NOT NULL
+        AND billing_subscription_id <> $3`,
+    [accountId, provider, subscriptionId],
+  );
+  return existing.rows.length > 0;
+}
+
+/**
  * The account this delivery is about: the one the provider echoed back, or the one that owns this
  * subscription already.
  *
@@ -230,6 +292,15 @@ export async function applyBillingDelivery(
     if (accountId === undefined) {
       await client.query("COMMIT");
       return { outcome: "unmatched", accountId: undefined };
+    }
+
+    // **Before the plan is even looked up**, because the collision is about identity and does not
+    // depend on this delivery's product being one the deployment configured — reporting `unmapped`
+    // for a delivery that would have been refused anyway names the less actionable of the two facts.
+    if (await refuseForeignSubscription(client, input.provider, accountId, event.subscriptionId)) {
+      await settle(client, input.provider, event.eventId, "conflict", accountId);
+      await client.query("COMMIT");
+      return { outcome: "conflict", accountId };
     }
 
     const plan = input.plans.get(event.planKey);

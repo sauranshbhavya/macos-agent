@@ -130,6 +130,22 @@ export function verifyWebhookSignature(input: SignatureInput): SignatureVerdict 
   // interpreting.
   if (!/^-?\d{1,15}$/.test(timestamp)) return { ok: false, refusal: "timestamp_malformed" };
   const sentAt = new Date(Number(timestamp) * 1000);
+  // **A digit string can be in range for the regex and out of range for a `Date`, and the arithmetic
+  // below fails OPEN when it is** (PR #178 review, F3). ECMAScript bounds a `Date` at ±8.64e15 ms, so
+  // a 13-to-15-digit second count overflows it; `new Date` is then `Invalid Date`, `getTime()` is
+  // `NaN`, `drift` is `NaN`, and **`NaN > tolerance` is `false`** — so the comparison that exists to
+  // refuse says accept. The verdict then travels on carrying an `Invalid Date`, which reaches
+  // Postgres as `0NaN-NaN-NaNTNaN:NaN:NaN.NaN+NaN:NaN` and throws.
+  //
+  // Refused here rather than by narrowing the regex, because the regex would then be encoding the
+  // `Date` range in digit counts — true today and a silent trap the day either bound moves. Asking
+  // the `Date` whether it is a date is the check that cannot drift.
+  //
+  // **Not an authentication bypass, and it is worth saying so rather than letting the fix imply
+  // one**: the timestamp is inside the signed content, so only the provider or a holder of the
+  // secret can reach this at all. What it was, exactly, is the replay bound having a hole for a
+  // class of values and a 500 where a refusal belongs.
+  if (Number.isNaN(sentAt.getTime())) return { ok: false, refusal: "timestamp_malformed" };
   const drift = Math.abs(input.now.getTime() - sentAt.getTime()) / 1000;
   if (drift > WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     return { ok: false, refusal: "timestamp_outside_tolerance" };
@@ -146,6 +162,13 @@ export function verifyWebhookSignature(input: SignatureInput): SignatureVerdict 
     const bytes = Buffer.from(candidate, "base64");
     // Length first: `timingSafeEqual` throws on a mismatch, and a thrown `RangeError` inside a route
     // handler is a `500` standing in for a refusal.
+    //
+    // **Held by `refuses a v1 entry that decodes to the wrong number of bytes` and by nothing else**
+    // (PR #178 review, F2, where mutant R1 survived). Every `v1,` entry that reaches this loop in an
+    // ordinary test is a real HMAC-SHA256 and therefore always 32 bytes — the wrong-secret and
+    // tampered-body cases included — so the whole suite passed with this guard deleted while a 401
+    // became a 500. The test that holds it presents a short `v1,` value with otherwise valid headers,
+    // which is the only shape that reaches the comparison at the wrong length.
     if (bytes.length === expected.length && timingSafeEqual(bytes, expected)) {
       return { ok: true, eventId: id, sentAt };
     }

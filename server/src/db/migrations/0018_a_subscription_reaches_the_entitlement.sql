@@ -6,7 +6,7 @@
 --
 -- **This file holds no plan, no price and no tier, exactly as 0013 does not.** `plan` stays the
 -- opaque key 0013 declared it; which provider plan key maps to which capability list is deployment
--- configuration (`BILLING_PLAN_CAPABILITIES`), and the numbers behind it are SONNY-212's. What is
+-- configuration (`BILLING_PLANS`), and the numbers behind it are SONNY-212's. What is
 -- added here is the *state* a subscription puts an account into, and the audit of the deliveries
 -- that put it there.
 --
@@ -108,6 +108,10 @@ CREATE TABLE sonny.billing_event (
   --   unreadable— the signature passed and the payload did not parse, or named a status this
   --               gateway has no mapping for. Either the provider changed a shape or something
   --               holding the endpoint secret is sending nonsense; both are worth seeing.
+  --   conflict  — a delivery about a DIFFERENT subscription than the one this account's entitlement
+  --               is already live on. Nothing moves. See `server/src/billing/store.ts` for why a
+  --               second live subscription on one account has to be refused rather than merged, and
+  --               why refusing it is the direction that does not cost the customer their access.
   outcome       text        NOT NULL,
 
   -- The account it reached, when it reached one. A scope, not a foreign key.
@@ -122,7 +126,8 @@ CREATE TABLE sonny.billing_event (
   PRIMARY KEY (provider, event_id),
 
   CONSTRAINT billing_event_outcome_known
-    CHECK (outcome IN ('applied', 'ignored', 'stale', 'unmatched', 'unmapped', 'unreadable'))
+    CHECK (outcome IN ('applied', 'ignored', 'stale', 'unmatched', 'unmapped', 'unreadable',
+                       'conflict'))
 );
 
 COMMENT ON TABLE sonny.billing_event IS
