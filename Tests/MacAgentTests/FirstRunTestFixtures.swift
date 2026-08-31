@@ -90,7 +90,7 @@ func makeHermeticScreenAccessModel(
 final class NoOpRelauncher: AppRelaunching {
     private(set) var relaunchCount = 0
 
-    func relaunch() {
+    func relaunch() async throws {
         relaunchCount += 1
     }
 }
