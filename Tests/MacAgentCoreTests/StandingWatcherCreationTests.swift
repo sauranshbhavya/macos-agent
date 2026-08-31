@@ -128,6 +128,24 @@ struct StandingWatcherCreationTests {
         #expect(assessment.escalations.isEmpty)
     }
 
+    /// **The two numbers the founders' shortened manual build puts on screen, asserted rather than
+    /// reasoned about** (SONNY-382's manual rows; the same discipline PR #184's F6 added for
+    /// `checkTimeout` after two rounds of manual-row arithmetic that did not compose).
+    ///
+    /// The manual pass runs at `checkInterval: 30` and `maxLifetime: 600`, and both of this
+    /// operation's approval numbers round: half a minute renders as "1 minute" and ten minutes as
+    /// "1 day". Neither is a defect and both look like one, so the checklist says so — and this is
+    /// what fails if a later edit changes either formatter and leaves that page lying.
+    @Test
+    func theApprovalsTwoNumbersRoundTheWayTheManualChecklistSaysTheyDo() {
+        #expect(StandingWatcherCapabilityAdapter.minuteCount(30) == "1 minute")
+        #expect(StandingWatcherNoticeCopy.dayCount(600) == "1 day")
+        // And at the shipped values, where they are exact rather than rounded — the control, without
+        // which the two assertions above would be satisfied by a formatter that always says "1".
+        #expect(StandingWatcherCapabilityAdapter.minuteCount(StandingWatcherLimits.standard.checkInterval) == "15 minutes")
+        #expect(StandingWatcherNoticeCopy.dayCount(StandingWatcherLimits.standard.maxLifetime) == "7 days")
+    }
+
     /// The cap refuses rather than evicting, and it refuses **before** an approval panel is raised —
     /// a user who is at five should be told so instead of approving a watcher that is then declined
     /// underneath them.

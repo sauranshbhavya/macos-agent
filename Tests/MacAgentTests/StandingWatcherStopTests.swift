@@ -115,7 +115,9 @@ struct StandingWatcherStopTests {
     /// Both channels are asserted, in both directions, because getting this wrong is silent: the
     /// notice channel would leave the user believing the watcher had stopped, and `errorMessage` on
     /// a *background* write would blank the result of a task that succeeded.
-    @Test
+    /// Gated: it locks a directory to 0o500, and root bypasses permission bits — so on a
+    /// root-running machine this would fail for a reason that is not a defect (SONNY-106 section D).
+    @Test(.requiresUnprivilegedProcess)
     func aStopThatCannotBeWrittenReportsOnTheChannelForAPressedControl() throws {
         let fixture = try makeStopFixture()
         defer { fixture.cleanUp() }
