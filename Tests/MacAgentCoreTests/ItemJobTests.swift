@@ -522,25 +522,27 @@ struct ItemJobTests {
 
         // Not leading: it takes what the step before it produced, so it must keep both path fields
         // blank — that blankness is what `ChainedArtifactCarry.consumesPreviousArtifact` reads.
-        let trailing = try executor.prepare(
+        let folders = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: folders) }
+        for name in ["alpha", "beta"] {
+            let folder = folders.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try write("doc", to: folder.appendingPathComponent("report.docx"))
+        }
+        let folderExecutor = makeExecutor(root: folders)
+        let trailing = try folderExecutor.prepare(
             plan: AgentPlan(
-                summary: "Write a note for each of these and open it.",
+                summary: "Convert the documents in each of these folders and open the result.",
                 requiresConfirmation: false,
                 steps: [
-                    AgentStep(
-                        id: "draft",
-                        operation: .createLocalDraft,
-                        description: "Write a note.",
-                        draftTitle: "Note",
-                        draftContent: "Body."
-                    ),
+                    AgentStep(id: "scan", operation: .scanDocx, description: "Find them."),
+                    AgentStep(id: "convert", operation: .convertDocxToPDF, description: "Convert them."),
                     AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
                 ],
                 itemJob: PlanItemJob(
                     source: .folder,
-                    folderPath: root.path,
-                    itemKind: .files,
-                    fileExtensions: ["pdf"],
+                    folderPath: folders.path,
+                    itemKind: .folders,
                     itemField: .inputPath
                 )
             )
@@ -549,9 +551,9 @@ struct ItemJobTests {
         #expect(openSteps.count == 2)
         #expect(openSteps.allSatisfy { $0.inputPath == nil })
         #expect(openSteps.allSatisfy { ChainedArtifactCarry.consumesPreviousArtifact($0) })
-        // The control beside it: the step that is *not* a consumer did get the item.
-        let draftSteps = trailing.plan.steps.filter { $0.operation == .createLocalDraft }
-        #expect(draftSteps.compactMap(\.inputPath).count == 2)
+        // The control beside it: the steps that are *not* trailing consumers did get the item.
+        let scanSteps = trailing.plan.steps.filter { $0.operation == .scanDocx }
+        #expect(scanSteps.compactMap(\.inputPath).count == 2)
     }
 
     // MARK: - Remembering its place
@@ -668,6 +670,409 @@ struct ItemJobTests {
             updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         #expect(record.itemJobProgress == nil)
+    }
+
+    // MARK: - A resumed job is still a job (PR #185, F1)
+
+    /// **The ticket's headline property, on the app's own Continue path.** `remainingPlan()` rebuilt
+    /// the plan from three fields and let `itemJob` default to `nil`, so a remainder kept every step's
+    /// `itemIndex` and stopped being a job — every rule that makes a job a job was present on the
+    /// first attempt and absent on the second, silently.
+    @Test
+    func aResumedJobIsStillAJob() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c"] {
+            try write(name, to: root.appendingPathComponent("\(name).pdf"))
+        }
+        let executor = makeExecutor(root: root)
+        let prepared = try executor.prepare(plan: shortcutJob(over: root))
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: prepared.plan,
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        let record = ResumableTask(
+            command: "Summarise each of these",
+            plan: prepared.plan,
+            completedStepIDs: reported.flatMap(\.stepIDs),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let remainder = record.remainingPlan()
+
+        // It is a job, its declaration is intact, and it keeps the whole item list so a failure's
+        // index still means what it meant.
+        let job = try #require(remainder.itemJob)
+        #expect(job.items.count == 3)
+        #expect(job.itemField == .shortcutInput)
+        #expect(remainder.steps.map(\.id) == ["run#3"])
+
+        // **And the count is the remainder's own, which is the trap in the obvious fix**: carrying
+        // the declaration without scoping the count reports "all 3" after doing one.
+        let progress = try #require(ItemJobProgress.of(plan: remainder, completedStepIDs: [], failures: []))
+        #expect(progress.itemCount == 1)
+        #expect(progress.completedCount == 0)
+
+        let resumeInvoker = RecordingShortcutInvoker()
+        let resuming = makeExecutor(root: root, shortcutInvoker: resumeInvoker)
+        let resumed = try resuming.prepare(plan: remainder)
+        let result = try await resuming.execute(plan: resumed.plan) { _, _ in }
+        #expect(resumeInvoker.inputs.map { ($0 as NSString).lastPathComponent } == ["c.pdf"])
+        #expect(result.summary == "Worked through all 1 files.")
+    }
+
+    /// The three job rules that were silently absent on a resume, each asserted through the real
+    /// `prepare`/`execute` rather than by inspecting the plan.
+    @Test
+    func aResumedJobKeepsSkipAndContinueAndItsPreviewDrop() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d"] {
+            try write(name, to: root.appendingPathComponent("\(name).pdf"))
+        }
+        let executor = makeExecutor(root: root)
+        let prepared = try executor.prepare(plan: shortcutJob(over: root))
+        // Pretend the first item finished and the run stopped there.
+        let record = ResumableTask(
+            command: "Summarise each of these",
+            plan: prepared.plan,
+            completedStepIDs: ["run#1"],
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        // Skip-and-continue survives the resume: `c.pdf` fails and `d.pdf` still runs.
+        let invoker = RecordingShortcutInvoker(failingOnInputContaining: "c.pdf")
+        let resuming = makeExecutor(root: root, shortcutInvoker: invoker)
+        let resumed = try resuming.prepare(plan: record.remainingPlan())
+        let result = try await resuming.execute(plan: resumed.plan) { _, _ in }
+
+        #expect(invoker.inputs.map { ($0 as NSString).lastPathComponent } == ["b.pdf", "c.pdf", "d.pdf"])
+        #expect(result.itemJobFailures.map(\.itemIndex) == [2])
+        // Counted over the three the remainder covers, not the four the job began with.
+        #expect(result.summary.contains("2 of 3 files"))
+    }
+
+    /// A remainder whose own items include one that cannot be previewed drops it and runs the rest —
+    /// the defect `82ee28d` fixed for the first attempt, which came back on the second.
+    @Test
+    func aResumedJobDropsAnUnpreviewableItemRatherThanDyingAtTheDoor() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma"] {
+            let folder = root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if name != "beta" {
+                try write("doc", to: folder.appendingPathComponent("report.docx"))
+            }
+        }
+        let executor = makeExecutor(root: root)
+        // `beta` is dropped at the first prepare, so the plan holds alpha and gamma.
+        let prepared = try executor.prepare(plan: docxJob(over: root))
+        #expect(prepared.plan.itemJob?.unavailableItems.map(\.itemIndex) == [1])
+
+        // Now empty `gamma` too, so the *remainder* has one item that cannot be previewed.
+        try FileManager.default.removeItem(at: root.appendingPathComponent("gamma/report.docx"))
+        let record = ResumableTask(
+            command: "Convert each of these",
+            plan: prepared.plan,
+            completedStepIDs: ["scan#1", "convert#1"],
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        // Before F1's fix this threw `noMatchingFiles` and prepared nothing at all.
+        let resuming = makeExecutor(root: root)
+        #expect(throws: PlanItemJobError.self) {
+            _ = try resuming.prepare(plan: record.remainingPlan())
+        }
+        // …and that is the *right* refusal here, because gamma was the remainder's only item. The
+        // control is the same remainder with gamma still convertible, which prepares and runs.
+        try write("doc", to: root.appendingPathComponent("gamma/report.docx"))
+        let healthy = try resuming.prepare(plan: record.remainingPlan())
+        #expect(healthy.plan.steps.map(\.itemIndex) == [2, 2])
+        let result = try await resuming.execute(plan: healthy.plan) { _, _ in }
+        // One folder, and beta is not re-reported: the earlier attempt's unavailable items do not
+        // travel into the remainder, for the same reason its failures do not.
+        #expect(healthy.plan.itemJob?.unavailableItems.isEmpty == true)
+        #expect(result.summary == "Worked through all 1 folders.")
+    }
+
+    /// **A resume's carried artifact never crosses an item boundary**, because the resume door bakes
+    /// it onto the remainder's leading step before `executeChain` runs and no in-loop reset can take
+    /// a value back out of the plan (PR #185, F2(b)).
+    @Test
+    func aResumesCarriedArtifactIsWithheldWhenItWouldCrossAnItemBoundary() throws {
+        let plan = expandedTwoStepJobPlan(items: ["/tmp/alpha", "/tmp/beta"])
+        let crossing = ResumableTask(
+            command: "Convert each of these",
+            plan: plan,
+            // Item 0's unit finished; the remainder starts item 1.
+            completedStepIDs: ["scan#1", "convert#1"],
+            chainedArtifactPath: "/tmp/alpha/report.pdf",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(crossing.chainedArtifactPath == "/tmp/alpha/report.pdf")
+        #expect(crossing.chainedArtifactPathForRemainder == nil)
+
+        // The control, and the case the carry exists for: the remainder continues the *same* item.
+        let sameItem = ResumableTask(
+            command: "Convert each of these",
+            plan: plan,
+            completedStepIDs: ["scan#1"],
+            chainedArtifactPath: "/tmp/alpha/report.pdf",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(sameItem.chainedArtifactPathForRemainder == "/tmp/alpha/report.pdf")
+
+        // And a plan that is not a job is untouched by the rule.
+        let ordinary = ResumableTask(
+            command: "Open a page",
+            plan: AgentPlan(
+                summary: "Open.",
+                requiresConfirmation: false,
+                steps: [AgentStep(id: "url", operation: .openURL, description: "Open.", targetURL: "https://example.com")]
+            ),
+            chainedArtifactPath: "/tmp/whatever.md",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        #expect(ordinary.chainedArtifactPathForRemainder == "/tmp/whatever.md")
+    }
+
+    // MARK: - The declared field has to be one the template reads (PR #185, F2)
+
+    /// **The silent wrong result this refusal exists for.** A `[invoke_shortcut]` template declaring
+    /// `itemField: .inputPath` ran the Shortcut once per item with no input at all, recorded zero
+    /// failures, and reported "Worked through all 3 files" — a job that touched none of its items and
+    /// called itself a complete success.
+    @Test
+    func aJobWhoseTemplateReadsTheDeclaredFieldNowhereIsRefused() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c"] {
+            try write(name, to: root.appendingPathComponent("\(name).pdf"))
+        }
+        let invoker = RecordingShortcutInvoker()
+        let executor = makeExecutor(root: root, shortcutInvoker: invoker)
+
+        var mismatched = shortcutJob(over: root)
+        mismatched.itemJob?.itemField = .inputPath
+        #expect(throws: PlanItemJobError.self) {
+            _ = try executor.prepare(plan: mismatched)
+        }
+        // Nothing ran, which is the half that matters: the old behaviour invoked three times.
+        #expect(invoker.inputs.isEmpty)
+
+        // The control: the same template with the field the Shortcut actually reads prepares and runs.
+        let correct = try executor.prepare(plan: shortcutJob(over: root))
+        #expect(correct.plan.steps.count == 3)
+    }
+
+    /// The item is written only into steps that read the declared field, so a step that reads neither
+    /// is left exactly as the planner wrote it.
+    @Test
+    func theItemIsWrittenOnlyIntoStepsThatReadTheDeclaredField() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("one", to: root.appendingPathComponent("a.pdf"))
+        try write("two", to: root.appendingPathComponent("b.pdf"))
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Summarise each of these, then open the notes page.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(id: "run", operation: .invokeShortcut, description: "Run it.", shortcutName: "Summarise"),
+                    AgentStep(id: "url", operation: .openURL, description: "Open.", targetURL: "https://example.com/page")
+                ],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: root.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .shortcutInput
+                )
+            )
+        )
+        let shortcutSteps = prepared.plan.steps.filter { $0.operation == .invokeShortcut }
+        let urlSteps = prepared.plan.steps.filter { $0.operation == .openURL }
+        #expect(shortcutSteps.compactMap(\.shortcutInput).count == 2)
+        // `open_url` reads neither field: it keeps its own target and gains nothing.
+        #expect(urlSteps.allSatisfy { $0.shortcutInput == nil && $0.inputPath == nil })
+        #expect(urlSteps.allSatisfy { $0.targetURL == "https://example.com/page" })
+    }
+
+    /// The narrower half of the same hole: a *leading* consuming step handed a field it does not read
+    /// would keep both path fields blank and stay a live consumer of an artifact from outside its own
+    /// item. It is not written into, and the whole declaration is refused when nothing else reads the
+    /// field either.
+    @Test
+    func aLeadingConsumingStepIsNotHandedAFieldItDoesNotRead() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("one", to: root.appendingPathComponent("a.pdf"))
+        try write("two", to: root.appendingPathComponent("b.pdf"))
+        let executor = makeExecutor(root: root)
+
+        // The expansion leaves the reveal alone: it does not read `shortcutInput`, so it is not
+        // handed one and does not become a step carrying a value nothing will read.
+        let expanded = PlanItemJobResolver.expanding(
+            AgentPlan(
+                summary: "Reveal each of these, then run the Shortcut on it.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it."),
+                    AgentStep(id: "run", operation: .invokeShortcut, description: "Run it.", shortcutName: "Summarise")
+                ]
+            ),
+            over: PlanItemJob(
+                source: .folder,
+                folderPath: root.path,
+                itemKind: .files,
+                fileExtensions: ["pdf"],
+                itemField: .shortcutInput,
+                items: [root.appendingPathComponent("a.pdf").path, root.appendingPathComponent("b.pdf").path]
+            )
+        )
+        let revealSteps = expanded.steps.filter { $0.operation == .revealInFinder }
+        #expect(revealSteps.count == 2)
+        #expect(revealSteps.allSatisfy { $0.shortcutInput == nil })
+        #expect(revealSteps.allSatisfy { $0.inputPath == nil })
+        // So every item's leading reveal has nothing to reveal, and `prepare` says so at the door
+        // rather than after the run — every item is unavailable.
+        #expect(throws: PlanItemJobError.self) {
+            _ = try executor.prepare(
+                plan: AgentPlan(
+                    summary: "Reveal each of these, then run the Shortcut on it.",
+                    requiresConfirmation: true,
+                    steps: expanded.steps.prefix(2).map { step in
+                        var template = step
+                        template.id = String(step.id.prefix(while: { $0 != "#" }))
+                        template.itemIndex = nil
+                        template.shortcutInput = nil
+                        return template
+                    },
+                    itemJob: PlanItemJob(
+                        source: .folder,
+                        folderPath: root.path,
+                        itemKind: .files,
+                        fileExtensions: ["pdf"],
+                        itemField: .shortcutInput
+                    )
+                )
+            )
+        }
+        // The control, and the direction the leading-step exemption is for: with the field the reveal
+        // *does* read, it gets the item and stops being a consumer.
+        let reading = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Reveal each of these.",
+                requiresConfirmation: true,
+                steps: [AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: root.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .inputPath
+                )
+            )
+        )
+        #expect(reading.plan.steps.allSatisfy { $0.inputPath != nil })
+        #expect(reading.plan.steps.allSatisfy { !ChainedArtifactCarry.consumesPreviousArtifact($0) })
+    }
+
+    /// The backstop on the table: every operation the table says reads a field is one whose adapter
+    /// really names that field, and every operation it says reads none names neither.
+    ///
+    /// A source scan rather than a value list, because the thing that goes stale is the *agreement*
+    /// between the table and the adapters, and only the adapters can say what they read.
+    @Test
+    func theItemFieldTableMatchesWhatTheAdaptersActuallyRead() throws {
+        let adapterSource = try adapterSourceByOperation()
+        for operation in AgentOperation.allCases {
+            guard let source = adapterSource[operation] else {
+                // No adapter owns it (`.clarify`, `.unsupported`), so it can read nothing.
+                #expect(operation.itemFieldsRead.isEmpty, "\(operation.rawValue) has no adapter yet claims a field")
+                continue
+            }
+            for field in PlanItemField.allCases {
+                let named = source.contains(".\(field.rawValue)")
+                #expect(
+                    operation.itemFieldsRead.contains(field) == named,
+                    "AgentOperation.itemFieldsRead disagrees with the adapter for \(operation.rawValue) on \(field.rawValue)"
+                )
+            }
+        }
+    }
+
+    // MARK: - The whitelist guards on a job's items (PR #185, F3)
+
+    /// A symbolic link is not an item, so a link inside the folder pointing outside the whitelist
+    /// never becomes one of the fifty paths a single approval covers.
+    @Test
+    func aSymbolicLinkInTheFolderIsNotAnItem() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let target = outside.appendingPathComponent("secret.pdf")
+        try write("outside", to: target)
+        try write("inside", to: root.appendingPathComponent("a.pdf"))
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("link.pdf"),
+            withDestinationURL: target
+        )
+
+        let executor = makeExecutor(root: root)
+        let prepared = try executor.prepare(plan: shortcutJob(over: root))
+
+        #expect(prepared.plan.itemJob?.items == [root.appendingPathComponent("a.pdf").path])
+        #expect(prepared.plan.itemJob?.items.contains(target.path) == false)
+    }
+
+    /// And the second guard, on its own terms: an item outside the whitelist is refused by the
+    /// per-item validation even when nothing has filtered it out first.
+    @Test
+    func anItemOutsideTheWhitelistIsRefusedByItsOwnValidation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try write("outside", to: outside.appendingPathComponent("secret.pdf"))
+
+        // The Finder selection is the source that can hand back a path from anywhere, so it is where
+        // the per-item check is reachable without bypassing the link filter.
+        let job = PlanItemJob(
+            source: .finderSelection,
+            itemKind: .files,
+            fileExtensions: ["pdf"],
+            itemField: .shortcutInput
+        )
+        #expect(throws: (any Error).self) {
+            _ = try PlanItemJobResolver.resolveItems(
+                for: job,
+                whitelist: PathWhitelist(roots: [root]),
+                finderContextReader: FixedFinderSelection([outside.appendingPathComponent("secret.pdf")]),
+                fileManager: .default
+            )
+        }
+        // The control: the same reader handing back a path inside the whitelist resolves fine.
+        try write("inside", to: root.appendingPathComponent("a.pdf"))
+        let items = try PlanItemJobResolver.resolveItems(
+            for: job,
+            whitelist: PathWhitelist(roots: [root]),
+            finderContextReader: FixedFinderSelection([root.appendingPathComponent("a.pdf")]),
+            fileManager: .default
+        )
+        #expect(items == [root.appendingPathComponent("a.pdf").path])
     }
 
     // MARK: - The store
@@ -972,6 +1377,28 @@ struct ItemJobTests {
         )
     }
 
+    /// Each operation's owning adapter source, read from the tree rather than listed here.
+    private func adapterSourceByOperation() throws -> [AgentOperation: String] {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/MacAgentCore")
+        var byOperation: [AgentOperation: String] = [:]
+        for adapter in CapabilityRegistry.default.adapters {
+            let name = adapter.metadata.id
+            _ = name
+            let file = directory.appendingPathComponent("\(String(describing: type(of: adapter))).swift")
+            guard let source = try? String(contentsOf: file, encoding: .utf8) else {
+                continue
+            }
+            for operation in adapter.metadata.operations {
+                byOperation[operation] = source
+            }
+        }
+        return byOperation
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("sonny-item-job-\(UUID().uuidString)")
@@ -1029,6 +1456,17 @@ private struct WritingDocumentConverter: DocumentConverting {
         }
         return converted
     }
+}
+
+/// Hands back a fixed selection, so the Finder-selection source is reachable without Apple Events.
+private struct FixedFinderSelection: FinderContextReading {
+    let urls: [URL]
+
+    init(_ urls: [URL]) {
+        self.urls = urls
+    }
+
+    func selectedItems() throws -> [URL] { urls }
 }
 
 private struct OneShortcutCatalog: ShortcutCatalogProviding {

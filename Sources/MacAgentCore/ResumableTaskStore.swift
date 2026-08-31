@@ -252,12 +252,65 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// The remaining steps begin at a unit boundary by construction — only whole units are ever
     /// recorded as complete — so re-segmenting the remainder produces exactly the units that had not
     /// run. `theRemainderOfAPlanSegmentsIntoTheUnitsThatHadNotRun` pins that.
+    ///
+    /// **`itemJob` is carried, and dropping it was this branch's own blocking defect** (PR #185, F1).
+    /// This is the one door in the tree that reassembles an expanded plan, and rebuilding it from
+    /// three fields let the fourth default to `nil` — so the remainder kept every step's `itemIndex`
+    /// and stopped being a job. Everything that makes a job a job was then absent on the second
+    /// attempt and silent about it: an unpreviewable item killed the whole resumed run at `prepare`
+    /// again, skip-and-continue was gone, no progress line appeared on either surface, the widget drew
+    /// one row per remaining item in the approval prompt, and a second interruption wrote a record
+    /// that had forgotten it was ever a job.
+    ///
+    /// **What is carried is the declaration and the whole item list, not a recomputed one**, so a
+    /// failure's `itemIndex` still points at the same item it always did. What must *not* be taken
+    /// from the whole list is the job's **size**: `ItemJobProgress` and `AgentActionExecutor`'s job
+    /// summary both count the items this plan is responsible for — the ones with steps, plus the ones
+    /// recorded unavailable — so a resume that does the last two of forty says "2 of 2" rather than
+    /// claiming it worked through all forty. That was the trap in the obvious one-line fix.
     public func remainingPlan() -> AgentPlan {
         AgentPlan(
             summary: plan.summary,
             requiresConfirmation: plan.requiresConfirmation,
-            steps: remainingSteps
+            steps: remainingSteps,
+            // **The declaration and the whole item list, with the earlier attempt's unavailable items
+            // cleared** — the same rule, and the same reason, as `itemJobFailures` starting empty on a
+            // resume. Those items were reported by the run that met them; carrying them would make the
+            // remainder report a failure it never experienced and count itself larger than it is.
+            itemJob: plan.itemJob.map { job in
+                var carried = job
+                carried.unavailableItems = []
+                return carried
+            }
         )
+    }
+
+    /// The file the last finished unit produced, offered to a resume **only when it cannot cross an
+    /// item boundary** (PR #185, F2(b) and the review's third door on R4).
+    ///
+    /// `AgentViewModel`'s Continue bakes this onto the remainder's leading step through
+    /// `ChainedArtifactCarry.applying`, which is a cross-item carry that no in-loop reset can undo —
+    /// the value is in the plan before `executeChain` ever runs. For an ordinary plan that is exactly
+    /// right and is unchanged. For a job it is right only when the unit that produced the file and the
+    /// step about to consume it belong to the same item; otherwise item N+1 would open item N's file
+    /// and the run would report success.
+    ///
+    /// Answered from this record's own two fields rather than by storing a third: the last completed
+    /// step names its item, the first remaining step names its own, and a carry between different
+    /// items is withheld. A job whose remainder starts a fresh item simply begins with nothing
+    /// carried, which is what `executeChain`'s own item-boundary reset would have done had the value
+    /// not arrived pre-applied.
+    public var chainedArtifactPathForRemainder: String? {
+        guard plan.itemJob != nil else {
+            return chainedArtifactPath
+        }
+        let done = Set(completedStepIDs)
+        let lastCompletedItem = plan.steps.last { done.contains($0.id) }?.itemIndex
+        let nextItem = remainingSteps.first?.itemIndex
+        guard lastCompletedItem == nextItem else {
+            return nil
+        }
+        return chainedArtifactPath
     }
 
     private static func cappedCommand(_ value: String) -> String {

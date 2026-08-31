@@ -6470,7 +6470,12 @@ final class AgentViewModel: ObservableObject {
             // of what gets assessed. A no-op for every remainder that does not begin with such a
             // step, and `ChainedArtifactCarry` is the one place that rule lives.
             prebuiltPlan: ChainedArtifactCarry.applying(
-                task.chainedArtifactPath,
+                // Not `chainedArtifactPath` — see `ResumableTask.chainedArtifactPathForRemainder`.
+                // For an ordinary plan the two are the same value; for a job the carry is withheld
+                // when it would cross an item boundary, because applying it here puts it in the plan
+                // before `executeChain` runs and no reset inside that loop can take it back out
+                // (PR #185, F2(b)).
+                task.chainedArtifactPathForRemainder,
                 toLeadingStepOf: task.remainingPlan()
             ),
             prebuiltPlanSource: .resumedTask
@@ -7419,11 +7424,14 @@ final class AgentViewModel: ObservableObject {
         stepStatuses = Dictionary(uniqueKeysWithValues: plan.steps.map { ($0.id, AgentStepStatus.pending) })
         // Beside the step statuses because it is the same fact at the job's granularity, and because
         // this is the one place every dispatch passes with the plan it is about to run — including a
-        // resumed one, whose plan is what is *left* of the job (SONNY-235). A resumed job therefore
-        // shows progress over the whole item list, with the items an earlier attempt finished already
-        // absent from the steps: `ItemJobProgress` reads `itemJob.items` for the total and the plan's
-        // own steps for what is done, so a remainder reports "0 of 40 done" and climbs, which is
-        // honest about this attempt rather than about the job's whole history.
+        // resumed one, whose plan is what is *left* of the job (SONNY-235).
+        //
+        // **This comment used to describe behaviour the code could not produce**, which is how PR
+        // #185's F1 stayed invisible: it said a remainder reports "0 of 40 done" and climbs, while
+        // `remainingPlan()` was dropping `itemJob` so a remainder produced no progress at all. Both
+        // are fixed, and the count is the remainder's own — `ItemJobProgress` is scoped to the items
+        // *this plan* is responsible for, so a resume of the last two of forty reports "0 of 2" and
+        // climbs to "2 of 2" rather than either claiming forty or saying nothing.
         activeItemJobPlan = plan.itemJob == nil ? nil : plan
         activeItemJobCompletedStepIDs = []
         activeItemJobFailures = []

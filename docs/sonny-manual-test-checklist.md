@@ -2701,6 +2701,14 @@ copied.
 - [ ] **(SONNY-235)** Point the same request at a folder that contains **nothing at all**. **Sonny
       says there is nothing to work through, in plain words, and asks for no approval.** **The
       finding is a prompt to approve a job over nothing**, or a technical error.
+- [ ] **(SONNY-235)** **The one this ticket is named for.** Start the job again over all six folders,
+      let it get two or three in, then **quit Sonny outright** (menu bar → Quit, not Cancel). Relaunch
+      it. **The widget offers to continue that job.** Press Continue. **The finding is any of these:**
+      no offer at all; an approval prompt listing one row per remaining folder rather than describing
+      the job once; no progress line while it runs; a progress line counting the *whole* job rather
+      than what is left ("0 of 6" instead of "0 of 3"); or a final summary claiming it worked through
+      all six when it only did the ones that were left. **Sonny should not redo the folders it already
+      finished** — check their PDFs' timestamps if you want to be sure.
 - [ ] **(SONNY-235)** Ask for the same work over a folder holding **more than fifty** subfolders.
       **Sonny refuses and says how many it will take.** **The finding is Sonny starting anyway**, or
       quietly doing the first fifty without saying so.

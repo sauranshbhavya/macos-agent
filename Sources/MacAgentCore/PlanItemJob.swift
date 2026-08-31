@@ -237,6 +237,59 @@ public enum PlanItemField: String, Codable, CaseIterable, Equatable, Sendable {
     case inputPath
     /// The text a Shortcut is run with, which for a per-file job is the file's path.
     case shortcutInput
+
+    /// How this field is named in the one sentence a user reads when a job declares one no step of
+    /// its template reads.
+    var displayNoun: String {
+        switch self {
+        case .inputPath:
+            return "file or folder"
+        case .shortcutInput:
+            return "Shortcut input"
+        }
+    }
+}
+
+public extension AgentOperation {
+    /// Which of a job's item fields this operation actually reads (SONNY-235, PR #185 F2).
+    ///
+    /// **Why this table has to exist, inside the one design chosen to avoid tables like it.** The
+    /// plan-level shape moves "which field carries the item" out of the adapters and into the plan,
+    /// which is the decision and is right. What it also does is make a *wrong* declaration silently
+    /// executable: a `[invoke_shortcut]` template declaring `itemField: .inputPath` expanded cleanly,
+    /// ran the Shortcut once per item with **no input at all**, recorded zero failures and reported
+    /// "Worked through all 3 files" — a job that touched none of its items and called itself a
+    /// complete success, which is the one direction of failure this branch's whole partial-outcome
+    /// design exists to prevent.
+    ///
+    /// So: one table, in the plan language rather than in an adapter, read **only** to refuse a
+    /// declaration and to decide where the item is written. Nothing dispatches off it, and no adapter
+    /// consults it — an adapter still reads whatever field it always read.
+    ///
+    /// **Exhaustive, with no `default`**, so a new operation cannot reach the tree without being
+    /// classified. `theItemFieldTableMatchesWhatTheAdaptersActuallyRead` is the backstop that keeps
+    /// it in step with the adapters rather than leaving it to memory.
+    var itemFieldsRead: Set<PlanItemField> {
+        switch self {
+        // The folder- and file-consuming capabilities, reading `inputPath` directly or through
+        // `FinderSelectionResolver.selectedDirectoryPath`'s primary/secondary pooling.
+        case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF:
+            return [.inputPath]
+        // `outputPath ?? inputPath` — which is why an item written into `inputPath` reaches them, and
+        // why writing one into a *trailing* consuming step is exactly what stops it consuming.
+        case .revealInFinder, .openGeneratedArtifact:
+            return [.inputPath]
+        case .invokeShortcut:
+            return [.shortcutInput]
+        case .openHackerNews, .fetchHNHeadlines, .writeMarkdown, .webToMarkdown, .openApp,
+             .openAppSearchURL, .openURL, .playMedia, .getFinderSelection, .showPermissionReadiness,
+             .saveRoutine, .runRoutine, .createWorkspace, .editWorkspace, .openWorkspace,
+             .createLocalDraft, .calculateUtility, .lookupClipboardHistory, .expandSnippet,
+             .saveSnippet, .switchRunningApp, .lookupRecentArtifacts, .visionSession, .clarify,
+             .unsupported:
+            return []
+        }
+    }
 }
 
 /// One item of a job that could not be done, and why.
@@ -278,6 +331,9 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
     /// `AgentActionExecutor.prepare` — see `refuseUnresolvedItemJob(in:)` for why that is a refusal
     /// rather than a second resolution.
     case notPrepared
+    /// No step of the template reads the field the job says carries the item, so the item would
+    /// reach nothing and every item would be reported done (PR #185, F2).
+    case noStepReadsTheItemField(String)
     /// Not one item of the job could even be previewed, so there is nothing to ask approval for. The
     /// associated value is the first item's own error, which is the message that explains what is
     /// wrong with what the user pointed at.
@@ -297,6 +353,8 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
             return "That is \(count) items, and Sonny works through at most \(limit) in one job. Narrow it down and ask again."
         case .notPrepared:
             return "Sonny could not work out which items this job covers."
+        case .noStepReadsTheItemField(let detail):
+            return detail
         case .everyItemUnavailable(let detail):
             return detail
         }
@@ -318,6 +376,15 @@ public struct ItemJobProgress: Equatable, Sendable {
     public var itemKind: PlanItemKind
     /// Every item of the job, in the order it is worked through.
     public var items: [String]
+    /// The indexes into `items` **this plan is responsible for** — the ones whose steps it holds,
+    /// plus the ones it recorded unavailable. Ascending.
+    ///
+    /// **The job's size for this run, and it is not `items.count`** (PR #185, F1). A fresh job covers
+    /// its whole list. A *resumed* one covers only what was left: carrying `itemJob` into
+    /// `remainingPlan()` without this makes a resume that did the last two of forty report "40",
+    /// which was the trap in the obvious one-line fix for that finding. `items` stays the whole list
+    /// so a failure's `itemIndex` keeps pointing at the item it always did; only the count is scoped.
+    public var coveredItemIndexes: [Int]
     /// Indexes into `items` whose every step is finished, ascending.
     public var completedItemIndexes: [Int]
     /// The items that were tried and could not be done.
@@ -326,11 +393,13 @@ public struct ItemJobProgress: Equatable, Sendable {
     public init(
         itemKind: PlanItemKind,
         items: [String],
+        coveredItemIndexes: [Int],
         completedItemIndexes: [Int],
         failures: [ItemJobFailure]
     ) {
         self.itemKind = itemKind
         self.items = items
+        self.coveredItemIndexes = coveredItemIndexes
         self.completedItemIndexes = completedItemIndexes
         self.failures = failures
     }
@@ -347,7 +416,7 @@ public struct ItemJobProgress: Equatable, Sendable {
             .sorted { $0.itemIndex < $1.itemIndex }
     }
 
-    public var itemCount: Int { items.count }
+    public var itemCount: Int { coveredItemIndexes.count }
     public var completedCount: Int { completedItemIndexes.count }
     public var failedCount: Int { failures.count }
     /// Everything the job has settled one way or the other. What is left is `itemCount` minus this.
@@ -380,11 +449,17 @@ public struct ItemJobProgress: Equatable, Sendable {
             .filter { _, ids in !ids.isEmpty && ids.allSatisfy { completed.contains($0) } }
             .keys
             .sorted()
+        let merged = Self.merged(job.unavailableItems, failures)
+        // What this plan is responsible for: every item it holds steps for, plus every item it
+        // recorded unavailable — those have no steps by construction and must still be counted, or a
+        // job that dropped one at `prepare` would report "38 of 39".
+        let covered = Set(stepsPerItem.keys).union(job.unavailableItems.map(\.itemIndex)).sorted()
         return ItemJobProgress(
             itemKind: job.itemKind,
             items: job.items,
+            coveredItemIndexes: covered,
             completedItemIndexes: completedIndexes,
-            failures: Self.merged(job.unavailableItems, failures)
+            failures: merged.filter { covered.contains($0.itemIndex) }
         )
     }
 }
