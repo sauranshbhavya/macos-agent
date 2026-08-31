@@ -96,18 +96,47 @@ struct WidgetControlNamingTests {
         #expect(CompactCapsulePresentation.expandLabel == "Open Sonny")
     }
 
-    /// **The words the capsule and the menu bar share, and the fact that they do different things.**
+    /// **Each control is named after where it goes (SONNY-338).**
     ///
-    /// `AppDelegate`'s menu item titled "Open Sonny" opens the Command Center window; the capsule
-    /// expands the floating widget. Renaming either is the founders' call, so this asserts the
-    /// collision rather than resolving it — if one of them is reworded, this test says so and the
-    /// record on `CompactCapsulePresentation` and SONNY-338 gets read instead of rediscovered.
+    /// `AppDelegate`'s menu item and the capsule both said "Open Sonny" and went to two different
+    /// places — the Command Center window and the floating widget. SONNY-251 asserted that
+    /// collision rather than resolving it, because the words are product vocabulary; the founders
+    /// decided it on 2026-08-30, and this test is that assertion turned around. The menu item is
+    /// named for the window it opens; the capsule keeps "Open Sonny" for the widget.
+    ///
+    /// **The third assertion is a relationship, and it deliberately replaces a literal rather than
+    /// sitting beside one.** The two words each control says are pinned by value above it; what
+    /// they cannot say is that the *pair* stays apart, so the collision could return through the
+    /// other door — the capsule renamed onto whatever the menu bar ends up carrying — with both
+    /// literal assertions edited to match and nothing left objecting. Reading the capsule's own
+    /// constant back out and requiring that no menu item carries it is the same claim that
+    /// outlives a rename of either control.
+    ///
+    /// **What that is worth today, stated rather than implied: it is exactly the literal it
+    /// replaced.** `expandLabel` is asserted to be "Open Sonny" one line above, so at this tree
+    /// this check and `count(of: "withTitle: \"Open Sonny\"") == 0` are the same bytes and kill the
+    /// same mutants. Writing it the derived way buys nothing now and keeps meaning what it says
+    /// after the next wording decision; writing *both* would have been a decorative assertion of
+    /// exactly the kind the paragraph below removes.
+    ///
+    /// **The `count(of: "openCommandCenter") >= 1` this test used to carry is gone rather than
+    /// renamed.** PR #155's review recorded it as decorative and SONNY-251's entry left it as a
+    /// residual: the selector is declared in the same file it counts, so that assertion holds
+    /// whether or not any menu item reaches it. What the item is actually wired to is asserted by
+    /// target, selector and key equivalent in
+    /// `ProductShellTests.newTaskMenuItemRoutesThroughTheSharedWidgetPresentationRequest`, which is
+    /// where a rewiring is caught.
     @Test
-    func theCapsuleAndTheMenuBarStillShareThreeWordsForTwoDestinations() throws {
+    func theCapsuleAndTheMenuBarNameTheirOwnDestinations() throws {
         let appDelegate = try MacAgentSource.read("AppDelegate.swift")
 
-        #expect(MacAgentSource.count(of: "withTitle: \"Open Sonny\"", inText: appDelegate) == 1)
-        #expect(MacAgentSource.count(of: "openCommandCenter", inText: appDelegate) >= 1)
+        #expect(MacAgentSource.count(of: "withTitle: \"Open Command Center\"", inText: appDelegate) == 1)
         #expect(CompactCapsulePresentation.expandLabel == "Open Sonny")
+        #expect(
+            MacAgentSource.count(
+                of: "withTitle: \"\(CompactCapsulePresentation.expandLabel)\"",
+                inText: appDelegate
+            ) == 0
+        )
     }
 }
