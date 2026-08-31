@@ -225,7 +225,19 @@ Files changed:
 
 Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2614 tests in 176 suites, 52.386s, 7 known issues, exit 0** at `d6cda07`. `scripts/warnings` -> **0 warnings, exit 0**, its own report stamped `d6cda07 (clean)`. Server half, because the diff touches it: `npm run build` **exit 0**, `npm test` **exit 0, 636 passed / 354 skipped**, `npm run typecheck` **exit 0**, `npm run check:secrets` **exit 0**, and `npm run test:db` against a lane-derived container **exit 0, 42 files / 990 tests, none skipped**. `scripts/changelog-order` -> **exit 0**, `is in merge order, 153 entries, both eras`. Exit codes read with nothing between each command and `$?`.
 
-Mutation: **two batteries — 17 mutants at `6b7c7ae` -> 15 killed, 2 survived, and the fix round's 10 at `d6cda07` -> 9 killed, 1 survived, 0 unattributed in both, exit 2.** It covers every property this branch claims to protect. **The two survivors are the same line in the two chain walks** — `executeChain`'s cross-item reset of the carried artifact and `previewChain`'s copy of it — and they are recorded rather than closed, for the reason below.
+Mutation: **five batteries produced a measurement, and the two that the figures below are quoted from are the last of each phase** — 17 mutants at `6b7c7ae` -> 15 killed, 2 survived, and the fix round's 10 at `d6cda07` -> 9 killed, 1 survived, 0 unattributed in both, exit 2. Between them they cover every property this branch claims to protect. **The two survivors at `6b7c7ae` are the same line in the two chain walks** — `executeChain`'s cross-item reset of the carried artifact and `previewChain`'s copy of it — and they are recorded rather than closed, for the reason below; the one at `d6cda07` is the per-item whitelist validation, recorded on the same terms.
+
+**The whole run, because "two batteries" was written here first and describes fewer than happened** (PR #185, R5). Each run is a full run at its own head rather than a carry — see the four-conditions note below — and each one after the first exists because the one before it found something:
+
+| head | mutants | killed | survived |
+|---|---|---|---|
+| `369cbc3` | 14 | 11 | 3 — R3, R4, R14 |
+| `6976659` | 16 | 15 | 1 — R4 |
+| `6b7c7ae` | 17 | 15 | 2 — R4, and R4P covering `previewChain`'s copy of the same line |
+| `08db3aa` | 10 | 8 | 2 — V7, V9 |
+| `d6cda07` | 10 | 9 | 1 — V9 |
+
+**And three further runs produced no measurement at all**, which is worth recording rather than dropping, because each is one of the process pitfalls this entry documents below: one aborted mid-run when `docs/` edits made the tree dirty, one refused at pre-flight on a `from` block a later commit had moved, and one stopped on a red baseline before any mutant was applied — which is the run that caught the over-broad expansion fix. A battery that measures nothing is not a battery that measured zero.
 
 **What the batteries actually bought, because three of this branch's real defects came out of them and one came out of writing a test for a survivor.** The first run, 14 mutants at `369cbc3`, returned 11 killed and 3 survived.
 
