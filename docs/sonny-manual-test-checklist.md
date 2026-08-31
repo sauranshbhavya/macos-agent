@@ -2027,6 +2027,36 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       offline. Everything Sonny does on this Mac still works."* rather than with an allowance
       message, because being offline and being out of allowance are different states and the app
       must not confuse them.
+- [ ] **(new 2026-08-30, SONNY-211) — the end-to-end subscription, and it is the founders' row that
+      nothing else can stand in for.** In the Polar dashboard, create the product, create a webhook
+      endpoint pointing at the gateway's `POST /v1/billing/webhook`, and copy its signing secret.
+      Start the gateway with `BILLING_PROVIDER=polar`, that secret in `BILLING_WEBHOOK_SECRET`, the
+      product's hosted checkout link in `BILLING_CHECKOUT_URL`, and
+      `BILLING_PLANS=<product id>=paid:screen_control`. Then, signed in: call
+      `POST /v1/billing/checkout`, open the URL it returns, and **complete a real test subscription**.
+      Within seconds `npm run entitlements -- show <account-id>` must report the plan and the
+      capability, and `SELECT event_type, outcome FROM sonny.billing_event` must show the delivery
+      with outcome `applied`. **A `subscription.active` delivery landing as anything but `applied` is
+      the finding**, and the outcome column says which of the five other things it was —
+      `unmatched` most likely, which means the account id did not survive the round trip through the
+      checkout link.
+- [ ] **(new 2026-08-30, SONNY-211) — the cancellation half, immediately after the row above.** In
+      the Polar dashboard, **cancel** the test subscription. `sonny.billing_event` gains a row; the
+      entitlement's `revoked_at` is set; and the next `GET /v1/account/entitlements` the app makes
+      returns a claim with **no capabilities** while still naming the plan. What would be a finding:
+      the capability surviving, the row not arriving at all (which means the endpoint or its secret
+      is wrong, not that the code is), or the account losing its plan key as well as its capability.
+      **Note that Polar cancels in two steps** — clicking cancel usually keeps access to the end of
+      the paid period and only later revokes it — so the *immediate* correct answer may be "nothing
+      changed yet", and that is the behaviour, not a bug. The revocation follows when Polar says
+      access has ended.
+- [ ] **(new 2026-08-30, SONNY-211) — the refusal, and this one needs no Polar account.** With the
+      gateway running and billing configured, `curl -X POST` the webhook path with any JSON body and
+      no signature headers. It must answer **401**, and `SELECT count(*) FROM sonny.billing_event`
+      must be **unchanged** — an unauthenticated caller must not be able to write a row into that
+      table by posting at it. Repeat with a plausible-looking but wrong `webhook-signature` header:
+      same answer. If either one returns 200, or if the row count moves, stop and report it before
+      the gateway is ever deployed anywhere reachable.
 - [ ] **(new 2026-08-28, SONNY-135) — the clock row, and it is the one most likely to surprise.**
       Signed in, with the container running, open System Settings → General → Date & Time, turn off
       "Set time and date automatically", and move the Mac's clock **forward one day**. Then use the
