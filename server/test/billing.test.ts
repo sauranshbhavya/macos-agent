@@ -848,11 +848,18 @@ describe("where a subscriber manages the subscription", () => {
     const empty = providerAnswering(() => new Response("", { status: 404 }));
     const text = providerAnswering(() => new Response("not found", { status: 404 }));
     const array = providerAnswering(() => new Response("[]", { status: 404 }));
+    // `null` is the one JSON literal that slips between the four above, because
+    // `typeof null === "object"` and `Array.isArray(null)` is false — so the `parsed !== null`
+    // clause is what refuses it, and a mutant dropping that clause survived until this line
+    // existed (cycle 3, C4). Not a live hazard — nothing plausibly answers `null` to a 404 — but
+    // this round's own lesson is that a guard nobody asserts is a guard.
+    const nullBody = providerAnswering(() => new Response("null", { status: 404 }));
 
     expect(await html.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
     expect(await empty.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
     expect(await text.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
     expect(await array.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
+    expect(await nullBody.provider.portalUrlFor(ACCOUNT)).toMatchObject({ kind: "rejected" });
   });
 
   it("treats a throttled call as the provider's capacity, not as a bad request", async () => {

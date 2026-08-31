@@ -309,9 +309,11 @@ export const PORTAL_SESSION_TIMEOUT_MS = 8_000;
 /**
  * The body of a response, read once and never re-read.
  *
- * Only the 404 branch calls this and it returns immediately afterwards, so nothing else consumes
- * the same stream. A body this fails to read is `""`, which `looksLikeAMissingCustomer` refuses --
- * the fail-loud direction.
+ * Only the 404 branch calls this, and nothing else consumes the same stream. **The reason is not
+ * that the branch returns immediately** -- it does not, when `looksLikeAMissingCustomer` is false
+ * control falls through to `!response.ok` (cycle 3's residual). It is that the only other read of
+ * this body, `response.json()`, sits behind `response.ok`, and a 404 never reaches it. A body this
+ * fails to read is `""`, which `looksLikeAMissingCustomer` refuses -- the fail-loud direction.
  */
 async function peek(response: Response): Promise<string> {
   try {

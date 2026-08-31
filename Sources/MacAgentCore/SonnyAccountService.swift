@@ -87,18 +87,6 @@ public struct SonnyAccountService: Sendable {
         return tokens.identity
     }
 
-    /// Revoke the family server-side, then clear this Mac. **The local clear happens either way.**
-    ///
-    /// Order matters and cannot be the other one: clearing first destroys the very token the revoke
-    /// has to present. Clearing unconditionally afterwards is the deliberate half — a user who
-    /// pressed Sign out and is left holding a refresh token because a network call failed has been
-    /// told something untrue about their own machine.
-    ///
-    /// **Sign-out is not "delete my local data" and not "reset the encryption identity."** Contract
-    /// §3.3 names all three and says conflating any two is a real bug; branch 7 deliberately made
-    /// local data deletion leave the Keychain encryption key alone. This touches one Keychain
-    /// account under `com.sonny.account` and no file under `~/Library/Application Support/Sonny/`.
-
     /// Ask the gateway for a hosted billing-portal link for this account (SONNY-216).
     ///
     /// **This account service rather than a billing one, because there is nothing else to it.** The
@@ -130,6 +118,17 @@ public struct SonnyAccountService: Sendable {
         return url
     }
 
+    /// Revoke the family server-side, then clear this Mac. **The local clear happens either way.**
+    ///
+    /// Order matters and cannot be the other one: clearing first destroys the very token the revoke
+    /// has to present. Clearing unconditionally afterwards is the deliberate half — a user who
+    /// pressed Sign out and is left holding a refresh token because a network call failed has been
+    /// told something untrue about their own machine.
+    ///
+    /// **Sign-out is not "delete my local data" and not "reset the encryption identity."** Contract
+    /// §3.3 names all three and says conflating any two is a real bug; branch 7 deliberately made
+    /// local data deletion leave the Keychain encryption key alone. This touches one Keychain
+    /// account under `com.sonny.account` and no file under `~/Library/Application Support/Sonny/`.
     @discardableResult
     public func signOut() async throws -> SignOutOutcome {
         var outcome = SignOutOutcome.revoked

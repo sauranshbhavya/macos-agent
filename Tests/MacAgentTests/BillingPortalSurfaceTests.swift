@@ -316,6 +316,61 @@ import Testing
         #expect(surface.model.subscription == SubscriptionSnapshot(plan: "paid", status: .active))
     }
 
+    @Test func theCachedAnswerWinsAndDoesNotWaitForTheRefreshItStarted() async {
+        // **C2 — the guard that keeps the common path off the network, which nothing asserted.**
+        // Deleting `guard subscription == nil else { return }` survived all 2591 tests, and what
+        // that mutant does is make *every* Account open wait on any refresh in flight, including for
+        // a subscribed user whose cached claim already answered — falsifying this method's own
+        // documented claim with nothing to notice.
+        //
+        // `theFirstReadNeverWaitsOnTheNetwork` looks like it covers this and cannot: it seeds a
+        // fresh claim, so `shouldRefresh` is false, no refresh is ever started, and the mutant
+        // reaches an empty `refreshTask` and returns at once. Its name claims more than it holds.
+        //
+        // **The separation here needs no timing assertion at all**, which is what makes it safe
+        // under load: the cached claim and the served claim name *different plans*. Past the 8-hour
+        // refresh mark the first read answers from the cache AND starts a refresh; with the guard
+        // that cached answer is published and the refresh changes only the next open, so the plan is
+        // `paid`. Without it the wait completes, `adopt` takes the newer claim, and the second read
+        // publishes `team`.
+        let signer = Signer()
+        let surface = Self.subscribedSurface(
+            // Inside its window — a 24-hour lifetime plus grace — and past the third-of-life mark
+            // `EntitlementJudgement.shouldRefresh` uses, so this claim answers and is stale at once.
+            storing: signer.claim(plan: "paid", issuedAt: Date().addingTimeInterval(-9 * 60 * 60)),
+            signer: signer,
+            serving: signer.claim(plan: "team")
+        )
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshSubscription()
+
+        #expect(surface.model.subscription == SubscriptionSnapshot(plan: "paid", status: .active))
+    }
+
+    @Test func aFailedPortalPressDoesNotSurviveReopeningTheDialog() async {
+        // **C3.** The model is the app-wide singleton, `.task` runs `refreshSubscription()` every
+        // time the Account sheet is presented, and nothing cleared `portalFailure` there — so a
+        // failed press left its sentence under the row and reopening Account showed it again with
+        // no press behind it. `run()`'s own doc states the standard: no path may leave a stale
+        // message under a new result.
+        let surface = Self.surface()
+        surface.fixture.register { _ in
+            Self.portalReply(
+                #"{"error":{"code":"provider.rejected","message":"x","retryable":false,"retry_after_seconds":null,"request_id":"r"}}"#,
+                status: 502
+            )
+        }
+        defer { surface.fixture.unregister() }
+        await surface.model.openBillingPortal()
+        #expect(surface.model.portalFailure != nil)
+
+        // What `.task` does on the next presentation of the sheet.
+        await surface.model.refreshSubscription()
+
+        #expect(surface.model.portalFailure == nil)
+    }
+
     @Test func signingOutClearsTheSubscriptionBeforeTheNextUserSeesIt() async {
         // **F13.** `signedInStep` renders synchronously when `step` becomes `.signedIn`, while
         // `refreshSubscription()` awaits an actor hop, a Keychain read and a signature check — so a
