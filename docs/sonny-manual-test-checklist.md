@@ -2066,11 +2066,25 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       - **Same id** → the provider modifies the subscription in place. Record that. It means the
         out-of-order plan-change regression recorded on this branch is **unreachable**, and the
         finding closes with no code change. Expect the new delivery's `outcome` to be `applied`.
-      - **Different id** → the provider cancels and creates. Record that too. It means the regression
-        is **reachable**, and the fix is code rather than a note: the refusal has to tell "a foreign
-        subscription while mine is live" from "the replacement for mine". Expect at least one row
-        whose `outcome` is `conflict`, and expect the entitlement to be wrong afterwards — wrong is
-        the *expected* result in this branch, not a new bug to report.
+      - **Different id** → the provider cancels and creates. Record that too. **The two ids are the
+        whole answer, and this one means the regression is reachable — whatever else you see in the
+        same run.** The fix is then code rather than a note: the refusal has to tell "a foreign
+        subscription while mine is live" from "the replacement for mine".
+
+        **Two things this can look like, and both are normal.** Which one you get depends only on the
+        order the two webhook deliveries happened to arrive in, which nobody controls:
+
+        - `billing_event` shows a **`conflict`** row and the entitlement is **wrong** afterwards
+          (no capabilities). The new subscription arrived before the old one's cancellation. This is
+          the regression happening in front of you, and **wrong is the *expected* result in this
+          branch — do not file it as a new bug.**
+        - `billing_event` shows **only `applied`** rows and the entitlement is **correct**. The two
+          deliveries happened to arrive in order. This is **equally** a cancel-and-create and equally
+          means "different id": it does **not** mean the regression is absent, only that this run did
+          not hit the ordering that triggers it.
+
+        So a working entitlement here is not a passing result and not a mis-run — record "different
+        id" either way, and note which of the two you saw.
 
       **Report the two ids and the `outcome` column either way**, including when nothing looks
       broken: "same id, outcome applied" is the answer that closes the finding, and it is only an
