@@ -2221,7 +2221,8 @@ are not calculations.
       that became strippable, not a behaviour this branch changed.)
 - [ ] **(SONNY-284, the direction that DID change, and the founders' call to make)** Type
       `10 gb to mb` and `2 hours to minutes`. Before this branch each reached the calculator and
-      said **"gb is not a supported conversion unit"** — naming the word Sonny did not understand.
+      named the word Sonny did not understand — **"gb is not a supported conversion unit"** and
+      **"hours is not a supported conversion unit"** respectively.
       Now they reach the planner and get its generic refusal instead. That is the accepted cost of
       the guard that keeps `5 docs to pdf` out of the calculator (the two are structurally
       identical), and it is recorded in the changelog. **Nothing here is a finding unless you
