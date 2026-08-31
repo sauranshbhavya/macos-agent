@@ -2326,6 +2326,40 @@ are not calculations.
       identical), and it is recorded in the changelog. **Nothing here is a finding unless you
       disagree with the trade** — if you do, the fix is a wider unit table on its own ticket.
 
+### Taking an app back off the allowed list (new 2026-08-30, SONNY-144)
+
+Settings → Security & Access → **Screen Control** now lists the apps you have allowed Sonny to
+control, each with its own Remove, plus a Remove All. Nothing here can be checked by an agent — the
+list only fills up by answering the real per-app question in a real session.
+
+- [ ] **(SONNY-144)** Approve two apps through the flow — start a screen task on each and answer the
+      per-app question — then open Settings → Security & Access → Screen Control. **Both are listed**,
+      each by its real name, with the bundle identifier and when you allowed it underneath.
+- [ ] **(SONNY-144)** Press Remove on one of them. **It asks first** — like every other row delete
+      in the app. Confirm. Then ask Sonny to use that app again: **it asks.** Ask it to use the
+      other: **it does not.**
+- [ ] **(SONNY-144)** Press Remove on a row and **cancel** at the dialog. **The app stays on the
+      list**, and Sonny still controls it without asking.
+- [ ] **(SONNY-144)** Press Remove All and confirm. The list is empty and the empty state reads
+      sensibly — it should say how an app gets onto the list, not offer you a way to add one.
+- [ ] **(SONNY-144)** Press Remove All again and **cancel** at the dialog. **Nothing is removed.**
+- [ ] **(SONNY-144)** With nothing approved and the mode set to **Safe**, read the whole Screen
+      Control section. **The finding is a section that looks broken rather than deliberate** — an
+      empty block, or a stray control. In *this* scenario there are no grants at all, so Remove All
+      should not be on screen; if it is, that is the finding. (A Remove All above a list with no rows
+      is not always wrong — there is one state the app ships deliberately where it is correct, and it
+      says so in its own words rather than "No allowed apps yet". You cannot reach that state by
+      hand, so it is not a row here; it is described in the changelog under G2.)
+- [ ] **(SONNY-144)** Narrow the Command Center window as far as it goes and re-read the list.
+      **The finding is character-wrapping** — a name breaking one letter per line — **or a Remove
+      button clipped off the right edge.** The rows should stack the button under the name rather
+      than squeezing it.
+- [ ] **(SONNY-144)** Start a screen session in an approved app and, **while it is running**, press
+      Remove on that app in Settings. **A confirmation appears** — the same one any other Remove
+      raises; nothing about a live session changes it. Confirm it. **The session then stops** at its
+      next step, and it does not re-ask. (The dialog is new since the review round; a founder
+      following the old wording would have met a step this row did not describe.)
+
 ## 8. How to report back
 
 For each real finding, give me:

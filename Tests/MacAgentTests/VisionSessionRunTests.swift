@@ -846,6 +846,399 @@ struct VisionSessionRunTests {
         #expect(summary.contains("no longer allowed to control VS Code"))
     }
 
+    /// **A grant no surface will render is still reachable, and Remove All is what reaches it**
+    /// (PR #175 review, F1).
+    ///
+    /// The finding, made permanent. `approvedApps` is filtered by the terminal deny list, so a file
+    /// holding only ineligible grants renders no rows; Remove All used to be gated on that rendered
+    /// list, which closed the last door — the Memory row's Delete is disabled at a count of zero
+    /// while the file reads perfectly well, and the entries sheet reads the same filtered array. The
+    /// grant was then removable only by Settings → Data's whole-app wipe, which is a regression
+    /// against the unfiltered list this branch replaced.
+    ///
+    /// **The first assertion is a positive control**: a filter that dropped everything, or a fixture
+    /// that never wrote the grant, would otherwise make the empty rows below read as success.
+    /// `seedRawGrant` is the only way to build this state — `approve` refuses a terminal — which is
+    /// the point: the state exists because a file outlives the code that filled it.
+    @Test
+    func aGrantNoSurfaceRendersIsStillReachableByRemoveAll() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        let terminal = try #require(ScreenControlPolicy.terminalBundleIdentifiers.sorted().first)
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: terminal,
+            displayName: "A Terminal"
+        )
+        #expect(try fixture.approvedApps.loadAll().count == 1, "positive control: the fixture wrote a grant")
+
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshStoreReadability()
+
+        // Nothing renders it, which is correct and is what makes the rest of this test necessary.
+        #expect(fixture.viewModel.approvedApps.isEmpty)
+        #expect(ApprovedAppRevocationPresentation.rows(for: fixture.viewModel.approvedApps).isEmpty)
+        #expect(MemoryEntryPresentation.entries(for: .approvedApps, viewModel: fixture.viewModel).isEmpty)
+
+        // And the Memory row is a dead end: the file opens, so nothing says it is damaged, and the
+        // count is zero, so Delete is off. This is the closed door, asserted rather than described.
+        let memoryRow = MemoryRowPresentation.row(for: .approvedApps, viewModel: fixture.viewModel)
+        #expect(memoryRow.count == 0)
+        #expect(memoryRow.readability == .readable)
+        #expect(!memoryRow.canDelete)
+
+        // The one door that is open.
+        #expect(fixture.viewModel.storedApprovedAppCount == 1)
+        #expect(
+            ApprovedAppRevocationPresentation.offersRemoveAll(
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            )
+        )
+
+        // And the section says so rather than saying the list is empty (PR #175 cycle 3, G2): the
+        // old copy told this user they had allowed nothing, under an invitation to allow an app
+        // that would not have surfaced the one they had.
+        let state = ApprovedAppRevocationPresentation.emptyState(
+            for: MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel),
+            storedGrantCount: fixture.viewModel.storedApprovedAppCount
+        )
+        #expect(state.title == ApprovedAppRevocationPresentation.heldButNotHonouredTitle)
+        #expect(state.message == ApprovedAppRevocationPresentation.heldButNotHonouredMessage)
+
+        fixture.viewModel.forgetAllApprovedApps()
+
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+        #expect(fixture.viewModel.storedApprovedAppCount == 0)
+        #expect(fixture.viewModel.errorMessage == nil)
+
+        // Once it is cleared the ordinary empty state is what is left, so the new arm cannot become
+        // a state the section is simply stuck in.
+        #expect(
+            ApprovedAppRevocationPresentation.emptyState(
+                for: MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel),
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            ).title == ApprovedAppRevocationPresentation.emptyTitle
+        )
+    }
+
+    /// **An unreadable grants file offers no Remove All, and says what is wrong rather than that the
+    /// list is empty** (PR #175 cycle 3, G3).
+    ///
+    /// Today's behaviour is right and nothing held it: `loadMemoryEntries` answers `[]` on a throw,
+    /// so the count falls to zero with the list and the control is correctly hidden. The reviewer's
+    /// N2 sourced the count so it did *not* fall to zero and the whole suite still passed. What that
+    /// mutant ships is the state `forgetAll()`'s own doc exists to prevent: Remove All offered above
+    /// "Sonny can't read your allowed apps", and pressing it fails, because `forgetAll()` refuses an
+    /// unreadable file — so the user is told "Could not remove your allowed apps" on the one screen
+    /// already telling them Sonny cannot read the file. *Remove All must not become a second, quieter
+    /// door onto destroying it* is this branch's sentence, and this is the direction of the new gate
+    /// that nothing covered.
+    ///
+    /// The first two expectations are the positive control: a file that is really there and really
+    /// will not decrypt. Without them a fixture that wrote nothing would make the zero below read as
+    /// success.
+    @Test
+    func anUnreadableGrantsFileOffersNoRemoveAllAndSaysWhatIsWrong() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try corruptGrantsFile(at: fixture.approvedApps.fileURL)
+        #expect(FileManager.default.fileExists(atPath: fixture.approvedApps.fileURL.path))
+        #expect(throws: (any Error).self) { try fixture.approvedApps.loadAll() }
+
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshStoreReadability()
+
+        #expect(fixture.viewModel.storedApprovedAppCount == 0)
+        #expect(
+            !ApprovedAppRevocationPresentation.offersRemoveAll(
+                storedGrantCount: fixture.viewModel.storedApprovedAppCount
+            ),
+            "Remove All over a file forgetAll() will refuse is a control that can only fail"
+        )
+
+        // And what the section shows instead is the unreadable state, not the empty one and not the
+        // held-grant one — the count is zero, so only the readability tells them apart.
+        let readability = MemoryRowReadability.of(.approvedApps, viewModel: fixture.viewModel)
+        #expect(readability == .unreadable)
+        let state = ApprovedAppRevocationPresentation.emptyState(
+            for: readability,
+            storedGrantCount: fixture.viewModel.storedApprovedAppCount
+        )
+        #expect(state.title == ApprovedAppRevocationPresentation.unreadableTitle)
+    }
+
+    /// The count and the rendered list come from one load and cannot disagree about an ordinary
+    /// grant — the case where both should say the same thing.
+    @Test
+    func theStoredCountAndTheRenderedListAgreeWhenEveryGrantIsRenderable() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        for (identifier, name) in [("com.apple.Notes", "Notes"), ("com.apple.Safari", "Safari")] {
+            try fixture.approvedApps.approve(
+                bundleIdentifier: identifier,
+                displayName: name,
+                approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        fixture.viewModel.refreshMemoryEntries()
+
+        #expect(fixture.viewModel.storedApprovedAppCount == 2)
+        #expect(fixture.viewModel.approvedApps.count == 2)
+    }
+
+    /// **Removing an app in Settings mid-session stops that session at the next iteration**
+    /// (SONNY-144).
+    ///
+    /// The test directly above proves the *loop* re-reads the grant, by writing the file underneath
+    /// it. This proves the product's own control reaches that mechanism: the grant is taken back the
+    /// way a user takes it back — `refreshMemoryEntries()` fills the list Settings renders,
+    /// `forgetApprovedApp` is what the row's Remove presses — rather than by a test writing the file
+    /// the loop happens to read. The ticket asked for exactly this distinction, and it is the one a
+    /// file-writing test cannot make: a Remove wired to nothing at all would leave that test green.
+    @Test
+    func removingTheAppInSettingsMidSessionEndsTheSessionAtTheNextIteration() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"General","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"never reached."}"#
+            ],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: "com.microsoft.VSCode",
+            displayName: "VS Code"
+        )
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the first synthesized action") { fixture.synthesizer.clickCount == 1 }
+
+        // The Settings path, in the order the page walks it: load the list, find the row, press it.
+        fixture.viewModel.refreshMemoryEntries()
+        let rows = ApprovedAppRevocationPresentation.rows(for: fixture.viewModel.approvedApps)
+        #expect(rows.map(\.title) == ["VS Code"])
+        let app = try #require(
+            fixture.viewModel.approvedApps.first { $0.matches(bundleIdentifier: "com.microsoft.VSCode") }
+        )
+        fixture.viewModel.forgetApprovedApp(app)
+
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no action after the removal")
+        #expect(fixture.viewModel.approvalRequest == nil, "a withdrawn grant is not re-prompted")
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("no longer allowed to control VS Code"))
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+    }
+
+    /// **Remove All reaches a live session the same way one Remove does** (SONNY-144).
+    ///
+    /// A separate commit path is a separate chance to write the file and never be re-read, and this
+    /// one writes the whole list at once rather than one grant.
+    @Test
+    func removingEveryAppInSettingsMidSessionEndsTheSessionAtTheNextIteration() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"General","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"never reached."}"#
+            ],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: "com.microsoft.VSCode",
+            displayName: "VS Code"
+        )
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the first synthesized action") { fixture.synthesizer.clickCount == 1 }
+        fixture.viewModel.forgetAllApprovedApps()
+
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no action after Remove All")
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+        #expect(fixture.viewModel.errorMessage?.contains("Could not remove") != true)
+    }
+
+    /// **After a removal, the next run that needs the app asks again** — asserted through the real
+    /// path rather than by reading the store back (SONNY-144).
+    ///
+    /// Two sessions in one test, which is the only way to state the claim: the first mints the grant
+    /// by answering the ask, Settings takes it back, and the second arrives at the same question.
+    /// Reading the file after the Remove would prove a row is gone; it would not prove the gate ever
+    /// consults that file again.
+    @Test
+    func afterRemovingAnAppInSettingsTheNextSessionAsksAboutItAgain() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"done","rationale":"first."}"#,
+                #"{"action":"done","rationale":"second."}"#,
+                #"{"action":"done","rationale":"third."}"#
+            ],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+        #expect(try fixture.approvedApps.loadAll().map(\.bundleIdentifier) == ["com.microsoft.VSCode"])
+
+        // The same run again, with the grant standing: no question.
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.approvalRequest == nil, "a standing grant is not re-asked")
+
+        fixture.viewModel.refreshMemoryEntries()
+        let app = try #require(fixture.viewModel.approvedApps.first)
+        fixture.viewModel.forgetApprovedApp(app)
+        #expect(fixture.viewModel.approvedApps.isEmpty, "the list Settings renders is empty after the Remove")
+        #expect(fixture.viewModel.errorMessage == nil)
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the per-app control question, asked again") {
+            fixture.viewModel.approvalRequest != nil
+        }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **A failed write on Remove gets write-failure wording, never the load failure's**
+    /// (SONNY-144, and `CLAUDE.md`'s rule about a bug this repository has shipped once).
+    ///
+    /// The store's directory is made read-only so the write really fails; what is asserted is the
+    /// sentence the user reads. "Could not be decrypted or decoded" describes a file that will not
+    /// open, and after a press that tried to *change* a file it names the wrong thing entirely.
+    @Test(.requiresUnprivilegedProcess)
+    func aFailedRemoveSaysTheWriteFailedAndNeverBorrowsTheLoadFailuresWords() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: "com.microsoft.VSCode",
+            displayName: "VS Code"
+        )
+        fixture.viewModel.refreshMemoryEntries()
+        let app = try #require(fixture.viewModel.approvedApps.first)
+
+        let directory = fixture.approvedApps.fileURL.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        fixture.viewModel.forgetApprovedApp(app)
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.contains("Could not delete this allowed app"))
+        #expect(!message.contains("could not be decrypted or decoded"))
+        #expect(fixture.viewModel.localStorageNotice == nil, "a control the user pressed reports on errorMessage")
+    }
+
+    /// The same rule for Remove All, whose message has no twin anywhere else in the app.
+    @Test(.requiresUnprivilegedProcess)
+    func aFailedRemoveAllSaysWhichPressFailedAndNeverBorrowsTheLoadFailuresWords() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        try seedRawGrant(
+            at: fixture.approvedApps.fileURL,
+            bundleIdentifier: "com.microsoft.VSCode",
+            displayName: "VS Code"
+        )
+
+        let directory = fixture.approvedApps.fileURL.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        fixture.viewModel.forgetAllApprovedApps()
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.contains("Could not remove your allowed apps"))
+        #expect(!message.contains("could not be decrypted or decoded"))
+    }
+
+    /// **Removing one app removes exactly that one and leaves the rest** — on a fixture whose two
+    /// display names differ only in case, since the store keys on the identifier and the list
+    /// renders the name (SONNY-144).
+    @Test
+    func removingOneGrantLeavesEveryOtherGrantIncludingACaseTwinOfItsName() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"unused."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+        // **Two different apps whose display names differ only in case.** The identifiers have to
+        // be genuinely different: `ApprovedApp.matches` folds case, so `com.example.notes` and
+        // `com.example.NOTES` are one app to the store and the second `approve` would be a no-op —
+        // which is what the first draft of this test did, and it read as a list losing a row.
+        for (identifier, name) in [
+            ("com.example.notes", "Notes"),
+            ("com.other.notes", "NOTES"),
+            ("com.apple.Safari", "Safari")
+        ] {
+            try fixture.approvedApps.approve(
+                bundleIdentifier: identifier,
+                displayName: name,
+                approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.approvedApps.count == 3)
+
+        let target = try #require(
+            fixture.viewModel.approvedApps.first { $0.displayName == "NOTES" }
+        )
+        fixture.viewModel.forgetApprovedApp(target)
+
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(
+            Set(try fixture.approvedApps.loadAll().map(\.bundleIdentifier))
+                == ["com.example.notes", "com.apple.Safari"]
+        )
+        #expect(
+            Set(ApprovedAppRevocationPresentation.rows(for: fixture.viewModel.approvedApps).map(\.title))
+                == ["Notes", "Safari"]
+        )
+    }
+
     /// **Founder decision 4, through the product**: Normal → Safe keeps the user's own list and
     /// drops the starter list's contribution.
     ///

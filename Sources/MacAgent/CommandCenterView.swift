@@ -2446,7 +2446,11 @@ private enum TaskHistoryDurationFormatter {
     }
 }
 
-private enum TaskHistoryDateFormatter {
+/// Internal rather than `private`: `ApprovedAppRevocationPresentation` lives in another file and
+/// builds the row that both the Memory sheet and Settings' allowed-apps list render, so the two
+/// surfaces date one grant the same way. A shared formatter the rest of the target cannot name is
+/// the same problem `SettingsAdaptiveControlRow` was made internal for (SONNY-144).
+enum TaskHistoryDateFormatter {
     static func relativeTimestamp(
         for date: Date,
         now: Date,
@@ -4797,12 +4801,40 @@ enum MemoryDeletionCopy {
     /// page it is a page away and has to be named. Those three are exactly the `.page` destinations,
     /// so the split is the routing that already exists.
     static func unreadableSheetMessage(for category: MemoryCategory) -> String {
-        let row = category.title.lowercased()
-        let tail = "to start over. The file stays on your Mac."
         switch MemoryRowDestination.of(category) {
         case .entriesSheet:
-            return "Press Delete on the \(row) row \(tail)"
+            return unreadableRecoveryMessage(for: category, standing: .besideTheMemoryRow)
         case .page:
+            return unreadableRecoveryMessage(for: category, standing: .elsewhere)
+        }
+    }
+
+    /// Where the reader is standing when they are told how to recover an unreadable store.
+    ///
+    /// **Not `MemoryRowDestination`, which is about routing rather than about distance** (SONNY-144).
+    /// That type answers where a Memory row's View button goes; this one answers whether the row
+    /// being named is behind the reader. They agree for every caller inside the Memory section and
+    /// part company the moment a surface outside it has to say the same thing — Settings' allowed-apps
+    /// list is that surface, and `MemoryRowDestination.of(.approvedApps)` is `.entriesSheet`, so
+    /// reusing it there would have told a reader in Settings to press a Delete on a row that is not
+    /// on their screen.
+    enum UnreadableRecoveryStanding {
+        /// The Memory row is directly behind the reader and does not need naming.
+        case besideTheMemoryRow
+        /// The reader is elsewhere in the app, so the sentence has to say where to go.
+        case elsewhere
+    }
+
+    static func unreadableRecoveryMessage(
+        for category: MemoryCategory,
+        standing: UnreadableRecoveryStanding
+    ) -> String {
+        let row = category.title.lowercased()
+        let tail = "to start over. The file stays on your Mac."
+        switch standing {
+        case .besideTheMemoryRow:
+            return "Press Delete on the \(row) row \(tail)"
+        case .elsewhere:
             return "Open Memory in Command Center and press Delete on the \(row) row \(tail)"
         }
     }
@@ -4934,14 +4966,14 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                 )
             }
         case .approvedApps:
+            // **Built from the row Settings' allowed-apps list renders, not written again here**
+            // (SONNY-144). Two surfaces now list this one store, and the identifier, the timestamp
+            // and the fall back to the identifier when an app carries no display name are decisions
+            // about a grant rather than about a sheet. Written twice they would drift, and nothing
+            // in either file would notice.
             return viewModel.approvedApps.map { app in
-                MemoryEntryPresentation(
-                    // The identifier, not a UUID: a grant is keyed by the app it names, and the
-                    // record carries no id of its own.
-                    id: app.bundleIdentifier,
-                    title: app.displayName.isEmpty ? app.bundleIdentifier : app.displayName,
-                    detail: "\(app.bundleIdentifier) · allowed \(TaskHistoryDateFormatter.relativeTimestamp(for: app.approvedAt, now: now))"
-                )
+                let row = ApprovedAppRevocationPresentation.row(for: app, now: now)
+                return MemoryEntryPresentation(id: row.id, title: row.title, detail: row.detail)
             }
         case .resumableTasks:
             return viewModel.resumableTasks.map { task in
@@ -5221,6 +5253,12 @@ private struct CollectionEmptyState: View {
     let systemImage: String
     let title: String
     let message: String
+    /// **Parameterized rather than copied** (SONNY-144). A full-page or full-sheet empty state needs
+    /// the height so it does not read as a stray line; the same state inside a Settings section is
+    /// one block among several and 180pt of it pushes the rest of the page off screen. The words, the
+    /// icon and the tokens are identical, so what varies is the frame and nothing else — a second
+    /// view would have been the same three lines with a different number in them, free to drift.
+    var minHeight: CGFloat = 180
 
     var body: some View {
         VStack(spacing: 8) {
@@ -5236,7 +5274,7 @@ private struct CollectionEmptyState: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 340)
         }
-        .frame(maxWidth: .infinity, minHeight: 180)
+        .frame(maxWidth: .infinity, minHeight: minHeight)
         .padding(24)
     }
 }
@@ -5718,6 +5756,12 @@ private struct SettingsSecurityAccessPage: View {
 
                     SettingsDivider()
 
+                    // The revoke the comment above promised: the list of grants, each with its own
+                    // Remove, directly under the sentence that says Sonny remembers them (SONNY-144).
+                    ApprovedAppRevocationList(viewModel: viewModel)
+
+                    SettingsDivider()
+
                     SettingsControlLabel(
                         title: "Terminals, never",
                         detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has — so this is not something you can turn on."
@@ -5735,6 +5779,14 @@ private struct SettingsSecurityAccessPage: View {
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
             viewModel.refreshPermissions()
+            // **Both, or the allowed-apps list below is wrong in one of two ways** (SONNY-144).
+            // `refreshMemoryEntries()` is what fills `approvedApps` — without it this page renders
+            // whatever the last Memory visit loaded, which for a user who never opens Memory is
+            // nothing at all. `refreshStoreReadability()` is what separates "you have allowed no
+            // apps" from "this file will not open"; without it an undecryptable grants file reads as
+            // an empty one, which is the exact defect SONNY-239 was filed for, on a new surface.
+            viewModel.refreshMemoryEntries()
+            viewModel.refreshStoreReadability()
         }
         .sheet(isPresented: $isScreenAccessSetupPresented) {
             ScreenAccessOnboardingView(model: screenAccessModel, isPresented: $isScreenAccessSetupPresented)
@@ -5745,6 +5797,221 @@ private struct SettingsSecurityAccessPage: View {
             if !isPresented {
                 viewModel.refreshPermissions()
             }
+        }
+    }
+}
+
+/// Settings → Security & Access → Screen Control's list of the apps the user has allowed Sonny to
+/// control, each with its own Remove, plus a Remove All (SONNY-144).
+///
+/// **The first `ForEach` over a stored list on any Settings page**, which is why it follows an
+/// existing pattern instead of establishing one. The row is `WorkspaceDetailView`'s scope-entry row
+/// in its layout — `SettingsAdaptiveControlRow` with a trailing
+/// `CommandCenterRowActionStyle(tone: .danger)` — and never a hand-rolled `HStack`, which is the
+/// shape that caused the narrow-width character-wrapping bug that pattern exists to fix. It is
+/// deliberately *not* that row in what a press costs: `entryRow`'s Remove dispatches a task through
+/// `prepare → assessRisk → approval`, which is why that one is `.disabled(isTaskInFlight)`; this one
+/// commits straight to a store.
+///
+/// **Both controls confirm.** Remove All did from the start; per-row Remove did not until PR #175's
+/// review, which is where the reasoning for the asymmetry fell over — see
+/// `ApprovedAppRevocationPresentation.removeConfirmationTitle(for:)` for what was wrong with it.
+/// Command Center's own invariant, on the Memory entries sheet in this file, is that nothing in the
+/// app deletes a row on one press, and it names a revoked app grant as its example.
+///
+/// **Neither control is disabled while a task runs. That is an answer rather than an omission, and
+/// it is the founders' to overturn** (PR #175 review, F3; the reasoning corrected at cycle 3, G6).
+///
+/// The argument this first rested on was that removing the app a session is controlling is *how a
+/// user stops that session*, so the control has to be live in the state a gate would switch it off.
+/// **That leg does not hold and is recorded here rather than quietly dropped.** F2 put a
+/// confirmation in front of this very press, so it is two presses now; `EmergencyStopHotKey` is
+/// armed for the whole of every vision session, which is one key and reaches no Settings page; and
+/// `cancelCurrentRun` has doors on both surfaces. Revoking is *a* way to stop a session, not the way.
+/// A gate here would not even make the mechanism unreachable — the Memory section's Delete commits
+/// through the same `forgetApprovedApp`, ungated — so gating both controls was always available, and
+/// this comment used to imply it was not.
+///
+/// What survives, and what the decision now rests on: gating here would put **two answers to one
+/// question about one store** on two surfaces, which is the defect F2 was raised for; the precedent
+/// is split by page role rather than by destructiveness — every control on Settings → Data is gated
+/// because it operates on Sonny's whole local data (the founder decision at PR #117's F3), while
+/// every delete in the Memory section is live, including the per-type Delete that empties an entire
+/// store, and these two do what the Memory section's do, to the same store; and this ticket's
+/// acceptance criterion and its last manual item both direct a mid-run Remove *at this page*, so a
+/// gate rewrites a checklist item rather than merely disabling a button.
+///
+/// **What that accepts, stated rather than left to be found:** a revocation write that *fails*
+/// during a run reports on `errorMessage`, which the widget picks ahead of `.result`, so it replaces
+/// the result of a task that ran and succeeded. That cannot be routed elsewhere —
+/// `recordLocalStorageWriteFailure` is for bookkeeping a task did on its own, and this is a control
+/// the user pressed. If the founders would rather pay the other cost, the change is
+/// `.disabled(viewModel.isRunning)` on the Remove All button and nothing else.
+///
+/// **There is no Add.** A picker here would be a second consent shape for the same consent, decided
+/// somewhere the user cannot see what Sonny is about to do; approval happens by being asked, in the
+/// flow. The empty state says how a grant arrives for exactly that reason.
+private struct ApprovedAppRevocationList: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var showRemoveAllConfirmation = false
+
+    /// Recomputed per render rather than held in `@State`, so the list cannot outlive the store: a
+    /// Remove writes the file, `refreshMemoryEntries()` republishes `approvedApps`, and this reads
+    /// that. A cached copy would be a second answer about one file.
+    private var rows: [ApprovedAppRowPresentation] {
+        ApprovedAppRevocationPresentation.rows(for: viewModel.approvedApps)
+    }
+
+    private var readability: MemoryRowReadability {
+        MemoryRowReadability.of(.approvedApps, viewModel: viewModel)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsAdaptiveControlRow {
+                SettingsControlLabel(
+                    title: ApprovedAppRevocationPresentation.listTitle,
+                    detail: ApprovedAppRevocationPresentation.listDetail
+                )
+            } trailing: {
+                // **On the store's count, not on the rendered list.** Gating this on `rows` hid the
+                // one control that reaches a grant the deny-list filter refuses to render, which is
+                // the only thing that could reach it (PR #175 review, F1).
+                if ApprovedAppRevocationPresentation.offersRemoveAll(
+                    storedGrantCount: viewModel.storedApprovedAppCount
+                ) {
+                    Button(ApprovedAppRevocationPresentation.removeAllLabel) {
+                        showRemoveAllConfirmation = true
+                    }
+                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                    .sonnyPointerCursor()
+                    .accessibilityLabel(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
+                    .help(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
+                }
+            }
+
+            if rows.isEmpty {
+                // **Empty and unreadable are different facts and used to render identically**
+                // (SONNY-239). A grants file that will not decrypt loads as zero grants, so without
+                // this split a user who has allowed apps would be told they have allowed none, under
+                // a sentence inviting them to go and allow one. One call rather than a ternary per
+                // field, or nothing holds which arm the view takes (PR #175 review, F4). The third
+                // arm is the same defect through the filter rather than through a damaged file, which
+                // is why the count goes in too (PR #175 cycle 3, G2).
+                let state = ApprovedAppRevocationPresentation.emptyState(
+                    for: readability,
+                    storedGrantCount: viewModel.storedApprovedAppCount
+                )
+                CollectionEmptyState(
+                    systemImage: state.systemImage,
+                    title: state.title,
+                    message: state.message,
+                    minHeight: 120
+                )
+            } else {
+                ForEach(rows) { row in
+                    SettingsDivider()
+
+                    ApprovedAppRevocationRow(row: row) {
+                        remove(row)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // On the container rather than on the Remove All button, for the reason the Data page's
+        // set-aside-files dialog gives: the button sits inside a `ViewThatFits` candidate, and this
+        // is the node that is rendered exactly once. The per-row dialogs are on the rows for the same
+        // reason, and on the rows rather than here because two `confirmationDialog`s on one node is
+        // the shape SwiftUI has dropped one of before — the split the Data page already makes.
+        .confirmationDialog(
+            ApprovedAppRevocationPresentation.removeAllConfirmationTitle,
+            isPresented: $showRemoveAllConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                ApprovedAppRevocationPresentation.removeAllConfirmButtonLabel,
+                role: .destructive
+            ) {
+                viewModel.forgetAllApprovedApps()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(ApprovedAppRevocationPresentation.removeAllConfirmationMessage)
+        }
+    }
+
+    /// Resolves the row back to the grant it came from before committing.
+    ///
+    /// **By identifier through the store's own comparison, not by position.** A row that no longer
+    /// has a grant behind it is a no-op: the array can shrink under a page that is still on screen,
+    /// and a confirmation dialog holds a row across exactly that window. (This used to say the
+    /// rendered list is a filtered view of `approvedApps` so an index into one is not an index into
+    /// the other; that was true while the filter ran here and stopped being true when it moved to the
+    /// load — `rows` re-applies `eligible` to an already-eligible array, so the two are
+    /// index-identical today. The choice is still right, for the reason above. PR #175 review, F7.)
+    private func remove(_ row: ApprovedAppRowPresentation) {
+        guard let app = viewModel.approvedApps.first(where: {
+            $0.matches(bundleIdentifier: row.id)
+        }) else {
+            return
+        }
+        viewModel.forgetApprovedApp(app)
+    }
+}
+
+/// One allowed app and the Remove that takes it back, with the confirmation that press needs.
+///
+/// **Its own view because the dialog needs its own `@State`**, which a `ForEach` body cannot hold,
+/// and because the dialog belongs on the row rather than on the list: two `confirmationDialog`s on
+/// one node is the shape SwiftUI has dropped one of before, and the list already carries Remove
+/// All's. On the row rather than on the button for the reason the Data page records — the button
+/// sits inside a `ViewThatFits` candidate and is built twice; the row is rendered once.
+private struct ApprovedAppRevocationRow: View {
+    let row: ApprovedAppRowPresentation
+    let onRemove: () -> Void
+
+    @State private var showRemoveConfirmation = false
+
+    var body: some View {
+        SettingsAdaptiveControlRow {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.title)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                // The identifier beside the name, not instead of it: the name is what a person
+                // recognises, and the identifier is what the grant is matched on.
+                Text(row.detail)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } trailing: {
+            Button(ApprovedAppRevocationPresentation.removeLabel) {
+                showRemoveConfirmation = true
+            }
+            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            .sonnyPointerCursor()
+            .accessibilityLabel(row.removeAccessibilityLabel)
+            .help(row.removeAccessibilityLabel)
+        }
+        .confirmationDialog(
+            ApprovedAppRevocationPresentation.removeConfirmationTitle(for: row),
+            isPresented: $showRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                ApprovedAppRevocationPresentation.removeConfirmButtonLabel,
+                role: .destructive,
+                action: onRemove
+            )
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(ApprovedAppRevocationPresentation.removeConfirmationMessage)
         }
     }
 }
