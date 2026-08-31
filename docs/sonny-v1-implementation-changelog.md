@@ -194,7 +194,7 @@ Files changed:
 
 **This list was one file short as first written** and is derived rather than recalled now: `git diff --name-only 37c9177..HEAD` → 12 files, and every one is above. `UnprivilegedGateTests.swift` was the missing one — its gated-directory-locking count went 12 → 14 for the two forced-write-failure tests — and the closing comment had it while the durable record did not (PR #175 review, F5).
 
-Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2537 tests in 174 suites, 67.283s, 7 known issues, exit 0**. `scripts/warnings` -> WARNINGS_PLACEHOLDER. `scripts/mutate` -> BATTERY_PLACEHOLDER. `scripts/changelog-order` -> **exit 0**, `is in merge order, 146 entries, both eras`.
+Tests: `swift build` (clean), then CLAUDE.md's flagged command -> **PASS, 2537 tests in 174 suites, 67.283s, 7 known issues, exit 0**. `scripts/warnings` -> **0 warnings, exit 0**, its own report stamped `b47f6d3 (clean)`, 164s. `scripts/mutate` (6 mutants, scoped to the properties the fix round changes) -> **6 killed, 0 survived, 0 unattributed, exit 0** at `b47f6d3`. **R5 is a build-failure kill and carries no test evidence** — dropping `.partlyUnreadable` from the switch makes it non-exhaustive, so the compiler holds that arm's *presence* and R1 holds its *value*. Counted, and said rather than left to read as coverage. `scripts/changelog-order` -> **exit 0**, `is in merge order, 146 entries, both eras`.
 
 **The figures before the fix round were 2527 tests at `b52cc81`**, reproduced independently by the reviewer at `469f369`. This round adds ten tests and re-measures rather than adjusting.
 
