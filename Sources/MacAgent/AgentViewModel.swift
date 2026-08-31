@@ -6542,10 +6542,13 @@ final class AgentViewModel: ObservableObject {
                 plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: name),
                 source: .instantResolver
             )
-            // Reachable since routine deletion exists, not merely defensive.
-            // `SaveRoutineCapabilityAdapter` still rejects open_workspace and run_routine steps at
-            // save time, so a routine's own steps still cannot name a missing target — but the
-            // routine itself is re-resolved *by name* in `prepare` above, and
+            // Reachable since routine deletion exists, not merely defensive. It has a second cause
+            // as of SONNY-186: a routine may carry an `open_workspace` step, so a routine's own
+            // steps *can* now name a missing target, and a workspace deleted or renamed since the
+            // routine was taught reaches this line as `.missingWorkspaceInRoutine` — a clarification
+            // naming the routine and the workspace, so the notice below says what could not be
+            // found rather than reporting a routine that quietly did nothing. The original cause is
+            // unchanged: the routine itself is re-resolved *by name* in `prepare` above, and
             // `checkScheduledRoutines` spawning this method as a `Task` is a real suspension point
             // between reading the routine and this line running. Deleting the routine inside that
             // window makes `RunRoutineCapabilityAdapter`'s store read throw `.missingRoutine`,
@@ -6600,11 +6603,25 @@ final class AgentViewModel: ObservableObject {
                 prepared,
                 approvalDecision: .approved(.tier2),
                 confirmationMessage: "Scheduled run approved by this routine's unattended-run setting",
-                // `.unscoped` on purpose, not by omission. A scheduled run has no workspace binding
-                // available: `SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
-                // `create_workspace` and `open_workspace` as routine steps, so a stored routine can
-                // never name a workspace, and nothing else in a scheduled run carries one — there is
-                // no command text a user typed and no dispatch that named one.
+                // `.unscoped` on purpose, not by omission — and the reason is now a decision rather
+                // than an absence (SONNY-186). It used to be that no workspace name could reach
+                // here at all: a routine could not carry `open_workspace`, so a stored routine
+                // could never name a workspace, and nothing else in a scheduled run carries one —
+                // there is no command text a user typed and no dispatch that named one. A routine
+                // may carry it now, so a name genuinely is available, and this stays `.unscoped`
+                // anyway.
+                //
+                // **Opening a workspace is not the same act as being bound by one, and the
+                // scheduled path is where treating them alike does damage.** The founder decision
+                // binds the *step*: it says which workspace to open. Turning that into the run's
+                // boundary would put an unattended run one out-of-scope resource away from a tier-3
+                // escalation — which this path structurally cannot satisfy — and per SONNY-10 that
+                // skips this occurrence and usually every future one, silently, for a routine the
+                // user taught deliberately. That is the exact interaction
+                // `docs/sonny-founder-design-decisions.md` records as the one genuinely dangerous
+                // one. The foreground path is the opposite case and binds it: `WorkspaceTaskTagging`
+                // reads the routine's own `open_workspace` step, and there is a person present to
+                // answer the escalation it can produce.
                 //
                 // Under the consequence rule this choice also carries the unattended ceiling's
                 // advisory half: an unscoped assessment can produce no out-of-scope advisory, and

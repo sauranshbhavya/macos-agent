@@ -301,6 +301,25 @@ public final class AgentActionExecutor {
                 kind: "routine",
                 savedNames: (try? routineStore.loadAll())?.values.map(\.name)
             )
+        case .missingWorkspaceInRoutine(let routine, let workspace):
+            // The same clarification `.missingWorkspace` gets, with the routine named — the user
+            // asked to run a routine, so a sentence opening on a workspace they never mentioned
+            // would read as a non-sequitur (SONNY-186). The saved-name list is the load-bearing
+            // half: a routine's step holds a workspace *name*, so a rename is indistinguishable
+            // from a deletion here, and the new name is in that list.
+            //
+            // The "did you mean the other store's record of the same name" branch above is
+            // deliberately not repeated. It disambiguates what the *user* typed; nothing the user
+            // typed is in question here, and offering to run a routine to someone who is already
+            // running one answers a question nobody asked.
+            let trimmedRoutine = routine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+            return missingTargetQuestion(
+                name: workspace,
+                kind: "workspace",
+                savedNames: (try? workspaceStore.loadAll())?.values.map(\.name),
+                opening: "The routine \"\(trimmedRoutine)\" opens a workspace called \"\(trimmedWorkspace)\", and I don't have one saved by that name"
+            )
         case .missingName, .emptyRoutine, .emptyWorkspace, .unsafeRoutineStep, .invalidSchedule:
             // Every other automation-store failure keeps its own error. A missing name, an
             // empty definition, an unsafe nested step, or a malformed schedule are real problems,
@@ -309,22 +328,33 @@ public final class AgentActionExecutor {
         }
     }
 
-    private func missingTargetQuestion(name: String, kind: String, savedNames: [String]?) -> String? {
+    /// `opening` is the clause before the dash, defaulted to the one a user's own named target
+    /// deserves. A caller passes its own only when the missing name is not the name the user typed
+    /// — today that is `.missingWorkspaceInRoutine` alone (SONNY-186). Everything after the dash is
+    /// shared on purpose: which saved names are listed, how many, and what the user is asked to do
+    /// next are the same decisions whichever door arrived here.
+    private func missingTargetQuestion(
+        name: String,
+        kind: String,
+        savedNames: [String]?,
+        opening: String? = nil
+    ) -> String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let savedNames else {
             // The store could not be read at all. That is a load failure with its own
             // surfacing — do not disguise it as "you never saved this".
             return nil
         }
+        let lead = opening ?? "I don't have a \(kind) called \"\(trimmed)\" saved"
 
         let sorted = savedNames.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         guard !sorted.isEmpty else {
-            return "I don't have a \(kind) called \"\(trimmed)\" saved — you haven't saved any \(kind)s yet. What would you like me to do instead?"
+            return "\(lead) — you haven't saved any \(kind)s yet. What would you like me to do instead?"
         }
 
         let shown = sorted.prefix(5).joined(separator: ", ")
         let remainder = sorted.count > 5 ? ", and \(sorted.count - 5) more" : ""
-        return "I don't have a \(kind) called \"\(trimmed)\" saved — did you mean one of: \(shown)\(remainder)? Or would you like to do something else?"
+        return "\(lead) — did you mean one of: \(shown)\(remainder)? Or would you like to do something else?"
     }
 
     /// Same shape the planner emits for a genuine clarification, so every downstream path
@@ -1597,35 +1627,62 @@ public final class AgentActionExecutor {
             // with apps only — and opening local apps sends nothing anywhere. Classifying every
             // workspace open as egress printed "Data leaves device: yes" on the approval panel of
             // any plan carrying an apps-only workspace open, a claim nothing in that plan made
-            // true.
-            //
-            // Do not read this `try?` by analogy with the `.runRoutine` one below: that branch is
-            // safe because `RunRoutineCapabilityAdapter.assessRisk` loads the routine with a plain
-            // `try` first, and `OpenWorkspaceCapabilityAdapter` has no `assessRisk` override at
-            // all, so there is no such guarantee here. What actually makes it safe is `prepare`,
-            // which runs `preview` before anything reaches this copy: the adapter's `preview`
-            // loads the workspace with a plain `try`, a name matching nothing becomes a
-            // clarification plan, and an unreadable store still throws. Neither failure mode
-            // survives to be silently answered "no" here on the `AgentRunner` path, the only path
-            // that renders this line. (`UnattendedTrustAdvisory` is the one caller that skips
-            // `prepare`, and it reads `effectiveTier` only, never `approvalCopy`.)
-            guard let workspace = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
-                return false
-            }
-            return !workspace.urls.isEmpty
+            // true. Why the helper's `try?` is safe is recorded on the helper.
+            return workspaceOpenLeavesDevice(step)
         case .runRoutine:
             // A saved routine can wrap egress steps, so the outer .runRoutine step alone says
-            // nothing. Stored routines cannot themselves contain .runRoutine *or* .openWorkspace
-            // (both rejected at save time), so one level is enough and the nested scan needs no
-            // second lookup of its own. A routine that fails to load surfaces through the
-            // adapter's assessRisk before this copy is built.
+            // nothing. A routine that fails to load surfaces through the adapter's assessRisk
+            // before this copy is built.
+            //
+            // **The nested scan asks the workspace question too, as of SONNY-186.** A routine may
+            // carry `.openWorkspace` now, and that is precisely the operation whose answer is not
+            // in `dataEgressOperations` — it depends on the *stored* workspace's URLs, which is the
+            // branch directly above. A membership test alone therefore printed "Data leaves device:
+            // no" on the approval panel of a routine that opens a workspace full of URLs.
+            //
+            // **Written out rather than recursing into `stepLeavesDevice`, and that is the point of
+            // this shape.** A routine cannot contain `.runRoutine` — `validateStepSafety` refuses it
+            // at both write doors — but `RoutineStore.loadAll` validates nothing, so a hand-edited
+            // `routines.json` naming a routine that runs itself is reachable, and a self-call here
+            // would answer it by exhausting the stack. One level, spelled out, cannot. The shared
+            // half is `workspaceOpenLeavesDevice`, so the two levels cannot disagree about what a
+            // workspace open means; only the depth is fixed here.
             guard let routine = try? routineStore.routine(named: step.routineName ?? "") else {
                 return false
             }
-            return routine.steps.contains { Self.dataEgressOperations.contains($0.operation) }
+            return routine.steps.contains { nested in
+                Self.dataEgressOperations.contains(nested.operation)
+                    || (nested.operation == .openWorkspace && workspaceOpenLeavesDevice(nested))
+            }
         default:
             return false
         }
+    }
+
+    /// Whether opening the workspace an `.openWorkspace` step names sends anything off-device.
+    ///
+    /// One definition for the two depths `stepLeavesDevice` asks it at — the plan's own steps, and a
+    /// routine's steps one level down (SONNY-186).
+    ///
+    /// Do not read this `try?` by analogy with `stepLeavesDevice`'s `.runRoutine` one: that branch
+    /// is safe because `RunRoutineCapabilityAdapter.assessRisk` loads the routine with a plain `try`
+    /// first, and `OpenWorkspaceCapabilityAdapter` has no `assessRisk` override at all, so there is
+    /// no such guarantee here. What actually makes it safe is `prepare`, which runs `preview` before
+    /// anything reaches this copy: the adapter's `preview` loads the workspace with a plain `try`, a
+    /// name matching nothing becomes a clarification plan, and an unreadable store still throws.
+    /// Neither failure mode survives to be silently answered "no" here on the `AgentRunner` path,
+    /// the only path that renders this line. (`UnattendedTrustAdvisory` is the one caller that skips
+    /// `prepare`, and it reads `effectiveTier` only, never `approvalCopy`.)
+    ///
+    /// **That argument reaches the nested depth too, through the routine's own preview.**
+    /// `RunRoutineCapabilityAdapter.preview` previews every nested step, so a routine naming a
+    /// deleted workspace becomes a clarification at `prepare` — `.missingWorkspaceInRoutine` — and
+    /// never a plan whose approval panel this line has to describe.
+    private func workspaceOpenLeavesDevice(_ step: AgentStep) -> Bool {
+        guard let workspace = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
+            return false
+        }
+        return !workspace.urls.isEmpty
     }
 
     private func undoDescription(for tier: CapabilityRiskTier, plan: AgentPlan) -> String {
