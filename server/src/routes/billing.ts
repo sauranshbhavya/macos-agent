@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { callerOf } from "../auth/gate.js";
 import { errorBody } from "../errors.js";
 import type { BillingPlans, BillingStore } from "../billing/store.js";
@@ -56,6 +56,13 @@ import { verifyWebhookSignature } from "../billing/webhook-signature.js";
  * entitlement and not offer the control at all — the same relationship `entitlement.already_subscribed`
  * has with Subscribe.
  *
+ * **And that account is answered without the call** (SONNY-387). The sentence above says "unlike
+ * every billing path before it, it calls the provider", and that is true of a subscriber; it is not
+ * true of the majority of accounts, which hold no subscription this gateway ever recorded. Only the
+ * *absence* of a record short-circuits, and only into the refusal — a record present still calls,
+ * so the provider remains the thing that decides whether a link exists. `billing/store.ts`'s
+ * `hasSubscriptionRecord` carries which question this asks and why it is not the checkout guard's.
+ *
  * ## `POST /v1/billing/checkout` is authenticated and returns a URL
  *
  * The account id travels to the provider on that URL and comes back on the customer, which is what
@@ -74,6 +81,27 @@ export interface BillingRouteDeps {
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
 export const BILLING_PORTAL_PATH = "/v1/billing/portal";
+
+/**
+ * "This account holds no subscription to manage", as **one** answer with two arms behind it — the
+ * local one and the provider's (SONNY-387).
+ *
+ * Two spellings would let a client tell which side answered, and which side answered is this
+ * gateway's business rather than the caller's: both arms are saying the same thing about the same
+ * account, and the client's copy for it is written once (`BillingPortalCopy`).
+ */
+function noSubscriptionToManage(request: FastifyRequest, reply: FastifyReply): FastifyReply {
+  return reply
+    .status(409)
+    .send(
+      errorBody(
+        "entitlement.no_subscription",
+        "This account holds no subscription to manage.",
+        request.id,
+        { retryable: false },
+      ),
+    );
+}
 
 export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDeps): void {
   const now = deps.now ?? (() => new Date());
@@ -171,6 +199,25 @@ export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDe
 
   app.post(BILLING_PORTAL_PATH, async (request, reply) => {
     const caller = callerOf(request);
+    /**
+     * **The never-subscribed account is answered here, without asking the provider** (SONNY-387).
+     * It is most accounts, and the outbound call it used to cost only ever discovered the absence
+     * this gateway had already recorded. The answer is byte-identical to the `noCustomer` arm below
+     * on purpose: the client must not be able to tell which side answered, because the two are
+     * saying the same thing about the same account.
+     *
+     * **The store's answer is decisive in one direction only.** A recorded subscription decides
+     * nothing — the provider is still called, and its `noCustomer` still wins, which is what keeps
+     * a stale row from minting a link that does not exist. Only the absence short-circuits, and
+     * `hasSubscriptionRecord` carries the enumeration of when an absence can be wrong and why none
+     * of those shapes is reachable from the app.
+     *
+     * **It is `hasSubscriptionRecord`, not the checkout route's `hasLiveSubscription`.** A cancelled
+     * subscriber is exactly who this route is for, and their row is revoked.
+     */
+    if (!(await deps.store.hasSubscriptionRecord(deps.provider.name, caller.accountId))) {
+      return noSubscriptionToManage(request, reply);
+    }
     const link = await deps.provider.portalUrlFor(caller.accountId);
     // One arm per case, and every failure arm's status and `retryable` come straight from 7.2's
     // taxonomy rather than being decided here — which is why `PortalLink`'s cases are named for
@@ -181,16 +228,7 @@ export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDe
         // reporting "the portal is down" for a window it sat on for an hour.
         return reply.send({ portal_url: link.url, expires_at: link.expiresAt.toISOString() });
       case "noCustomer":
-        return reply
-          .status(409)
-          .send(
-            errorBody(
-              "entitlement.no_subscription",
-              "This account holds no subscription to manage.",
-              request.id,
-              { retryable: false },
-            ),
-          );
+        return noSubscriptionToManage(request, reply);
       case "timedOut":
         // The reason is logged and never sent, exactly as the webhook's refusal reason is: it
         // describes this gateway's own budget and its upstream, neither of which is the caller's.
