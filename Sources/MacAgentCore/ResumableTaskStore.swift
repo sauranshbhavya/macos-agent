@@ -391,7 +391,7 @@ public struct ResumableTaskStore: @unchecked Sendable {
     public let maxTasks: Int
     /// The standing-watcher cap. Injectable for tests exactly as `idleExpiry` and `maxTasks` are,
     /// and for the same reason: reaching `maxActive` otherwise means creating the shipped number of
-    /// real watchers. `noProductionPathPassesStandingWatcherLimits` pins that nothing in `Sources/`
+    /// real watchers. `noProductionPathBuildsItsOwnStandingWatcherLimits` pins that nothing in `Sources/`
     /// passes anything but `.standard`.
     public let limits: StandingWatcherLimits
     private let fileManager: FileManager

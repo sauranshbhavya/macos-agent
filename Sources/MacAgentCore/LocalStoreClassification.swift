@@ -43,9 +43,18 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 /// **The unreadable case is deliberately not covered by this and must not be.** A collection-scoped
 /// delete rewrites the file, which means decoding it — precisely what has failed for a store that
 /// will not read. So an unreadable store goes to `LocalDataQuarantine` at file level whatever this
-/// says, and nothing is lost by that: quarantine *keeps* the file rather than destroying it, so the
-/// watchers inside it are set aside intact alongside the tasks. It is
-/// `deleteStoreFilesOnly()`'s own readable/unreadable asymmetry reaching one door further.
+/// says. It is `deleteStoreFilesOnly()`'s own readable/unreadable asymmetry reaching one door
+/// further.
+///
+/// **"Nothing is lost" is a claim about bytes and this comment used to make it without that
+/// qualifier** (PR #184 review, F5). The bytes survive — quarantine keeps the file rather than
+/// destroying it, so the watchers inside are set aside alongside the tasks. What does not survive is
+/// the *watching*: the file leaves the path the checker reads, so every standing watcher in it stops
+/// permanently and **none of the four endings fires**. That is a fifth, quiet ending, and it
+/// contradicts the rule stated in three places — that a watcher which stops says so, because one
+/// that dies quietly leaves the user believing it is still watching. It is also not `.cancelled`:
+/// the user pressed a control about unfinished tasks. Recorded on SONNY-236 as a founder call rather
+/// than decided here, since it is the same shape decision A ruled on for the readable path.
 public enum LocalStoreRowDeletionScope: Equatable, Sendable {
     /// The row owns the whole file, so the press unlinks it. Twelve of the thirteen.
     case wholeFile

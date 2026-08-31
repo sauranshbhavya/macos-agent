@@ -26,9 +26,15 @@ struct StandingWatcherRunTests {
         defer { fixture.cleanUp() }
         let observer = fixture.observer
         observer.answer(with: "Price: £40  In stock")
-        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "Price: £40 In stock")))
+        // `createdAt` on the same clock the pulse is given: a fixture created at the real `Date()`
+        // and checked at a fixed 2027 instant is simply expired, which is the watcher working and
+        // not what this test is about.
+        let checkedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try fixture.store.saveWatcher(
+            watcher(baselineDigest: digest(of: "Price: £40 In stock"), createdAt: checkedAt)
+        )
 
-        await fixture.check()
+        await fixture.check(now: checkedAt)
 
         #expect(observer.callCount == 1)
         #expect(fixture.viewModel.watcherNotice == nil)
@@ -36,7 +42,14 @@ struct StandingWatcherRunTests {
         #expect(remaining.count == 1)
         let updated = try #require(remaining.first)
         #expect(updated.candidateDigest == nil)
-        #expect(updated.lastCheckedAt != nil)
+        // **The clock the pulse was given is the clock the record carries** (PR #184 review, R3).
+        // `!= nil` was the assertion here, and it holds against the defect this branch shipped for
+        // one commit — due-ness decided on the injected clock while `lastCheckedAt` was stamped from
+        // `Date()`. The three tests that caught that only failed once real time had drifted past the
+        // injected clock by more than a second, which is why this lane's own filtered run was green.
+        // This is the deterministic version: equality, through the view model, on the value the test
+        // chose.
+        #expect(updated.lastCheckedAt == checkedAt)
     }
 
     /// **The ad-slot property, through the real path.** A first difference writes a candidate and
@@ -225,6 +238,141 @@ struct StandingWatcherRunTests {
         #expect(try #require(watchers.first { $0.id == "new" }).lastCheckedAt == nil)
     }
 
+    // MARK: - The three findings of PR #184's review
+
+    /// **F1 — a watcher notice reaches the user even when Sonny is the app they are in.**
+    ///
+    /// The four older notification channels are gated on `!isUserWorkingInSonny`, and for them the
+    /// gate is free: whatever it suppresses is already on a Sonny surface. `watcherNotice` is
+    /// rendered by no view, and `finishStandingWatcher` publishes the sentence and then deletes the
+    /// record — so a gate here was not deduplication, it was deletion, in what is arguably the
+    /// feature's most common case.
+    ///
+    /// Asserted by reading the wiring, because `SonnyNotificationService.init?` returns nil without
+    /// bundle identity and the subscription does not exist in a test process. The **control** is the
+    /// neighbouring channels in the same file: they still carry the guard, so a zero here is this
+    /// channel's asymmetry rather than the sweep failing to find a guard anywhere.
+    @Test
+    func theWatcherChannelIsTheOneWithNoIsUserWorkingInSonnyGate() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let subscription = try MacAgentSource.region(
+            of: delegate,
+            from: "viewModel.$watcherNotice",
+            to: ".store(in: &cancellables)"
+        )
+        #expect(!subscription.contains("isUserWorkingInSonny"))
+
+        for gated in ["viewModel.$scheduledRunNotice", "viewModel.$localStorageNotice", "viewModel.$errorMessage"] {
+            let other = try MacAgentSource.region(of: delegate, from: gated, to: ".store(in: &cancellables)")
+            #expect(
+                other.contains("!isUserWorkingInSonny"),
+                "\(gated) lost its gate — the watcher channel's exemption is only meaningful beside them"
+            )
+        }
+    }
+
+    /// **F2 — a wipe pressed while a check is in flight is not undone by that check's write-back.**
+    ///
+    /// `deleteLocalData` guards on `!isRunning`, and a watcher check deliberately does not set it,
+    /// so the fetch outlives the wipe. Without the fix `saveWatcher` finds a missing file, creates
+    /// the directory and writes the watcher back — a user who pressed delete-all-local-data gets
+    /// their watchers returned, which is a privacy failure rather than an ordering bug.
+    ///
+    /// The **control** is the precondition: the wipe really did unlink the file and `loadWatchers()`
+    /// really was empty, so the final assertion is about the write-back and not about a delete that
+    /// never happened.
+    @Test
+    func aWipeDuringAnInFlightCheckIsNotUndoneByIt() async throws {
+        let fixture = try makeWatcherFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.holdTheAnswer()
+        try fixture.store.saveWatcher(watcher(baselineDigest: digest(of: "steady")))
+
+        await fixture.startCheck(now: Date())
+        #expect(observer.callCount == 1, "the check must be in flight for this to test anything")
+
+        fixture.viewModel.deleteLocalData()
+        #expect(try fixture.store.loadWatchers().isEmpty, "precondition: the wipe took the file")
+        #expect(FileManager.default.fileExists(atPath: fixture.store.fileURL.path) == false)
+
+        // Now let the page answer, after the wipe.
+        observer.releaseTheAnswer(with: "steady")
+        await fixture.viewModel.awaitStandingWatcherCheck()
+
+        #expect(try fixture.store.loadWatchers().isEmpty, "the wipe was undone by a check in flight")
+        #expect(FileManager.default.fileExists(atPath: fixture.store.fileURL.path) == false)
+    }
+
+    /// **F3 — one page that never answers does not stop every other watcher.**
+    ///
+    /// The re-entrancy slot was cleared only by the task body finishing and nothing bounded the
+    /// fetch, so a page that never answers parked it permanently: every later pulse returned at the
+    /// guard, no failure was ever recorded, and `maxConsecutiveFailures` could not end the stalled
+    /// watcher either — the cap written to stop a dead page occupying a watcher was unreachable.
+    ///
+    /// Driven entirely on the injected clock: the abandonment is decided by comparing the pulse's own
+    /// `now` against the check's start, so nothing here races a timer.
+    @Test
+    func onePageThatNeverAnswersIsAbandonedAndDoesNotStopTheOthers() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.holdTheAnswer()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        try fixture.store.saveWatcher(
+            watcher(id: "stalled", subject: "a page that never answers", baselineDigest: "base", createdAt: start.addingTimeInterval(-100))
+        )
+        try fixture.store.saveWatcher(
+            watcher(id: "healthy", subject: "a page that answers", baselineDigest: digest(of: "steady"), createdAt: start)
+        )
+
+        await fixture.startCheck(now: start)
+        #expect(observer.callCount == 1)
+
+        // A pulse inside the bound changes nothing: the slot is still legitimately held.
+        fixture.viewModel.checkStandingWatchers(now: start.addingTimeInterval(30))
+        #expect(observer.callCount == 1)
+
+        // A pulse at the bound abandons it, records a failed reading against the stalled watcher,
+        // and frees the slot.
+        observer.releaseTheAnswer(with: "steady")
+        await fixture.check(now: start.addingTimeInterval(StandingWatcherLimits.standard.checkTimeout))
+
+        let watchers = try fixture.store.loadWatchers()
+        let stalled = try #require(watchers.first { $0.id == "stalled" })
+        #expect(stalled.consecutiveFailures == 1, "an abandoned check must count, or the cap cannot end it")
+        #expect(observer.callCount >= 2, "the other watcher must become reachable again")
+    }
+
+    /// And the late answer from an abandoned check writes nothing — the half of F2 and F3 that
+    /// cancellation alone cannot do, since a cancelled `Task` still runs its continuation and the
+    /// observer may ignore cancellation entirely.
+    @Test
+    func aStalledCheckThatAnswersLateWritesNothing() async throws {
+        let fixture = try makeWatcherFixture()
+        defer { fixture.cleanUp() }
+        let observer = fixture.observer
+        observer.holdTheAnswer()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        try fixture.store.saveWatcher(watcher(baselineDigest: "base", createdAt: start))
+
+        await fixture.startCheck(now: start)
+        fixture.viewModel.checkStandingWatchers(now: start.addingTimeInterval(StandingWatcherLimits.standard.checkTimeout))
+        // The abandonment recorded one failure. Whatever the stalled fetch says now must not add to
+        // it, and must not promote anything.
+        let afterAbandon = try #require(try fixture.store.loadWatchers().first)
+        #expect(afterAbandon.consecutiveFailures == 1)
+
+        observer.releaseTheAnswer(with: "something entirely different")
+        await fixture.viewModel.awaitStandingWatcherCheck()
+
+        let settled = try #require(try fixture.store.loadWatchers().first)
+        #expect(settled.consecutiveFailures == 1, "the late answer wrote back")
+        #expect(settled.candidateDigest == nil, "the late answer promoted a reading")
+        #expect(fixture.viewModel.watcherNotice == nil)
+    }
+
     // MARK: - The notification channel
 
     /// **The watcher notice posts through its own actionless category, and the actionless part is a
@@ -334,13 +482,31 @@ private struct WatcherFixture {
         await viewModel.awaitStandingWatcherCheck()
     }
 
+    /// Starts a check and returns once the observer has actually been asked — for the tests about a
+    /// check that is *in flight*, which cannot await the task because the answer is being withheld
+    /// on purpose.
+    ///
+    /// **Bounded by yields rather than by a clock.** `checkStandingWatchers` schedules a `Task` on
+    /// this actor and returns, so the body has not run when it does; a test asserting immediately
+    /// reads a call count of zero. Spinning the actor a fixed number of times is deterministic —
+    /// there is no wall-clock threshold to lose a race against, which is the trap
+    /// `asyncProcessRunnerCancelsRunningProcess` is written down for. The count is generous and the
+    /// assertion afterwards is what fails if it were ever too small.
+    func startCheck(now: Date) async {
+        let before = observer.callCount
+        viewModel.checkStandingWatchers(now: now)
+        for _ in 0..<100 where observer.callCount == before {
+            await Task.yield()
+        }
+    }
+
     func cleanUp() {
         try? FileManager.default.removeItem(at: root)
     }
 }
 
 @MainActor
-private func makeWatcherFixture() throws -> WatcherFixture {
+private func makeWatcherFixture(wipesRealStoreFiles: Bool = false) throws -> WatcherFixture {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("StandingWatcherRunTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -379,7 +545,9 @@ private func makeWatcherFixture() throws -> WatcherFixture {
             store: UnreachableLocalStores.clipboardHistory(),
             settingsStore: clipboardSettingsStore
         ),
-        localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        // Empty by default, so no test can wipe anything it did not ask to; the F2 test opts in and
+        // names exactly the one file it is about.
+        localDataDeletionService: LocalDataDeletionService(fileURLs: wipesRealStoreFiles ? [store.fileURL] : []),
         backendClient: makeHermeticBackendClient(),
         userDefaults: UserDefaults(suiteName: "StandingWatcherRunTests-\(UUID().uuidString)") ?? .standard
     )
@@ -410,6 +578,8 @@ final class WatcherObserverStub: StandingWatcherObserving {
     private var reply: Result<String, any Error> = .failure(StubError.notConfigured)
     private(set) var callCount = 0
     private(set) var urlsRead: [URL] = []
+    private var held = false
+    private var pending: [CheckedContinuation<String, Never>] = []
 
     enum StubError: Error, Equatable { case notConfigured, refused }
 
@@ -421,9 +591,34 @@ final class WatcherObserverStub: StandingWatcherObserving {
         reply = .failure(StubError.refused)
     }
 
+    /// The next read blocks until `releaseTheAnswer` — a page that has not answered *yet*, which is
+    /// what F2 and F3 are both about and what no `Result` can express.
+    ///
+    /// A continuation rather than a sleep: the test decides when the page answers, so nothing here
+    /// races a clock. `CheckedContinuation` also traps on a double resume, which is the failure a
+    /// hand-rolled flag would make silent.
+    func holdTheAnswer() {
+        held = true
+    }
+
+    func releaseTheAnswer(with text: String) {
+        held = false
+        reply = .success(text)
+        let waiting = pending
+        pending = []
+        for continuation in waiting {
+            continuation.resume(returning: text)
+        }
+    }
+
     func readableText(at url: URL) async throws -> String {
         callCount += 1
         urlsRead.append(url)
-        return try reply.get()
+        guard held else {
+            return try reply.get()
+        }
+        return await withCheckedContinuation { continuation in
+            pending.append(continuation)
+        }
     }
 }
