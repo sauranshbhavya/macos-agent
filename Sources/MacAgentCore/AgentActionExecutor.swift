@@ -222,7 +222,25 @@ public final class AgentActionExecutor {
         self.visionSession = visionSession
     }
 
+    /// **A job over many items is resolved and expanded here, before anything else sees the plan**
+    /// (SONNY-235). `PlanItemJobResolver` reads the folder or the Finder selection once, pins the
+    /// list into `plan.itemJob.items`, and replaces the template steps with one copy per item — so
+    /// the previews below, the assessment `AgentRunner` takes next, the approval the user answers,
+    /// and the dispatch that follows are all about the same forty items. It is the first thing this
+    /// function does because everything after it, this function included, is written for a plan of
+    /// ordinary steps.
+    ///
+    /// **`assessRisk` and `execute` refuse an unresolved job rather than resolving one**, which is
+    /// what makes "the list approved is the list run" structural: a second resolution at a later
+    /// moment could return a different folder listing, and the user's one approval would then cover
+    /// a job they were never shown.
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
+        let plan = try PlanItemJobResolver.resolving(
+            plan,
+            whitelist: whitelist,
+            finderContextReader: finderContextReader,
+            fileManager: fileManager
+        )
         if let question = try clarificationQuestion(in: plan) {
             let preview = ActionPreview(
                 title: "Clarification needed",
@@ -396,7 +414,23 @@ public final class AgentActionExecutor {
     /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
     /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
-        try assessRisk(plan: plan, scope: scope, namedByEnclosingPlan: .none)
+        try Self.refuseUnresolvedItemJob(in: plan)
+        return try assessRisk(plan: plan, scope: scope, namedByEnclosingPlan: .none)
+    }
+
+    /// **A job that has not been through `prepare` gets no further** (SONNY-235).
+    ///
+    /// The alternative — resolving here too — is what makes one approval cover forty items unsafe:
+    /// each door would read the folder at its own moment, and a file added between the prompt and
+    /// the run would be worked through under an approval the user gave over a shorter list. This
+    /// cannot be reached through the app, where `AgentRunner` prepares once and hands that same plan
+    /// to both doors; it exists so that a caller who skips `prepare` gets a refusal instead of a
+    /// quiet second resolution.
+    static func refuseUnresolvedItemJob(in plan: AgentPlan) throws {
+        guard let job = plan.itemJob, !job.isResolved else {
+            return
+        }
+        throw PlanItemJobError.notPrepared
     }
 
     /// The whole of `assessRisk`, plus the destinations the plans enclosing this one already name.
@@ -792,20 +826,23 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
         onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
+        onItemFailed: ((ItemJobFailure) -> Void)? = nil,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
+        try Self.refuseUnresolvedItemJob(in: plan)
         // Every top-level run starts naming nothing: a plan's own destinations are added by
         // `executeChain` once they have been resolved, and only a *nested* plan is ever handed a
         // non-empty set. `PlannedDestinations` is deliberately not part of this public signature —
         // it is executor-internal plumbing, and the one thing it must never become is something an
         // adapter or a caller can hand in, since a set of intentions arriving from outside is
         // indistinguishable here from the run's own.
-        try await execute(
+        return try await execute(
             plan: plan,
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             namedByEnclosingPlan: .none,
             onUnitCompleted: onUnitCompleted,
+            onItemFailed: onItemFailed,
             log: log
         )
     }
@@ -827,6 +864,7 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims,
         namedByEnclosingPlan: PlannedDestinations,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let resolvedPlan = try resolveDefaultOutputs(
@@ -892,7 +930,7 @@ public final class AgentActionExecutor {
         case .visionSession:
             return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
     }
 
@@ -1892,6 +1930,7 @@ public final class AgentActionExecutor {
                     // whole nested run returns anyway, which is what the enclosing `executeChain`
                     // reports.
                     onUnitCompleted: nil,
+                    onItemFailed: nil,
                     log: log
                 )
             },
@@ -1966,6 +2005,7 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
@@ -2005,21 +2045,97 @@ public final class AgentActionExecutor {
         // it, which is the same defect this function's seed comment carries a correction for.
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
+        // **The job half of this loop (SONNY-235), in three rules, all of them inert on a plan that
+        // is not a job.** A job's items are independent pieces of the same approved work, so: an
+        // item that fails does not end the job, the items after it still run, and the chain's
+        // carry-forward does not leak across an item boundary. Nothing here is per-*operation*
+        // knowledge — the loop reads `AgentStep.itemIndex`, which the expansion wrote, and no
+        // capability adapter is involved in any of it.
+        let itemJob = plan.itemJob
+        var itemJobFailures: [ItemJobFailure] = []
+        var failedItemIndexes: Set<Int> = []
+        var currentItemIndex: Int?
+        var sawFirstSegment = false
+
         let segments = try chainSegments(in: plan)
         for (index, segment) in segments.enumerated() {
+            // **The stop control, observed by the loop itself.** Cancellation already unwinds
+            // through whatever an adapter awaits, which is enough for an ordinary chain; it is not
+            // enough for a job, because the rule below turns a thrown error into "skip this item and
+            // carry on" — so a job needs a point where stopping is decided rather than inferred from
+            // an error. Asked before each unit, so a stop lands at an item boundary with the items
+            // after it untouched and resumable, which is exactly what the founder's decision of
+            // 2026-08-31 asks a stop to mean. Inert unless the run really was cancelled.
+            try Task.checkCancellation()
+
+            let segmentItemIndex = segment.steps.first?.itemIndex
+            if itemJob != nil, sawFirstSegment, segmentItemIndex != currentItemIndex {
+                // A new item starts with nothing carried from the last one. Without this, item 2's
+                // bare "reveal it in Finder" would point at the file item 1 produced — the carry is
+                // right *within* one item's units and is a cross-contamination between items.
+                previousArtifactPath = nil
+            }
+            currentItemIndex = segmentItemIndex
+            sawFirstSegment = true
+
+            if let segmentItemIndex, failedItemIndexes.contains(segmentItemIndex) {
+                // The rest of a failed item is skipped rather than attempted: its later units were
+                // written to act on what its earlier ones produced, and running them against nothing
+                // manufactures a second, less honest failure for the same item.
+                continue
+            }
+
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let result = try await execute(
-                plan: resolved,
-                preferredBrowser: preferredBrowser,
-                claimedEarlierInThisRun: claimed,
-                namedByEnclosingPlan: namedByThisRun,
-                // `nil`: this is the *inside* of one unit, and the loop below is what reports that
-                // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
-                // workflow — but a nested routine re-enters this function through
-                // `executeNestedPlan`, which passes `nil` at that door for the reason written there.
-                onUnitCompleted: nil,
-                log: log
-            )
+            let result: AgentRunResult
+            do {
+                result = try await execute(
+                    plan: resolved,
+                    preferredBrowser: preferredBrowser,
+                    claimedEarlierInThisRun: claimed,
+                    namedByEnclosingPlan: namedByThisRun,
+                    // `nil`: this is the *inside* of one unit, and the loop below is what reports that
+                    // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
+                    // workflow — but a nested routine re-enters this function through
+                    // `executeNestedPlan`, which passes `nil` at that door for the reason written there.
+                    onUnitCompleted: nil,
+                    onItemFailed: nil,
+                    log: log
+                )
+            } catch {
+                // **Skip and continue, and only for a job.** The three choices the ticket names are
+                // stop, skip and retry. Stopping is what an ordinary chain does and stays what it
+                // does — every plan that is not a job reaches the rethrow below unchanged. For a job
+                // it is the wrong answer: the user approved forty items in one press, and abandoning
+                // thirty-seven of them because the third was locked leaves them a job to restart and
+                // re-approve. Retrying is rejected because it is a second policy — how many times,
+                // how long between — and because an item that failed halfway may have already had
+                // half its effect.
+                //
+                // **A cancellation is never a failed item.** Swallowing one here would turn the stop
+                // control into a button that makes Sonny work through the remaining thirty-seven
+                // items and report them as failures. `SonnyBackendError.isCancellation` is the one
+                // predicate for that in this repository, and it covers the shapes a cancelled
+                // network call really arrives in as well as Swift's own `CancellationError`.
+                guard let itemJob,
+                      let segmentItemIndex,
+                      !SonnyBackendError.isCancellation(error) else {
+                    throw error
+                }
+                let item = segmentItemIndex < itemJob.items.count
+                    ? itemJob.items[segmentItemIndex]
+                    : ""
+                let failure = ItemJobFailure(
+                    itemIndex: segmentItemIndex,
+                    item: item,
+                    message: error.localizedDescription,
+                    failedAt: now()
+                )
+                failedItemIndexes.insert(segmentItemIndex)
+                itemJobFailures.append(failure)
+                log(.act, "Could not do \(Self.itemDisplayName(item)): \(error.localizedDescription)")
+                onItemFailed?(failure)
+                continue
+            }
             for written in result.previews.flatMap(\.writes) {
                 claimed.recordWrite(written)
             }
@@ -2065,14 +2181,72 @@ public final class AgentActionExecutor {
             }
         }
 
-        let summary = summaries.joined(separator: " ")
+        // **A job authors its own summary rather than joining forty of them.** Joining is right for
+        // an ordinary chain, where each unit did a different thing worth a sentence; forty sentences
+        // saying the same thing about different files is not a report, and the one fact the user
+        // needs — that thirty-eight worked and two did not — would be buried in it.
+        let summary: String
+        if let itemJob {
+            summary = Self.itemJobSummary(
+                job: itemJob,
+                failures: itemJobFailures,
+                fallback: summaries.joined(separator: " ")
+            )
+        } else {
+            summary = summaries.joined(separator: " ")
+        }
         return AgentRunResult(
             plan: plan,
             previews: previews,
             summary: summary,
             summaryProvenance: summaryProvenance,
-            suggestions: suggestions
+            suggestions: suggestions,
+            itemJobFailures: itemJobFailures
         )
+    }
+
+    /// What a job says when it finishes — the honest partial outcome the ticket asks for.
+    ///
+    /// **Both halves are named, always.** "Thirty-eight summaries and two failures is a real
+    /// outcome", and a sentence that reported only the successes would be the flat success this
+    /// exists to replace. The failed items are named individually up to `maxNamedFailures`, because
+    /// a user who is told two of forty failed and not which two has to go and find them.
+    static func itemJobSummary(
+        job: PlanItemJob,
+        failures: [ItemJobFailure],
+        fallback: String
+    ) -> String {
+        let total = job.items.count
+        guard total > 0 else {
+            return fallback
+        }
+        let done = total - failures.count
+        let noun = job.itemKind.pluralNoun
+        guard !failures.isEmpty else {
+            return "Worked through all \(total) \(noun)."
+        }
+
+        let named = failures.prefix(maxNamedFailures).map { failure in
+            "\(itemDisplayName(failure.item)) (\(failure.message))"
+        }
+        var tail = named.joined(separator: "; ")
+        if failures.count > maxNamedFailures {
+            tail += "; and \(failures.count - maxNamedFailures) more"
+        }
+        let failedNoun = failures.count == 1 ? "one" : "\(failures.count)"
+        return "Worked through \(done) of \(total) \(noun). Could not do \(failedNoun): \(tail)."
+    }
+
+    /// How many failed items a job's summary names before it counts the rest. Five is about as many
+    /// as a notification and a widget line can carry without becoming a list nobody reads; the count
+    /// after them keeps the sentence honest.
+    static let maxNamedFailures = 5
+
+    /// An item as it is named back to the user: its last path component, which is what they see in
+    /// Finder, falling back to the whole string for an item that is not a path.
+    static func itemDisplayName(_ item: String) -> String {
+        let leaf = (item as NSString).lastPathComponent
+        return leaf.isEmpty ? item : leaf
     }
 
     /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive

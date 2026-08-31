@@ -232,8 +232,8 @@ public final class AgentRunner {
         return request
     }
 
-    /// `onUnitCompleted` is forwarded to `AgentActionExecutor.execute` unchanged and means exactly
-    /// what it means there (SONNY-210). It defaults to "nobody is recording progress", which is
+    /// `onUnitCompleted` and `onItemFailed` are forwarded to `AgentActionExecutor.execute` unchanged
+    /// and mean exactly what they mean there (SONNY-210, SONNY-235). It defaults to "nobody is recording progress", which is
     /// every caller but the foreground run's resumable checkpoint — the scheduled path passes none,
     /// deliberately, because a scheduled routine writes no resumable record at all
     /// (`AgentViewModel.beginResumableTask`).
@@ -244,7 +244,8 @@ public final class AgentRunner {
         logRiskAssessment: Bool = true,
         scope: TaskWorkspaceScope,
         context: ApprovalContext,
-        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil
+        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
+        onItemFailed: ((ItemJobFailure) -> Void)? = nil
     ) async throws -> AgentRunResult {
         let request = try approvalRequest(
             for: preparedRun,
@@ -297,7 +298,8 @@ public final class AgentRunner {
         logStore.append(.confirm, confirmationMessage)
         let result = try await executor.execute(
             plan: preparedRun.plan,
-            onUnitCompleted: onUnitCompleted
+            onUnitCompleted: onUnitCompleted,
+            onItemFailed: onItemFailed
         ) { phase, message in
             self.logStore.append(phase, message)
         }
