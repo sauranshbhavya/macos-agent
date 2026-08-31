@@ -350,12 +350,16 @@ enum ComposerPresentation {
 /// are the same words by construction rather than by two literals agreeing, the same reason
 /// `ClarificationPresentation.cancelLabel` exists.
 ///
-/// **The words are unchanged, deliberately, and there is a question in them for the founders.**
-/// `AppDelegate`'s menu-bar item says "Open Sonny" too and opens the *Command Center window*
-/// (`openCommandCenter`), while this expands the *floating widget* (`expandFromCompact`) — two
-/// destinations under three words. Renaming either is product vocabulary rather than a session's
-/// call, so this ticket names the collision and changes nothing; the manual checklist asks the
-/// question beside the hover it already owed. Filed as **SONNY-338**.
+/// **The words stay here and left the menu bar, because each control is now named after where it
+/// goes (SONNY-338).** `AppDelegate`'s menu-bar item said "Open Sonny" too and opened the *Command
+/// Center window* (`openCommandCenter`), while this expands the *floating widget*
+/// (`expandFromCompact`) — two destinations under three words, named at the code by SONNY-251 and
+/// left there, because renaming either is product vocabulary rather than a session's call. The
+/// founders decided it on 2026-08-30: the menu-bar item became "Open Command Center", which is the
+/// window it opens, and the capsule keeps these words for the thing a user actually sees Sonny as.
+/// `WidgetControlNamingTests.theCapsuleAndTheMenuBarNameTheirOwnDestinations` holds both halves —
+/// the capsule's words and the menu bar's *absence* of them — so the collision cannot come back
+/// unnoticed.
 ///
 /// **No visible label, and that is not deference.** The capsule exists to be small — it is what a
 /// permanent on-screen overlay shrinks to when nothing needs attention — so text inside it undoes
