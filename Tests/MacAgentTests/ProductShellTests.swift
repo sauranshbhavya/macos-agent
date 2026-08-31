@@ -734,6 +734,89 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
+    /// **A job over many items publishes its progress from a real run** (row 13, SONNY-235).
+    ///
+    /// The founder's decision of 2026-08-31 approves a whole job in one press on the condition that
+    /// the user can see it moving and stop it. This is the seeing, driven through the view model's
+    /// own dispatch rather than by calling the reporter: the executor's unit boundaries are what
+    /// feed it, and a test that pushed values into `itemJobProgress` directly would pin nothing
+    /// about whether a real run ever reaches them.
+    ///
+    /// Two of three, not three of three, and that is `CompletedRunUnit`'s semantics rather than a
+    /// miscount: a chain never reports its last unit, because a boundary with nothing behind it
+    /// changes no resume. The run's own summary is what settles the third.
+    @Test
+    func aJobOverManyItemsPublishesHowFarItHasGot() async throws {
+        let fixture = try makeProductShellFixture()
+        let viewModel = fixture.viewModel
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let folder = fixture.root.appendingPathComponent("job-items")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for name in ["a", "b", "c"] {
+            try Data("x".utf8).write(to: folder.appendingPathComponent("\(name).pdf"), options: .atomic)
+        }
+
+        viewModel.command = "Reveal each of these"
+        viewModel.start(
+            prebuiltPlan: AgentPlan(
+                summary: "Reveal each of these.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")
+                ],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: folder.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .inputPath
+                )
+            )
+        )
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let progress = try #require(viewModel.itemJobProgress)
+        #expect(progress.itemCount == 3)
+        #expect(progress.completedItemIndexes == [0, 1])
+        #expect(progress.failedCount == 0)
+        #expect(ItemJobProgressPresentation.progressLine(for: progress) == "2 of 3 files done")
+        // The control for every assertion above: the run really did happen and really was a job.
+        #expect(viewModel.finalSummary == "Worked through all 3 files.")
+    }
+
+    /// The control beside the test above, and the one that makes a non-nil progress mean something:
+    /// an ordinary run publishes none at all, so a surface that renders it renders nothing.
+    @Test
+    func anOrdinaryRunPublishesNoJobProgress() async throws {
+        let fixture = try makeProductShellFixture()
+        let viewModel = fixture.viewModel
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let file = fixture.root.appendingPathComponent("one.pdf")
+        try Data("x".utf8).write(to: file, options: .atomic)
+
+        viewModel.command = "Reveal it"
+        viewModel.start(
+            prebuiltPlan: AgentPlan(
+                summary: "Reveal it.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(
+                        id: "reveal",
+                        operation: .revealInFinder,
+                        description: "Reveal it.",
+                        inputPath: file.path
+                    )
+                ]
+            )
+        )
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.itemJobProgress == nil)
+        #expect(!viewModel.finalSummary.isEmpty)
+    }
+
     /// **The forcing function for `clearInMemoryLocalDataState`'s hand-written enumeration.**
     ///
     /// That enumeration has now been missed three times, always the same way: a new stored property
