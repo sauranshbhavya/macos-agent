@@ -255,6 +255,21 @@ final class AgentViewModel: ObservableObject {
     /// Carries successes too, not just skips: an action taken with nobody watching should be
     /// visible after the fact, which is the whole reason unattended execution needs a surface.
     @Published var scheduledRunNotice: String?
+    /// What a standing watcher has to say — it fired, or it stopped and why (SONNY-236).
+    ///
+    /// **A fifth channel rather than a reuse of `scheduledRunNotice`, and the shapes are genuinely
+    /// different.** That one reports what the *scheduler* did with a routine the user set up, and its
+    /// notification click lands on the Routines page where a paused schedule is switched back on. A
+    /// watcher notice reports a fact about the outside world, and the thing a user does with it is
+    /// go and look at the page — there is nothing in Sonny to fix. Sharing the channel would also
+    /// share the notification category, and a category is where the difference would become visible
+    /// as the wrong action on a banner, which is how SONNY-113 and SONNY-187 each ended up with a
+    /// Retry button on something that could not be retried.
+    ///
+    /// **Not `errorMessage`, ever.** A watcher that gives up on an unreachable page has not made the
+    /// user's task fail — there is no task. `errorMessage` outranks `.result` in the widget, so a
+    /// notice routed there would replace the result of whatever the user actually ran.
+    @Published var watcherNotice: String?
     /// **`plannerFallbackNotice` stood here and is gone** (SONNY-132), along with the widget strip
     /// that rendered it. It said which planner had actually planned a task when the configured
     /// selection could not be honored, and every state it could describe has stopped existing.
@@ -400,6 +415,13 @@ final class AgentViewModel: ObservableObject {
     /// Row 13's unfinished runs (SONNY-210). Injected like every other store so a test writes to its
     /// own file rather than the user's.
     private let resumableTaskStore: ResumableTaskStore
+    /// How `checkStandingWatchers` reads a watched page. See the initializer for why it has no
+    /// default.
+    private let standingWatcherObserver: any StandingWatcherObserving
+    /// The check in flight, or `nil`. The pulse fires every 30 seconds and a fetch takes longer than
+    /// that on a slow page, so without this a stalled request would have a second check start on top
+    /// of it, and a third — one watcher, N concurrent fetches at somebody else's server.
+    private var standingWatcherCheck: Task<Void, Never>?
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
@@ -870,6 +892,9 @@ final class AgentViewModel: ObservableObject {
                 whitelist: whitelist
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()),
+            // The real page fetch, named here for the same reason `finderRevealer` is: this is the
+            // one place the shipping app asks for something that reaches outside the process.
+            standingWatcherObserver: LiveStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 store: clipboardHistoryStore,
                 settingsStore: clipboardHistorySettingsStore
@@ -973,6 +998,14 @@ final class AgentViewModel: ObservableObject {
         // hands it to both.
         outputLocationStore: OutputLocationStore,
         resumableTaskStore: ResumableTaskStore,
+        // **How a standing watcher reads its page, and undefaulted for SONNY-240's reason applied to
+        // a network call** (SONNY-236). This is driven by a 30-second timer rather than by anything
+        // the user pressed, so a fixture that has never heard of watchers must not be one tick away
+        // from the real internet — and "a test that predates the parameter cannot know to pass it"
+        // does not care that this one fetches rather than writes. `UnreachableStandingWatcherObserver`
+        // is what a fixture with no interest in watchers passes; the shipping app's live one is named
+        // in `atItsRealStoreLocations()` beside the thirteen store locations.
+        standingWatcherObserver: any StandingWatcherObserving,
         // **The thirteenth store arrives inside this**, which is why it is required too even though
         // it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are the real
         // `clipboard-history.json` *and* the real system pasteboard, so a fixture that left this out
@@ -1036,6 +1069,7 @@ final class AgentViewModel: ObservableObject {
         self.approvedAppStore = approvedAppStore
         self.outputLocationStore = outputLocationStore
         self.resumableTaskStore = resumableTaskStore
+        self.standingWatcherObserver = standingWatcherObserver
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
         self.localDataDeletionService = localDataDeletionService
         self.memoryPolicyProvider = memoryPolicyProvider
@@ -6463,12 +6497,14 @@ final class AgentViewModel: ObservableObject {
     func startRoutineScheduling() {
         routineScheduleTimer?.invalidate()
         checkScheduledRoutines()
+        checkStandingWatchers()
         routineScheduleTimer = Timer.scheduledTimer(
             withTimeInterval: Self.scheduleTickInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.checkScheduledRoutines()
+                self?.checkStandingWatchers()
             }
         }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -6478,6 +6514,7 @@ final class AgentViewModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.checkScheduledRoutines()
+                self?.checkStandingWatchers()
             }
         }
     }
@@ -6557,6 +6594,132 @@ final class AgentViewModel: ObservableObject {
             currentTask = Task {
                 await performScheduledRun(next.routine, occurrence: occurrence)
             }
+        }
+    }
+
+    // MARK: - Standing watchers
+
+    /// Checks at most one standing watcher, if any is due.
+    ///
+    /// **Its own checker on the shared pulse, decided explicitly rather than defaulted** (SONNY-236;
+    /// the ticket asks for exactly this decision). It rides `startRoutineScheduling`'s timer and wake
+    /// observer, because those are already the app's "something might be due" heartbeat and a second
+    /// timer beside them would be two things to keep in step. It is **not** part of
+    /// `checkScheduledRoutines`, and the reason is that method's own guard: a scheduled routine
+    /// *starts a task*, so it must refuse while one is in flight — and it sets `isRunning` while it
+    /// runs. Folding watchers in would make them blind for the length of every routine and every
+    /// typed command, for no reason at all, because a watcher starts no task. It reads a page and
+    /// posts a notice.
+    ///
+    /// **So the guards here are deliberately narrower, and the omission of `!isRunning` is the
+    /// decision rather than an oversight.** What is guarded is re-entrancy: a fetch can outlast the
+    /// 30-second pulse, and a stalled request must not accumulate checks behind it.
+    ///
+    /// **One watcher per pulse, oldest first**, the same rule `checkScheduledRoutines` follows for a
+    /// backlog and for the same reason: five watchers coming due together should be five requests
+    /// spread over two and a half minutes, not five at once.
+    func checkStandingWatchers(now: Date = Date()) {
+        guard standingWatcherCheck == nil else {
+            return
+        }
+
+        let watchers: [StandingWatcher]
+        do {
+            watchers = try resumableTaskStore.loadWatchers()
+        } catch {
+            recordLocalStorageLoadFailure(.resumableTasks, error: error)
+            return
+        }
+
+        // Expiry is asked before due-ness, inside `decideBeforeObserving`, so a watcher whose
+        // lifetime ran out three minutes after its last check is retired on this pulse rather than
+        // waiting out an interval it no longer has.
+        for watcher in watchers {
+            switch StandingWatcherEvaluator.decideBeforeObserving(watcher, now: now) {
+            case .notDue:
+                continue
+            case .stopped(let stopped, let reason):
+                finishStandingWatcher(stopped, reason: reason)
+                return
+            case .pending, .unchanged:
+                standingWatcherCheck = Task { [weak self] in
+                    await self?.observeStandingWatcher(watcher)
+                    self?.standingWatcherCheck = nil
+                }
+                return
+            }
+        }
+    }
+
+    /// Waits for the check in flight, if any.
+    ///
+    /// **For tests, and it is not a seam that changes behaviour.** `checkStandingWatchers` starts a
+    /// `Task` and returns, because the 30-second pulse it runs on must not block the main actor for
+    /// the length of an HTTP request — so a test that called it and asserted immediately would be
+    /// racing the fetch and would usually win, which is the worst kind of passing test. Nothing in
+    /// `Sources/` calls this.
+    func awaitStandingWatcherCheck() async {
+        await standingWatcherCheck?.value
+    }
+
+    /// Reads one watcher's page and applies what came back.
+    ///
+    /// **Every failure is a failed *reading*, not a failed task.** A refused connection, a robots
+    /// disallow, a 404 and a page that stopped being HTML all arrive here as a throw, and all of them
+    /// mean the same thing to a watcher: this check did not happen. `applyFailure` decides how many
+    /// of those in a row is enough to give up, and until then nothing is said to the user — a
+    /// notification per flaky fetch would be worse than the silence it replaced.
+    private func observeStandingWatcher(_ watcher: StandingWatcher, now: Date = Date()) async {
+        let decision: StandingWatcherDecision
+        do {
+            let text = try await standingWatcherObserver.readableText(at: watcher.url)
+            decision = StandingWatcherEvaluator.apply(
+                reading: StandingWatcherEvaluator.digest(of: text),
+                to: watcher,
+                now: now
+            )
+        } catch {
+            decision = StandingWatcherEvaluator.applyFailure(to: watcher, now: now)
+        }
+
+        switch decision {
+        case .notDue:
+            return
+        case .unchanged(let updated), .pending(let updated):
+            saveStandingWatcher(updated)
+        case .stopped(let stopped, let reason):
+            finishStandingWatcher(stopped, reason: reason)
+        }
+    }
+
+    /// Tells the user what this watcher had to say, then forgets it.
+    ///
+    /// **In that order, and the order is the decision.** A watcher deleted before its notice was
+    /// published would leave nothing anywhere if the publish were ever to fail; a notice published
+    /// after a delete that failed would tell the user a watcher had stopped while it was still in the
+    /// file and still being checked. Publishing first and deleting after means the worst case is a
+    /// watcher that says the same thing twice, which is a nuisance rather than a lie.
+    private func finishStandingWatcher(_ watcher: StandingWatcher, reason: StandingWatcherStopReason) {
+        watcherNotice = StandingWatcherNoticeCopy.message(for: reason, subject: watcher.subject)
+        do {
+            try resumableTaskStore.deleteWatcher(id: watcher.id)
+        } catch {
+            recordLocalStorageWriteFailure("what Sonny is watching")
+        }
+        refreshMemoryRowsAfterRun()
+    }
+
+    /// Writes back a watcher that is still running.
+    ///
+    /// **`recordLocalStorageWriteFailure`, never `errorMessage`** — CLAUDE.md's channel rule, and
+    /// this is the clearest case of it in the product: nobody pressed anything, so there is no task
+    /// to have failed, and `errorMessage` outranks `.result` in the widget. A watcher's bookkeeping
+    /// write failing would otherwise blank the result of a task that ran and succeeded.
+    private func saveStandingWatcher(_ watcher: StandingWatcher) {
+        do {
+            try resumableTaskStore.saveWatcher(watcher)
+        } catch {
+            recordLocalStorageWriteFailure("what Sonny is watching")
         }
     }
 

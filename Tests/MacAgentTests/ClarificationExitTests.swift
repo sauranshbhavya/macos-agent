@@ -552,6 +552,7 @@ private struct ClarificationExitFixture {
                 whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+            standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: pasteboard,
                 store: clipboardHistoryStore,

@@ -3976,6 +3976,7 @@ private func makeMemoryFixture(
         approvedAppStore: approvedAppStore,
         outputLocationStore: outputLocationStore,
         resumableTaskStore: resumableTaskStore,
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: pasteboard,
             store: clipboardHistoryStore,
