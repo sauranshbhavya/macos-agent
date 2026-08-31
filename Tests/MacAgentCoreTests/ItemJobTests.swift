@@ -482,6 +482,73 @@ struct ItemJobTests {
         #expect(result.summary.contains("1 of 2 folders"))
     }
 
+    /// **A step that takes the previous unit's output gets the item when it *leads* the template, and
+    /// not otherwise.** Both directions in one test, because each was wrong on its own: exempting no
+    /// consuming step made "convert the documents in each of these folders and open the result" refuse
+    /// a folder outright, and exempting every one of them broke "reveal each of these", where the item
+    /// is the first thing that happens.
+    @Test
+    func aStepThatTakesThePreviousUnitsOutputGetsTheItemOnlyWhenItLeadsTheTemplate() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("one", to: root.appendingPathComponent("a.pdf"))
+        try write("two", to: root.appendingPathComponent("b.pdf"))
+        let executor = makeExecutor(root: root)
+
+        // Leading: the item is what it reveals.
+        let leading = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Reveal each of these.",
+                requiresConfirmation: false,
+                steps: [AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: root.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .inputPath
+                )
+            )
+        )
+        #expect(leading.plan.steps.map(\.inputPath) == [
+            root.appendingPathComponent("a.pdf").path,
+            root.appendingPathComponent("b.pdf").path
+        ])
+
+        // Not leading: it takes what the step before it produced, so it must keep both path fields
+        // blank — that blankness is what `ChainedArtifactCarry.consumesPreviousArtifact` reads.
+        let trailing = try executor.prepare(
+            plan: AgentPlan(
+                summary: "Write a note for each of these and open it.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Write a note.",
+                        draftTitle: "Note",
+                        draftContent: "Body."
+                    ),
+                    AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
+                ],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: root.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .inputPath
+                )
+            )
+        )
+        let openSteps = trailing.plan.steps.filter { $0.operation == .openGeneratedArtifact }
+        #expect(openSteps.count == 2)
+        #expect(openSteps.allSatisfy { $0.inputPath == nil })
+        #expect(openSteps.allSatisfy { ChainedArtifactCarry.consumesPreviousArtifact($0) })
+        // The control beside it: the step that is *not* a consumer did get the item.
+        let draftSteps = trailing.plan.steps.filter { $0.operation == .createLocalDraft }
+        #expect(draftSteps.compactMap(\.inputPath).count == 2)
+    }
+
     // MARK: - Remembering its place
 
     /// The whole point of the ticket, on the real path: a job interrupted partway records which

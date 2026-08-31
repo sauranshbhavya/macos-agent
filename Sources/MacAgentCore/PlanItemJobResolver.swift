@@ -91,15 +91,23 @@ public enum PlanItemJobResolver {
 
     /// One copy of the plan's steps per item, with the item written into the declared field.
     ///
-    /// **Every step of the template gets the item, except one that takes the previous unit's output.**
-    /// The template *is* the work done to one item, so there is no step of it that is about something
-    /// else — with exactly one exception, and it is a rule this repository already owns rather than a
-    /// special case: `ChainedArtifactCarry.consumesPreviousArtifact` is the predicate for a step whose
-    /// input is whatever the unit before it produced. Such a step's input is not the item, by
-    /// construction, and writing the item into it does not merely mis-fill the field — it *stops the
-    /// step working at all*, because the predicate reads blank path fields and an item written there
-    /// makes it false. A job of "convert the documents in each of these folders and open the result"
-    /// failed outright before this exception, with `open_generated_artifact` refusing a folder.
+    /// **Every step of the template gets the item, except one that takes the previous unit's output —
+    /// and that exception stops at the template's first step.** Both halves were paid for.
+    ///
+    /// The exception itself is a rule this repository already owns rather than a special case:
+    /// `ChainedArtifactCarry.consumesPreviousArtifact` marks a step whose input is whatever the unit
+    /// before it produced. Such a step's input is not the item, by construction, and writing the item
+    /// into it does not merely mis-fill the field — it *stops the step working at all*, because the
+    /// predicate reads blank path fields and an item written there makes it false. A job of "convert
+    /// the documents in each of these folders and open the result" failed outright without it, with
+    /// `open_generated_artifact` refusing a folder.
+    ///
+    /// **The first step is the half the exception got wrong on its own, and a battery's baseline
+    /// caught it.** A consuming step *leading* the template has no previous unit inside its own item —
+    /// the item is the first thing that happens to it — so it is the one place where the item really
+    /// is its input. Exempting it too broke every job whose per-item work is "reveal each of these":
+    /// each step arrived with no path at all and every item failed. `ChainedArtifactCarry.applying`
+    /// reasons about "the leading step" for the same reason, and says why that is a segment by itself.
     ///
     /// Filling in only steps whose field is empty was the alternative and does not work: the
     /// consuming step's field is empty in the template too, which is precisely what marks it.
@@ -115,11 +123,11 @@ public enum PlanItemJobResolver {
         var expandedSteps: [AgentStep] = []
         expandedSteps.reserveCapacity(job.items.count * plan.steps.count)
         for (index, item) in job.items.enumerated() {
-            for step in plan.steps {
+            for (position, step) in plan.steps.enumerated() {
                 var copy = step
                 copy.id = "\(step.id)#\(index + 1)"
                 copy.itemIndex = index
-                if !ChainedArtifactCarry.consumesPreviousArtifact(step) {
+                if position == 0 || !ChainedArtifactCarry.consumesPreviousArtifact(step) {
                     switch job.itemField {
                     case .inputPath:
                         copy.inputPath = item
