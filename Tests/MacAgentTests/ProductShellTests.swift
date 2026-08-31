@@ -2982,11 +2982,15 @@ struct ProductShellTests {
                 )
             ]
         )
-        // `.openWorkspace` is on `StoredRoutine.forbiddenStepOperations`, so `save` refuses this
-        // routine (SONNY-52). The behavior under test is what the *task record* says when a run
-        // descends into a routine that already contains one, which needs that state to exist on
-        // disk; the sanctioned bypass is how a test says so out loud.
-        try fixture.routineStore.saveBypassingStepValidation(routine)
+        // Written through the real `save`, which is what changed on SONNY-186: `.openWorkspace` left
+        // `StoredRoutine.forbiddenStepOperations`, so this routine is one a user can author and the
+        // sanctioned bypass is no longer what a test needs to say here. The behaviour under test is
+        // unchanged — what the *task record* says when a run descends into a routine that opens a
+        // workspace — and it is now exercised against a routine the product itself could have
+        // written. (PR #177's F4. The lane corrected the identical comment and call in
+        // `WorkspaceTaskTaggingTests` and missed this one, because its enumeration was scoped
+        // `-- Sources` and this site is under `Tests/`.)
+        try fixture.routineStore.save(routine)
         viewModel.refreshSavedItems()
 
         viewModel.command = "run morning setup"

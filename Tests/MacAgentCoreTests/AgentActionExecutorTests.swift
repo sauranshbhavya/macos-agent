@@ -3642,6 +3642,161 @@ struct AgentActionExecutorTests {
         )
     }
 
+    /// **The precedence rule the entry states in prose, in both directions — and the pair that
+    /// would have caught F1** (PR #177's F1 and F5).
+    ///
+    /// `aWorkspaceTheRoutineOpensBindsTheBrowserForTheRoutinesOwnURLs` above proves the workspace's
+    /// apps are *read*; it cannot prove *where in the order* they enter, because it gives the
+    /// routine only one browser source. No test anywhere paired a browser-capable `.openApp` with an
+    /// `.openWorkspace` whose workspace lists a browser — the two tests that put those step kinds
+    /// side by side open Notes, which is not browser-capable — so a mutant reversing the flatMap, or
+    /// hoisting `.openApp` steps ahead of `.openWorkspace` ones, survived the whole suite. That gap
+    /// is what hid F1: the fix that made the workspace *donate* a browser to the routine left the
+    /// workspace unable to *receive* one, and nothing that pairs the two step kinds existed to say
+    /// so.
+    ///
+    /// This case is `.openApp` first, so Chrome must win over the workspace's Safari — **and the
+    /// workspace's own URL has to land in Chrome too**, which is the half that failed before F1's
+    /// fix. Safari is still launched as an app; what is asserted is which browser the URLs went to.
+    @Test
+    func aBrowserNamedBeforeAWorkspaceBindsBothTheRoutinesURLAndTheWorkspacesOwn() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://workspace.example.com"])
+        )
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                AgentStep(id: "open-chrome", operation: .openApp, description: "Open Chrome.", appName: "Chrome"),
+                openWorkspaceStep(named: "Research"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ]
+        )
+
+        _ = try await fixture.executor.execute(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        ) { _, _ in }
+
+        let chrome = MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome")
+        #expect(
+            fixture.browserOpener.openedURLs.map(\.absoluteString)
+                == ["https://workspace.example.com", "https://github.com"]
+        )
+        // Both, by value and in order. The first entry is the assertion F1 was about: before that
+        // fix it was Safari, because the workspace resolved its own browser and never read the
+        // routine's.
+        #expect(fixture.browserOpener.openedBrowsers == [chrome, chrome])
+    }
+
+    /// The other direction, which is what makes the pair a *precedence* test rather than two
+    /// spellings of one.
+    ///
+    /// The workspace comes first in step order, so its Safari must beat the later `.openApp` Chrome
+    /// — and a mutant that hoists `.openApp` steps ahead of `.openWorkspace` ones passes the test
+    /// above and fails this one. Without both, "first browser-capable app wins **in step order**" is
+    /// prose with nothing holding it.
+    @Test
+    func aWorkspaceEarlierInStepOrderBindsAheadOfALaterNamedBrowser() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://workspace.example.com"])
+        )
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                openWorkspaceStep(named: "Research"),
+                AgentStep(id: "open-chrome", operation: .openApp, description: "Open Chrome.", appName: "Chrome"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ]
+        )
+
+        _ = try await fixture.executor.execute(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        ) { _, _ in }
+
+        let safari = MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")
+        #expect(fixture.browserOpener.openedBrowsers == [safari, safari])
+    }
+
+    /// F1's second shape, which needs no `.openApp` step at all and is therefore the one a routine
+    /// reaches soonest: two workspaces, two browsers.
+    ///
+    /// The first in step order binds both, which is the founders' own 2026-08-04 tie-break — *with
+    /// two browsers the first in step order wins* — applied one level down rather than a second rule
+    /// invented for workspaces. **The cost is real and is the thing to overturn if the founders would
+    /// rather each workspace kept its own**: a user who deliberately gave two workspaces two
+    /// browsers loses that distinction inside a routine. Asserted by value in both slots so that
+    /// answer is a decision the suite states rather than whatever the code happens to do.
+    @Test
+    func aRoutineOpeningTwoWorkspacesWithDifferentBrowsersBindsTheFirstInStepOrder() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Comms", apps: ["Chrome"], urls: ["https://comms.example.com"])
+        )
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://research.example.com"])
+        )
+        try await fixture.saveRoutine(
+            named: "Morning Setup",
+            steps: [
+                AgentStep(
+                    id: "open-comms",
+                    operation: .openWorkspace,
+                    description: "Open the Comms workspace.",
+                    workspaceName: "Comms"
+                ),
+                AgentStep(
+                    id: "open-research",
+                    operation: .openWorkspace,
+                    description: "Open the Research workspace.",
+                    workspaceName: "Research"
+                )
+            ]
+        )
+
+        _ = try await fixture.executor.execute(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Setup")
+        ) { _, _ in }
+
+        let chrome = MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome")
+        #expect(
+            fixture.browserOpener.openedURLs.map(\.absoluteString)
+                == ["https://comms.example.com", "https://research.example.com"]
+        )
+        #expect(fixture.browserOpener.openedBrowsers == [chrome, chrome])
+    }
+
+    /// The guard on the fix's blast radius: a workspace opened **outside** a routine is untouched.
+    ///
+    /// `preferredBrowser` is nil on that path, so the adapter falls back to the workspace's own app
+    /// list exactly as it did before F1's fix. Without this, a later simplification that dropped the
+    /// fallback and read only `preferredBrowser` would send every standalone workspace's URLs to the
+    /// system default, and nothing would say so.
+    @Test
+    func aWorkspaceOpenedOutsideARoutineStillUsesItsOwnBrowser() async throws {
+        let fixture = try makeWorkspaceRoutineFixture()
+        defer { fixture.cleanUp() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://workspace.example.com"])
+        )
+
+        _ = try await fixture.executor.execute(
+            plan: AgentPlan(
+                summary: "Open workspace.",
+                requiresConfirmation: true,
+                steps: [openWorkspaceStep(named: "Research")]
+            )
+        ) { _, _ in }
+
+        #expect(
+            fixture.browserOpener.openedBrowsers
+                == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")]
+        )
+    }
+
     /// **The deleted-or-renamed answer SONNY-186 owed, at the time it is usually met.** A rename is
     /// what is staged here, and it reaches the code as a deletion — a routine step holds a
     /// workspace *name*, so the two are the same event from the routine's side, which is why one

@@ -2164,10 +2164,28 @@ sees when the workspace is no longer there.
       routine and the workspace. With the workspace **present**, it should run normally, including a
       step that touches something the workspace does not list: a scheduled run is deliberately not
       bound by the workspace it opens, so that step must not be blocked or silently skipped.
-- [ ] **(SONNY-186, one browser)** Save a workspace whose apps include Safari but whose URL list is
-      empty, and a routine that opens that workspace and then opens a URL of its own. **Both the
-      workspace and the routine's own URL should land in Safari**, not one in Safari and one in your
-      system default browser.
+- [ ] **(SONNY-186, one browser — the workspace supplies it)** Save a workspace whose apps include
+      Safari but whose URL list is empty, and a routine that opens that workspace and then opens a
+      URL of its own. **The routine's URL should land in Safari**, not in your system default
+      browser.
+- [ ] **(SONNY-186, one browser — the workspace receives it. This is the round-2 fix, PR #177's F1,
+      and the row above cannot see it because its workspace has no URLs of its own.)** Give that
+      workspace **at least one URL**, and put an `open_app` for a *different* browser (Chrome, say)
+      **before** the workspace step: "a routine that opens Chrome, then my research workspace, then
+      github.com". **All three URLs — the workspace's own and the routine's — should land in
+      Chrome.** Two browsers opening is the failure. Then reverse it: workspace step first, Chrome
+      second — now everything should land in **Safari**, because the first browser in step order
+      wins.
+- [ ] **(SONNY-186, two workspaces, two browsers — the founders' call to confirm or overturn)** Save
+      a second workspace whose apps name a different browser and which has URLs of its own, and a
+      routine that opens both. **Both workspaces' URLs land in the first one's browser.** That is
+      the founders' own 2026-08-04 tie-break applied inside a routine, and the cost is exactly what
+      you are looking at: a workspace you deliberately gave its own browser does not get it here.
+      If that reads wrong, say so — the alternative is each workspace keeping its own, and it is one
+      line to change back.
+- [ ] **(SONNY-186, the blast-radius guard)** Open that same workspace **on its own** — "open my
+      research workspace", no routine. Its URLs must still open in **its own** browser. Nothing
+      outside a routine was meant to move.
 
 ## 8. How to report back
 

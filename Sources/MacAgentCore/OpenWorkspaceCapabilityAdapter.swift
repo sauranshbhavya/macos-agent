@@ -97,7 +97,40 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // Only launchable apps are candidates, and their relative order is preserved, so
         // "first browser in the list" is unchanged for every workspace that exists today — a
         // scope-only entry can never be a browser Sonny could open URLs in anyway.
-        let browser = WorkspaceBrowserCatalog.firstBrowser(in: apps)
+        //
+        // **An enclosing routine's binding wins over the workspace's own, and that is a decision
+        // this branch had to make rather than a mechanism it inherited** (SONNY-186, PR #177's F1).
+        // A routine could not carry `open_workspace` until this branch, so `preferredBrowser` was
+        // never non-nil here and the two rules could not meet. Now they can, and the founders'
+        // 2026-08-04 routine rule is the one that governs when they do: *the first browser-capable
+        // app anywhere in the routine binds all of the routine's URL steps*, with the first in step
+        // order winning when there are two. A routine that opens a Chrome workspace and a Safari
+        // workspace **is** "two browsers in one routine", so the tie-break already exists and this
+        // applies it one level down rather than inventing a second rule — which is the whole point
+        // of that decision's own sentence, that a routine and a workspace are one mental model.
+        //
+        // **What this costs, stated because it is the half a founder might overturn:** a routine
+        // opening a Chrome workspace and a Safari workspace puts both workspaces' URLs in whichever
+        // comes first in step order, so a user who deliberately gave two workspaces two browsers
+        // loses that distinction inside a routine. The alternative — each workspace keeps its own,
+        // which is what shipped in this branch's first round — is defensible and leaves a routine
+        // opening two browsers with nothing in the product explaining why. `RunRoutineCapabilityAdapter.browser(for:)`
+        // is the other half of this decision and reads the same way.
+        //
+        // **Nothing outside a routine changes**, and the reason is a one-site enumeration rather
+        // than a survey: the only thing that can put a non-nil value in `preferredBrowser` is
+        // `executeNestedPlan`, whose sole call site is the routine adapter
+        // (`git grep -n 'executeNestedPlan(' -- Sources | wc -l` → **1**,
+        // `RunRoutineCapabilityAdapter.swift:93`, at `740876c`). Every other site either threads the
+        // parameter it was given or takes the `MacApp? = nil` default on `execute`. So a standalone
+        // workspace open still resolves its own browser and a Safari workspace opened on its own
+        // still opens in Safari, byte for byte.
+        //
+        // A browser named on the *step* is deliberately still not read here. `context.browser(for:in:)`
+        // would honour one, and the precedence it documents would put it above the routine's binding;
+        // no path emits an `open_workspace` step carrying `browserName`, so wiring it would be a
+        // behaviour change on a shape nothing produces and a separate decision from this one.
+        let browser = context.preferredBrowser ?? WorkspaceBrowserCatalog.firstBrowser(in: apps)
         for rawURL in workspace.urls {
             let url = try SafeURL.validateWebURL(rawURL)
             log(.act, "Opening \(url.absoluteString)")
