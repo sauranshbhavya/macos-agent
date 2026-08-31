@@ -909,6 +909,81 @@ struct ItemJobTests {
         #expect(urlSteps.allSatisfy { $0.targetURL == "https://example.com/page" })
     }
 
+    /// **A template whose only field-reading step is a trailing consumer is refused**, and this is the
+    /// case that makes the refusal ask `writesTheItem` rather than `itemFieldsRead` alone (PR #185,
+    /// F2; a mutant reading the looser question survived at `08db3aa` until this test existed).
+    ///
+    /// `[create_local_draft, open_generated_artifact]` declaring `.inputPath` has a step that *reads*
+    /// the field — `open_generated_artifact` reads `outputPath ?? inputPath` — and that step is
+    /// precisely the one the expansion skips, so the item would reach nothing and every item would be
+    /// reported done.
+    @Test
+    func aTemplateWhoseOnlyFieldReadingStepIsATrailingConsumerIsRefused() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("one", to: root.appendingPathComponent("a.pdf"))
+        let executor = makeExecutor(root: root)
+
+        let job = PlanItemJob(
+            source: .folder,
+            folderPath: root.path,
+            itemKind: .files,
+            fileExtensions: ["pdf"],
+            itemField: .inputPath
+        )
+        let draftThenOpen = [
+            AgentStep(
+                id: "draft",
+                operation: .createLocalDraft,
+                description: "Write a note.",
+                draftTitle: "Note",
+                draftContent: "Body."
+            ),
+            AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
+        ]
+        // The premise, asserted rather than assumed: the trailing step really does read the field, so
+        // the looser question would have said yes.
+        #expect(draftThenOpen[1].operation.itemFieldsRead.contains(.inputPath))
+        #expect(!draftThenOpen[0].operation.itemFieldsRead.contains(.inputPath))
+
+        #expect(throws: PlanItemJobError.self) {
+            _ = try executor.prepare(
+                plan: AgentPlan(
+                    summary: "Write a note for each of these and open it.",
+                    requiresConfirmation: false,
+                    steps: draftThenOpen,
+                    itemJob: job
+                )
+            )
+        }
+
+        // The control: put a step in front that does read the field, and the same trailing consumer
+        // is fine — the refusal is about the item reaching nothing, not about consumers.
+        let folders = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: folders) }
+        let alpha = folders.appendingPathComponent("alpha")
+        try FileManager.default.createDirectory(at: alpha, withIntermediateDirectories: true)
+        try write("doc", to: alpha.appendingPathComponent("report.docx"))
+        let folderExecutor = makeExecutor(root: folders)
+        _ = try folderExecutor.prepare(
+            plan: AgentPlan(
+                summary: "Convert the documents in each of these folders and open the result.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "scan", operation: .scanDocx, description: "Find them."),
+                    AgentStep(id: "convert", operation: .convertDocxToPDF, description: "Convert them."),
+                    AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
+                ],
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: folders.path,
+                    itemKind: .folders,
+                    itemField: .inputPath
+                )
+            )
+        )
+    }
+
     /// The narrower half of the same hole: a *leading* consuming step handed a field it does not read
     /// would keep both path fields blank and stay a live consumer of an artifact from outside its own
     /// item. It is not written into, and the whole declaration is refused when nothing else reads the
@@ -1038,8 +1113,15 @@ struct ItemJobTests {
         #expect(prepared.plan.itemJob?.items.contains(target.path) == false)
     }
 
-    /// And the second guard, on its own terms: an item outside the whitelist is refused by the
-    /// per-item validation even when nothing has filtered it out first.
+    /// **An item from the Finder selection that sits outside the whitelist is refused.**
+    ///
+    /// **What this does and does not hold, measured rather than assumed.** It pins the outcome — such
+    /// an item never becomes one of the paths a single approval covers — and it does **not** hold
+    /// `resolveItems`' own closing `validateInsideWhitelist` pass: a mutant deleting that line
+    /// survived the whole suite at `08db3aa`. The refusal here comes from
+    /// `FinderSelectionResolver.whitelistedSelection`, which validates every URL it returns before
+    /// this resolver sees it. `PlanItemJobResolver`'s own line says at the code that it is defensive
+    /// and which guards reach first.
     @Test
     func anItemOutsideTheWhitelistIsRefusedByItsOwnValidation() throws {
         let root = try makeDirectory()
