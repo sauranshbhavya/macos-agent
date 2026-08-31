@@ -117,6 +117,19 @@ struct ScheduledRoutineRunTests {
     /// The deleted-or-renamed answer on the path where nobody is present to read a clarification
     /// panel (SONNY-186). A scheduled routine that quietly does nothing is the outcome the founder
     /// decision named as the worst one, so the notice has to carry both names.
+    ///
+    /// **It asserts a substring the notice template cannot supply, and the first version of it did
+    /// not** (PR #177's F2). The template is
+    /// `"“\(name)” was not run because Sonny needed to ask something first: \(question)"` and this
+    /// fixture's routine is literally named `Morning`, so `contains("Morning")` was satisfied by the
+    /// template's own prefix whether or not the *question* named the routine — and because the test
+    /// deletes the only workspace, the plain `.missingWorkspace` question would have contained
+    /// `Research` and the notice `was not run` regardless. All three assertions passed on the
+    /// un-relabelled error, so the test could not tell `.missingWorkspaceInRoutine` from
+    /// `.missingWorkspace`: the one thing it is named for. The tell was in this branch's own battery
+    /// and went unread — R2 came back killed by three tests and this was not one of them.
+    /// `opens a workspace called "Research"` appears only in the re-labelled error, so it is the
+    /// assertion that carries the property.
     @Test
     func aScheduledRoutineWhoseWorkspaceIsGoneSaysWhatItCouldNotFind() async throws {
         let fixture = try makeFixture()
@@ -141,6 +154,9 @@ struct ScheduledRoutineRunTests {
 
         let notice = try #require(fixture.viewModel.scheduledRunNotice)
         #expect(notice.contains("was not run"))
+        // The load-bearing one: this clause exists only in `.missingWorkspaceInRoutine`'s question,
+        // so it fails on the plain `.missingWorkspace` the three assertions below cannot see.
+        #expect(notice.contains("The routine \"Morning\" opens a workspace called \"Research\""))
         #expect(notice.contains("Morning"))
         #expect(notice.contains("Research"))
         // Nothing ran: the refusal is at preparation, before any step.

@@ -177,6 +177,19 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// stored order at the position of the step that opens it. A routine with no `open_workspace`
     /// step therefore binds byte-identically to before.
     ///
+    /// **This half is only half, and the other half is at `OpenWorkspaceCapabilityAdapter.execute`
+    /// — it did not exist for one round, and the record claimed it did** (PR #177's F1). Reading the
+    /// workspace's apps into the list makes a workspace *donate* a browser to the routine; it does
+    /// nothing about the workspace *receiving* one, because that adapter opened its own URLs with
+    /// its own resolution and read `preferredBrowser` nowhere. So the two shapes that need both
+    /// halves stayed broken while the paragraph above read as if they were fixed:
+    /// `[open_app Chrome, open_workspace(→ Safari, with URLs), open_url]`, where the routine binds
+    /// Chrome and the workspace's URLs still went to Safari; and a routine opening two workspaces
+    /// with different browsers, which needs no `open_app` at all and is the exact sentence the
+    /// paragraph above gives as the reason this fix exists. That adapter now takes
+    /// `preferredBrowser` first, so the ordering computed here is what every URL the routine opens
+    /// actually uses.
+    ///
     /// A workspace that cannot be loaded contributes nothing, for the same reason an unresolvable
     /// app name does: the missing workspace is `open_workspace`'s own failure to report, at the step
     /// that names it, and resolving a browser must not pre-empt that with a different failure before
