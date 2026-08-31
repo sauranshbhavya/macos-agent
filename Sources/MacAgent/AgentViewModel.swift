@@ -6634,6 +6634,13 @@ final class AgentViewModel: ObservableObject {
         // Expiry is asked before due-ness, inside `decideBeforeObserving`, so a watcher whose
         // lifetime ran out three minutes after its last check is retired on this pulse rather than
         // waiting out an interval it no longer has.
+        //
+        // **The handle is assigned before the task body can run, and that is a property of the
+        // isolation rather than luck.** This method is on the main actor, `Task {}` inherits that
+        // context, and nothing below suspends before the assignment — so the body cannot start
+        // first and clear a handle that has not been set. Worth writing down because the failure
+        // would be silent and permanent: a handle left non-nil stops every future check, and
+        // nothing anywhere would report it.
         for watcher in watchers {
             switch StandingWatcherEvaluator.decideBeforeObserving(watcher, now: now) {
             case .notDue:
@@ -6642,8 +6649,20 @@ final class AgentViewModel: ObservableObject {
                 finishStandingWatcher(stopped, reason: reason)
                 return
             case .pending, .unchanged:
+                // **`now` travels into the fetch rather than being re-read there** (found by the
+                // full suite; the filtered run was green). `observeStandingWatcher` used to default
+                // its own `now` to `Date()`, so due-ness was decided on the caller's clock and
+                // `lastCheckedAt` was stamped from the real one. Under an unloaded run the two are
+                // milliseconds apart and every test passes; under a loaded parallel suite they
+                // drift by seconds, and a check that should have been due reads as not due — one
+                // silently skipped check, which is a wrong *count* rather than a failure. Two
+                // clocks in one decision is the defect, not the drift.
+                //
+                // It also means `lastCheckedAt` records when the check *began* rather than when the
+                // page answered, which is the more honest of the two: the interval this feeds is
+                // "how often Sonny asks", and a slow page should not buy itself a longer gap.
                 standingWatcherCheck = Task { [weak self] in
-                    await self?.observeStandingWatcher(watcher)
+                    await self?.observeStandingWatcher(watcher, now: now)
                     self?.standingWatcherCheck = nil
                 }
                 return
@@ -6669,7 +6688,7 @@ final class AgentViewModel: ObservableObject {
     /// mean the same thing to a watcher: this check did not happen. `applyFailure` decides how many
     /// of those in a row is enough to give up, and until then nothing is said to the user — a
     /// notification per flaky fetch would be worse than the silence it replaced.
-    private func observeStandingWatcher(_ watcher: StandingWatcher, now: Date = Date()) async {
+    private func observeStandingWatcher(_ watcher: StandingWatcher, now: Date) async {
         let decision: StandingWatcherDecision
         do {
             let text = try await standingWatcherObserver.readableText(at: watcher.url)

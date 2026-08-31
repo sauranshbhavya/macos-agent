@@ -891,6 +891,17 @@ struct ProductShellTests {
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
+            // `watcherNotice` sits beside `scheduledRunNotice` and for the same reason (SONNY-236):
+            // it is news about something that already happened, not a view of stored data. The wipe
+            // does delete the watcher it names — `resumable-tasks.json` holds them — but clearing
+            // the sentence would erase the record of a thing the user was told, which is the one
+            // part of a watcher that cannot be recovered from anywhere.
+            "watcherNotice",
+            // `standingWatcherObserver` is a collaborator and `standingWatcherCheck` a task handle:
+            // neither is state a surface renders, and neither holds anything a wipe could find. The
+            // observer belongs with the injected seams above rather than here on the merits, and is
+            // listed here because this is the group that means "not local data".
+            "standingWatcherObserver", "standingWatcherCheck",
             // `memorySettings` sits here for the sharpest version of the group's reason: a wipe
             // that switched memory back on would re-enable recording for the user who reached for
             // the most privacy-minded control in the app. It lives in `UserDefaults`, which the

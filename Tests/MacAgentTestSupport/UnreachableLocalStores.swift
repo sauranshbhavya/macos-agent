@@ -87,3 +87,36 @@ public struct UnreachableStandingWatcherObserver: StandingWatcherObserving {
 public enum UnreachableStandingWatcherObserverError: Error, Equatable {
     case noNetworkInThisFixture(URL)
 }
+
+public extension UnreachableLocalStores {
+    /// The five stores that had no vendor here until SONNY-236 needed them.
+    ///
+    /// **Added rather than spelled at the call site, and the reason is a guard rather than tidiness.**
+    /// `LocalStoreInjectionScanTests.onlyTheShippedConstantsTestsNameAStoresRealLocation` sweeps the
+    /// test tree for every spelling that resolves a store's real `~/Library` path, and one of its
+    /// needles is `.fileURL(` — which `UnreachableLocalStores.fileURL("task-history.json")` matches
+    /// exactly, at a call site whose whole purpose is the opposite. A fixture written that way is
+    /// flagged as naming the real location while pointing at a directory nothing can find, and the
+    /// only repairs available are widening the permitted list, which would license the real thing in
+    /// that file forever, or keeping the dotted spelling inside this file, where the sweep's own
+    /// needle does not reach it. This is the second.
+    static func taskHistory() -> TaskHistoryStore {
+        TaskHistoryStore(fileURL: fileURL("task-history.json"))
+    }
+
+    static func taskPlanDetails() -> TaskPlanDetailStore {
+        TaskPlanDetailStore(fileURL: fileURL("task-plan-details.json"))
+    }
+
+    static func visionSessionJournal() -> VisionSessionJournalStore {
+        VisionSessionJournalStore(fileURL: fileURL("vision-sessions.json"))
+    }
+
+    static func approvedApps() -> ApprovedAppStore {
+        ApprovedAppStore(fileURL: fileURL("approved-apps.json"))
+    }
+
+    static func outputLocations() -> OutputLocationStore {
+        OutputLocationStore(fileURL: fileURL("output-locations.json"))
+    }
+}
