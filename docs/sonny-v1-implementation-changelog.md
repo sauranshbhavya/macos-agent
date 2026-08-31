@@ -225,13 +225,19 @@ Files changed:
 - `Sources/MacAgentCore/ScreenControlAllowance.swift` (new) — the Mac's reading, and nothing more.
 - `server/test/credit.test.ts`, `server/test/credit.db.test.ts`, `server/test/support/credit.ts` (all new); `server/test/authdeps.test.ts`, `server/test/gate.test.ts`, `server/test/support/config.ts`; `Tests/MacAgentCoreTests/ScreenControlAllowanceTests.swift` (new).
 
-Tests, **all re-measured at `0c1c0c1`, the head carrying PR #182's fix round. Nothing is carried.**
-The earlier figures were carried across two documentation commits under WORKFLOW.md step 5's
-tree-identity proof; that proof stopped holding the moment the fix round touched `Sources/`,
-`server/src/` and both test trees, so every figure below was taken again rather than repointed —
-which is the rule's own distinguishing question, whether the tree moved rather than whether the SHA
-did. (This is also the reviewer's F9, which found the *PR body* still carrying the pre-fix figures
-under a proof that no longer printed nothing.)
+Tests, **re-measured at `f38f623`, the head carrying PR #182's cycle-3 round** — the server half
+re-run there in full because that round touched `server/src/credit/balance.ts` and
+`server/test/credit.test.ts`, and the app half carried from `9a7ad23 (clean)` under WORKFLOW.md step
+5's tree-identity rule, `git diff --stat 9a7ad23 HEAD -- Sources Tests Package.swift` printing
+**nothing — 0 bytes**, with a positive control over `80c90f1..HEAD` on the same paths answering 7
+files so the zero is a measurement rather than a command that cannot find anything.
+Earlier in the branch the figures were carried across two documentation commits under the same rule,
+and that proof stopped holding the moment the fix round touched both halves — so those were taken
+again rather than repointed, which is the rule's own distinguishing question: whether the tree moved,
+not whether the SHA did. (That was the reviewer's F9, which found the *PR body* still carrying pre-fix
+figures under a proof that no longer printed nothing.) Cycle 3's round moved only the server half, so
+only the server half is re-run and the app-half carry has a proof scoped to exactly the paths those
+two figures depend on.
 The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
 which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
 tracked file and is therefore re-run at the head rather than carried**:
@@ -462,6 +468,15 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
   comment, swept to zero across the entry, `server/src/credit/`, the README and the contract with a
   positive control on each. That is the exact shape F8's decline is about, arriving inside the
   correction of F8.
+- **Cycle 3's battery was one mutant, and one is the right number.** The round added one catalogue,
+  so the battery is the survivor that catalogue was written to kill: `Z1`, the quotient rounded at
+  three places rather than six, **KILLED** by `divides without losing a run to the quotient, which
+  rounding the numerator does not fix`, at `f38f623` against a baseline of `PASSED 1022 passed`.
+  Neither of the earlier plans was re-run — every mutant in them is a kill, and re-running a kill
+  proves nothing. **Three batteries now stand on this branch and each answers a different question**:
+  the lane's four, that the properties it claims are held; the reviewer's eight and then nine, that
+  the properties the lane did not think to name are held; and this one, that the single new
+  assertion earns its place. `.build/mutate/f38f623-20260831T133305-40288/`.
 - **F7's multiplier is measured and it is in the checklist, not only here.** "Under-declaring buys
   extra runs" reads as a footnote without a number. At this repository's own placeholder weights
   (`perSession 10, perIteration 5, perMegapixel 2, runCredits 100`), a 12-iteration session at a real
