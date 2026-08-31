@@ -184,7 +184,7 @@ Tests: at `84e57fb` — `npm run build` **0**, `npm run typecheck` **0**, `npm r
 Behavior added:
 - **`POST /v1/billing/webhook`** — a subscription webhook from the payment provider, authenticated by an HMAC signature over the raw request bytes, mapped onto `sonny.entitlement`. Active grants the plan's capabilities, an ended or paused subscription revokes, and a failed payment opens §16.4's grace window.
 - **`POST /v1/billing/checkout`** — authenticated; hands the caller the hosted checkout link with its own account id on it, which is the only reason a later webhook can be attributed to an account at all.
-- **`sonny.billing_event`** — every accepted delivery, by the provider's own event id, with what this gateway did with it (`applied`, `ignored`, `stale`, `unmatched`, `unmapped`, `unreadable`). The replay bound and the audit in one table.
+- **`sonny.billing_event`** — every accepted delivery, by the provider's own event id, with what this gateway did with it (`applied`, `ignored`, `stale`, `unmatched`, `unmapped`, `unreadable`, and `conflict` from the fix round below — seven, which is what migration 0018's own comment block lists). The replay bound and the audit in one table.
 - **Five `BILLING_*` environment variables**, none with a credential default, and `BILLING_PROVIDER` alone decides whether any of this is mounted.
 
 Behavior preserved (required, no blanket claims):

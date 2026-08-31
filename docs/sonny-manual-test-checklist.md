@@ -2050,6 +2050,33 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       the paid period and only later revokes it — so the *immediate* correct answer may be "nothing
       changed yet", and that is the behaviour, not a bug. The revocation follows when Polar says
       access has ended.
+- [ ] **(new 2026-08-30, SONNY-211) — the plan-change question, and it is one action that settles a
+      code decision.** Run it after the end-to-end row above, on the same live test subscription.
+      **Before you change anything**, record the current subscription id:
+      `SELECT billing_subscription_id FROM sonny.entitlement WHERE account_id = '<account-id>';`
+      — write the value down verbatim. Then, in the Polar dashboard, **change that subscription's
+      plan** (switch it to a different product or price; create a second product first if there is
+      only one). Wait a few seconds, then run the same `SELECT` again and also
+      `SELECT event_type, outcome FROM sonny.billing_event ORDER BY received_at;`.
+
+      **The whole question is whether the two subscription ids are the same string.** It is not a
+      judgement about whether things "look right" — copy both ids and compare them character by
+      character.
+
+      - **Same id** → the provider modifies the subscription in place. Record that. It means the
+        out-of-order plan-change regression recorded on this branch is **unreachable**, and the
+        finding closes with no code change. Expect the new delivery's `outcome` to be `applied`.
+      - **Different id** → the provider cancels and creates. Record that too. It means the regression
+        is **reachable**, and the fix is code rather than a note: the refusal has to tell "a foreign
+        subscription while mine is live" from "the replacement for mine". Expect at least one row
+        whose `outcome` is `conflict`, and expect the entitlement to be wrong afterwards — wrong is
+        the *expected* result in this branch, not a new bug to report.
+
+      **Report the two ids and the `outcome` column either way**, including when nothing looks
+      broken: "same id, outcome applied" is the answer that closes the finding, and it is only an
+      answer if somebody writes it down. If no new `billing_event` row appears at all within a
+      minute, that is its own finding — the webhook endpoint is not subscribed to the event type the
+      plan change produces.
 - [ ] **(new 2026-08-30, SONNY-211) — the refusal, and this one needs no Polar account.** With the
       gateway running and billing configured, `curl -X POST` the webhook path with any JSON body and
       no signature headers. It must answer **401**, and `SELECT count(*) FROM sonny.billing_event`

@@ -165,13 +165,40 @@ function writeFor(
  * are answering separately; the gateway-side gap is real whatever that answer turns out to be, which
  * is why the fix is not scoped to it.
  *
- * **Refusing the foreign delivery is the direction that does not lose access, and both directions
- * cost something.** Refused: a customer who somehow holds two subscriptions keeps the access the
- * first one grants, pays twice, and the second subscription is visible in `sonny.billing_event` as
- * `conflict` for a human to unpick. Accepted, which is what shipped: the two subscriptions overwrite
- * each other and a cancellation of either revokes access the other is still paying for. Losing money
- * silently is bad; losing money *and* access, with an audit row that says `applied`, is worse — and
- * only the second is invisible to everyone.
+ * **Refusing the foreign delivery is the direction that does not lose access TO A CANCELLATION, and
+ * both directions cost something.** That qualifier is the whole of what was established, and the
+ * unqualified sentence this used to carry was **false in one shape** (PR #178's cycle-3 re-check).
+ * Refused: a customer who somehow holds two subscriptions keeps the access the first one grants and
+ * pays twice. Accepted, which is what shipped first: the two overwrite each other and a cancellation
+ * of *either* revokes access the other is still paying for.
+ *
+ * **Where the unqualified version is false, and it is worth reading before trusting this refusal.**
+ * If the payment provider handles a plan change by cancelling and creating rather than by modifying
+ * in place, and the two deliveries arrive out of order — the new subscription first, then the old
+ * one's revoke — this refusal drops the upgrade, and dropping it leaves `billing_event_at` at the
+ * *old* subscription's instant. That disarms the staleness guard which had been refusing the
+ * out-of-order revoke, so the revoke now applies and the customer ends with no capabilities. Before
+ * this refusal existed the same three deliveries left them on the old plan. Measured against a real
+ * Postgres, and pinned below by `aPlanChangeWhoseNewSubscriptionArrivesFirstLosesAccessToday`.
+ *
+ * **Three things bound it.** It needs the provider to cancel-and-create, which is unverified in
+ * either direction and is what the founders' fourth manual row settles. It needs the two deliveries
+ * out of order, which this branch's own design assumes is possible — `billing_event_at` exists for
+ * exactly that — but does not guarantee. And it **self-heals**: the next delivery about the new
+ * subscription, a renewal or any update, restores the correct state, so the exposure is up to one
+ * billing period rather than a permanent loss. That is bounded, not benign.
+ *
+ * **What a `conflict` row actually buys, said accurately because the sentence here used to overstate
+ * it.** This said the second subscription is "visible in `sonny.billing_event` as `conflict` for a
+ * human to unpick". **No such human exists yet.** The re-check enumerated rather than assumed: none
+ * of the five operator CLIs reads this table, there is no alerting, metric or dashboard anywhere in
+ * `server/src`, and the only reads of `sonny.billing_event` in the whole repository are three
+ * one-off `SELECT`s inside this branch's own manual-test rows, none of which looks at `conflict`.
+ * What the row is today is *evidence that survives*, queryable by anyone who already holds
+ * `DATABASE_URL` and knows to look — which is strictly better than the log line this table's own
+ * migration comment rejects, and is not a person being told. An operator surface with the shape
+ * `revocations.ts` already has — a command that exits non-zero while there is unresolved debt — is
+ * what would make the sentence true, and whether it is built now or filed is the founders'.
  *
  * **Liveness is the whole of the test, and it is what keeps resubscription working.** A row whose
  * subscription is revoked is not live, so a new subscription takes it over exactly as before — which
