@@ -1244,17 +1244,19 @@ private struct WidgetExistingStepRows: View {
     let stepStatuses: [String: AgentStepStatus]
 
     var body: some View {
-        if let plan, let jobRow = ItemJobProgressPresentation.summaryRow(for: plan) {
-            // No progress here on purpose: these panels are the ones that raise a *question* —
-            // permission, clarification, failure — and none of them is a report of how far a run
-            // got. The working panel below is where progress belongs.
-            WidgetItemJobRow(title: jobRow, progressLine: nil)
-        } else if let plan, !plan.steps.isEmpty {
+        // `progress: nil` on purpose: these panels are the ones that raise a *question* —
+        // permission, clarification, failure — and none of them is a report of how far a run got.
+        switch ItemJobProgressPresentation.rows(for: plan, progress: nil) {
+        case .job(let title, let progressLine):
+            WidgetItemJobRow(title: title, progressLine: progressLine)
+        case .steps(let steps):
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(plan.steps) { step in
+                ForEach(steps) { step in
                     WidgetStepRow(step: step, status: stepStatuses[step.id] ?? .pending)
                 }
             }
+        case nil:
+            EmptyView()
         }
     }
 }
@@ -1268,18 +1270,16 @@ private struct WidgetWorkingPanel: View {
     let itemJobProgress: ItemJobProgress?
 
     var body: some View {
-        if let plan, let jobRow = ItemJobProgressPresentation.summaryRow(for: plan) {
-            WidgetItemJobRow(
-                title: jobRow,
-                progressLine: itemJobProgress.flatMap(ItemJobProgressPresentation.progressLine(for:))
-            )
-        } else if let plan, !plan.steps.isEmpty {
+        switch ItemJobProgressPresentation.rows(for: plan, progress: itemJobProgress) {
+        case .job(let title, let progressLine):
+            WidgetItemJobRow(title: title, progressLine: progressLine)
+        case .steps(let steps):
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(plan.steps) { step in
+                ForEach(steps) { step in
                     WidgetStepRow(step: step, status: stepStatuses[step.id] ?? .pending)
                 }
             }
-        } else {
+        case nil:
             HStack(spacing: 8) {
                 WidgetSpinner()
                 Text("Understanding your request\u{2026}")
