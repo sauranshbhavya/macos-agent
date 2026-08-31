@@ -1094,4 +1094,29 @@ describe("where a subscriber manages the subscription", () => {
       billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "not a url" })),
     ).toThrow(ConfigError);
   });
+
+  it("refuses an API origin that is not https, because it decides where a credential is sent", () => {
+    // **PR #183, F12, and the arm my own fix shipped without** — the battery's U6 survived because
+    // nothing asserted it. `new URL` accepts any scheme, so `http://api.polar.sh` passed the
+    // parseability check and the adapter would then put `authorization: Bearer <OAT>` on the wire in
+    // cleartext. A route that throws on the first press is recoverable; a credential that has
+    // already travelled unencrypted is not.
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "http://api.example.test" })),
+    ).toThrow(ConfigError);
+    // And the valid form still starts, so the guard cannot be satisfied by refusing everything —
+    // which is the direction a test asserting only the throw would miss.
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "https://api.example.test" })),
+    ).not.toThrow();
+  });
+
+  it("refuses an API origin carrying a path, because the request path is appended from the root", () => {
+    // `new URL("/v1/customer-sessions/", "https://host/gw")` is `https://host/v1/...`, so a prefix
+    // is silently dropped rather than honoured — and the 404 that wrong path produces is exactly
+    // what `looksLikeAMissingCustomer` exists to keep from reading as "no customer".
+    expect(() =>
+      billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "https://api.example.test/gw" })),
+    ).toThrow(ConfigError);
+  });
 });
