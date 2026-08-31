@@ -225,11 +225,29 @@ struct ApprovedAppRevocationTests {
         let list = try Self.revocationListSource()
 
         #expect(list.contains("ApprovedAppRevocationPresentation.offersRemoveAll("))
-        #expect(list.contains("storedGrantCount: viewModel.storedApprovedAppCount"))
         #expect(
             !list.contains("if !rows.isEmpty"),
             "gating on the rendered list is the defect PR #175's F1 is about"
         )
+    }
+
+    /// **Both readers of the store's count, checked at their own call sites** (found by this round's
+    /// own battery, S3).
+    ///
+    /// The gate and the empty state each read `viewModel.storedApprovedAppCount`, and the scans above
+    /// asked only whether the section *mentions* it — so a mutant that fed the empty state a literal
+    /// zero, leaving the gate's own reading in place, passed the whole suite. A presence check over a
+    /// string two call sites share cannot see one of them stop reading it. This slices each call and
+    /// asks separately, and pins the count at two so a third reader arrives here rather than
+    /// silently.
+    @Test
+    func bothTheGateAndTheEmptyStateReadTheStoresCountAtTheirOwnCallSites() throws {
+        let list = try Self.revocationListSource()
+        let token = "storedGrantCount: viewModel.storedApprovedAppCount"
+
+        #expect(list.components(separatedBy: token).count - 1 == 2)
+        #expect(try Self.callSite("ApprovedAppRevocationPresentation.emptyState(", in: list).contains(token))
+        #expect(try Self.callSite("ApprovedAppRevocationPresentation.offersRemoveAll(", in: list).contains(token))
     }
 
     // MARK: - The two states that are not a list
@@ -318,7 +336,6 @@ struct ApprovedAppRevocationTests {
 
         #expect(list.contains("ApprovedAppRevocationPresentation.emptyState("))
         #expect(list.contains("for: readability,"))
-        #expect(list.contains("storedGrantCount: viewModel.storedApprovedAppCount"))
         #expect(
             !list.contains("readability == .readable"),
             "a ternary per field is the shape whose swapped arm no test could see"
@@ -395,6 +412,17 @@ struct ApprovedAppRevocationTests {
             rest.range(of: terminator),
             "the scan's end marker \(terminator) is gone, so this scan would have read the whole file"
         )
+        return String(rest[..<end.lowerBound])
+    }
+
+    /// The text of one call, from its opening marker to the first character that closes it.
+    ///
+    /// Both bounds are required rather than defaulted, for the reason `sectionSource(from:until:)`
+    /// gives: a scan that silently widens when its marker moves reports on text nobody asked about.
+    private static func callSite(_ marker: String, in source: String) throws -> String {
+        let start = try #require(source.range(of: marker), "\(marker) is not in this section")
+        let rest = source[start.upperBound...]
+        let end = try #require(rest.range(of: ")"), "the call opened by \(marker) is never closed")
         return String(rest[..<end.lowerBound])
     }
 
