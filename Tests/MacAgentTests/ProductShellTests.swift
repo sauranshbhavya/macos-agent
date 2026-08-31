@@ -825,7 +825,15 @@ struct ProductShellTests {
             // it holds, and the row and count its sentence is derived from (PR #117 review, F1). The
             // wipe's own sweep has just deleted the files it names, so a surviving record would offer
             // to show the user files that are gone.
-            "lastPerRowDelete"
+            "lastPerRowDelete",
+            // SONNY-235's four: the progress a job over many items publishes, and the three inputs it
+            // is computed from. Cleared for `plan`'s and `stepStatuses`' reason rather than row 13's
+            // — it is what a surface renders about the run in flight — so a wipe does not leave a
+            // "17 of 40" line counting records it has just deleted.
+            "itemJobProgress",
+            "activeItemJobPlan",
+            "activeItemJobCompletedStepIDs",
+            "activeItemJobFailures"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from

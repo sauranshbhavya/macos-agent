@@ -149,8 +149,18 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
     /// `ResumableTask.init(from:)` states for `declinedAt`.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // **A null `source` is how the wire says "this is not a job"** — see
+        // `AgentPlanSchema.itemJobSchema` for why the nullability had to move inside the object
+        // rather than sitting on it. Signalled rather than returned, because a `Decodable`
+        // initializer has no way to say "no value"; `AgentPlan.init(from:)` catches exactly this and
+        // maps it to `nil`, and every other decode failure — a job with a source and no `itemField`,
+        // say — still throws a real `DecodingError` and is refused rather than silently becoming an
+        // ordinary plan that runs the template once.
+        guard let source = try container.decodeIfPresent(PlanItemSource.self, forKey: .source) else {
+            throw PlanItemJobDecodingSignal.notAJob
+        }
         self.init(
-            source: try container.decode(PlanItemSource.self, forKey: .source),
+            source: source,
             folderPath: try container.decodeIfPresent(String.self, forKey: .folderPath),
             itemKind: try container.decode(PlanItemKind.self, forKey: .itemKind),
             fileExtensions: try container.decodeIfPresent([String].self, forKey: .fileExtensions),
@@ -160,11 +170,22 @@ public struct PlanItemJob: Codable, Equatable, Sendable {
         )
     }
 
-    /// Whether this job's items have been resolved yet. `PlanItemJobExpansion` is idempotent off
+    /// Whether this job's items have been resolved yet.
+    /// `PlanItemJobExpansion` is idempotent off
     /// this: a plan that has already been expanded — a resumed run's stored plan, or a second
     /// `prepare` of the same prepared run — passes through untouched rather than resolving a second,
     /// possibly different, list.
     public var isResolved: Bool { !items.isEmpty }
+}
+
+/// The one thing `PlanItemJob.init(from:)` has to say that a `Decodable` initializer cannot return:
+/// the object it was handed describes no job at all.
+///
+/// Its own type rather than a `DecodingError` case so that `AgentPlan.init(from:)` can catch exactly
+/// this and nothing else — catching a `DecodingError` there would swallow a malformed job as well,
+/// which is the silent failure this whole shape exists to avoid.
+enum PlanItemJobDecodingSignal: Error {
+    case notAJob
 }
 
 /// Where a job's items come from.

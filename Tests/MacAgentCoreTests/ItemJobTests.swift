@@ -597,13 +597,63 @@ struct ItemJobTests {
             _ = try AgentPlanDecoder.decodeStrict(from: Data(named.utf8))
         }
 
-        // `null` is how a strict-schema provider says "not a job", and it is not an error.
-        let notAJob = declared.replacingOccurrences(
+        // `null` in place of the whole object is not an error either — a plan that carries no job.
+        let nullJob = declared.replacingOccurrences(
             of: #""itemJob": {"#,
-            with: #""itemJob": null, "unusedItemJob": {"#
+            with: #""itemJob": null, "ignored": {"#
         )
-        #expect(throws: AgentPlanDecodingError.unexpectedTopLevelKey("unusedItemJob")) {
-            _ = try AgentPlanDecoder.decodeStrict(from: Data(notAJob.utf8))
+        #expect(throws: AgentPlanDecodingError.unexpectedTopLevelKey("ignored")) {
+            _ = try AgentPlanDecoder.decodeStrict(from: Data(nullJob.utf8))
+        }
+    }
+
+    /// **How the wire says "this is not a job", and the control that makes it mean something.** The
+    /// schema requires `itemJob` on every response and cannot make the object itself nullable — see
+    /// `AgentPlanSchema.itemJobSchema` — so an ordinary command comes back with every field inside it
+    /// null. That has to decode to exactly the plan the same response without the key decodes to,
+    /// or every ordinary command would become a one-item job.
+    @Test
+    func anItemJobWhoseSourceIsNullDecodesToTheSamePlanAsNoItemJobAtAll() throws {
+        let withNulls = """
+        {
+          "summary": "Open a page.",
+          "requiresConfirmation": false,
+          "itemJob": {
+            "source": null,
+            "folderPath": null,
+            "itemKind": null,
+            "fileExtensions": null,
+            "itemField": null
+          },
+          "steps": [
+            {"id": "url", "operation": "open_url", "description": "Open it.", "targetURL": "https://example.com"}
+          ]
+        }
+        """
+        let without = """
+        {
+          "summary": "Open a page.",
+          "requiresConfirmation": false,
+          "steps": [
+            {"id": "url", "operation": "open_url", "description": "Open it.", "targetURL": "https://example.com"}
+          ]
+        }
+        """
+        let a = try AgentPlanDecoder.decodeStrict(from: Data(withNulls.utf8))
+        let b = try AgentPlanDecoder.decodeStrict(from: Data(without.utf8))
+        #expect(a.itemJob == nil)
+        #expect(a == b)
+
+        // **And a job that is declared but malformed is refused rather than quietly becoming an
+        // ordinary plan.** This is the direction the signal exists to protect: catching a
+        // `DecodingError` in `AgentPlan.init(from:)` instead of the one signal would swallow this and
+        // run the template once, over nothing.
+        let sourceWithoutField = withNulls.replacingOccurrences(
+            of: #""source": null"#,
+            with: #""source": "folder", "folderPath": "~/Documents""#
+        )
+        #expect(throws: (any Error).self) {
+            _ = try AgentPlanDecoder.decodeStrict(from: Data(sourceWithoutField.utf8))
         }
     }
 

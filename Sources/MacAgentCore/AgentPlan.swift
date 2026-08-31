@@ -25,6 +25,31 @@ public struct AgentPlan: Codable, Equatable, Sendable {
         self.steps = steps
         self.itemJob = itemJob
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case summary
+        case requiresConfirmation
+        case steps
+        case itemJob
+    }
+
+    /// Written out rather than synthesized for one reason: an `itemJob` object whose `source` is
+    /// null is how the wire says "this is not a job", and it has to become `nil` here rather than a
+    /// half-filled value (SONNY-235).
+    ///
+    /// The encode side stays synthesized, so a stored plan writes the nested object exactly as this
+    /// type holds it and a plan that is not a job writes no key at all.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.summary = try container.decode(String.self, forKey: .summary)
+        self.requiresConfirmation = try container.decode(Bool.self, forKey: .requiresConfirmation)
+        self.steps = try container.decode([AgentStep].self, forKey: .steps)
+        do {
+            self.itemJob = try container.decodeIfPresent(PlanItemJob.self, forKey: .itemJob)
+        } catch PlanItemJobDecodingSignal.notAJob {
+            self.itemJob = nil
+        }
+    }
 }
 
 public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
@@ -574,7 +599,7 @@ public enum AgentPlanSchema {
         [
             "type": "object",
             "additionalProperties": false,
-            "required": ["summary", "requiresConfirmation", "steps"],
+            "required": ["summary", "requiresConfirmation", "steps", "itemJob"],
             "properties": [
                 "summary": [
                     "type": "string",
@@ -588,6 +613,66 @@ public enum AgentPlanSchema {
                     "type": "array",
                     "minItems": 1,
                     "items": stepSchema(allowsRoutineSteps: true)
+                ],
+                "itemJob": itemJobSchema()
+            ]
+        ]
+    }
+
+    /// The declaration that turns one group of steps into the same work repeated over many items
+    /// (SONNY-235).
+    ///
+    /// **`items` is not here and must never be**, for the reason `AgentPlanDecoder.itemJobKeys`
+    /// states: the paths a job acts on are read from the machine at prepare time, and a model that
+    /// could name them would be choosing forty files to act on. The schema and the decode allowlist
+    /// have to agree about that, and `aPlannerMayDeclareAJobAndMayNotNameItsItems` holds the decode
+    /// half.
+    ///
+    /// **Always an object, never a nullable one, and "not a job" is a null `source` inside it.** The
+    /// obvious spelling is `"type": ["object", "null"]`, and it is one the gateway cannot send: the
+    /// Anthropic prune rewrites a type union into an `anyOf` and leaves every sibling keyword on the
+    /// parent, so a nullable object comes out as a bare `{"type": "object"}` branch with no
+    /// `additionalProperties` — which `server/test/anthropic.test.ts` refuses, correctly, because the
+    /// structured-output subset requires it on object nodes. Teaching the prune to carry
+    /// `properties`, `required` and `additionalProperties` into that branch is a redesign of
+    /// `withoutTypeUnions` for a shape nothing else sends, which its own comment warns against; and
+    /// putting `additionalProperties: false` on a branch that carries no `properties` would forbid
+    /// the very object it is describing. So the nesting stays and the nullability moves inside it,
+    /// which is a shape the prune already handles everywhere else in this schema.
+    ///
+    /// Named in the top-level `required` list beside the other three, because the structured-output
+    /// subset requires every property to be required. `AgentPlan.init(from:)` is what turns an object
+    /// with a null `source` back into "no job" — see `PlanItemJobDecodingSignal`.
+    private static func itemJobSchema() -> [String: Any] {
+        [
+            "type": "object",
+            "description": "Set ONLY when the user asked for the same work to be done to every item in one folder or in the Finder selection — \"summarise each of these\", \"convert all of these folders\". Null for every other command, including one that names two or three things explicitly, which is an ordinary multi-step plan. When set, steps describes the work done to ONE item and Sonny repeats it for each item it finds.",
+            "additionalProperties": false,
+            "required": ["source", "folderPath", "itemKind", "fileExtensions", "itemField"],
+            "properties": [
+                "source": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemSource.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Where the items come from: folder for a folder the user named, finder_selection for whatever they have selected in Finder. NULL when this is not a job over many items, which is almost every command."
+                ],
+                "folderPath": [
+                    "type": ["string", "null"],
+                    "description": "The folder to read when source is folder, otherwise null."
+                ],
+                "itemKind": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemKind.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Whether each item is a file or a folder. Required when source is set; null otherwise."
+                ],
+                "fileExtensions": [
+                    "type": ["array", "null"],
+                    "items": ["type": "string"],
+                    "description": "File extensions without dots, such as pdf or docx, when the user named a kind of file. Null for every file, and null whenever itemKind is folders."
+                ],
+                "itemField": [
+                    "type": ["string", "null"],
+                    "enum": PlanItemField.allCases.map(\.rawValue) + [NSNull()],
+                    "description": "Which field of each repeated step the item is written into: inputPath for a capability that reads a file or folder, shortcutInput for running a Shortcut on each item. Required when source is set; null otherwise."
                 ]
             ]
         ]

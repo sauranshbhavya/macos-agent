@@ -294,10 +294,15 @@ describe("the real plan schema meets the prune", () => {
 
   it("is the shape the prune exists for, before the prune runs", () => {
     // Asserted on the input, so this file says out loud what it is defending against rather than
-    // only that the output is clean. 53 rather than the 27 PR #143's F9 counted: that figure is
+    // only that the output is clean. 58 rather than the 32 schema nodes the source carries: that
+    // figure is
     // source occurrences, and `stepSchema` is embedded twice — for `steps` and for `routineSteps`.
+    // It was 53 until SONNY-235 added the `itemJob` declaration, whose five nullable fields are
+    // embedded once each, because a job is a property of a plan and a routine's nested steps are not
+    // a plan. `itemJob` itself is a plain object and adds none: a nullable one is a shape this prune
+    // cannot express, which is recorded at `AgentPlanSchema.itemJobSchema`.
     const unions = nodes(planSchema).filter((node) => Array.isArray(node["type"]));
-    expect(unions).toHaveLength(53);
+    expect(unions).toHaveLength(58);
     // One `minItems`, on the top-level `steps` array. The nested `routineSteps` does not carry one,
     // which is why this is 1 rather than the 2 an embedded-twice `stepSchema` would suggest —
     // `minItems` sits on the property that *holds* the steps, and only `steps` is required non-empty.
@@ -324,8 +329,8 @@ describe("the real plan schema meets the prune", () => {
   it("comes out with every type union rewritten as an anyOf, and none left", () => {
     const pruned = nodes(prunedSchema(planSchema));
     expect(pruned.filter((node) => Array.isArray(node["type"]))).toHaveLength(0);
-    // The 53 unions become 53 `anyOf`s; the schema has none of its own to add to the count.
-    expect(pruned.filter((node) => Array.isArray(node["anyOf"]))).toHaveLength(53);
+    // The 58 unions become 58 `anyOf`s; the schema has none of its own to add to the count.
+    expect(pruned.filter((node) => Array.isArray(node["anyOf"]))).toHaveLength(58);
   });
 
   it("keeps an enum on the node whose type it split, so the field stays as narrow as it was", () => {
