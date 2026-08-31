@@ -416,12 +416,13 @@ compare directly — don't rely on memory of what it's supposed to look like.
       carried a tooltip and no accessibility name, so it announced whatever macOS makes of an SF
       Symbol called `wand.and.stars.inverse` — the other three icon-only controls in the widget have
       always had a full name. This is the fix; the hover half of it is the §3d-bis row below
-- [ ] **(new 2026-08-28, SONNY-251 → SONNY-338, a wording call that is yours)** With that in front
-      of you: the capsule says **"Open Sonny"** and expands the *widget*, while the **menu-bar item
-      with the same three words** opens the *Command Center window*. Both are defensible on their
-      own. Say whether you want either reworded — nothing was changed here, because the words are
-      product vocabulary rather than a session's call, and a test asserts the collision as it stands
-      so a later change is noticed rather than rediscovered
+- [ ] **(new 2026-08-30, SONNY-338 — replaces the 2026-08-28 wording-call row, which asked the
+      question this answers)** The two controls no longer share three words. With the capsule in
+      front of you it still says **"Open Sonny"** and still expands the *widget*; click the menu-bar
+      icon and its middle item now reads **"Open Command Center"** and still opens the *Command
+      Center window*. Each control is named after where it goes, which is what you and Bhavya
+      decided on 2026-08-30. Nothing else in either surface changed — the wider menu-bar treatment
+      is still SONNY-109's
 
 ### 3b. Working — `4-FloatingWidgetWorking.png`
 Submit a multi-step command **from the widget itself** (e.g. a routine with 2+ apps) to get real
@@ -854,9 +855,13 @@ it feels confusing in practice, not just whether it's "technically correct."
       — **confirmed 2026-07-24**
 - [x] Click the menu bar icon with **both** left-click and right-click — should show the identical
       3-item menu both times (New Task / Open Sonny / Quit Sonny) — a previous bug made this
-      right-click-only, worth explicitly re-confirming left-click works — **confirmed 2026-07-24**
-- [x] "New Task" opens/focuses the widget; "Open Sonny" opens/focuses Command Center; "Quit Sonny"
-      actually terminates the process (check Activity Monitor, not just that windows closed).
+      right-click-only, worth explicitly re-confirming left-click works — **confirmed 2026-07-24**.
+      **(Note 2026-08-30, SONNY-338: the middle item is now titled "Open Command Center". The
+      confirmation above is unaffected — it is about the menu appearing on both clicks — and the new
+      title has its own unchecked row in §3a.)**
+- [x] "New Task" opens/focuses the widget; "Open Command Center" (titled "Open Sonny" until
+      SONNY-338, 2026-08-30) opens/focuses Command Center; "Quit Sonny" actually terminates the
+      process (check Activity Monitor, not just that windows closed).
       "Open Sonny" and "Quit Sonny" — **confirmed 2026-07-24**. "New Task" — **confirmed
       2026-07-24, found broken 2026-08-01** (the pre-SONNY-8 path, `AppDelegate.showWidget()` →
       `widgetController.show()`, could not move keyboard focus at all, so the 2026-07-24 check

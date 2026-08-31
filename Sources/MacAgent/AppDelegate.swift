@@ -115,7 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A persistent `menu` (rather than a custom click handler) shows on any click, left or
         // right — modern macOS renders it with the same translucent, rounded-corner chrome as
         // native menu-bar dropdowns for free. The prior custom handler only showed this menu on
-        // right-click, which is exactly why "Open Sonny"/"Quit Sonny" read as missing entirely.
+        // right-click, which is exactly why "Open Command Center" (titled "Open Sonny" until
+        // SONNY-338) and "Quit Sonny" read as missing entirely.
         item.menu = makeStatusMenu()
         statusItem = item
 
@@ -444,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ).target = self
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "Open Sonny",
+            withTitle: "Open Command Center",
             action: #selector(openCommandCenter),
             keyEquivalent: ""
         ).target = self

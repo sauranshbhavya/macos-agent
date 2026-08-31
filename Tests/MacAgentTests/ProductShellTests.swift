@@ -56,7 +56,7 @@ struct ProductShellTests {
         )
 
         let menu = delegate.makeStatusMenu()
-        #expect(menu.items.map(\.title) == ["New Task", "", "Open Sonny", "", "Quit Sonny"])
+        #expect(menu.items.map(\.title) == ["New Task", "", "Open Command Center", "", "Quit Sonny"])
 
         // Titles alone pin nothing about wiring: an item rewired to a different selector keeps its
         // title and a title-only assertion stays green. Every item gets its target, selector, and
@@ -64,7 +64,7 @@ struct ProductShellTests {
         // silently broken once already (see `makeMainMenu()`'s comment).
         let expectedItems: [(title: String, action: Selector, keyEquivalent: String)] = [
             ("New Task", #selector(AppDelegate.requestWidgetPresentation), ""),
-            ("Open Sonny", #selector(AppDelegate.openCommandCenter), ""),
+            ("Open Command Center", #selector(AppDelegate.openCommandCenter), ""),
             ("Quit Sonny", #selector(AppDelegate.quit), "q")
         ]
         for expected in expectedItems {
