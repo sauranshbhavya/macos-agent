@@ -383,6 +383,33 @@ const schema = z.object({
    */
   BILLING_CHECKOUT_URL: nonEmpty.optional(),
   /**
+   * An Organization Access Token for the payment provider's API, with the scope that mints a
+   * customer portal session (SONNY-216).
+   *
+   * **The first provider API credential this gateway has ever held, and a deliberate reversal.**
+   * SONNY-211 recorded that the hosted checkout "needs no provider API credential and makes no
+   * outbound request" — a property, not an accident. A portal link cannot keep it: the provider's
+   * static portal authenticates the human by emailing a one-time code to the address on their
+   * *provider* record, and `docs/sonny-identity-linking-rule.md:14` says Sonny's identity key "is
+   * never the email address", so a Hide My Email user could not reach their own billing portal at
+   * all. `billing/polar.ts` carries the full argument.
+   *
+   * **No default, for the reason `BILLING_WEBHOOK_SECRET` has none.** `npm run check:secrets`
+   * carries this name on its name-anchored list: an access token is an opaque provider-issued
+   * string, so the name is the only thing that can catch it. Its rotation story is in
+   * `server/README.md`.
+   */
+  BILLING_PROVIDER_ACCESS_TOKEN: nonEmpty.optional(),
+  /**
+   * The payment provider's API origin. Optional; the provider adapter defaults it.
+   *
+   * Configuration for the reason `BILLING_CHECKOUT_URL` is — the sandbox API and the production API
+   * are different hosts, and moving between them must be a redeploy rather than a code change. The
+   * *default* deliberately lives in `billing/polar.ts` rather than here, because that is the one
+   * file allowed to know a vendor hostname.
+   */
+  BILLING_API_BASE_URL: nonEmpty.optional(),
+  /**
    * What each of the provider's products is worth, as
    * `<product id>=<plan key>:<capability>|<capability>`, comma-separated.
    *
@@ -458,6 +485,8 @@ export interface Config {
   readonly billingProvider: "polar" | undefined;
   readonly billingWebhookSecret: string | undefined;
   readonly billingCheckoutUrl: string | undefined;
+  readonly billingProviderAccessToken: string | undefined;
+  readonly billingApiBaseUrl: string | undefined;
   readonly billingPlans: string;
   readonly billingGraceDays: number;
   readonly credentials: readonly ProviderCredentials[];
@@ -649,6 +678,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     billingProvider: value.BILLING_PROVIDER,
     billingWebhookSecret: value.BILLING_WEBHOOK_SECRET,
     billingCheckoutUrl: value.BILLING_CHECKOUT_URL,
+    billingProviderAccessToken: value.BILLING_PROVIDER_ACCESS_TOKEN,
+    billingApiBaseUrl: value.BILLING_API_BASE_URL,
     billingPlans: value.BILLING_PLANS,
     billingGraceDays: value.BILLING_GRACE_DAYS,
     credentials: providerCredentials(env),

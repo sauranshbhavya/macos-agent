@@ -1,5 +1,6 @@
 import type {
   BillingProvider,
+  PortalLink,
   SubscriptionEvent,
   SubscriptionState,
   VerifiedDelivery,
@@ -201,6 +202,173 @@ export interface PolarProviderConfig {
   readonly webhookSecret: string;
   /** The hosted checkout link, from Polar's dashboard. Where a user is sent to subscribe. */
   readonly checkoutUrl: string;
+  /**
+   * An Organization Access Token with `customer_sessions:write` (SONNY-216). Never logged.
+   *
+   * **This is the first provider API credential this gateway has ever held**, and its arrival is a
+   * deliberate reversal argued in this file's portal section below.
+   */
+  readonly accessToken: string;
+  /**
+   * Polar's API origin. Defaults to production; a sandbox deployment overrides it.
+   *
+   * Configuration rather than a constant for the same reason `checkoutUrl` is: the sandbox and the
+   * production API are different hosts, and moving between them must be a redeploy rather than a
+   * code change. The default lives *here* rather than in `config.ts` because this is the file that
+   * is allowed to know a Polar hostname.
+   */
+  readonly apiBaseUrl?: string | undefined;
+  /**
+   * The `fetch` this adapter calls. **Tests only** — nothing a deployment sets.
+   *
+   * Injected rather than reached for globally so a test can assert what was sent without a network,
+   * the same shape `BillingRouteDeps.now` uses for the clock.
+   */
+  readonly fetchImplementation?: typeof fetch | undefined;
+}
+
+/** Polar's production API origin. Overridden by `apiBaseUrl` for sandbox deployments. */
+const POLAR_API_BASE_URL = "https://api.polar.sh";
+
+/** The path that mints a customer portal session. */
+const CUSTOMER_SESSIONS_PATH = "/v1/customer-sessions/";
+
+/**
+ * How long this gateway waits for Polar before giving up: **eight seconds**.
+ *
+ * **Chosen against the Mac's own budget rather than against a guess at Polar's latency**, because
+ * what the number decides is *which* timeout the user meets. The Mac spends
+ * `SonnyBackendTimeouts.auth` — 20 seconds — on an account call
+ * (`Sources/MacAgentCore/SonnyBackendClient.swift:28`). If this budget were the larger of the two,
+ * the Mac's own transport timeout would fire first, and that one is **not retried**; a typed `504
+ * provider.timeout` from this gateway **is** retried once, which that file's own comment at `:33-39`
+ * spells out. So the requirement is that this number be comfortably the smaller, and eight seconds
+ * leaves twelve for the round trip in both directions.
+ *
+ * The other end of the range is an ordinary successful call, which is one TLS handshake and one
+ * small JSON round trip to a commercial API — hundreds of milliseconds, not seconds. Eight is far
+ * enough above that to never fire on a healthy call and far enough below twenty to always beat the
+ * client.
+ *
+ * **What it is not is a guess that this gateway can afford to wait eight seconds.** An unbounded
+ * call inside a request handler is how a route stops answering at all, and every value here is
+ * better than none.
+ */
+const PORTAL_SESSION_TIMEOUT_MS = 8_000;
+
+/**
+ * Mint a customer portal session for one account, and turn every way that can go wrong into a
+ * `PortalLink` case (SONNY-216).
+ *
+ * ## Why this makes an outbound call when `checkoutUrlFor` beside it makes none
+ *
+ * **SONNY-211 established the opposite property deliberately, and this reverses it for one route.**
+ * Its closing comment states that the hosted checkout "needs no provider API credential and makes no
+ * outbound request" — that was a design property, not an accident, and it is why every billing path
+ * before this one is inbound.
+ *
+ * Polar offers both shapes, and the static one is unusable *here* for a reason that has nothing to
+ * do with security. `polar.sh/<org>/portal` authenticates the human by emailing a one-time code to
+ * the address on their Polar customer record — so reaching it requires the user to type an address
+ * Polar recognises. **Sonny does not key on the email address**:
+ * `docs/sonny-identity-linking-rule.md:14` states that "the identity key is `(provider, subject)`.
+ * It is never the email address", and §2 records Sign in with Apple returning
+ * `abc123@privaterelay.appleid.com`. So a Hide My Email user whose Polar record carries a relay
+ * address — or any user whose Sonny sign-in and Polar checkout used different addresses — cannot
+ * reach their own billing portal at all, with **no error this gateway can surface and no recovery
+ * the app can offer**. That is a paying customer silently locked out of cancelling their own
+ * subscription.
+ *
+ * A credential is a cost the founders can manage by rotating it. That one is a cost the user pays
+ * and nobody can fix, which is what decides it.
+ *
+ * **The account id is the whole of the lookup, and it already travels.** `checkoutUrlFor` sends
+ * `customer_external_id` (see `EXTERNAL_CUSTOMER_PARAMETER` above), so the Polar customer carries
+ * this gateway's account id as its `external_id` — and `external_customer_id` on this request
+ * resolves it. Nothing here reads `sonny.entitlement`, so the portal path touches no store, no
+ * column and no migration.
+ *
+ * **The link is not cached, and the expiry is why.** Polar scopes the session token to one customer
+ * and expires it after roughly an hour; a cached link handed to a second user would be the first
+ * user's invoices, and a cached link handed back to the same user after expiry is a dead page. One
+ * mint per press is the only shape with neither failure.
+ */
+async function polarPortalSession(
+  config: PolarProviderConfig,
+  accountId: string,
+): Promise<PortalLink> {
+  const call = config.fetchImplementation ?? fetch;
+  const endpoint = new URL(CUSTOMER_SESSIONS_PATH, config.apiBaseUrl ?? POLAR_API_BASE_URL);
+
+  let response: Response;
+  try {
+    response = await call(endpoint, {
+      method: "POST",
+      headers: {
+        // The credential. Never logged: every `reason` below is built from the status and the
+        // adapter's own words, and none of them interpolates a header.
+        authorization: `Bearer ${config.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ external_customer_id: accountId }),
+      signal: AbortSignal.timeout(PORTAL_SESSION_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // **`AbortSignal.timeout` rejects with a `TimeoutError`, and a dropped connection rejects here
+    // too** — they are told apart by name, because one is worth reporting as this gateway's own
+    // budget being spent and the other as the provider being unreachable, and 7.2 gives them
+    // different codes.
+    const name = error instanceof Error ? error.name : "";
+    if (name === "TimeoutError") {
+      return { kind: "timedOut", reason: `no answer within ${PORTAL_SESSION_TIMEOUT_MS}ms` };
+    }
+    return { kind: "unavailable", reason: name === "" ? "request failed" : name };
+  }
+
+  // **404 is the account with no Polar customer**, which is the ordinary case rather than a fault.
+  // Polar answers a `external_customer_id` it does not know with a not-found rather than an empty
+  // success, so this is where a user who has never subscribed lands.
+  //
+  // **Confirmed against the live account by a manual row rather than asserted here.** A 422 is the
+  // other plausible answer for an unknown external id, and nobody on this project has run this
+  // request against real Polar yet; if it turns out to be 422, this branch is where that is fixed
+  // and the manual row is what would find it. Until then a 422 falls to `rejected` below, which is
+  // the safe direction: it reports a fault loudly instead of telling a paying subscriber they have
+  // no subscription.
+  if (response.status === 404) return { kind: "noCustomer" };
+  if (response.status >= 500) {
+    return { kind: "unavailable", reason: `provider answered ${response.status}` };
+  }
+  if (!response.ok) {
+    return { kind: "rejected", reason: `provider answered ${response.status}` };
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return { kind: "rejected", reason: "provider answered 200 with a body that is not JSON" };
+  }
+  // Reuses this file's own `readString`, which is the one the delivery reader already uses — so a
+  // response object and a webhook payload are read by one rule rather than two that can drift.
+  const session =
+    typeof payload === "object" && payload !== null && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : undefined;
+  const url = session === undefined ? undefined : readString(session, "customer_portal_url");
+  if (url === undefined) {
+    return { kind: "rejected", reason: "provider answered 200 naming no customer_portal_url" };
+  }
+  // **A missing or unparseable `expires_at` does not lose the link.** The instant is carried for the
+  // client's benefit, not for a decision this gateway makes, so discarding a working URL over a
+  // field nothing depends on would be the worse failure. The fallback is deliberately the *shortest*
+  // honest answer — treat it as already expiring — rather than an invented hour, so a client that
+  // caches on this value re-mints instead of holding a link nothing vouched for.
+  const declared = readString(session!, "expires_at");
+  const parsed = declared === undefined ? undefined : new Date(declared);
+  const expiresAt =
+    parsed !== undefined && !Number.isNaN(parsed.getTime()) ? parsed : new Date(Date.now());
+  return { kind: "link", url, expiresAt };
 }
 
 export function polarProvider(config: PolarProviderConfig): BillingProvider {
@@ -219,5 +387,6 @@ export function polarProvider(config: PolarProviderConfig): BillingProvider {
       url.searchParams.set(EXTERNAL_CUSTOMER_PARAMETER, accountId);
       return url.toString();
     },
+    portalUrlFor: (accountId) => polarPortalSession(config, accountId),
   };
 }

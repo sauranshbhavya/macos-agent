@@ -98,6 +98,15 @@ check "a billing webhook secret is refused"   1 "BILLING_WEBHOOK_SECRET=${billin
 check "its lowercase YAML spelling is refused" 1 "  billing_webhook_secret: \"${billing_secret}\""
 check "a checkout link is not a secret"       0 "BILLING_CHECKOUT_URL=https://buy.polar.sh/polar_cl_abcdefghijklmnop"
 check "a plan map is not a secret"            0 "BILLING_PLANS=prod_abcdefghijklmnop=paid:screen_control"
+# SONNY-216: the provider API access token. The THIRD name on that list whose leak is a write, and
+# the first provider API credential this gateway holds -- whoever has it can mint a portal session
+# for any customer of the organization. Opaque and vendor-prefixless like the two above. Both
+# directions again: the token is refused, and the API origin beside it is not.
+provider_token="$(openssl rand -hex 24 2>/dev/null)"
+[[ -n "$provider_token" ]] || provider_token="$(printf 'p%.0s' {1..48})"
+check "a provider access token is refused"   1 "BILLING_PROVIDER_ACCESS_TOKEN=${provider_token}"
+check "its lowercase YAML spelling is refused" 1 "  billing_provider_access_token: \"${provider_token}\""
+check "an API origin is not a secret"        0 "BILLING_API_BASE_URL=https://sandbox-api.polar.sh"
 # A lockfile-style hash must NOT be caught: a generic entropy rule would flag every one of them,
 # and this pattern is name-anchored precisely so it does not.
 check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"

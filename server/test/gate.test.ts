@@ -137,6 +137,9 @@ describe("which routes the gate challenges", () => {
         billingCheckoutUrl: "https://buy.example.test/checkout/abc",
         billingPlans: "prod_x=paid:screen_control",
         billingGraceDays: 14,
+        // SONNY-216. Required wherever a provider is named, so without it this app does not build
+        // and the scan below would be reading an empty population rather than a billing one.
+        billingProviderAccessToken: "an-access-token-that-is-not-a-real-one",
       }),
       { provider: new UnusedProvider(), withConnection: noDatabase },
       { entitlementStore: fakeEntitlementStore() },
@@ -144,24 +147,35 @@ describe("which routes the gate challenges", () => {
     const routes = await registeredRoutes(app);
     expectPopulationIsReal(routes);
 
-    // Both routes are in the population now, which is the half that was missing.
+    // All three routes are in the population now, which is the half that was missing. SONNY-216's
+    // portal route is the case this scan was widened for: it was added inside that config-gated
+    // scope after the widening, and it is challenged.
     const billing = routes
       .map((route) => `${route.method} ${route.url}`)
       .filter((route) => route.includes("/v1/billing/"))
       .sort();
-    expect(billing).toEqual(["POST /v1/billing/checkout", "POST /v1/billing/webhook"]);
+    expect(billing).toEqual([
+      "POST /v1/billing/checkout",
+      "POST /v1/billing/portal",
+      "POST /v1/billing/webhook",
+    ]);
 
     // And every route this shape of the app serves is either public by a written decision or
     // challenged — the same property the scan above asserts, over the larger population.
     const unclassified = routes.filter(
       (route) => !isPublicRoute(route.method, route.url) && route.url.startsWith("/v1/billing/"),
     );
-    expect(unclassified.map((route) => `${route.method} ${route.url}`)).toEqual([
+    expect(unclassified.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       // The checkout route is authenticated like any other: absent from `PUBLIC_ROUTES`, challenged
       // by the gate, with its own 401 test in `billing.test.ts`. The webhook is NOT here, because it
       // is on the list — authenticated by its signature instead, which is the one entry in that list
       // that is not public in the sense the six beside it are.
       "POST /v1/billing/checkout",
+      // SONNY-216's, challenged the same way and for a sharper reason than checkout's: it mints a
+      // link to one named customer's invoices, payment method and cancel button, so a caller the
+      // gate never challenged would be asking for a portal on behalf of nobody. `billing.test.ts`
+      // asserts the 401 lands *before* the provider is called.
+      "POST /v1/billing/portal",
     ]);
     await app.close();
   });

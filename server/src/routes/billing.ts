@@ -42,6 +42,20 @@ import { verifyWebhookSignature } from "../billing/webhook-signature.js";
  * nowhere**, which is the other half of the same decision: an unauthenticated caller must not be
  * able to write rows into this gateway's tables by POSTing at it.
  *
+ * ## `POST /v1/billing/portal` is where a subscriber goes to manage what they pay for
+ *
+ * Authenticated, and — unlike every billing path before it — it **calls the provider**. The whole of
+ * why is in `billing/polar.ts`: the provider's static portal authenticates the human by emailing a
+ * one-time code to the address on their provider record, and Sonny does not key on the email
+ * address, so a Hide My Email user could not reach their own billing portal at all. The link is
+ * minted per press because the provider's session token is short-lived and scoped to one customer.
+ *
+ * **The account with no provider customer is the ordinary case and gets its own code.** A user who
+ * signed in and never subscribed has nothing to manage; that is not a fault, and it is not an empty
+ * success either. `entitlement.no_subscription` says so, and the app is expected to know its own
+ * entitlement and not offer the control at all — the same relationship `entitlement.already_subscribed`
+ * has with Subscribe.
+ *
  * ## `POST /v1/billing/checkout` is authenticated and returns a URL
  *
  * The account id travels to the provider on that URL and comes back on the customer, which is what
@@ -59,6 +73,7 @@ export interface BillingRouteDeps {
 
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
+export const BILLING_PORTAL_PATH = "/v1/billing/portal";
 
 export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDeps): void {
   const now = deps.now ?? (() => new Date());
@@ -152,5 +167,61 @@ export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDe
         );
     }
     return reply.send({ checkout_url: deps.provider.checkoutUrlFor(caller.accountId) });
+  });
+
+  app.post(BILLING_PORTAL_PATH, async (request, reply) => {
+    const caller = callerOf(request);
+    const link = await deps.provider.portalUrlFor(caller.accountId);
+    // One arm per case, and every failure arm's status and `retryable` come straight from 7.2's
+    // taxonomy rather than being decided here — which is why `PortalLink`'s cases are named for
+    // what the caller must do rather than for what went wrong upstream.
+    switch (link.kind) {
+      case "link":
+        // `expires_at` is carried so the client can tell a stale link from a broken one rather than
+        // reporting "the portal is down" for a window it sat on for an hour.
+        return reply.send({ portal_url: link.url, expires_at: link.expiresAt.toISOString() });
+      case "noCustomer":
+        return reply
+          .status(409)
+          .send(
+            errorBody(
+              "entitlement.no_subscription",
+              "This account holds no subscription to manage.",
+              request.id,
+              { retryable: false },
+            ),
+          );
+      case "timedOut":
+        // The reason is logged and never sent, exactly as the webhook's refusal reason is: it
+        // describes this gateway's own budget and its upstream, neither of which is the caller's.
+        request.log.warn({ reason: link.reason }, "billing portal timed out");
+        return reply
+          .status(504)
+          .send(
+            errorBody("provider.timeout", "The payment provider took too long.", request.id, {
+              retryable: true,
+            }),
+          );
+      case "unavailable":
+        request.log.warn({ reason: link.reason }, "billing portal provider unavailable");
+        return reply
+          .status(502)
+          .send(
+            errorBody("provider.unavailable", "The payment provider could not be reached.", request.id, {
+              retryable: true,
+            }),
+          );
+      case "rejected":
+        // **`error`, not `warn`.** This one is an operator's to fix — a revoked or wrong access
+        // token, or a request shape the provider stopped accepting — and a retry cannot help.
+        request.log.error({ reason: link.reason }, "billing portal refused by provider");
+        return reply
+          .status(502)
+          .send(
+            errorBody("provider.rejected", "The payment provider refused this request.", request.id, {
+              retryable: false,
+            }),
+          );
+    }
   });
 }
