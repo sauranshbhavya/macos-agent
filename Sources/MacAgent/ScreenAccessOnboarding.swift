@@ -4,9 +4,24 @@ import SwiftUI
 
 // MARK: - Relaunch seam
 
+/// Why a relaunch did not happen.
+///
+/// Read as a failure to report and never rendered: the user is told the restart did not happen,
+/// not why (SONNY-348, founder decision 2026-08-30).
+enum AppRelaunchFailure: Error, Equatable {
+    /// `/usr/bin/open` ran and refused to reopen the bundle — it moved, is quarantined, is
+    /// unreadable, or the launch was refused.
+    case reopenRefused(status: Int32)
+}
+
 protocol AppRelaunching {
+    /// Reopens the bundle and terminates this process, in that order.
+    ///
+    /// **Throwing means the app is still running**, which is the whole contract: a reopen that
+    /// worked ends in `NSApp.terminate`, so the only thing a caller can be told here is that the
+    /// new instance never started — and that it must act on rather than discard.
     @MainActor
-    func relaunch()
+    func relaunch() async throws
 }
 
 struct DefaultAppRelauncher: AppRelaunching {
@@ -14,14 +29,29 @@ struct DefaultAppRelauncher: AppRelaunching {
     /// instance and terminates this one. Only meaningful for the packaged `.app` — a bare
     /// `swift run` binary has no bundle to reopen (and no TCC identity to relaunch for), so
     /// there it just terminates.
+    ///
+    /// **The terminate is downstream of the reopen, and both of the reopen's failures are read**
+    /// (SONNY-348). This used to launch with `try? process.run()` and terminate unconditionally, so
+    /// an `open` that could not start the new instance left the user with no Sonny at all — on the
+    /// first-run path, on a Mac where they had just granted a screen-recording permission to it.
+    /// **The discarded `try?` was the smaller half of that**, and reading it alone would have fixed
+    /// the least likely case: `Process.run()` fails only when `/usr/bin/open` itself cannot be
+    /// spawned, while every failure the ticket was filed about — a bundle that moved, is
+    /// quarantined, or is refused — is `open` starting fine and *exiting non-zero*, which the old
+    /// code could not have seen at all. So the exit status is what decides, and `AsyncProcessRunner`
+    /// is what waits for it: `open` can sit on a Gatekeeper dialog for as long as the user leaves it
+    /// there, and this runs on the main actor.
     @MainActor
-    func relaunch() {
+    func relaunch() async throws {
         let bundleURL = Bundle.main.bundleURL
         if bundleURL.pathExtension == "app" {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-n", bundleURL.path]
-            try? process.run()
+            let reopen = try await AsyncProcessRunner.run(
+                executablePath: "/usr/bin/open",
+                arguments: ["-n", bundleURL.path]
+            )
+            guard reopen.terminationStatus == 0 else {
+                throw AppRelaunchFailure.reopenRefused(status: reopen.terminationStatus)
+            }
         }
         NSApp.terminate(nil)
     }
@@ -40,6 +70,17 @@ final class ScreenAccessOnboardingModel: ObservableObject {
     @Published private(set) var screenRecordingGranted: Bool
     @Published private(set) var accessibilityTrusted: Bool
     @Published private(set) var screenRecordingRequestedThisLaunch = false
+    /// Set when the last relaunch could not start a new instance, so this app is still the only
+    /// Sonny there is and the guidance has to say so. Cleared when another attempt begins.
+    @Published private(set) var relaunchFailed = false
+    /// True while a reopen is in flight, which is a window this branch created and the app did not
+    /// have before (SONNY-348, PR #180's review, F7). The old relaunch reached `NSApp.terminate`
+    /// synchronously, so there was no second press to make; now the button stays live for as long
+    /// as `/usr/bin/open` takes, and `-n` forces a *new* instance by design — so two presses are two
+    /// Sonnys sharing one Keychain, one set of encrypted stores and one menu bar, which
+    /// `WORKFLOW.md` names as a state to avoid. It also gives the button a pending state for the
+    /// case the async seam exists for, where `open` can sit on a Gatekeeper dialog indefinitely.
+    @Published private(set) var isRelaunching = false
 
     private let permissionChecker: any ScreenCapturePermissionChecking
     private let relauncher: any AppRelaunching
@@ -97,8 +138,20 @@ final class ScreenAccessOnboardingModel: ObservableObject {
         settingsOpener(Self.accessibilitySettingsURL)
     }
 
-    func relaunchNow() {
-        relauncher.relaunch()
+    /// **Nothing here decides that the relaunch worked** — it decides only that it did not.
+    /// A reopen that succeeded ends in `NSApp.terminate`, which need not return before the process
+    /// goes, so the flag is left where it was cleared and the guidance stays silent. A throw is the
+    /// one thing that means the user is still looking at this app.
+    func relaunchNow() async {
+        guard !isRelaunching else { return }
+        isRelaunching = true
+        defer { isRelaunching = false }
+        relaunchFailed = false
+        do {
+            try await relauncher.relaunch()
+        } catch {
+            relaunchFailed = true
+        }
     }
 }
 
@@ -238,12 +291,19 @@ struct ScreenAccessOnboardingView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Button {
-                model.relaunchNow()
+                Task { await model.relaunchNow() }
             } label: {
                 Label("Relaunch Sonny", systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(SonnyButtonStyle(tone: .secondary))
+            .disabled(model.isRelaunching)
             .accessibilityLabel("Relaunch Sonny")
+
+            if model.relaunchFailed {
+                Text("Couldn't restart Sonny.")
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.warning)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

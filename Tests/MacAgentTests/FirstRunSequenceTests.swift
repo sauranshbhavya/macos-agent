@@ -115,7 +115,7 @@ struct FirstRunSequenceTests {
     /// The relaunch is driven through the product's own `AppRelaunching` seam rather than simulated
     /// beside it, so the test cannot pass by agreeing with itself about what a relaunch is.
     @Test
-    func asecondLaunchOverTheSameMacResumesRatherThanRestarting() {
+    func asecondLaunchOverTheSameMacResumesRatherThanRestarting() async {
         let suite = FirstRunDefaultsSuite()
         defer { suite.removeAtEndOfTest() }
         let relauncher = NoOpRelauncher()
@@ -131,7 +131,7 @@ struct FirstRunSequenceTests {
 
         screenAccess.requestScreenRecording()
         #expect(screenAccess.needsRelaunchGuidance)
-        screenAccess.relaunchNow()
+        await screenAccess.relaunchNow()
         #expect(relauncher.relaunchCount == 1)
 
         // The process that comes back shares only the two things that survive it: the Keychain, and
@@ -373,11 +373,33 @@ struct FirstRunSequenceTests {
     }
 
     /// **No raw error can reach this sequence, and the reason is structural rather than a promise.**
-    /// It has two failure surfaces and only one of them can fail: `ScreenAccessOnboardingModel`
-    /// throws nothing and holds no error state at all, and every `SignInFailure` maps to one of
-    /// `SignInCopy`'s own sentences. Asserted over `allCases` so a case added later has to be given
-    /// a sentence rather than inheriting silence, and against the wire vocabulary a raw error would
-    /// carry.
+    /// Every `SignInFailure` maps to one of `SignInCopy`'s own sentences, asserted over `allCases`
+    /// so a case added later has to be given a sentence rather than inheriting silence, and against
+    /// the wire vocabulary a raw error would carry.
+    ///
+    /// **Both surfaces can fail now, and the screen-access one is held differently** (SONNY-348).
+    /// This used to read "only one of them can fail: `ScreenAccessOnboardingModel` throws nothing
+    /// and holds no error state at all", and the second half of that sentence was the assertion
+    /// underneath it — a `throws` count of zero over the whole file. That stopped being available
+    /// the moment a relaunch that cannot reopen the bundle had to be reported rather than discarded,
+    /// and it was never the property this test is about: what matters is that no error's *words*
+    /// reach the user, not that no error exists.
+    ///
+    /// **What the replacement is stronger against, corrected** (PR #180's review, F6). The first
+    /// version of this sentence said the old count "would have passed a catch publishing
+    /// `error.localizedDescription`", and that is false: the loop below has scanned this very file
+    /// for `localizedDescription` since before this branch, two lines above the line that was
+    /// removed (`:401` against the removed `:403`, at `37c9177`), so that example was already
+    /// covered and the comparison ignored a sibling assertion in its own function. The real gain is
+    /// the rest of the family, none of which carries that token — `"\(error)"`,
+    /// `String(describing: error)`, and `if case .reopenRefused(let status)` rendering the status
+    /// into a second published string. The old `throws` count protected none of them, because it
+    /// never protected error *words* at all; it protected the absence of a language feature.
+    ///
+    /// **And "the file's error channel" is one `catch` block**, because `braceBlock` resolves the
+    /// first. The count below is what makes the word true: a second `catch` added later would be
+    /// held by nothing but the `localizedDescription` loop, so it is refused outright and whoever
+    /// adds one comes here to say how it is guarded.
     @Test
     func noStepCanSurfaceARawError() throws {
         var sentences: Set<String> = []
@@ -400,7 +422,16 @@ struct FirstRunSequenceTests {
             let source = try MacAgentSource.read(file)
             #expect(MacAgentSource.count(of: "localizedDescription", inText: source) == 0, "\(file)")
         }
-        #expect(MacAgentSource.count(of: "throws", inText: try MacAgentSource.read("ScreenAccessOnboarding.swift")) == 0)
+        // The screen-access surface's own error channel: everything the catch does with the failure
+        // is record that there was one. An error read here — interpolated, described, or destructured
+        // for its status — would be a leak the `localizedDescription` loop above cannot see, because
+        // none of those forms carries that token.
+        let screenAccessSource = try MacAgentSource.read("ScreenAccessOnboarding.swift")
+        // There is exactly one, which is what lets the block below stand for the whole file:
+        // `braceBlock` resolves the first `} catch {` and would not see a second.
+        #expect(MacAgentSource.count(of: "} catch {", inText: screenAccessSource) == 1)
+        let catchBlock = try MacAgentSource.braceBlock(of: screenAccessSource, openedBy: "} catch {")
+        #expect(catchBlock.trimmingCharacters(in: .whitespacesAndNewlines) == "relaunchFailed = true")
 
         // And the one place a sign-in failure is drawn renders the mapped sentence and nothing else.
         // `localizedDescription` is the obvious leak and the scan above covers it; this covers the
