@@ -212,13 +212,17 @@ above it under WORKFLOW.md step 5's tree-identity rule rather than re-stamped**.
 figure depends on were named before the command was written: the Swift figures depend on `Sources/`,
 `Tests/` and `Package.swift`, and the server figures on `server/src`, `server/test`,
 `server/package.json`, `server/tsconfig.json`, `server/tsconfig.typecheck.json` and
-`server/vitest.config.ts`. `git diff --stat e367c4d HEAD --` over exactly those paths prints nothing.
+`server/vitest.config.ts`. `git diff --stat e367c4d HEAD --` over exactly those paths prints
+nothing — 0 bytes of output, checked rather than eyeballed, and written against `HEAD` rather than a
+stamped SHA precisely because every commit above `e367c4d` on this branch is documentation, so the
+proof has to keep holding as they accumulate rather than name the one that existed when it was
+written.
 The documentation commit touches `docs/`, `server/README.md` and `server/scripts/deploy.sh`, none of
 which any of those commands compiles or runs — **except `npm run check:secrets`, which scans every
 tracked file and is therefore re-run at the head rather than carried**:
 - Server, no database: `npm test` → **26 passed | 18 skipped (44) files, 656 passed | 361 skipped (1017) tests**, exit 0. The skipped count is the database-gated suites and is read rather than glossed, per `CLAUDE.md` — a suite that quietly ran zero tests looks exactly like one that passed.
 - Server, with a database: `DATABASE_URL=… npm run test:db` → **44 passed (44) files, 1017 passed (1017)**, exit 0, **0 skipped**. 656 + 361 = 1017, so the two runs account for the same population. Postgres was a per-lane container per `CLAUDE.md`'s recipe (`sonny-gw-db-lane-212`, host port chosen by Docker).
-- `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (557 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0; `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
+- `npm run build` exit 0; `npm run typecheck` exit 0; `npm run check:secrets` → `clean (566 tracked files scanned, 12 patterns, 8 baselined fixtures)`, exit 0, re-run at `ea19230` rather than carried, since it scans every tracked file (566 there rather than the 557 at `e367c4d`, the difference being this branch's own new files); `./scripts/check-secrets-selftest.sh` → `50 passed, 0 failed`, exit 0.
 - App half, the flagged command from `CLAUDE.md` → **2569 tests in 175 suites passed after 54.697 s with 7 known issues**, no `error:` lines (`grep -cE "^error:|error: fatalError|✘"` → 0).
 - `scripts/warnings` → **0 warnings** at `e367c4d (clean)`, every file in `Sources/` and `Tests/` recompiled, 124 s.
 
