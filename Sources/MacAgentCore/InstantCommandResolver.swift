@@ -562,12 +562,24 @@ public struct InstantCommandResolver: Sendable {
     /// read it — a trailing `=` or `?` dropped along with the whitespace (SONNY-281) — so `= 2 + 2 =`
     /// plans as `2 + 2`, and `= =` is the question rather than a plan to calculate `=`.
     ///
-    /// **It takes the sentence filler off too** (SONNY-284's fix round). This path plans whatever
-    /// follows the prefix without asking whether it is arithmetic, so `calculate 2 + 2 please` did
-    /// not fall through to a planner — it planned `2 + 2 please` and the evaluator answered
-    /// *"Could not calculate that expression: Unexpected token p."*, a parser message naming a
-    /// letter, on the same sentence `2 + 2 please` is answered on. The strip is the one the widened
-    /// path already does, so the two prefixes agree instead of one being the strict door.
+    /// **It takes the *trailing* filler off too, and only the trailing filler** (SONNY-284's fix
+    /// round). This path plans whatever follows the prefix without asking whether it is arithmetic,
+    /// so `calculate 2 + 2 please` did not fall through to a planner — it planned `2 + 2 please`
+    /// and the evaluator answered *"Could not calculate that expression: Unexpected token p."*, a
+    /// parser message naming a letter, on the same sentence `2 + 2 please` is answered on.
+    ///
+    /// **`takingLeadIns: false` is load-bearing and was found by a battery's baseline going red.**
+    /// Taking lead-ins here too costs `ResumableTaskRunTests.anAnswerThatRestatesTheCommandIsTakenAsTheWholeCommand`,
+    /// and the mechanism is worth stating because nothing about this function hints at it: when a
+    /// user answers the `calc` question by restating the prefix — `Calc 2 + 2` — PR #118's F2 tries
+    /// the joined candidate `calc Calc 2 + 2` first and picks the answer alone *because the joined
+    /// one fails the dry run's evaluation*. Stripping `calc` as a lead-in makes the joined candidate
+    /// evaluate cleanly, so it wins, and the task history records `calc Calc 2 + 2` as the command
+    /// the user gave. A discrimination that works by one candidate failing is silently defeated by
+    /// anything that makes it succeed. It is also the right rule on its own terms: after `calc` the
+    /// command has already said it is a calculation, so a word at the front is part of what the user
+    /// wrote rather than filler in front of it, while politeness and punctuation on the end are
+    /// filler either way.
     private func prefixedCalculatorExpression(in command: String) -> String? {
         let lowered = command.lowercased()
         for prefix in ["calc", "calculate"] {
@@ -575,11 +587,14 @@ public struct InstantCommandResolver: Sendable {
                 return ""
             }
             if lowered.hasPrefix("\(prefix) ") {
-                return withoutCalculationFiller(String(command.dropFirst(prefix.count)))
+                return withoutCalculationFiller(
+                    String(command.dropFirst(prefix.count)),
+                    takingLeadIns: false
+                )
             }
         }
         if command.hasPrefix("=") {
-            return withoutCalculationFiller(String(command.dropFirst()))
+            return withoutCalculationFiller(String(command.dropFirst()), takingLeadIns: false)
         }
         return nil
     }
@@ -645,7 +660,7 @@ public struct InstantCommandResolver: Sendable {
     }
 
     /// The stripping half on its own, because `prefixedCalculatorExpression` wants it without the
-    /// recognition step — after `calc` the command has already said it is a calculation.
+    /// recognition step — and without the lead-ins, for the reason recorded there.
     ///
     /// **The trailing trim runs inside the loop, not once before it, and that placement is the
     /// whole of why `what's 2+2? thanks` works** (PR #176 review, F2): the `?` is not at the end
@@ -653,13 +668,13 @@ public struct InstantCommandResolver: Sendable {
     /// planner's refusal to a sentence a person plainly typed at a calculator. Every trailing-sign
     /// case that predates this branch already has its sign at the end before any strip, so the
     /// suite stays green under that rearrangement — which is exactly why it is pinned by name.
-    private func withoutCalculationFiller(_ command: String) -> String {
+    private func withoutCalculationFiller(_ command: String, takingLeadIns: Bool = true) -> String {
         var expression = command
         // Each pass removes at least one character, so the loop is bounded by the command's length;
         // the count is the guard against a phrase that could ever strip to itself.
         for _ in 0...command.count {
             let trimmed = withoutTrailingCalculationNoise(expression)
-            if let shorter = withoutOneCalculationFillerPhrase(trimmed) {
+            if let shorter = withoutOneCalculationFillerPhrase(trimmed, takingLeadIns: takingLeadIns) {
                 expression = shorter
                 continue
             }
@@ -704,9 +719,12 @@ public struct InstantCommandResolver: Sendable {
     /// One lead-in or one tail-off, or nil when the text begins and ends with neither. Matched
     /// whole-word against a lowercased copy with the curly apostrophe folded to the straight one,
     /// because `what’s` is what dictation produces and `what's` is what the list holds.
-    private func withoutOneCalculationFillerPhrase(_ text: String) -> String? {
+    private func withoutOneCalculationFillerPhrase(
+        _ text: String,
+        takingLeadIns: Bool
+    ) -> String? {
         let lowered = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
-        for phrase in Self.calculationLeadIns where lowered.hasPrefix("\(phrase) ") {
+        for phrase in Self.calculationLeadIns where takingLeadIns && lowered.hasPrefix("\(phrase) ") {
             return String(text.dropFirst(phrase.count))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
