@@ -1544,6 +1544,76 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval ? 1 : 0
     }
 
+    // MARK: - Screen-control allowance (SONNY-214)
+
+    /// How many screen-control runs the gateway says this account has left this period, or `nil`
+    /// when no figure has been read.
+    ///
+    /// **Read, never derived here.** `ScreenControlAllowanceService` states the rule this property
+    /// obeys — the number is the server's and this side renders it — and SONNY-212 derives it from
+    /// row 12's metering at read time rather than from a ledger, so it is a forward-looking estimate
+    /// that re-prices when the founders change a weight. `server/src/credit/balance.ts` records that
+    /// trade in full, including why it is fine for a number a user reads and not for a refusal.
+    ///
+    /// **`nil` after a failed read, and that is the same call the service makes**: there is no
+    /// fallback figure, because zero locks a user out of something they have paid for and any
+    /// positive number promises runs the server never granted. A surface with no figure shows no
+    /// line at all — not a placeholder, not a stale number, and not a sentence about why.
+    @Published private(set) var screenControlAllowance: ScreenControlAllowance?
+
+    /// Built over the one backend client this process holds, the same client every other
+    /// authenticated read goes through. `lazy` rather than an initializer parameter because it
+    /// carries no state, no location and no configuration: threading a fourteenth argument through
+    /// every fixture would say nothing this line does not.
+    private lazy var screenControlAllowanceService = ScreenControlAllowanceService(client: backendClient)
+
+    /// Ask the gateway for the allowance and publish it; a failure clears the figure.
+    ///
+    /// **Called by the two surfaces that show it and by nothing else** — Command Center's Insights
+    /// page when it appears, and the widget when a screen-control task goes in flight. Deliberately
+    /// not called from `performStart`: a run must never wait on a usage read, and a request issued
+    /// from inside the run path would also land in the middle of every scripted backend fixture that
+    /// counts what a session put on the wire.
+    func refreshScreenControlAllowance() async {
+        do {
+            screenControlAllowance = try await screenControlAllowanceService.fetch()
+        } catch {
+            // Swallowed on purpose, and this is the one place that decision lives. A usage line is
+            // ambient: the user did not press anything to get it, so a failure to read it is not an
+            // outcome they are owed a sentence about. `errorMessage` means the task failed and
+            // `localStorageNotice` means a file would not open; neither is true here.
+            screenControlAllowance = nil
+        }
+    }
+
+    /// Whether the task in flight — or the one waiting on an approval — is a screen-control run.
+    ///
+    /// **Every term is `@Published`, which is what makes this observable from a view.** The obvious
+    /// spelling reads `preparedRun`, which is not published and would leave a view showing the wrong
+    /// answer until something else happened to redraw it. `plan` is the same prepared plan, assigned
+    /// from it one line later in `performStart` and cleared at the top of every run.
+    var isScreenControlTaskInFlight: Bool {
+        guard isRunning || isAwaitingApproval else {
+            return false
+        }
+        return plan?.steps.contains { $0.operation == .visionSession } ?? false
+    }
+
+    /// The figure the widget shows beside a screen-control run, or `nil`.
+    ///
+    /// **The ticket's gate, stated as a property rather than as an expression inside the widget** —
+    /// the same reason `isVoiceControlDisabled` is one: a rule written inline in a view is enforced
+    /// by nothing but a reader noticing, and this rule is the whole of SONNY-214's second half.
+    /// Both halves are required, and each fails in the direction it should: an ordinary free task
+    /// shows nothing whatever the allowance says, and a screen-control run whose read failed shows
+    /// nothing rather than a number nobody served.
+    var screenControlRunsLeftForTaskInFlight: Int? {
+        guard isScreenControlTaskInFlight else {
+            return nil
+        }
+        return screenControlAllowance?.runsLeft
+    }
+
     /// Whether the floating widget currently has real content to show — one of row I's parked
     /// Safe-mode questions, a permission/clarification/failure state, a live screen-control session,
     /// or row 13's offer to carry on with an unfinished run (all of those regardless of which
