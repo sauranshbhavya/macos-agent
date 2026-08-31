@@ -33,7 +33,17 @@ const describeDb = url ? describe : describe.skip;
 
 const PRODUCT = "prod_screen_control";
 const SUBSCRIPTION = "sub_123";
-const PLANS: BillingPlans = new Map([[PRODUCT, { plan: "paid", capabilities: ["screen_control"] }]]);
+/**
+ * A second product, so a **plan change** can be expressed at all — no test could before (PR #178's
+ * cycle-3 re-check). Two products and two capability lists is the smallest fixture that tells an
+ * upgrade from a resubscription: without the second, every delivery carries the same `planKey` and
+ * the three shapes below are indistinguishable from one another.
+ */
+const PRODUCT_PRO = "prod_pro";
+const PLANS: BillingPlans = new Map([
+  [PRODUCT, { plan: "paid", capabilities: ["screen_control"] }],
+  [PRODUCT_PRO, { plan: "pro", capabilities: ["screen_control", "power"] }],
+]);
 const GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 const NOW = new Date("2026-08-30T12:00:00Z");
 
@@ -428,6 +438,143 @@ describeDb("a subscription reaches the entitlement", () => {
     expect(second.outcome).toBe("conflict");
     const record = await readEntitlement(client, account);
     expect(record.pastDueSince).not.toBeNull();
+  });
+
+  /**
+   * **The three shapes a plan change can take, none of which any test covered** (PR #178's cycle-3
+   * re-check). Which one the payment provider actually produces is the founders' fourth manual row —
+   * change the plan on the live test subscription and record whether the subscription id moves — and
+   * until that is run, all three are pinned so the answer lands on tests rather than on a belief.
+   *
+   * They differ only in what the provider does and in what order the deliveries arrive:
+   *
+   * - **A** — modified in place, one subscription id throughout. The founders' expectation.
+   * - **B** — cancelled and created, the old subscription's revoke arriving first.
+   * - **C** — cancelled and created, the new subscription arriving first. The regression.
+   */
+  itUnderHangBackstop("aPlanChangeOnOneSubscriptionIdUpgradesTheEntitlement", async () => {
+    // **Shape A.** The provider modifies the subscription in place, so the id never moves and the
+    // foreign-subscription refusal never sees it — `<> $3` excludes the row's own subscription, which
+    // is exactly why the refusal is written that way. Unpinned until now, which means the founders'
+    // own expectation was the shape with no test behind it.
+    await apply(event({ state: "active" }));
+
+    const upgraded = await apply(
+      event({
+        eventId: "msg_2",
+        eventType: "subscription.updated",
+        state: "active",
+        planKey: PRODUCT_PRO,
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+
+    expect(upgraded).toEqual({ outcome: "applied", accountId: account });
+    const record = await readEntitlement(client, account);
+    expect(record.plan).toBe("pro");
+    expect(claimFactsFor(record, new Date(NOW.getTime() + 60_000)).capabilities)
+      .toEqual(["screen_control", "power"]);
+    expect(record.revokedAt).toBeNull();
+  });
+
+  itUnderHangBackstop("aPlanChangeWhoseRevokeArrivesFirstUpgradesTheEntitlement", async () => {
+    // **Shape B.** Cancel-and-create with the deliveries in the order the provider sent them. The
+    // revoke lands, the row stops being live, and the replacement takes it over through the same
+    // door `aResubscriptionAfterACancellationIsNotAConflict` uses. Correct before this round and
+    // correct after it — recorded so a later change to the refusal cannot break it silently.
+    await apply(event({ state: "active" }));
+    await apply(
+      event({
+        eventId: "msg_2",
+        eventType: "subscription.revoked",
+        state: "ended",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+
+    const replacement = await apply(
+      event({
+        eventId: "msg_3",
+        state: "active",
+        subscriptionId: "sub_456",
+        planKey: PRODUCT_PRO,
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+
+    expect(replacement).toEqual({ outcome: "applied", accountId: account });
+    const record = await readEntitlement(client, account);
+    expect(record.plan).toBe("pro");
+    expect(record.revokedAt).toBeNull();
+    expect(claimFactsFor(record, new Date(NOW.getTime() + 120_000)).capabilities)
+      .toEqual(["screen_control", "power"]);
+  });
+
+  itUnderHangBackstop("aPlanChangeWhoseNewSubscriptionArrivesFirstLosesAccessToday", async () => {
+    // **Shape C, and this test RECORDS A REGRESSION rather than asserting a guarantee.** Read the
+    // name that way: what it pins is what the code does today, so that a remedy changes it
+    // deliberately and visibly instead of quietly.
+    //
+    // **The mechanism is two guards interacting.** Refusing the upgrade does not merely drop it — it
+    // leaves `billing_event_at` at the OLD subscription's instant, which disarms the staleness guard
+    // that had been refusing the out-of-order revoke. So the revoke, which arrives carrying an
+    // earlier instant than the upgrade it followed, is no longer stale and applies.
+    //
+    // **Before this branch's F1 refusal existed, these same three deliveries left the customer on the
+    // old plan** — the upgrade applied, and the late revoke was refused as stale. After it, they end
+    // with nothing. That is why the justification this refusal rests on is now qualified in
+    // `store.ts` as "does not lose access TO A CANCELLATION": unqualified, it is false here.
+    //
+    // Whether this shape is reachable at all depends on what the provider does with a plan change,
+    // which nobody has checked in either direction; the founders' fourth manual row settles it.
+    await apply(event({ state: "active" }));
+
+    const upgrade = await apply(
+      event({
+        eventId: "msg_2",
+        state: "active",
+        subscriptionId: "sub_456",
+        planKey: PRODUCT_PRO,
+        occurredAt: new Date(NOW.getTime() + 120_000),
+      }),
+    );
+    expect(upgrade.outcome).toBe("conflict");
+
+    const lateRevoke = await apply(
+      event({
+        eventId: "msg_3",
+        eventType: "subscription.revoked",
+        state: "ended",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      }),
+    );
+    // Not `stale`, which is the whole mechanism: the marker never moved, so the earlier instant is
+    // still newer than what the row carries.
+    expect(lateRevoke.outcome).toBe("applied");
+
+    const lost = await readEntitlement(client, account);
+    expect(lost.revokedAt).not.toBeNull();
+    expect(claimFactsFor(lost, new Date(NOW.getTime() + 180_000)).capabilities).toEqual([]);
+
+    // **And the bound on it, which is why this is up to one billing period rather than permanent.**
+    // The next delivery about the new subscription restores the correct state, because the row is no
+    // longer live and the replacement takes it over.
+    const renewal = await apply(
+      event({
+        eventId: "msg_4",
+        eventType: "subscription.cycled",
+        state: "active",
+        subscriptionId: "sub_456",
+        planKey: PRODUCT_PRO,
+        occurredAt: new Date(NOW.getTime() + 180_000),
+      }),
+    );
+    expect(renewal).toEqual({ outcome: "applied", accountId: account });
+    const healed = await readEntitlement(client, account);
+    expect(healed.plan).toBe("pro");
+    expect(healed.revokedAt).toBeNull();
+    expect(claimFactsFor(healed, new Date(NOW.getTime() + 180_000)).capabilities)
+      .toEqual(["screen_control", "power"]);
   });
 
   itUnderHangBackstop("theCheckoutGuardSeesALiveSubscriptionAndNotARevokedOne", async () => {
