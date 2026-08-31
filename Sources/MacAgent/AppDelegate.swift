@@ -55,6 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // that happen to agree today.
         onOpenStorageNotice: { [weak self] in
             self?.windowCoordinator.showCommandCenter()
+        },
+        // A watcher notice's click, and it is deliberately a fifth closure rather than a reuse of the
+        // fourth (SONNY-236). Command Center is where a watcher is listed and where its Stop control
+        // will be, so the two agree today — and they are still separate decisions about separate
+        // notices, which is the reason `onOpenStorageNotice` gives for not sharing the third.
+        onOpenWatcherNotice: { [weak self] in
+            self?.windowCoordinator.showCommandCenter()
         }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
@@ -327,6 +334,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 notificationService.postScheduledRunNotification(message: message)
+            }
+            .store(in: &cancellables)
+
+        // A standing watcher (SONNY-236). Like the scheduled channel above, this fires with nobody
+        // watching — but here that is the feature rather than a case the fallback covers: a watcher
+        // exists precisely because the user is not going to be present when the thing happens, and a
+        // notification is the whole of what it may do.
+        //
+        // **This is the one channel with no `isUserWorkingInSonny` gate, and the asymmetry is the
+        // whole point rather than an oversight** (PR #184 review, F1). For the four channels above,
+        // the gate is free: whatever it suppresses is already on a Sonny surface the user is looking
+        // at — an approval in the widget's panel, a storage notice as a Memory row, a scheduled
+        // notice on the Routines page. **`watcherNotice` is rendered by no view at all**, so the
+        // gate was not deduplication, it was deletion: `finishStandingWatcher` publishes the
+        // sentence, the sink dropped it, and the next statement deletes the watcher's record. The
+        // single output of the entire feature was gone, unrecoverably, in what is arguably its most
+        // common case — a user who happens to have Sonny frontmost when a page they asked about
+        // changes.
+        //
+        // **A banner arriving while the user is in Sonny is the cheap failure; silence is not.** The
+        // alternative fix is to render `watcherNotice` on a surface, which is SONNY-382's work
+        // pulled forward — and even with that surface built, this channel would still want no gate,
+        // because a watcher's notice is news about the outside world rather than a restatement of
+        // something already on screen.
+        //
+        // The comment that stood here argued the gate was acceptable because a suppressed notice was
+        // "visible only as `watcherNotice` in Command Center". That was false about this tree, and a
+        // claim that a surface exists when it does not is what kept this invisible to three sessions.
+        viewModel.$watcherNotice
+            .compactMap { $0 }
+            .sink { message in
+                notificationService.postWatcherNotification(message: message)
             }
             .store(in: &cancellables)
     }

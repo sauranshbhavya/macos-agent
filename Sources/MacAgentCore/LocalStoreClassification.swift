@@ -29,6 +29,40 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
     case notWrittenByTasks
 }
 
+/// How Command Center's per-row Delete removes one store's contents.
+///
+/// **Two answers because a store is a *file* and a file can hold more than one kind of thing**
+/// (SONNY-236, founder decision 2026-08-31). Every row deleted through
+/// `LocalDataDeletionService.deleteStoreFilesOnly()` until `resumable-tasks.json` gained a second
+/// collection, at which point a row labelled *Unfinished tasks* would have unlinked the file and
+/// destroyed the user's standing watchers with it — a mislabelled delete, and one whose damage is
+/// invisible in every direction: nothing fails, and the user is simply never told about a watched
+/// page again. `CLAUDE.md`'s account of PR #110's F2 is that calling the wrong deletion door is
+/// silent exactly this way.
+///
+/// **The unreadable case is deliberately not covered by this and must not be.** A collection-scoped
+/// delete rewrites the file, which means decoding it — precisely what has failed for a store that
+/// will not read. So an unreadable store goes to `LocalDataQuarantine` at file level whatever this
+/// says. It is `deleteStoreFilesOnly()`'s own readable/unreadable asymmetry reaching one door
+/// further.
+///
+/// **"Nothing is lost" is a claim about bytes and this comment used to make it without that
+/// qualifier** (PR #184 review, F5). The bytes survive — quarantine keeps the file rather than
+/// destroying it, so the watchers inside are set aside alongside the tasks. What does not survive is
+/// the *watching*: the file leaves the path the checker reads, so every standing watcher in it stops
+/// permanently and **none of the four endings fires**. That is a fifth, quiet ending, and it
+/// contradicts the rule stated in three places — that a watcher which stops says so, because one
+/// that dies quietly leaves the user believing it is still watching. It is also not `.cancelled`:
+/// the user pressed a control about unfinished tasks. Recorded on SONNY-236 as a founder call rather
+/// than decided here, since it is the same shape decision A ruled on for the readable path.
+public enum LocalStoreRowDeletionScope: Equatable, Sendable {
+    /// The row owns the whole file, so the press unlinks it. Twelve of the thirteen.
+    case wholeFile
+    /// The row owns one collection inside a file it shares, so the press rewrites the file without
+    /// that collection and leaves the rest of it alone.
+    case collectionWithinASharedFile
+}
+
 /// Every local store on disk, each classified exactly once.
 ///
 /// Two independent mechanisms keep this exhaustive, because a store that quietly defaults to
@@ -189,8 +223,17 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// What this store is called in the sentence Settings uses to say what the wipe takes
-    /// (SONNY-233).
+    /// What this store's contents are called in the sentence Settings uses to say what the wipe
+    /// takes (SONNY-233).
+    ///
+    /// **A list rather than a name, because a store is a *file* and a file can hold more than one
+    /// kind of thing** (SONNY-236). Twelve of the thirteen return one phrase and always will; the
+    /// thirteenth holds unfinished tasks and standing watchers in one file, and naming only the
+    /// first would put the second inside an irreversible press with nothing on screen to say so.
+    /// The alternative — one phrase reading "unfinished tasks and standing watchers" — keeps the
+    /// property's old shape and produces "…, common output locations, and unfinished tasks and
+    /// standing watchers", two conjunctions deep at the end of the one sentence in the product that
+    /// most needs to be read.
     ///
     /// **The sentence was written by hand twice and was false both times.** Settings' detail line
     /// named ten of the thirteen stores the wipe deleted then and the confirmation dialog named nine —
@@ -220,39 +263,74 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// sentence puts it mid-list among twelve others**, so the two want different lengths — "saved"
     /// distributes over the whole list here and cannot in a banner, and a sentence naming thirteen
     /// things has no room for a clause. Neither vocabulary is the other's to restore.
-    public var deletionCopyName: String {
+    public var deletionCopyNames: [String] {
         switch self {
         case .visionSessionJournal:
-            return "records of what Sonny did on screen"
+            return ["records of what Sonny did on screen"]
         case .routines:
-            return "routines"
+            return ["routines"]
         case .workspaces:
-            return "workspaces"
+            return ["workspaces"]
         case .clipboardHistory:
-            return "clipboard history"
+            return ["clipboard history"]
         case .clipboardHistorySettings:
-            return "clipboard settings"
+            return ["clipboard settings"]
         case .snippets:
-            return "snippets"
+            return ["snippets"]
         case .recentArtifacts:
-            return "recent artifacts"
+            return ["recent artifacts"]
         case .shortcutRunHistory:
             // Capitalised because Apple's app is: it is the name of a product, not of a Sonny
             // feature, and it is the one item in this list that is.
-            return "Shortcut run history"
+            return ["Shortcut run history"]
         case .taskHistory:
-            return "task history"
+            return ["task history"]
         case .taskPlanDetails:
             // Named for what the user would notice going missing — a follow-up on a past task with
             // less to go on — rather than for the file. The same words
             // `LocalStorageLoadFailureSource` uses when this file will not read.
-            return "what past tasks planned"
+            return ["what past tasks planned"]
         case .approvedApps:
-            return "allowed apps"
+            return ["allowed apps"]
         case .outputLocations:
-            return "common output locations"
+            return ["common output locations"]
         case .resumableTasks:
-            return "unfinished tasks"
+            // **Two phrases from one store, and it is the only one** (SONNY-236). This store's file
+            // holds two collections — unfinished tasks and standing watchers — so a single name for
+            // it would leave the wipe taking something its own sentence never mentions. Derived from
+            // `ResumableTaskFileCollection.allCases` rather than written here, so a third collection
+            // in that file reaches this sentence by existing; `theWipesOwnSentenceNamesEveryCollectionInEveryStore`
+            // is what fails if one arrives without a name.
+            return ResumableTaskFileCollection.allCases.map(\.wipeCopyName)
+        }
+    }
+
+    /// What Command Center's per-row Delete does to this store, and the reasoning is on
+    /// `LocalStoreRowDeletionScope`.
+    ///
+    /// Exhaustive with no `default`, the same guard `kind`, `memoryCategory` and `deletionCopyNames`
+    /// use: a fourteenth store cannot reach the tree without somebody deciding whether its row owns
+    /// its file. Answering that wrongly in the `.wholeFile` direction is how a row deletes a
+    /// neighbour's data.
+    public var rowDeletionScope: LocalStoreRowDeletionScope {
+        switch self {
+        case .visionSessionJournal,
+             .routines,
+             .workspaces,
+             .clipboardHistory,
+             .clipboardHistorySettings,
+             .snippets,
+             .recentArtifacts,
+             .shortcutRunHistory,
+             .taskHistory,
+             .taskPlanDetails,
+             .approvedApps,
+             .outputLocations:
+            return .wholeFile
+        case .resumableTasks:
+            // The one store whose file holds a second collection: `ResumableTaskFile` carries
+            // standing watchers beside the unfinished tasks this row is named for.
+            return .collectionWithinASharedFile
         }
     }
 }

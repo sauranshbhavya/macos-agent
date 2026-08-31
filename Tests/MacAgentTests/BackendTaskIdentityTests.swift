@@ -368,6 +368,7 @@ private func makeViewModel(
             fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
         ),
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: SilentPasteboardReader(),
             store: ClipboardHistoryStore(

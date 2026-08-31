@@ -2784,6 +2784,7 @@ private func makeFixture() throws -> ResumableFixture {
             whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: resumableTaskStore,
+            standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),
                 store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),

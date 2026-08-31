@@ -772,6 +772,21 @@ struct ProductShellTests {
             "taskHistoryRecords",
             "taskHistoryQuery",
             "completedRunNotice",
+            // **`watcherNotice` moved here from `outsideTheWipe` in PR #184's fix round, and the
+            // earlier reasoning is superseded rather than merely wrong.** It said clearing the
+            // sentence would erase the record of a thing the user was told — true while the wipe left
+            // a watcher check running, because the notice was then the only surviving trace. F2 made
+            // the wipe abandon that check, so what is left is residue naming a watcher the same press
+            // just deleted, which is exactly `completedRunNotice`'s case one line above. The user is
+            // present at a wipe by construction, so F1's concern — a notice destroyed while nobody
+            // could see it — does not arise here.
+            "watcherNotice",
+            // `notifiedWatcherIDs` goes with the records it is about (PR #184 cycle 3, N1). It is
+            // the set of watchers already notified, so a delete that keeps failing says its sentence
+            // once rather than once per pulse — and the wipe has just deleted every record those ids
+            // name, so keeping them would silence the first notice of a watcher created afterwards
+            // that happened to reuse one.
+            "notifiedWatcherIDs",
             "taskDetailRequest",
             // Row J's grants, cached for one vision iteration. The grants file is one of the
             // stores the wipe erases, so its in-memory copy is erased with it (SONNY-202).
@@ -891,6 +906,19 @@ struct ProductShellTests {
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
+            // `standingWatcherObserver` is a collaborator; `standingWatcherCheck` and the three
+            // beside it are one check's bookkeeping — a task handle, the watcher it is about, when it
+            // started, and the generation that makes a late answer inert. None is state a surface
+            // renders and none holds anything a wipe could find.
+            //
+            // **All four are in fact cleared by the wipe, through `abandonStandingWatcherCheck()`**
+            // (PR #184 review, F2). They are not in `clearedByTheWipe` because that list is the
+            // *direct* assignments in `clearInMemoryLocalDataState`, which is what
+            // `assignmentsInClearInMemoryLocalDataState()` can read — the classification is about
+            // what a property holds, not about which door clears it.
+            "standingWatcherObserver", "standingWatcherCheck",
+            "standingWatcherCheckSubject", "standingWatcherCheckStartedAt",
+            "standingWatcherCheckGeneration",
             // `memorySettings` sits here for the sharpest version of the group's reason: a wipe
             // that switched memory back on would re-enable recording for the user who reached for
             // the most privacy-minded control in the app. It lives in `UserDefaults`, which the
@@ -3788,6 +3816,7 @@ private func makeProductShellFixture(
             fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
         ),
+        standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
             store: ClipboardHistoryStore(

@@ -346,13 +346,19 @@ struct ResumableTaskStoreTests {
 
     // MARK: - Constructed the way production constructs one
 
-    /// Nothing in `Sources/` narrows the idle period or the cap — both are injectable so a test can
-    /// reach them without waiting a fortnight or writing twenty-one records, exactly as
-    /// `TaskPlanDetailStore.maxDetails` is, and a production path that passed either would be
-    /// changing the founder's lifecycle by a parameter.
+    /// Nothing in `Sources/` narrows the idle period, the task cap, or the standing-watcher cap —
+    /// all three are injectable so a test can reach them without waiting a fortnight, writing
+    /// twenty-one records, or creating the shipped number of real watchers, exactly as
+    /// `TaskPlanDetailStore.maxDetails` is, and a production path that passed any of them would be
+    /// changing a founder's decision by a parameter.
     ///
     /// A source scan rather than a runtime assertion, because there is no object to interrogate: the
     /// thing being asserted is the absence of an argument at a call site.
+    ///
+    /// **`limits:` joined the needle set with SONNY-236 rather than getting a scan of its own.** It
+    /// is the same population asked the same question — this store's construction sites, and whether
+    /// any of them narrows a shipped lifecycle number — and a second walker over the same files is
+    /// the shape where one of the two gets a new needle and the other does not.
     @Test
     func noProductionPathPassesAnIdleExpiryOrCapToTheResumableStore() throws {
         var constructionSites = 0
@@ -371,7 +377,7 @@ struct ResumableTaskStoreTests {
                 // written across several. Six is comfortably more than the longest construction in
                 // this repository and short enough not to reach a neighbouring one.
                 let window = lines[index..<min(index + 6, lines.count)].map(\.text).joined(separator: "\n")
-                if window.contains("idleExpiry:") || window.contains("maxTasks:") {
+                if window.contains("idleExpiry:") || window.contains("maxTasks:") || window.contains("limits:") {
                     offenders.append("\(file.lastPathComponent):\(line.number)")
                 }
             }
