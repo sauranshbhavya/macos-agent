@@ -222,7 +222,25 @@ public final class AgentActionExecutor {
         self.visionSession = visionSession
     }
 
+    /// **A job over many items is resolved and expanded here, before anything else sees the plan**
+    /// (SONNY-235). `PlanItemJobResolver` reads the folder or the Finder selection once, pins the
+    /// list into `plan.itemJob.items`, and replaces the template steps with one copy per item — so
+    /// the previews below, the assessment `AgentRunner` takes next, the approval the user answers,
+    /// and the dispatch that follows are all about the same forty items. It is the first thing this
+    /// function does because everything after it, this function included, is written for a plan of
+    /// ordinary steps.
+    ///
+    /// **`assessRisk` and `execute` refuse an unresolved job rather than resolving one**, which is
+    /// what makes "the list approved is the list run" structural: a second resolution at a later
+    /// moment could return a different folder listing, and the user's one approval would then cover
+    /// a job they were never shown.
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
+        let plan = try PlanItemJobResolver.resolving(
+            plan,
+            whitelist: whitelist,
+            finderContextReader: finderContextReader,
+            fileManager: fileManager
+        )
         if let question = try clarificationQuestion(in: plan) {
             let preview = ActionPreview(
                 title: "Clarification needed",
@@ -241,8 +259,16 @@ public final class AgentActionExecutor {
         }
 
         do {
-            let previews = try preview(plan: resolvedPlan)
-            return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+            var unavailableItems: [ItemJobFailure] = []
+            let previews = try previewForPreparation(resolvedPlan, unavailableItems: &unavailableItems)
+            guard !unavailableItems.isEmpty else {
+                return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+            }
+            let (trimmedPlan, trimmedPreviews) = try droppingUnavailableItems(
+                unavailableItems,
+                from: resolvedPlan
+            )
+            return PreparedAgentRun(plan: trimmedPlan, previews: trimmedPreviews)
         } catch let error as AutomationStoreError {
             // Only a not-found target converts, and only *after* preview has run, so an earlier
             // step's real error still wins: previewing in step order is what decides which
@@ -257,6 +283,86 @@ public final class AgentActionExecutor {
             )
             return PreparedAgentRun(plan: clarifyPlan, previews: [preview], clarificationQuestion: question)
         }
+    }
+
+    /// `preview`, plus the one thing only `prepare` needs from it: which items of a job could not be
+    /// previewed at all (SONNY-235).
+    ///
+    /// A job always classifies as `.chain` (`workflow(in:)`), so this reaches `previewChain` directly
+    /// for one and delegates for everything else. Delegating rather than always calling
+    /// `previewChain` keeps every non-job plan on exactly the path it was on before this branch.
+    private func previewForPreparation(
+        _ plan: AgentPlan,
+        unavailableItems: inout [ItemJobFailure]
+    ) throws -> [ActionPreview] {
+        guard plan.itemJob != nil else {
+            return try preview(plan: plan)
+        }
+        return try previewChain(
+            plan,
+            namedByEnclosingPlan: .none,
+            unavailableItems: &unavailableItems
+        )
+    }
+
+    /// Removes an unavailable item's steps from a job's plan and previews what is left.
+    ///
+    /// **Every item unavailable is a refusal, not an empty job.** A plan of no steps is not something
+    /// any part of this executor is written for, and more to the point a job in which nothing can be
+    /// done should say so at the door rather than ask for approval to do nothing — so the first
+    /// item's own error is thrown, which is the message that would have been thrown before this
+    /// branch and is the one that explains the folder the user pointed at.
+    ///
+    /// The previews are recomputed over the trimmed plan rather than filtered from the first pass:
+    /// `claimed` and the carried artifact accumulate across units, so a pass that walked a unit which
+    /// is no longer there produced a set that is subtly not the trimmed plan's. This costs a second
+    /// preview pass **only when something was dropped**, which is the rare path; a job in which every
+    /// item previews cleanly pays exactly one pass, as before.
+    private func droppingUnavailableItems(
+        _ unavailableItems: [ItemJobFailure],
+        from plan: AgentPlan
+    ) throws -> (AgentPlan, [ActionPreview]) {
+        guard var job = plan.itemJob else {
+            return (plan, try preview(plan: plan))
+        }
+        let dropped = Set(unavailableItems.map(\.itemIndex))
+        let survivingSteps = plan.steps.filter { step in
+            guard let index = step.itemIndex else {
+                return true
+            }
+            return !dropped.contains(index)
+        }
+        guard !survivingSteps.isEmpty else {
+            throw PlanItemJobError.everyItemUnavailable(
+                unavailableItems.first?.message ?? "Sonny could not start any part of this job."
+            )
+        }
+
+        job.unavailableItems = ItemJobProgress.merged(job.unavailableItems, unavailableItems)
+        var trimmed = plan
+        trimmed.itemJob = job
+        trimmed.steps = survivingSteps
+
+        var stillUnavailable: [ItemJobFailure] = []
+        let previews = try previewForPreparation(trimmed, unavailableItems: &stillUnavailable)
+        // A second pass that drops *more* items is possible in principle — the trimmed plan's
+        // accumulated claims differ from the first pass's — and is not iterated on: one more round
+        // would have the same property, and an unbounded loop over a preview that reads the file
+        // system is worse than the residual.
+        //
+        // **What happens to such an item, stated once and correctly** (PR #185, F4(a); this comment
+        // and `executeChain`'s seeding comment used to say two different things, both wrong). Its
+        // steps stay in the plan, because the trim has already happened. But it is recorded here in
+        // `unavailableItems`, and `executeChain` seeds `failedItemIndexes` from exactly that list — so
+        // its segments are present and are skipped by the loop's own guard. It is reported once, with
+        // its prepare-time message, and nothing about it is attempted.
+        if !stillUnavailable.isEmpty {
+            trimmed.itemJob?.unavailableItems = ItemJobProgress.merged(
+                job.unavailableItems,
+                stillUnavailable
+            )
+        }
+        return (trimmed, previews)
     }
 
     /// Turns a planner-invented workspace/routine name into a clarification instead of a hard
@@ -396,7 +502,23 @@ public final class AgentActionExecutor {
     /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
     /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
-        try assessRisk(plan: plan, scope: scope, namedByEnclosingPlan: .none)
+        try Self.refuseUnresolvedItemJob(in: plan)
+        return try assessRisk(plan: plan, scope: scope, namedByEnclosingPlan: .none)
+    }
+
+    /// **A job that has not been through `prepare` gets no further** (SONNY-235).
+    ///
+    /// The alternative — resolving here too — is what makes one approval cover forty items unsafe:
+    /// each door would read the folder at its own moment, and a file added between the prompt and
+    /// the run would be worked through under an approval the user gave over a shorter list. This
+    /// cannot be reached through the app, where `AgentRunner` prepares once and hands that same plan
+    /// to both doors; it exists so that a caller who skips `prepare` gets a refusal instead of a
+    /// quiet second resolution.
+    static func refuseUnresolvedItemJob(in plan: AgentPlan) throws {
+        guard let job = plan.itemJob, !job.isResolved else {
+            return
+        }
+        throw PlanItemJobError.notPrepared
     }
 
     /// The whole of `assessRisk`, plus the destinations the plans enclosing this one already name.
@@ -758,10 +880,14 @@ public final class AgentActionExecutor {
         case .visionSession:
             return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
+            // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
+            // `prepare` has nothing to do with a job's unavailable items.
+            var ignoredUnavailableItems: [ItemJobFailure] = []
             return try previewChain(
                 plan,
                 claimedEarlierInThisRun: claimedEarlierInThisRun,
-                namedByEnclosingPlan: namedByEnclosingPlan
+                namedByEnclosingPlan: namedByEnclosingPlan,
+                unavailableItems: &ignoredUnavailableItems
             )
         }
     }
@@ -792,20 +918,23 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
         onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
+        onItemFailed: ((ItemJobFailure) -> Void)? = nil,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
+        try Self.refuseUnresolvedItemJob(in: plan)
         // Every top-level run starts naming nothing: a plan's own destinations are added by
         // `executeChain` once they have been resolved, and only a *nested* plan is ever handed a
         // non-empty set. `PlannedDestinations` is deliberately not part of this public signature —
         // it is executor-internal plumbing, and the one thing it must never become is something an
         // adapter or a caller can hand in, since a set of intentions arriving from outside is
         // indistinguishable here from the run's own.
-        try await execute(
+        return try await execute(
             plan: plan,
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             namedByEnclosingPlan: .none,
             onUnitCompleted: onUnitCompleted,
+            onItemFailed: onItemFailed,
             log: log
         )
     }
@@ -827,6 +956,7 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims,
         namedByEnclosingPlan: PlannedDestinations,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let resolvedPlan = try resolveDefaultOutputs(
@@ -892,7 +1022,7 @@ public final class AgentActionExecutor {
         case .visionSession:
             return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
     }
 
@@ -957,6 +1087,20 @@ public final class AgentActionExecutor {
             if workflows.contains(.clarify) {
                 throw AgentExecutionError.invalidPlan("Clarification must be the only planned step.")
             }
+            return .chain
+        }
+
+        // **A job over many items always takes the chain walk, even when only one item is left**
+        // (SONNY-235). The job's rules live in `executeChain` and `previewChain` — skip and continue,
+        // the per-item carry reset, the job's own summary — and a job that fell through to a single
+        // `executeCapability` call would silently lose all of them and report the adapter's own
+        // sentence instead of "worked through 1 of 40". One item is reachable in ordinary use: a
+        // forty-item job whose other thirty-nine could not be previewed, and a resumed job with one
+        // item left. `chainSegments(in:)` allows the single segment for the same reason.
+        //
+        // A `.clarify` job is not a thing a planner can produce — a clarification is asked instead of
+        // acting — and it falls through to the refusals below rather than being chained.
+        if plan.itemJob != nil, workflow != .clarify {
             return .chain
         }
 
@@ -1892,6 +2036,7 @@ public final class AgentActionExecutor {
                     // whole nested run returns anyway, which is what the enclosing `executeChain`
                     // reports.
                     onUnitCompleted: nil,
+                    onItemFailed: nil,
                     log: log
                 )
             },
@@ -1919,13 +2064,25 @@ public final class AgentActionExecutor {
     /// `claimed` when the routine is previewed and the outer draft's name is invisible to it. The
     /// union below is the same one `executeChain` computes, for the same reason and at the same
     /// altitude: a segment sees only its own steps, and the outer draft lives in a different one.
+    /// - Parameter unavailableItems: Collects the items of a job whose own preview threw
+    ///   (SONNY-235). Empty for every plan that is not a job. `prepare` is the caller that reads it —
+    ///   it drops those items from the plan and previews what is left; every other caller passes a
+    ///   local it ignores, which is honest because a job's `previewChain` is only ever reached from
+    ///   `prepare` (a segment carries no `itemJob`, and a stored routine has no plan to carry one).
     private func previewChain(
         _ plan: AgentPlan,
         claimedEarlierInThisRun: RunClaims = .none,
-        namedByEnclosingPlan: PlannedDestinations
+        namedByEnclosingPlan: PlannedDestinations,
+        unavailableItems: inout [ItemJobFailure]
     ) throws -> [ActionPreview] {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
+        // The preview-side halves of the three job rules `executeChain` states in full. Same reading
+        // of `AgentStep.itemIndex`, same inertness on a plan that is not a job.
+        let itemJob = plan.itemJob
+        var failedItemIndexes: Set<Int> = []
+        var currentItemIndex: Int?
+        var sawFirstSegment = false
 
         // The same accumulation as `executeChain`, over what each unit *says* it will do. Without it
         // the preview and the run disagree about the second unit — the panel names `report.pdf` and
@@ -1939,12 +2096,41 @@ public final class AgentActionExecutor {
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
         for segment in try chainSegments(in: plan) {
+            let segmentItemIndex = segment.steps.first?.itemIndex
+            if itemJob != nil, sawFirstSegment, segmentItemIndex != currentItemIndex {
+                previousArtifactPath = nil
+            }
+            currentItemIndex = segmentItemIndex
+            sawFirstSegment = true
+
+            if let segmentItemIndex, failedItemIndexes.contains(segmentItemIndex) {
+                continue
+            }
+
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let segmentPreviews = try preview(
-                plan: resolved,
-                claimedEarlierInThisRun: claimed,
-                namedByEnclosingPlan: namedByThisRun
-            )
+            let segmentPreviews: [ActionPreview]
+            do {
+                segmentPreviews = try preview(
+                    plan: resolved,
+                    claimedEarlierInThisRun: claimed,
+                    namedByEnclosingPlan: namedByThisRun
+                )
+            } catch {
+                guard let itemJob, let segmentItemIndex else {
+                    throw error
+                }
+                let item = segmentItemIndex < itemJob.items.count ? itemJob.items[segmentItemIndex] : ""
+                failedItemIndexes.insert(segmentItemIndex)
+                unavailableItems.append(
+                    ItemJobFailure(
+                        itemIndex: segmentItemIndex,
+                        item: item,
+                        message: error.localizedDescription,
+                        failedAt: now()
+                    )
+                )
+                continue
+            }
             previews.append(contentsOf: segmentPreviews)
             for written in segmentPreviews.flatMap(\.writes) {
                 claimed.recordWrite(written)
@@ -1966,6 +2152,7 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
         onUnitCompleted: ((CompletedRunUnit) -> Void)?,
+        onItemFailed: ((ItemJobFailure) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
@@ -2005,21 +2192,123 @@ public final class AgentActionExecutor {
         // it, which is the same defect this function's seed comment carries a correction for.
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
+        // **The job half of this loop (SONNY-235), in three rules, all of them inert on a plan that
+        // is not a job.** A job's items are independent pieces of the same approved work, so: an
+        // item that fails does not end the job, the items after it still run, and the chain's
+        // carry-forward does not leak across an item boundary. Nothing here is per-*operation*
+        // knowledge — the loop reads `AgentStep.itemIndex`, which the expansion wrote, and no
+        // capability adapter is involved in any of it.
+        let itemJob = plan.itemJob
+        // **Seeded from the items `prepare` could not preview**, so the run's own report covers both
+        // kinds of failure a job has and the summary's arithmetic covers every item this plan is
+        // responsible for rather than only the part that reached execution (SONNY-235).
+        //
+        // **Seeding the skip set with them is load-bearing rather than free, and this comment used to
+        // claim the opposite** (PR #185, F4(a)): it said "a dropped item has no segments here", which
+        // is true of the *first* preview round's drops and false of the second's. The second round
+        // runs after the trim, so an item it names still has its steps — and this seeding is the only
+        // thing that stops them being attempted.
+        var itemJobFailures: [ItemJobFailure] = itemJob?.unavailableItems ?? []
+        var failedItemIndexes = Set(itemJobFailures.map(\.itemIndex))
+        var currentItemIndex: Int?
+        var sawFirstSegment = false
+
         let segments = try chainSegments(in: plan)
         for (index, segment) in segments.enumerated() {
+            // **The stop control, observed by the loop itself.** Cancellation already unwinds
+            // through whatever an adapter awaits, which is enough for an ordinary chain; it is not
+            // enough for a job, because the rule below turns a thrown error into "skip this item and
+            // carry on" — so a job needs a point where stopping is decided rather than inferred from
+            // an error. Asked before each unit, so a stop lands at an item boundary with the items
+            // after it untouched and resumable, which is exactly what the founder's decision of
+            // 2026-08-31 asks a stop to mean. Inert unless the run really was cancelled.
+            try Task.checkCancellation()
+
+            let segmentItemIndex = segment.steps.first?.itemIndex
+            if itemJob != nil, sawFirstSegment, segmentItemIndex != currentItemIndex {
+                // A new item starts with nothing carried from the last one: the carry is right
+                // *within* one item's units and would be a cross-contamination between items.
+                //
+                // **Defensive, and measured to be so rather than assumed.** A mutation battery at
+                // `6976659` deleted this line and the whole suite passed (R4), and the reason is the
+                // fallback fifteen lines below: a unit that writes nothing still re-seeds the carry
+                // from its last *suggestion*, and every folder-shaped capability returns one naming
+                // the folder it worked in. So for an item to inherit the previous item's file, its
+                // own first unit would have to produce no write **and** no suggestion, and then be
+                // followed inside the same item by a step that consumes an artifact — and no
+                // combination of today's capabilities does that: the ones that suggest nothing
+                // (calculator, URL opening, Shortcut invocation) also give a consuming step nothing
+                // to consume, so that item fails at the consumer and its later units are skipped.
+                //
+                // Kept rather than removed, because the invariant is right and the line costs
+                // nothing: a capability that succeeds while producing neither a write nor a
+                // suggestion would make it live, and it would be live silently — the wrong file
+                // opened, and a run reporting success. `scripts/mutate` will keep reporting R4 as a
+                // survivor until such a capability exists, and that is the honest state rather than a
+                // gap to close with a test that pins something else.
+                previousArtifactPath = nil
+            }
+            currentItemIndex = segmentItemIndex
+            sawFirstSegment = true
+
+            if let segmentItemIndex, failedItemIndexes.contains(segmentItemIndex) {
+                // The rest of a failed item is skipped rather than attempted: its later units were
+                // written to act on what its earlier ones produced, and running them against nothing
+                // manufactures a second, less honest failure for the same item.
+                continue
+            }
+
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let result = try await execute(
-                plan: resolved,
-                preferredBrowser: preferredBrowser,
-                claimedEarlierInThisRun: claimed,
-                namedByEnclosingPlan: namedByThisRun,
-                // `nil`: this is the *inside* of one unit, and the loop below is what reports that
-                // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
-                // workflow — but a nested routine re-enters this function through
-                // `executeNestedPlan`, which passes `nil` at that door for the reason written there.
-                onUnitCompleted: nil,
-                log: log
-            )
+            let result: AgentRunResult
+            do {
+                result = try await execute(
+                    plan: resolved,
+                    preferredBrowser: preferredBrowser,
+                    claimedEarlierInThisRun: claimed,
+                    namedByEnclosingPlan: namedByThisRun,
+                    // `nil`: this is the *inside* of one unit, and the loop below is what reports that
+                    // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
+                    // workflow — but a nested routine re-enters this function through
+                    // `executeNestedPlan`, which passes `nil` at that door for the reason written there.
+                    onUnitCompleted: nil,
+                    onItemFailed: nil,
+                    log: log
+                )
+            } catch {
+                // **Skip and continue, and only for a job.** The three choices the ticket names are
+                // stop, skip and retry. Stopping is what an ordinary chain does and stays what it
+                // does — every plan that is not a job reaches the rethrow below unchanged. For a job
+                // it is the wrong answer: the user approved forty items in one press, and abandoning
+                // thirty-seven of them because the third was locked leaves them a job to restart and
+                // re-approve. Retrying is rejected because it is a second policy — how many times,
+                // how long between — and because an item that failed halfway may have already had
+                // half its effect.
+                //
+                // **A cancellation is never a failed item.** Swallowing one here would turn the stop
+                // control into a button that makes Sonny work through the remaining thirty-seven
+                // items and report them as failures. `SonnyBackendError.isCancellation` is the one
+                // predicate for that in this repository, and it covers the shapes a cancelled
+                // network call really arrives in as well as Swift's own `CancellationError`.
+                guard let itemJob,
+                      let segmentItemIndex,
+                      !SonnyBackendError.isCancellation(error) else {
+                    throw error
+                }
+                let item = segmentItemIndex < itemJob.items.count
+                    ? itemJob.items[segmentItemIndex]
+                    : ""
+                let failure = ItemJobFailure(
+                    itemIndex: segmentItemIndex,
+                    item: item,
+                    message: error.localizedDescription,
+                    failedAt: now()
+                )
+                failedItemIndexes.insert(segmentItemIndex)
+                itemJobFailures.append(failure)
+                log(.act, "Could not do \(Self.itemDisplayName(item)): \(error.localizedDescription)")
+                onItemFailed?(failure)
+                continue
+            }
             for written in result.previews.flatMap(\.writes) {
                 claimed.recordWrite(written)
             }
@@ -2065,14 +2354,80 @@ public final class AgentActionExecutor {
             }
         }
 
-        let summary = summaries.joined(separator: " ")
+        // **A job authors its own summary rather than joining forty of them.** Joining is right for
+        // an ordinary chain, where each unit did a different thing worth a sentence; forty sentences
+        // saying the same thing about different files is not a report, and the one fact the user
+        // needs — that thirty-eight worked and two did not — would be buried in it.
+        let summary: String
+        if let itemJob {
+            summary = Self.itemJobSummary(
+                job: itemJob,
+                plan: plan,
+                failures: itemJobFailures,
+                fallback: summaries.joined(separator: " ")
+            )
+        } else {
+            summary = summaries.joined(separator: " ")
+        }
         return AgentRunResult(
             plan: plan,
             previews: previews,
             summary: summary,
             summaryProvenance: summaryProvenance,
-            suggestions: suggestions
+            suggestions: suggestions,
+            itemJobFailures: itemJobFailures
         )
+    }
+
+    /// What a job says when it finishes — the honest partial outcome the ticket asks for.
+    ///
+    /// **Both halves are named, always.** "Thirty-eight summaries and two failures is a real
+    /// outcome", and a sentence that reported only the successes would be the flat success this
+    /// exists to replace. The failed items are named individually up to `maxNamedFailures`, because
+    /// a user who is told two of forty failed and not which two has to go and find them.
+    static func itemJobSummary(
+        job: PlanItemJob,
+        plan: AgentPlan,
+        failures: [ItemJobFailure],
+        fallback: String
+    ) -> String {
+        // **The items this plan is responsible for, not the whole list** (PR #185, F1). A resume
+        // carries the job's declaration and its whole item list — a failure's index has to keep
+        // meaning what it meant — so counting `job.items.count` would make a resume that did the last
+        // two of forty report "Worked through all 40 files." `ItemJobProgress` scopes the same way
+        // from the same two inputs, so the summary and the progress line cannot disagree.
+        let total = ItemJobProgress.of(plan: plan, completedStepIDs: [], failures: [])?.itemCount
+            ?? job.items.count
+        guard total > 0 else {
+            return fallback
+        }
+        let done = total - failures.count
+        let noun = job.itemKind.pluralNoun
+        guard !failures.isEmpty else {
+            return "Worked through all \(total) \(noun)."
+        }
+
+        let named = failures.prefix(maxNamedFailures).map { failure in
+            "\(itemDisplayName(failure.item)) (\(failure.message))"
+        }
+        var tail = named.joined(separator: "; ")
+        if failures.count > maxNamedFailures {
+            tail += "; and \(failures.count - maxNamedFailures) more"
+        }
+        let failedNoun = failures.count == 1 ? "one" : "\(failures.count)"
+        return "Worked through \(done) of \(total) \(noun). Could not do \(failedNoun): \(tail)."
+    }
+
+    /// How many failed items a job's summary names before it counts the rest. Five is about as many
+    /// as a notification and a widget line can carry without becoming a list nobody reads; the count
+    /// after them keeps the sentence honest.
+    static let maxNamedFailures = 5
+
+    /// An item as it is named back to the user: its last path component, which is what they see in
+    /// Finder, falling back to the whole string for an item that is not a path.
+    static func itemDisplayName(_ item: String) -> String {
+        let leaf = (item as NSString).lastPathComponent
+        return leaf.isEmpty ? item : leaf
     }
 
     /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive
@@ -2189,12 +2544,20 @@ public final class AgentActionExecutor {
     /// first records made while having enumerated only the middle case.
     private func chainSegments(in plan: AgentPlan) throws -> [AgentPlan] {
         let segments = try segmentPlans(in: plan)
-        guard segments.count != 1 else {
+        // A one-unit *job* is legitimate and a one-unit chain is still a bug — see `workflow(in:)`
+        // for why a job takes this walk however few items it has left (SONNY-235).
+        guard segments.count != 1 || plan.itemJob != nil else {
             throw AgentExecutionError.invalidPlan("A chained plan must contain more than one unit of work.")
         }
         return segments
     }
 
+    /// **A segment deliberately carries no `itemJob`** (SONNY-235). A unit of a job is one item's
+    /// ordinary work, and `previewChain`/`executeChain` re-enter `preview`/`execute` per segment — so
+    /// a segment that declared itself a job would classify as `.chain` again and recurse on itself
+    /// forever, now that `workflow(in:)` chains a job however few units it holds. The steps keep their
+    /// `itemIndex`, which is what the two chain walks read; the declaration stays with the plan that
+    /// owns the item list.
     private func segmentPlan(from plan: AgentPlan, steps: [AgentStep]) -> AgentPlan {
         AgentPlan(
             summary: plan.summary,

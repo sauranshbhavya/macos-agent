@@ -186,6 +186,9 @@ struct SpokenPathTests {
         "mediaArtist": false,
         "contextSource": false,
         "resolvedFromFinderSelection": false,
+        // SONNY-235. An `Int`, and a position in a job's item list rather than anything a folder
+        // phrase could be spoken into.
+        "itemIndex": false,
         "routineName": false,
         "routineSteps": false,
         "workspaceName": false,
@@ -246,6 +249,7 @@ struct SpokenPathTests {
             resolvedAppName: phrase,
             resolvedBundleIdentifier: phrase,
             resolvedFromFinderSelection: true,
+            itemIndex: 7,
             visionGoal: phrase
         )
 

@@ -148,19 +148,31 @@ public struct AgentRunResult: Equatable, Sendable {
     /// segments leaving it alone.
     public var summaryProvenance: StoredTaskResult.Provenance
     public var suggestions: [RunSuggestion]
+    /// The items of a job over many items that could not be done, in the order they failed
+    /// (SONNY-235). Empty for every run that is not a job, and for a job in which nothing failed.
+    ///
+    /// **Here as well as in the stored record, and the two are not two homes for one fact.** This is
+    /// what *this* run reports when it returns — what the summary is authored from and what a
+    /// surface renders honestly rather than by reading a sentence. `ResumableTask.itemJobFailures`
+    /// is the durable checkpoint, written as the run goes, which is the only thing left when a job
+    /// is interrupted at item thirty and never returns a result at all. `executeChain` accumulates
+    /// once and feeds both.
+    public var itemJobFailures: [ItemJobFailure]
 
     public init(
         plan: AgentPlan,
         previews: [ActionPreview],
         summary: String,
         summaryProvenance: StoredTaskResult.Provenance = .codeAuthored,
-        suggestions: [RunSuggestion] = []
+        suggestions: [RunSuggestion] = [],
+        itemJobFailures: [ItemJobFailure] = []
     ) {
         self.plan = plan
         self.previews = previews
         self.summary = summary
         self.summaryProvenance = summaryProvenance
         self.suggestions = suggestions
+        self.itemJobFailures = itemJobFailures
     }
 
     /// This run's summary as it will be stored, with the provenance it was authored under.
