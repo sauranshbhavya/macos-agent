@@ -466,10 +466,16 @@ charge. What that costs is that changing a weight re-prices the period under way
 for a forward-looking estimate and would **not** be for a refusal; `balance.ts` says so where a later
 ticket will read it.
 
-**Only rows whose `upstream_duration_ms` is set draw.** That is the table's own record of "a provider
-call was opened", and it is the same question `entitlement/hook.ts` asks before charging a hold, so a
-credit draw and a cap charge agree about which requests were free. `provider` and `outcome` were both
-measured as wrong for this and `src/credit/store.ts` says why.
+**A row draws when `upstream_duration_ms` is set *or* the outcome is `client_cancelled`, and it took
+a defect to establish that one column was not enough** (PR #182's review, F2). The duration is
+written in a `finally` after the provider call, but the metering event has a second writer — the
+response's `close` listener — which fires while the handler is still awaiting the provider. A user
+pressing Stop mid-run therefore produces a row with a null duration, `outcome: client_cancelled`, a
+vendor that has been paid and a spend cap that charged it: on the duration alone that iteration drew
+nothing and its session paid no per-session weight either. The two conditions are read together, so
+the draw and the cap now agree on every path this gateway has rather than on every path where the
+handler finishes. `provider` and `outcome` used *alone* were both measured as wrong for this and
+`src/credit/store.ts` says why each fails.
 
 **Every number is `CREDIT_PLANS`, and this repository has no default for it.** Tiers, allowances, the
 credit weights and what one run is worth all arrive in that one JSON value; startup refuses without

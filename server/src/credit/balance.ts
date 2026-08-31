@@ -61,12 +61,43 @@ export const NO_DRAW: ScreenControlDraw = { sessions: 0, iterations: 0, pixels: 
  * recompute the run count from the credits beside it. Deriving from the unrounded value and
  * publishing the rounded one would produce a response that contradicts its own arithmetic at the
  * boundary, which is exactly where somebody checking it would look.
+ *
+ * **Rounding the figures is only half of that guarantee, and this comment used to claim the whole
+ * of it** (PR #182's review, F1). The quotient is a floating-point operation of its own and the last
+ * one before the floor, so a perfectly rounded remainder still divides wrong: the response said
+ * `remaining 0.3`, `per_run 0.1`, `runs_left 2`, and a reader doing exactly what `credits` is on the
+ * wire for computed 3. `runsFrom` below is the other half; neither is sufficient alone.
  */
 export const CREDIT_PRECISION = 6;
 
 function round(credits: number): number {
   const scale = 10 ** CREDIT_PRECISION;
   return Math.round(credits * scale) / scale;
+}
+
+/**
+ * How many whole runs a credit figure is worth.
+ *
+ * **The division is rounded before the floor, and that is the whole of this function.** Rounding
+ * `allowance`, `drawn` and `remaining` does nothing about the quotient, which is the *last* floating
+ * point operation before the floor that produces the number a user reads — so a rounded numerator
+ * still floors wrong. `7 / 0.07` is `99.99999999999999` and floors to **99** on a plan that includes
+ * 100; `0.3 / 0.1` is `2.9999999999999996` and floors to **2** where a reader recomputing by hand
+ * gets 3. The second case is worse than it looks: `runsIncluded` is derived the same way, so a tier
+ * advertised **99** with nothing drawn — before the user has done anything at all.
+ *
+ * Rounding first at the same six places the figures beside it use turns `2.9999999999999996` into
+ * `3` and leaves a genuine `2.999999` at 2 and a `2.5` at 2, so it corrects float noise without
+ * rounding a real remainder up into a run the user has not got.
+ *
+ * (PR #182's review, F1. The defect was the same IEEE-754 shape this file's own `round` was added
+ * for, one line below where it was fixed — and the test that claimed to hold it asserted
+ * `runsLeft === Math.floor(remaining / perRun)`, which is the implementation restated and therefore
+ * true under the defect by construction. That is the identical circularity SONNY-212's own mutation
+ * battery caught in the arm above it at `4c7d6b0`; a value assertion is what replaced both.)
+ */
+function runsFrom(credits: number, perRun: number): number {
+  return Math.floor(round(credits / perRun));
 }
 
 /**
@@ -136,8 +167,8 @@ export function creditBalance(input: {
     plan: plan.key,
     periodStart: periodStart(input.now),
     periodEnd: periodEnd(input.now),
-    runsLeft: Math.floor(remaining / perRun),
-    runsIncluded: Math.floor(allowance / perRun),
+    runsLeft: runsFrom(remaining, perRun),
+    runsIncluded: runsFrom(allowance, perRun),
     credits: { allowance, drawn, remaining, perRun },
   };
 }

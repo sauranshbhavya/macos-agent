@@ -20,8 +20,13 @@ struct ScreenControlAllowanceTests {
     ) -> Data {
         try! JSONSerialization.data(withJSONObject: [
             "plan": plan,
-            "period_start": "2026-08-01T00:00:00Z",
-            "period_end": "2026-09-01T00:00:00Z",
+            // **The server's own form, milliseconds included.** `Date.toISOString()` writes `.000Z`
+            // and contract §5.4's example shows it, so a fixture without them is a shape the gateway
+            // never sends. `.iso8601` decodes both — measured, and `TaskHistoryStore.swift` records
+            // the same measurement — but a fixture should be the real thing rather than a near miss
+            // a later reader has to re-measure (PR #182's review, recorded residual).
+            "period_start": "2026-08-01T00:00:00.000Z",
+            "period_end": "2026-09-01T00:00:00.000Z",
             "screen_control_runs_left": runsLeft,
             "screen_control_runs_included": runsIncluded,
             // The derivation the gateway publishes beside the number. This client must ignore it,
@@ -89,8 +94,8 @@ struct ScreenControlAllowanceTests {
         defer { fixture.unregister() }
         let partial = try! JSONSerialization.data(withJSONObject: [
             "plan": "test-plan-a",
-            "period_start": "2026-08-01T00:00:00Z",
-            "period_end": "2026-09-01T00:00:00Z",
+            "period_start": "2026-08-01T00:00:00.000Z",
+            "period_end": "2026-09-01T00:00:00.000Z",
             "screen_control_runs_included": 100
         ])
         fixture.register { _ in Self.reply(partial) }

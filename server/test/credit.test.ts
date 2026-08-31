@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { ConfigError, loadConfig, requireCreditCatalogue } from "../src/config.js";
@@ -10,6 +10,7 @@ import {
   periodEnd,
   type ScreenControlDraw,
 } from "../src/credit/balance.js";
+import { itUnderHangBackstop } from "./support/backstop.js";
 import {
   CreditCatalogueError,
   parseCreditCatalogue,
@@ -20,7 +21,9 @@ import { creditPlanKeyFor } from "../src/credit/store.js";
 import type { WithConnection } from "../src/db/connection.js";
 import { periodStart } from "../src/entitlement/period.js";
 import { claimFactsFor, unprovisioned, type EntitlementRecord } from "../src/entitlement/store.js";
-import { METERED_ROUTES } from "../src/metering/event.js";
+import { METERED_ROUTES, type MeteringEvent } from "../src/metering/event.js";
+import type { MeteringStore } from "../src/metering/store.js";
+import type { ClaimOutcome, KeyStore } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { catalogueOf, fakeCreditStore, TEST_CREDIT_PLANS } from "./support/credit.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
@@ -139,11 +142,23 @@ describe("the catalogue is configuration, never code (SONNY-212's acceptance cri
     expect(() => parseCreditCatalogue(raw)).toThrow(/defaultPlan/);
   });
 
-  it("falls an unknown plan key to the default and never to the largest tier", () => {
+  it("falls an unknown plan key to the plan defaultPlan names, not to whatever is listed first", () => {
     // The misconfiguration this is about: a `BILLING_PLANS` entry pointing at a plan nobody added
     // here. The two ways to be wrong are not symmetric — a smaller allowance is complainable, a
     // larger one is a bill nobody sees.
-    const catalogue = catalogueOf({ runCredits: 10, monthlyCredits: [100, 100_000] });
+    //
+    // **`defaultIndex: 1` is the whole point of this fixture** (PR #182's review, F3). Every
+    // catalogue in this suite used to make the default the first entry, so "the named default" and
+    // "the first listed" were the same plan and a mutant returning `plans[0]` survived. Here the
+    // default is the *second* tier and the first is deliberately the large one, so returning either
+    // "the first" or "the largest" fails — and an operator who lists their paid tier first, which is
+    // an ordinary thing to do, is the deployment this models.
+    const catalogue = catalogueOf({
+      runCredits: 10,
+      monthlyCredits: [100_000, 100],
+      defaultIndex: 1,
+    });
+    expect(catalogue.defaultPlan).not.toBe(catalogue.plans[0]!.key);
     const balance = creditBalance({
       catalogue,
       planKey: `plan-${randomUUID()}`,
@@ -151,6 +166,7 @@ describe("the catalogue is configuration, never code (SONNY-212's acceptance cri
       now: new Date("2026-08-15T12:00:00Z"),
     });
     expect(balance.plan).toBe(catalogue.defaultPlan);
+    expect(balance.plan).toBe(catalogue.plans[1]!.key);
     expect(balance.runsLeft).toBe(10);
     expect(planFor(catalogue, undefined).key).toBe(catalogue.defaultPlan);
   });
@@ -259,11 +275,54 @@ describe("runs left, derived from what row 12 measured", () => {
         draw: drawOf({ sessions: 1, iterations: 4, pixels }),
         now,
       });
-      const { allowance, drawn, remaining, perRun } = balance.credits;
+      const { allowance, drawn, remaining } = balance.credits;
       expect(remaining).toBe(Math.max(0, Math.round((allowance - drawn) * 1e6) / 1e6));
-      expect(balance.runsLeft).toBe(Math.floor(remaining / perRun));
       expect(Number.isInteger(balance.runsLeft)).toBe(true);
     }
+    // **The run count is NOT recomputed from the response here, and that removal is the finding**
+    // (PR #182's review, F1). The line that stood here was
+    // `expect(balance.runsLeft).toBe(Math.floor(remaining / perRun))` — the implementation restated,
+    // so it was true under the very defect it was meant to catch, which is the identical circularity
+    // the battery caught one arm above at `4c7d6b0`. Values are what hold the quotient now, below.
+  });
+
+  it("divides without losing a run to the quotient, which rounding the numerator does not fix", () => {
+    // **Three catalogues, three exact answers, from PR #182's review F1.** Each is a plausible
+    // release-time value for "what is one run worth" and each is a divisor the unrounded quotient
+    // gets wrong on an exact multiple. The published `credits` block is asserted beside the run
+    // count in every row, because the guarantee is that the two agree — a founder recomputing
+    // `remaining / per_run` by hand must reach the number the response already shows them.
+    const at = new Date("2026-08-15T12:00:00Z");
+    const weights = { perSession: 0.1, perIteration: 0.1, perMegapixel: 0 };
+
+    // 0.5 - 0.2 = 0.3, and 0.3 / 0.1 is 2.9999999999999996 unrounded.
+    const one = creditBalance({
+      catalogue: catalogueOf({ runCredits: 0.1, monthlyCredits: [0.5], weights }),
+      planKey: undefined,
+      draw: drawOf({ sessions: 1, iterations: 1 }),
+      now: at,
+    });
+    expect(one.credits).toEqual({ allowance: 0.5, drawn: 0.2, remaining: 0.3, perRun: 0.1 });
+    expect(one.runsLeft).toBe(3);
+
+    // **The row worth looking at twice: nothing has been drawn at all.** 7 / 0.07 is
+    // 99.99999999999999, so a tier that includes 100 runs advertised 99 before the user had done
+    // anything — and `runsIncluded` is the denominator of "3 of 20 left".
+    const untouched = creditBalance({
+      catalogue: catalogueOf({ runCredits: 0.07, monthlyCredits: [7], weights }),
+      planKey: undefined,
+      draw: drawOf({}),
+      now: at,
+    });
+    expect(untouched.credits).toEqual({ allowance: 7, drawn: 0, remaining: 7, perRun: 0.07 });
+    expect(untouched.runsLeft).toBe(100);
+    expect(untouched.runsIncluded).toBe(100);
+
+    // And rounding the quotient must not round a real remainder UP into a run nobody has: 2.5 and a
+    // genuine 2.999999 both floor to 2, so this corrects float noise and nothing else.
+    const half = catalogueOf({ runCredits: 0.2, monthlyCredits: [0.5], weights });
+    expect(creditBalance({ catalogue: half, planKey: undefined, draw: drawOf({}), now: at }).runsLeft)
+      .toBe(2);
   });
 
   it("reports the calendar month the server is in, as an instant pair", () => {
@@ -326,6 +385,18 @@ describe("which plan an account draws against", () => {
       record({ revokedAt: new Date("2026-08-01T00:00:00Z") }),
       record({ graceUntil: new Date("2026-08-01T00:00:00Z"), pastDueSince: at }),
       record({ graceUntil: new Date("2026-08-20T00:00:00Z"), pastDueSince: at }),
+      // **The boundary instant, and it is the only place the two rules can drift**
+      // (PR #182's review, F5). Both sides read `now >= graceUntil`, so the sole way they can
+      // disagree is one of them becoming `>` — and every fixture above sits days from the boundary,
+      // so a mutant that moved it passed this loop untouched. `graceUntil` exactly `at` is the one
+      // input that tells `>=` from `>`, and both sides must call it closed.
+      record({ graceUntil: at, pastDueSince: new Date("2026-08-01T00:00:00Z") }),
+      // One millisecond earlier is still open, so the assertion above is a boundary rather than a
+      // rule that refuses everything near it.
+      record({
+        graceUntil: new Date(at.getTime() + 1),
+        pastDueSince: new Date("2026-08-01T00:00:00Z"),
+      }),
     ];
     for (const one of withCapability) {
       const keepsCapabilities = claimFactsFor(one, at).capabilities.length > 0;
@@ -366,6 +437,156 @@ const signedInConnection: WithConnection = async (work) => {
   };
   return work(client as unknown as pg.Client);
 };
+
+/**
+ * A `KeyStore` that grants every claim and remembers nothing.
+ *
+ * The smallest thing that lets a request through the idempotency hook. This suite asserts nothing
+ * about §9.2 — `idempotency.test.ts` owns that — and a store modelling replay here would be a second
+ * model of a mechanism this file is not testing.
+ */
+function alwaysClaims(): KeyStore {
+  return {
+    claim: () => Promise.resolve({ kind: "claimed", token: randomUUID() } as ClaimOutcome),
+    complete: () => Promise.resolve(),
+    release: () => Promise.resolve(),
+  };
+}
+
+describe("what a cancelled iteration leaves behind (PR #182's review, F2)", () => {
+  /**
+   * **The premise the credit filter rests on, proved against the real app rather than assumed.**
+   *
+   * `credit/store.ts` prices an iteration when `upstream_duration_ms IS NOT NULL` **or** the outcome
+   * is `client_cancelled`, and the second half of that is only defensible if rows of that shape
+   * actually occur. They do, and this is why: `meteredUpstreamCall` sets `upstreamAttempted` before
+   * the provider call and writes the duration in a `finally` afterwards, while the metering event
+   * has a *second* writer — the response's `close` listener — which fires when the caller
+   * disconnects **while the handler is still awaiting the provider**. At that instant the `finally`
+   * has not run.
+   *
+   * **A real socket, because `inject` has none**, and the construction is `metering.test.ts`'s own:
+   * nothing sleeps, every step waits on a signal the other side publishes, and the provider is still
+   * held when the event is read so that the `close` listener is the only thing that can have written
+   * it. Releasing first would let the two writers race and this would pass or fail on which won.
+   */
+  itUnderHangBackstop(
+    "a cancelled screen-control iteration really does write a row of this shape",
+    async () => {
+      let reachedProvider!: () => void;
+      const providerReached = new Promise<void>((resolve) => {
+        reachedProvider = resolve;
+      });
+      let letProviderAnswer!: () => void;
+      const providerMayAnswer = new Promise<void>((resolve) => {
+        letProviderAnswer = resolve;
+      });
+
+      // Kept before the stub replaces the global: the client request below is a real `fetch`, and a
+      // stubbed one would call the provider stub instead of the server.
+      const realFetch = globalThis.fetch;
+      let upstreamCalls = 0;
+      vi.stubGlobal("fetch", async () => {
+        upstreamCalls += 1;
+        reachedProvider();
+        await providerMayAnswer;
+        return new Response(JSON.stringify({ output_text: '{"action":"done"}' }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      let eventWritten!: (event: MeteringEvent) => void;
+      const written = new Promise<MeteringEvent>((resolve) => {
+        eventWritten = resolve;
+      });
+      const events: MeteringEvent[] = [];
+      const meteringStore: MeteringStore = {
+        async write(event) {
+          events.push(event);
+          eventWritten(event);
+          return "written";
+        },
+      };
+
+      // The spend cap's own answer, recorded beside the event's: the point of the finding is that
+      // the two disagreed, so both are read in one test rather than argued about across two.
+      const entitlement = fakeEntitlementStore();
+      const settled: boolean[] = [];
+      const recordingEntitlement = {
+        ...entitlement,
+        settle: async (reservationId: string, charge: boolean) => {
+          settled.push(charge);
+          return entitlement.settle(reservationId, charge);
+        },
+      };
+
+      const app = buildApp(
+        testConfig({ credentials: [{ provider: "vision", keys: ["vk-test-vision-key"] }] }),
+        { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+        { idempotencyStore: alwaysClaims(), meteringStore, entitlementStore: recordingEntitlement },
+      );
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (address === null || typeof address === "string") throw new Error("no port to call");
+
+      const controller = new AbortController();
+      const inflight = realFetch(`http://127.0.0.1:${address.port}/v1/screen/analyze`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}`,
+          "content-type": "application/json",
+          "idempotency-key": randomUUID(),
+        },
+        body: JSON.stringify({
+          task_id: "task-1",
+          session_id: "session-cancelled",
+          session_iteration: 1,
+          retention: "standard",
+          prompt: "Decide the next action.",
+          image: {
+            media_type: "image/jpeg",
+            encoding: "base64",
+            data: Buffer.alloc(9, 0x41).toString("base64"),
+            pixel_width: 1000,
+            pixel_height: 1000,
+          },
+        }),
+        signal: controller.signal,
+      }).catch(() => undefined);
+
+      await providerReached;
+      // The user presses Stop. The vision call is open and is still being held.
+      controller.abort();
+      const event = await written;
+
+      // The provider was reached, so the vendor has been paid for this iteration.
+      expect(upstreamCalls).toBe(1);
+      expect(event.route).toBe("screen.analyze");
+      expect(event.sessionId).toBe("session-cancelled");
+      expect(event.outcome).toBe("client_cancelled");
+      // **The finding.** The `finally` has not run, so the column the draw used to rely on is null.
+      expect(event.upstreamDurationMs).toBeNull();
+
+      letProviderAnswer();
+      await inflight;
+      expect(events).toHaveLength(1);
+      // And the spend cap charged it, which is §12's rule and is what made the disagreement matter:
+      // the same iteration was billed by one mechanism and given away by the other.
+      expect(settled).toContain(true);
+      await app.close();
+      vi.unstubAllGlobals();
+
+      // The two now agree: a row of exactly this shape draws.
+      expect(
+        creditsForDraw(
+          { perSession: 10, perIteration: 5, perMegapixel: 1 },
+          { sessions: 1, iterations: 1, pixels: 1_000_000 },
+        ),
+      ).toBe(16);
+    },
+  );
+});
 
 describe("GET /v1/account/credits", () => {
   const at = new Date("2026-08-15T12:00:00Z");
@@ -411,9 +632,15 @@ describe("GET /v1/account/credits", () => {
     // One clock read for the whole response: the instant judging the grace window is the instant
     // whose period is counted.
     expect(store.asked).toEqual([at]);
+    // **And it asked about the caller's own account** (PR #182's review, F6). Replacing
+    // `caller.accountId` with a fixed UUID in the route passed the whole suite before this line
+    // existed, which is a route that would serve one account's balance to another with nothing
+    // noticing. `ACCOUNT` is what `signedInConnection` answers the gate's attribution query with, so
+    // this is the id the token really resolved to and not one the test chose for the route.
+    expect(store.askedAbout).toEqual([ACCOUNT]);
   });
 
-  it("is authenticated — it names the caller's own account and nobody else's", async () => {
+  it("is authenticated — an unauthenticated caller is refused before any account is read", async () => {
     const app = build(fakeCreditStore({}));
     const response = await app.inject({ method: "GET", url: "/v1/account/credits" });
     await app.close();
