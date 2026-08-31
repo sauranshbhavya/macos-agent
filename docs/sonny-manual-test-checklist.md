@@ -2217,6 +2217,16 @@ export CREDIT_PLANS='{"runCredits":100,"defaultPlan":"free","weights":{"perSessi
         user ever reaches it, so it sits **far above any plan's allowance**, and under-declaring buys
         extra runs anywhere in that gap. It buys nothing today, because nothing refuses on this
         number yet; it becomes real the moment the gate lands (SONNY-213).
+      - **How big is it — measured, because "buys extra runs" without a number reads as a footnote.**
+        At **the placeholder weights in `server/.env.example`** (`perSession 10, perIteration 5,
+        perMegapixel 2, runCredits 100`), a full 12-iteration session at a real capture's dimensions
+        (2406 × 1354) costs **148.19 credits honestly and 60.00 deflated** — a **2.47× multiplier**,
+        because `perIteration` carries only **40%** of the honest price and it is the only component
+        a client cannot talk down. **The multiplier is one over whatever share `perIteration`
+        carries, so it grows as your weights get more accurate**: `catalogue.ts` says `perMegapixel`
+        is what vision cost actually tracks, so a well-calibrated set puts *more* weight on the
+        deflatable component, and a calibration where `perIteration` carries 10% is a 10× multiplier
+        on the paid line. That is the size of what you are choosing against.
       - **The decision:** if you want an allowance nothing can talk down, set `perSession` and
         `perMegapixel` to **0** and put the whole price on `perIteration`. That is a `CREDIT_PLANS`
         value and needs no code change. The cost of doing it is that a session sending huge images

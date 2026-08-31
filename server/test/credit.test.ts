@@ -323,6 +323,32 @@ describe("runs left, derived from what row 12 measured", () => {
     const half = catalogueOf({ runCredits: 0.2, monthlyCredits: [0.5], weights });
     expect(creditBalance({ catalogue: half, planKey: undefined, draw: drawOf({}), now: at }).runsLeft)
       .toBe(2);
+
+    // **The other half of that sentence, which nothing held until PR #182's cycle 3** (its R2). A
+    // mutant loosening the rounding from six places to three turned a genuine `2.999999` into `3` —
+    // the exact over-grant the sentence promises against — and the whole suite passed. `2.5` was
+    // covered and `2.999999` was not, which is the direction that costs revenue rather than the one
+    // that costs a user a run.
+    //
+    // **`runCredits: 1` is load-bearing and the obvious fixture does not work.** A catalogue of
+    // `runCredits: 0.1` with `monthlyCredits: [0.2999999]` rounds the *allowance* to `0.3` before
+    // the division ever happens, which lands back on the float-noise case the first assertion in
+    // this test already covers. The genuine sub-integer remainder has to sit where rounding cannot
+    // reach it.
+    const genuineRemainder = catalogueOf({
+      runCredits: 1,
+      monthlyCredits: [2.999999],
+      weights: { perSession: 0, perIteration: 0, perMegapixel: 0 },
+    });
+    const untouchedRemainder = creditBalance({
+      catalogue: genuineRemainder,
+      planKey: undefined,
+      draw: drawOf({}),
+      now: at,
+    });
+    expect(untouchedRemainder.credits.remaining).toBe(2.999999);
+    expect(untouchedRemainder.runsLeft).toBe(2);
+    expect(untouchedRemainder.runsIncluded).toBe(2);
   });
 
   it("reports the calendar month the server is in, as an instant pair", () => {
