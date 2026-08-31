@@ -25,10 +25,56 @@ protocol AppRelaunching {
 }
 
 struct DefaultAppRelauncher: AppRelaunching {
-    /// Screen Recording grants only take effect in a fresh process, so this launches a new
-    /// instance and terminates this one. Only meaningful for the packaged `.app` — a bare
-    /// `swift run` binary has no bundle to reopen (and no TCC identity to relaunch for), so
-    /// there it just terminates.
+    /// The bundle to reopen, and what reopening and terminating actually do.
+    ///
+    /// **Injected rather than reached for** (SONNY-379). `Bundle.main`, `/usr/bin/open` and
+    /// `NSApp.terminate` are all process-wide, so a `relaunch()` naming them inline could not be
+    /// driven in a test process at all: reaching it ended the test run rather than failing it, and
+    /// every decision this type makes was therefore held by a source scan reading this file's text.
+    /// With the three collaborators handed in, those decisions are behaviour again.
+    private let bundleURL: URL
+    private let reopen: @MainActor (URL) async throws -> Int32
+    private let terminate: @MainActor () -> Void
+
+    /// **No parameter has a default, deliberately** — SONNY-240's family, whose rule is that
+    /// anything a fixture could accidentally point at the real machine is a required parameter.
+    /// A defaulted `terminate` is the sharpest case this repository has: a test that omitted it
+    /// would end its own process rather than fail, which is the failure this seam exists to remove.
+    /// `forTheRunningApp()` is where the real collaborators are named, in words a reader and a
+    /// source scan can both see.
+    init(
+        bundleURL: URL,
+        reopen: @escaping @MainActor (URL) async throws -> Int32,
+        terminate: @escaping @MainActor () -> Void
+    ) {
+        self.bundleURL = bundleURL
+        self.reopen = reopen
+        self.terminate = terminate
+    }
+
+    /// The wiring the shipping app runs, and the only place in the product that names it.
+    ///
+    /// **Scan-held rather than behavioural, and it cannot be anything else**: a test that ran this
+    /// reopen would start a second Sonny, and one that ran this terminate would end the test
+    /// process. `-n` forces a *new* instance, which is the entire point of the flag on a TCC
+    /// relaunch — reusing the running one would hand the user back the same process with the same
+    /// grant still denied.
+    static func forTheRunningApp() -> DefaultAppRelauncher {
+        DefaultAppRelauncher(
+            bundleURL: Bundle.main.bundleURL,
+            reopen: { bundleURL in
+                try await AsyncProcessRunner.run(
+                    executablePath: "/usr/bin/open",
+                    arguments: ["-n", bundleURL.path]
+                ).terminationStatus
+            },
+            terminate: { NSApp.terminate(nil) }
+        )
+    }
+
+    /// Screen Recording grants only take effect in a fresh process, so this reopens the bundle and
+    /// terminates this one. Only meaningful for the packaged `.app` — a bare `swift run` binary has
+    /// no bundle to reopen (and no TCC identity to relaunch for), so there it just terminates.
     ///
     /// **The terminate is downstream of the reopen, and both of the reopen's failures are read**
     /// (SONNY-348). This used to launch with `try? process.run()` and terminate unconditionally, so
@@ -43,17 +89,13 @@ struct DefaultAppRelauncher: AppRelaunching {
     /// there, and this runs on the main actor.
     @MainActor
     func relaunch() async throws {
-        let bundleURL = Bundle.main.bundleURL
         if bundleURL.pathExtension == "app" {
-            let reopen = try await AsyncProcessRunner.run(
-                executablePath: "/usr/bin/open",
-                arguments: ["-n", bundleURL.path]
-            )
-            guard reopen.terminationStatus == 0 else {
-                throw AppRelaunchFailure.reopenRefused(status: reopen.terminationStatus)
+            let status = try await reopen(bundleURL)
+            guard status == 0 else {
+                throw AppRelaunchFailure.reopenRefused(status: status)
             }
         }
-        NSApp.terminate(nil)
+        terminate()
     }
 }
 
@@ -91,7 +133,7 @@ final class ScreenAccessOnboardingModel: ObservableObject {
 
     init(
         permissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
-        relauncher: any AppRelaunching = DefaultAppRelauncher(),
+        relauncher: any AppRelaunching = DefaultAppRelauncher.forTheRunningApp(),
         settingsOpener: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }
     ) {
         self.permissionChecker = permissionChecker
