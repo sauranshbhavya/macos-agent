@@ -180,6 +180,35 @@ public struct ApprovedAppStore: @unchecked Sendable {
         try write(sorted(remaining))
     }
 
+    /// Revokes every grant at once — Settings' Remove All (SONNY-144).
+    ///
+    /// **One write, not one per app.** The alternative, looping ``forget(bundleIdentifier:)``, is a
+    /// load-and-write per grant and is not atomic: a failure halfway through leaves the user looking
+    /// at a list they asked to empty, half emptied, with no way to tell which half went. This writes
+    /// the empty list once, so the press either happens or does not.
+    ///
+    /// **It takes what ``loadAll()`` cannot show, and that is deliberate.** The revocation surface
+    /// renders only grants the terminal deny list still allows, so a stored entry the list refuses
+    /// has no row and therefore no per-row Remove. This is the one control that reaches it — the
+    /// user asked for the file to hold nothing, and it then holds nothing.
+    ///
+    /// A store with nothing in it is a no-op rather than a write, so pressing Remove All on an empty
+    /// list does not mint a file for a user who never granted anything.
+    ///
+    /// **A file that will not read is reported, never overwritten.** The load is inside this call
+    /// rather than beside it, so an undecryptable store throws here and the press fails with a
+    /// message instead of writing an empty list over bytes that may still be recoverable — the same
+    /// reasoning `LocalDataQuarantine` sets aside an unreadable file under: a decrypt failure proves
+    /// only that the bytes were written under a different key, and a key migration can hand that key
+    /// back. The user's route through an unreadable store is the Memory row's Delete, which keeps
+    /// the file; this control is not a second, quieter door onto destroying it.
+    public func forgetAll() throws {
+        guard !(try loadAll()).isEmpty else {
+            return
+        }
+        try write([])
+    }
+
     private func sorted(_ apps: [ApprovedApp]) -> [ApprovedApp] {
         apps.sorted {
             if $0.approvedAt != $1.approvedAt {

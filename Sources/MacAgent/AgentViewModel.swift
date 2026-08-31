@@ -3506,7 +3506,13 @@ final class AgentViewModel: ObservableObject {
             try clipboardHistoryMonitor.historyStore.loadAll()
         }
         approvedApps = loadMemoryEntries(.approvedApps) {
-            try approvedAppStore.loadAll()
+            // **Filtered here rather than in either surface that renders it** (SONNY-144). Settings'
+            // allowed-apps list and the Memory section's entries sheet both read this array, so a
+            // filter in one of them is a filter the other does not have — and a revocation list
+            // offering to take back a grant on Terminal would tell the user they had allowed
+            // something Sonny will never do. The store's write path already refuses to persist one;
+            // this is about a file outliving the code that filled it, not about today's writers.
+            ApprovedAppRevocationPresentation.eligible(try approvedAppStore.loadAll())
         }
         outputLocations = loadMemoryEntries(.outputLocations) {
             // Already ranked best-suggestion-first by the store, so the sheet lists them in the order
@@ -3894,9 +3900,32 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Revokes one app's control grant. Sonny asks about that app again the next time it needs it.
+    ///
+    /// **Two surfaces, one path.** The Memory section's entries sheet has pressed this since
+    /// SONNY-208 and Settings' allowed-apps list presses it now (SONNY-144). Neither gets a commit
+    /// path of its own, so one failed write cannot be reported two different ways.
     func forgetApprovedApp(_ app: ApprovedApp) {
         performMemoryEntryDelete(named: "allowed app") {
             try approvedAppStore.forget(bundleIdentifier: app.bundleIdentifier)
+        }
+    }
+
+    /// Revokes every app's control grant — Settings' Remove All (SONNY-144).
+    ///
+    /// **The confirmation is the view's, and this is deliberately not gated on one.** A press that
+    /// reaches here has already been confirmed; putting a second check in the commit path would be a
+    /// rule written twice, and the view's `confirmationDialog` is the one a person actually sees.
+    /// Per-row Remove has no dialog at all, and the asymmetry is reasoned rather than accidental:
+    /// removing one app is a single grant the user re-mints by answering the next ask, and removing
+    /// all of them is not something the flow can hand back.
+    ///
+    /// One store call rather than a loop over `approvedApps`, for two reasons the store's own
+    /// `forgetAll()` states: it is one write instead of one per grant, and it reaches a stored entry
+    /// the deny-list filter keeps out of the rendered list — which per-row Remove, by construction,
+    /// cannot.
+    func forgetAllApprovedApps() {
+        performMemoryStoreWrite(failureMessage: "Could not remove your allowed apps") {
+            try approvedAppStore.forgetAll()
         }
     }
 
@@ -3997,10 +4026,25 @@ final class AgentViewModel: ObservableObject {
     /// write-failure gotcha draws: the user pressed a control, and the thing they asked for did not
     /// happen. A *task's* bookkeeping write failing is the other case and goes to the notice.
     private func performMemoryEntryDelete(named noun: String, delete: () throws -> Void) {
+        performMemoryStoreWrite(failureMessage: "Could not delete this \(noun)", write: delete)
+    }
+
+    /// Commits a write onto one of the Memory section's stores, and reloads the lists it publishes.
+    ///
+    /// **A write failure gets write-failure wording, never the load failure's** (`CLAUDE.md`, and a
+    /// bug this repository has shipped once). "Could not be decrypted or decoded" belongs to
+    /// `recordLocalStorageLoadFailure` and describes a file that will not open; after a press that
+    /// tried to *change* a file, it names the wrong thing entirely.
+    ///
+    /// `setError` rather than `recordLocalStorageWriteFailure`, because every caller is a control the
+    /// user pressed: the thing they asked for did not happen, which is what `errorMessage` means. The
+    /// storage notice is for bookkeeping a *task* did on its own, where `errorMessage` would replace
+    /// the result of a run that succeeded.
+    private func performMemoryStoreWrite(failureMessage: String, write: () throws -> Void) {
         do {
-            try delete()
+            try write()
         } catch {
-            setError("Could not delete this \(noun): \(error.localizedDescription)")
+            setError("\(failureMessage): \(error.localizedDescription)")
             return
         }
         refreshMemoryEntries()
