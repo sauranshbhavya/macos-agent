@@ -1,12 +1,11 @@
 # Sonny gateway — a portable container image.
 #
-# **Portability is the whole point of this file** (decision doc §12.2). The gateway's host changes
-# across the product's life: development first tries deploymind, beta runs on Oracle Cloud, v1 on
-# AWS. **Nothing below couples to any of them** -- they are named in this comment because a reader
+# **Portability is the whole point of this file** (decision doc §12.2, superseded in part by §12.4).
+# The gateway's host changes across the product's life: beta runs on Oracle Cloud, v1 on AWS.
+# **Nothing below couples to either of them** -- they are named in this comment because a reader
 # should know why portability matters, and nowhere else: no host-specific stage, base image, flag or
-# default appears in this file. What each host receives is an OCI image and a set of
-# environment variables, which every one of them can run, so moving is a redeploy rather than a
-# rewrite.
+# default appears in this file. What each host receives is an OCI image and a set of environment
+# variables, which both of them can run, so moving is a redeploy rather than a rewrite.
 
 # ── build ────────────────────────────────────────────────────────────────────
 # Pinned to a minor rather than floating on `node:22`. Not pinned to a digest: a digest survives
@@ -51,7 +50,7 @@ COPY package.json ./
 USER node
 
 EXPOSE 8080
-# No HEALTHCHECK instruction: /v1/health is for the platform's probe, and each of the three hosts
-# configures that its own way. Baking one in would express a preference in the one file that is
-# supposed to be host-agnostic.
+# No HEALTHCHECK instruction: /v1/health is for the platform's probe, and each host configures that
+# its own way. Baking one in would express a preference in the one file that is supposed to be
+# host-agnostic.
 CMD ["node", "dist/server.js"]
