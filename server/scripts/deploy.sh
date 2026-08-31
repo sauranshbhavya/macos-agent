@@ -3,15 +3,15 @@
 #
 #   ./scripts/deploy.sh <local|staging|production>
 #
-# **Two of the three targets are stubs today, and that is recorded rather than hidden.** The
-# founder confirmed on 2026-08-21 that deploymind cannot receive a deploy yet. So this script
+# **Two of the three targets are stubs today, and that is recorded rather than hidden.** No remote
+# host is provisioned: Oracle Cloud is the first one and it does not exist yet. So this script
 # builds and proves the entire path — image build, build-identifier injection, container start,
 # health verification — against `local`, and refuses `staging` and `production` with an explicit
 # message naming what is missing. It does not pretend to deploy, and it does not silently succeed.
 #
-# What makes the stub cheap to replace: every host on the timeline (deploymind, then Oracle, then
-# AWS) receives the same thing — an OCI image and a set of environment variables. Filling in a
-# target is a `push` and a `run` for that host, not a rewrite of this script.
+# What makes the stub cheap to replace: both hosts on the timeline (Oracle, then AWS) receive the
+# same thing — an OCI image and a set of environment variables. Filling in a target is a `push` and
+# a `run` for that host, not a rewrite of this script.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -377,9 +377,8 @@ case "$TARGET" in
     The image was built and is ready: ${IMAGE}:${BUILD_ID}
     What did NOT happen: it was not pushed anywhere and nothing is running.
 
-    This is deliberate, not an error to work around. The founder confirmed on 2026-08-21 that
-    deploymind — the development host, and the first of the three — cannot receive a deploy yet.
-    Beta runs on Oracle Cloud and v1 on AWS, and neither exists either.
+    This is deliberate, not an error to work around. Oracle Cloud is the first host — beta runs
+    there and v1 on AWS — and neither is provisioned yet, so there is nowhere to push to.
 
     To fill this in, one host at a time, add below:
       1. a registry push        docker push ${IMAGE}:${BUILD_ID}

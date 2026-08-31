@@ -41,10 +41,13 @@ margin, not a rounding error, but it is also not generous — §8 says what to d
 **Read §12 before acting on any of this.** On **2026-08-21**, after these measurements were taken
 and on the strength of them, the founder decided that **the gateway will run on a VM rather than on
 Edge Functions** — staged deploymind → Oracle → AWS — while **Supabase keeps auth and Postgres**.
-So the Edge ceilings below stop binding on the shipping architecture: the gateway will choose its
-own limits. What survives that decision intact is the spend-cap proof (§9), which is Postgres's and
-so still live, the payload arithmetic (§2), and the gzip cost (§4.2). **The measurements are kept in
-full because they are the evidence the decision was made against**, not despite being superseded.
+**The deploymind stage was then dropped on 2026-08-30** (founder decision, SONNY-373), leaving
+**Oracle Cloud first and AWS for v1**; §12.4 is the live record and §12.2 is kept as what was
+decided on 2026-08-21. So the Edge ceilings below stop binding on the shipping architecture: the
+gateway will choose its own limits. What survives that decision intact is the spend-cap proof (§9),
+which is Postgres's and so still live, the payload arithmetic (§2), and the gzip cost (§4.2). **The
+measurements are kept in full because they are the evidence the decision was made against**, not
+despite being superseded.
 
 ---
 
@@ -521,10 +524,11 @@ Two environments plus local, per the founder's 2026-08-16 decision.
 **$35/month was the realistic floor for the architecture this document measured, and that
 architecture is superseded** (§12.2). It prices Supabase carrying *everything* — auth, Postgres and
 the gateway. After the 2026-08-21 decision Supabase carries **auth and Postgres only**, and the
-gateway's hosting is a separate cost on deploymind, then Oracle, then AWS. **So $35 is neither the
-floor nor a clean component of one**, and nobody has yet priced what the auth-plus-Postgres
-footprint alone actually needs. That is the live version of the founder's deferred Free-versus-Pro
-question.
+gateway's hosting is a separate cost on Oracle, then AWS — that list read deploymind, then Oracle,
+then AWS until 2026-08-30, when the founders dropped the deploymind stage (§12.4). **So $35 is
+neither the floor nor a clean component of one**, and nobody has yet priced what the
+auth-plus-Postgres footprint alone actually needs. That is the live version of the founder's
+deferred Free-versus-Pro question.
 
 One input survives the decision intact, because it is a property of Supabase *projects* rather than
 of Edge Functions: **a Free project pauses after a week of inactivity**, and a staging environment is
@@ -613,6 +617,12 @@ is a measured number rather than a documentation quote.
 
 ### 12.2 What the founder decided, 2026-08-21 — and it supersedes the above
 
+> **Superseded in part on 2026-08-30 (founder decision, SONNY-373): the deploymind stage was
+> dropped, leaving Oracle Cloud first and AWS for v1. §12.4 is the live record.** Everything below
+> is kept verbatim as what was decided on 2026-08-21, including the two things §12.4 replaces — the
+> "first tries" hedge on deploymind as the development host, and the count of three in the derived
+> constraint at the end of this section. Nothing else here moved.
+
 Recorded on SONNY-125 by the coordinator; that comment is the source, this is the durable copy.
 
 **The gateway runs on a VM, not on serverless functions.** Hosting is staged across the product's
@@ -657,6 +667,37 @@ Three of them also outlive the platform outright: the **payload sizes** (§2) ar
 **spend-cap mechanism** (§9) is Postgres's, and the **gzip cost** (§4.2) is the payload's. The
 Cloudflare arm (§5) becomes what it always was — a measured comparison — rather than a fallback
 anyone now needs.
+
+### 12.4 What the founders decided, 2026-08-30 — deploymind is out of the plan
+
+Recorded on SONNY-192 by the coordinator and filed as SONNY-373; that comment is the source, this is
+the durable copy. It supersedes part of §12.2 and nothing else in this document.
+
+**Deploymind is dropped from the hosting plan entirely** — verbatim: *"oracle cloud, completely drop
+the idea of deploymind."* It is not a later stage, a fallback, or a maybe. **Oracle Cloud is the
+first host and AWS is v1's**, so the staging §12.2 recorded is two hosts rather than three.
+
+**Everything else in §12.2 stands, and the derived constraint stands unweakened.** The gateway still
+runs on a VM rather than on serverless functions; Supabase still keeps auth and Postgres; every
+Edge-Function ceiling this document measured still stops binding. Host-portability was never a
+function of *how many* hosts there are — it is the requirement that no single one of them is
+load-bearing — so dropping a stage leaves it exactly where §12.2 put it. What changes is the
+sentence, not the obligation: "three hosts across the product's life" is now two.
+
+**The "first tries" hedge dies with the stage it qualified.** §12.2 preserved it deliberately, and
+recorded why (PR #82 cycle 2, R5): the VM decision was settled and deploymind as the development
+host was not. With deploymind out there is nothing left for it to hedge, and Oracle and AWS were
+always named without it.
+
+**Development gets no remote host, and needs none.** `./scripts/deploy.sh local` builds the image
+and runs it on the developer's own machine, which is what every session has actually used since
+SONNY-126 — deploymind was never provisioned, so nothing changes in practice. What was dropped is a
+plan for a development host, not a running one.
+
+**Still owed, and unchanged by this:** `server/scripts/deploy.sh` refuses `staging` and `production`
+with exit 3 because neither Oracle nor AWS is provisioned, and the first real remote deploy is
+recorded on SONNY-126. The Supabase plan tier (§12.2, §10.1) is still the founders' deferred
+question.
 
 ---
 
