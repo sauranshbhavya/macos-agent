@@ -41,7 +41,7 @@ margin, not a rounding error, but it is also not generous — §8 says what to d
 **Read §12 before acting on any of this.** On **2026-08-21**, after these measurements were taken
 and on the strength of them, the founder decided that **the gateway will run on a VM rather than on
 Edge Functions** — staged deploymind → Oracle → AWS — while **Supabase keeps auth and Postgres**.
-**The deploymind stage was then dropped on 2026-08-30** (founder decision, SONNY-373), leaving
+**The deploymind stage was then dropped on 2026-08-30** (founders' decision, SONNY-373), leaving
 **Oracle Cloud first and AWS for v1**; §12.4 is the live record and §12.2 is kept as what was
 decided on 2026-08-21. So the Edge ceilings below stop binding on the shipping architecture: the
 gateway will choose its own limits. What survives that decision intact is the spend-cap proof (§9),
@@ -617,7 +617,7 @@ is a measured number rather than a documentation quote.
 
 ### 12.2 What the founder decided, 2026-08-21 — and it supersedes the above
 
-> **Superseded in part on 2026-08-30 (founder decision, SONNY-373): the deploymind stage was
+> **Superseded in part on 2026-08-30 (founders' decision, SONNY-373): the deploymind stage was
 > dropped, leaving Oracle Cloud first and AWS for v1. §12.4 is the live record.** Everything below
 > is kept verbatim as what was decided on 2026-08-21, including the two things §12.4 replaces — the
 > "first tries" hedge on deploymind as the development host, and the count of three in the derived
@@ -671,7 +671,10 @@ anyone now needs.
 ### 12.4 What the founders decided, 2026-08-30 — deploymind is out of the plan
 
 Recorded on SONNY-192 by the coordinator and filed as SONNY-373; that comment is the source, this is
-the durable copy. It supersedes part of §12.2 and nothing else in this document.
+the durable copy. **The section it supersedes is §12.2, and the only one.** Two others were brought
+up to date in place rather than superseded, and are named here because the sentence above otherwise
+tells a reader not to look at them: §1's forward pointer and §10.1's cost paragraph both carry this
+decision with its date.
 
 **Deploymind is dropped from the hosting plan entirely** — verbatim: *"oracle cloud, completely drop
 the idea of deploymind."* It is not a later stage, a fallback, or a maybe. **Oracle Cloud is the

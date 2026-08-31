@@ -492,9 +492,9 @@ was settled, deploymind as the development host was not. The founders then dropp
 the plan entirely, so the staging is Oracle then AWS and the hedge has nothing left to qualify.
 `docs/sonny-row-12-host-decision.md` §12.4.) So the Edge-Function ceilings below stop binding: the
 gateway now chooses and enforces its own timeouts and limits. `docs/sonny-row-12-host-decision.md`
-§12.2 is the full record, and the derived constraint for SONNY-126 is that the gateway must be
-**host-portable from day one** — containerized, per-environment configuration, a deploy path not
-coupled to any single host.
+§12.2 is the full record of the 2026-08-21 decision and §12.4 of the 2026-08-30 one, and the derived
+constraint for SONNY-126 is that the gateway must be **host-portable from day one** — containerized,
+per-environment configuration, a deploy path not coupled to any single host.
 
 **The measurements below are kept in full because they are the evidence that decision was taken
 against**, and because three of them outlive the platform outright: the payload arithmetic is the
