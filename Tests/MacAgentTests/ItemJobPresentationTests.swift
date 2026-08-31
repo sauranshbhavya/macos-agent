@@ -56,6 +56,48 @@ struct ItemJobPresentationTests {
         #expect(try #require(ItemJobProgressPresentation.summaryRow(for: plan)).hasSuffix("— 1 file"))
     }
 
+    /// **The choice a panel makes, held by value.** R14 of the battery at `369cbc3` deleted the job
+    /// arm from `WidgetWorkingPanel` — putting forty rows back into the approval prompt — and the
+    /// whole suite passed, because the branch lived inside a SwiftUI body and nothing here tests one.
+    /// The decision moved out; this is what holds it.
+    @Test
+    func theRowsAJobDrawsAreOneRowRatherThanOnePerItem() {
+        let job = expandedJob(items: (1...40).map { "/tmp/report-\($0).pdf" }, kind: .files)
+        let progress = ItemJobProgress(
+            itemKind: .files,
+            items: (1...40).map { "/tmp/report-\($0).pdf" },
+            completedItemIndexes: Array(0..<12),
+            failures: []
+        )
+        #expect(
+            ItemJobProgressPresentation.rows(for: job, progress: progress)
+                == .job(title: "Run the Shortcut on this file. — 40 files", progressLine: "12 of 40 files done")
+        )
+
+        // The question panels pass no progress, because none of them reports how far a run got.
+        #expect(
+            ItemJobProgressPresentation.rows(for: job, progress: nil)
+                == .job(title: "Run the Shortcut on this file. — 40 files", progressLine: nil)
+        )
+
+        // The control, and the half R14 flipped: an ordinary plan still draws one row per step.
+        let steps = [
+            AgentStep(id: "calc", operation: .calculateUtility, description: "Add up.", searchQuery: "2 + 2"),
+            AgentStep(id: "url", operation: .openURL, description: "Open it.", targetURL: "https://example.com")
+        ]
+        let ordinary = AgentPlan(summary: "Two things.", requiresConfirmation: false, steps: steps)
+        #expect(ItemJobProgressPresentation.rows(for: ordinary, progress: nil) == .steps(steps))
+
+        // And nothing at all to draw stays nothing.
+        #expect(ItemJobProgressPresentation.rows(for: nil, progress: nil) == nil)
+        #expect(
+            ItemJobProgressPresentation.rows(
+                for: AgentPlan(summary: "Empty.", requiresConfirmation: false, steps: []),
+                progress: nil
+            ) == nil
+        )
+    }
+
     // MARK: - The progress line
 
     /// **Both halves, once either is non-zero.** "Thirty-eight summaries and two failures is a real

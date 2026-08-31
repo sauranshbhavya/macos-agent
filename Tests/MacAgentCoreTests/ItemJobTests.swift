@@ -373,6 +373,115 @@ struct ItemJobTests {
         #expect(result.summary == "Worked through all 1 files.")
     }
 
+    /// **The rest of a failed item is skipped, not attempted** — the second half of skip-and-continue,
+    /// and the one a one-step template cannot see. A mutant removing the skip survived the suite at
+    /// `369cbc3` (R3); this is the test it named.
+    ///
+    /// A later unit of an item was written to act on what its earlier ones produced, so running it
+    /// against nothing manufactures a second, less honest failure for the same item.
+    @Test
+    func theRestOfAFailedItemIsSkippedRatherThanAttempted() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c"] {
+            try write(name, to: root.appendingPathComponent("\(name).pdf"))
+        }
+        let invoker = RecordingShortcutInvoker(failingOnInputContaining: "b.pdf")
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, shortcutInvoker: invoker, browserOpener: opener)
+
+        // Two workflows per item, so each item is two units and the second one is skippable.
+        let plan = AgentPlan(
+            summary: "Summarise each of these, then open the notes page.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .invokeShortcut,
+                    description: "Run the Shortcut on this file.",
+                    shortcutName: "Summarise"
+                ),
+                AgentStep(
+                    id: "url",
+                    operation: .openURL,
+                    description: "Open the page.",
+                    targetURL: "https://example.com/page"
+                )
+            ],
+            itemJob: PlanItemJob(
+                source: .folder,
+                folderPath: root.path,
+                itemKind: .files,
+                fileExtensions: ["pdf"],
+                itemField: .shortcutInput
+            )
+        )
+        let prepared = try executor.prepare(plan: plan)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        // Three items were tried; the middle one's second unit was not.
+        #expect(invoker.inputs.count == 3)
+        #expect(opener.opened.count == 2)
+        #expect(result.itemJobFailures.map(\.itemIndex) == [1])
+        // The control: with nothing failing, all three items open their page.
+        let cleanOpener = RecordingBrowserOpener()
+        let cleanExecutor = makeExecutor(root: root, browserOpener: cleanOpener)
+        let cleanPrepared = try cleanExecutor.prepare(plan: plan)
+        _ = try await cleanExecutor.execute(plan: cleanPrepared.plan) { _, _ in }
+        #expect(cleanOpener.opened.count == 3)
+    }
+
+    /// **The chain's carried artifact does not cross an item boundary.** A mutant removing the reset
+    /// survived the suite at `369cbc3` (R4), and the reachable case took some finding, so it is
+    /// written down: an item whose work *succeeds while writing nothing*, followed in the same item
+    /// by a step that opens "whatever the previous unit produced".
+    ///
+    /// A folder whose documents have all been converted already is exactly that — every record is
+    /// skipped, the unit succeeds, and its previews name no write. Without the reset, that item's
+    /// bare open reaches back and opens the **previous** item's PDF, and the run reports success.
+    @Test
+    func aJobsCarriedArtifactDoesNotLeakFromOneItemIntoTheNext() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let alpha = root.appendingPathComponent("alpha")
+        let beta = root.appendingPathComponent("beta")
+        try FileManager.default.createDirectory(at: alpha, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: beta, withIntermediateDirectories: true)
+        try write("doc", to: alpha.appendingPathComponent("report.docx"))
+        try write("doc", to: beta.appendingPathComponent("memo.docx"))
+        // beta's conversion is already done, so its unit succeeds and writes nothing.
+        try write("pdf", to: beta.appendingPathComponent("memo.pdf"))
+
+        let fileOpener = RecordingFileOpener()
+        let executor = makeExecutor(root: root, fileOpener: fileOpener)
+        let plan = AgentPlan(
+            summary: "Convert the documents in each of these folders and open the result.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan", operation: .scanDocx, description: "Find the documents."),
+                AgentStep(id: "convert", operation: .convertDocxToPDF, description: "Convert them."),
+                AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open the result.")
+            ],
+            itemJob: PlanItemJob(
+                source: .folder,
+                folderPath: root.path,
+                itemKind: .folders,
+                itemField: .inputPath
+            )
+        )
+        let prepared = try executor.prepare(plan: plan)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        // alpha's own PDF, once. Without the reset this list holds it twice — the second time as
+        // beta's "result", which beta never produced.
+        #expect(fileOpener.opened == [alpha.appendingPathComponent("report.pdf").path])
+        // And beta is reported as an item that could not be done, rather than silently handed
+        // somebody else's file.
+        #expect(result.itemJobFailures.map(\.itemIndex) == [1])
+        #expect(result.summary.contains("1 of 2 folders"))
+    }
+
     // MARK: - Remembering its place
 
     /// The whole point of the ticket, on the real path: a job interrupted partway records which
@@ -810,12 +919,14 @@ struct ItemJobTests {
         // so a test leaning on the default would be measuring whether Word is installed on the
         // machine — which is how the first version of `aFolderThatCannotBePreviewedIsDropped…`
         // reported all three folders as failures and looked briefly like the fix not working.
-        documentConverter: any DocumentConverting = WritingDocumentConverter()
+        documentConverter: any DocumentConverting = WritingDocumentConverter(),
+        fileOpener: any FileOpening = RecordingFileOpener()
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
             documentConverter: documentConverter,
             browserOpener: browserOpener,
+            fileOpener: fileOpener,
             permissionReadinessService: .deterministic(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
@@ -875,6 +986,15 @@ private final class RecordingShortcutInvoker: ShortcutInvoking, @unchecked Senda
             throw ShortcutsBridgeError.invocationFailed(name, 1, "the Shortcut reported an error")
         }
         return ProcessResult(terminationStatus: 0, output: "")
+    }
+}
+
+@MainActor
+private final class RecordingFileOpener: FileOpening {
+    private(set) var opened: [String] = []
+
+    func openFile(_ url: URL) async throws {
+        opened.append(url.path)
     }
 }
 

@@ -15,6 +15,38 @@ import MacAgentCore
 /// user scrolls, which is the per-item prompt that decision rejected wearing different clothes. A
 /// job shows what it does to one item, and how many items there are.
 enum ItemJobProgressPresentation {
+    /// What a panel that lists a run's work should draw — **a value, so the choice is testable**.
+    ///
+    /// The branch itself used to live inside two SwiftUI view bodies, and a mutation battery at
+    /// `369cbc3` showed what that costs: R14 deleted the job arm from `WidgetWorkingPanel`, putting
+    /// forty rows back into the approval prompt, and the whole suite passed. Nothing here tests a
+    /// view body — this repository does not — so the fix is to move the *decision* out of the body
+    /// and hold it by value, which `theRowsAJobDrawsAreOneRowRatherThanOnePerItem` does. What is left
+    /// untested is the drawing, which is the part a founder's manual pass covers.
+    enum RunRows: Equatable {
+        /// One row for the whole job, and its progress when there is any to show.
+        case job(title: String, progressLine: String?)
+        /// One row per step, which is every plan that is not a job.
+        case steps([AgentStep])
+    }
+
+    /// Which of the two a panel draws, or `nil` when there is nothing to draw at all.
+    ///
+    /// `progress` is `nil` for the panels that raise a *question* — permission, clarification,
+    /// failure — because none of them is a report of how far a run got.
+    static func rows(for plan: AgentPlan?, progress: ItemJobProgress?) -> RunRows? {
+        guard let plan else {
+            return nil
+        }
+        if let title = summaryRow(for: plan) {
+            return .job(title: title, progressLine: progress.flatMap(progressLine(for:)))
+        }
+        guard !plan.steps.isEmpty else {
+            return nil
+        }
+        return .steps(plan.steps)
+    }
+
     /// What the job does, once, with the number of items it does it to — the row that stands in for
     /// the whole expansion.
     ///

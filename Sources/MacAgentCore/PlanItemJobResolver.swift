@@ -91,13 +91,22 @@ public enum PlanItemJobResolver {
 
     /// One copy of the plan's steps per item, with the item written into the declared field.
     ///
-    /// **Every step of the template gets the item, unconditionally.** The template *is* the work done
-    /// to one item, so there is no step of it that is about something else — and the alternative,
-    /// filling in only steps whose field is empty, would make the rule depend on what a planner
-    /// happened to leave blank. A unit of more than one step is covered by this without special
-    /// handling: `[scan_docx, convert]` both take the folder in `inputPath`, and
-    /// `DocxConversionCapabilityAdapter` reads `primary ?? secondary`, so the pair is one item's
-    /// unit exactly as it is one plan's.
+    /// **Every step of the template gets the item, except one that takes the previous unit's output.**
+    /// The template *is* the work done to one item, so there is no step of it that is about something
+    /// else — with exactly one exception, and it is a rule this repository already owns rather than a
+    /// special case: `ChainedArtifactCarry.consumesPreviousArtifact` is the predicate for a step whose
+    /// input is whatever the unit before it produced. Such a step's input is not the item, by
+    /// construction, and writing the item into it does not merely mis-fill the field — it *stops the
+    /// step working at all*, because the predicate reads blank path fields and an item written there
+    /// makes it false. A job of "convert the documents in each of these folders and open the result"
+    /// failed outright before this exception, with `open_generated_artifact` refusing a folder.
+    ///
+    /// Filling in only steps whose field is empty was the alternative and does not work: the
+    /// consuming step's field is empty in the template too, which is precisely what marks it.
+    ///
+    /// A unit of more than one step is covered without special handling: `[scan_docx, convert]` both
+    /// take the folder in `inputPath`, and `DocxConversionCapabilityAdapter` reads
+    /// `primary ?? secondary`, so the pair is one item's unit exactly as it is one plan's.
     ///
     /// Step ids are suffixed rather than regenerated, so a reader of a stored record can still see
     /// which template step an expanded one came from — and so `remainingPlan()`'s subtraction, which
@@ -110,11 +119,13 @@ public enum PlanItemJobResolver {
                 var copy = step
                 copy.id = "\(step.id)#\(index + 1)"
                 copy.itemIndex = index
-                switch job.itemField {
-                case .inputPath:
-                    copy.inputPath = item
-                case .shortcutInput:
-                    copy.shortcutInput = item
+                if !ChainedArtifactCarry.consumesPreviousArtifact(step) {
+                    switch job.itemField {
+                    case .inputPath:
+                        copy.inputPath = item
+                    case .shortcutInput:
+                        copy.shortcutInput = item
+                    }
                 }
                 expandedSteps.append(copy)
             }
