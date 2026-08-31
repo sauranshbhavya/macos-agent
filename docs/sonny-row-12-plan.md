@@ -485,9 +485,12 @@ behaviour instant utilities depend on (§2.6).
 ### 4.8 Host — decided and measured (SONNY-125, 2026-08-20)
 
 **Superseded in part on 2026-08-21, and the part that moved is the gateway.** The founder decided
-that **the gateway runs on a VM** — development first tries deploymind, then Oracle Cloud for beta,
-then AWS for v1 — while **Supabase keeps auth and Postgres**. ("First tries" is the founder's hedge:
-the VM decision is settled, deploymind as the development host is not.) So the Edge-Function ceilings below stop binding: the
+that **the gateway runs on a VM** — Oracle Cloud for beta, then AWS for v1 — while **Supabase keeps
+auth and Postgres**. (**Amended 2026-08-30, SONNY-373.** As decided on 2026-08-21 the staging was
+deploymind → Oracle → AWS, with "first tries" the founder's own hedge on deploymind: the VM decision
+was settled, deploymind as the development host was not. The founders then dropped deploymind from
+the plan entirely, so the staging is Oracle then AWS and the hedge has nothing left to qualify.
+`docs/sonny-row-12-host-decision.md` §12.4.) So the Edge-Function ceilings below stop binding: the
 gateway now chooses and enforces its own timeouts and limits. `docs/sonny-row-12-host-decision.md`
 §12.2 is the full record, and the derived constraint for SONNY-126 is that the gateway must be
 **host-portable from day one** — containerized, per-environment configuration, a deploy path not
@@ -559,9 +562,10 @@ The two things this section previously said to carry into the decision, both now
 **The $35 monthly floor was priced for the superseded architecture.** It is Supabase Pro with two
 projects, per Supabase's own worked example, and it was costed when **the whole backend** — auth,
 Postgres *and* the gateway — was going to live there. After the 2026-08-21 decision Supabase carries
-**auth and Postgres only**, and the gateway's own hosting is a separate cost on deploymind, Oracle
-and then AWS. So $35 is neither the floor nor a component of it until someone prices what the
-auth-plus-Postgres footprint alone actually needs. **That is the real open question, and it is the
+**auth and Postgres only**, and the gateway's own hosting is a separate cost on Oracle and then AWS
+(deploymind was first in that list until the founders dropped it on 2026-08-30, SONNY-373). So $35
+is neither the floor nor a component of it until someone prices what the auth-plus-Postgres
+footprint alone actually needs. **That is the real open question, and it is the
 same one the founder deferred:** Free versus Pro, to be settled with Bhavya before the v1 release.
 Free measured fine on every limit tested but pauses a project after a week of inactivity, which is
 what staging is — and that constraint survives the decision, because it is about Supabase projects

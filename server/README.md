@@ -534,12 +534,12 @@ overlap is ever wanted.
 failure when absent or unrecognised. Each has its own configuration and its own credentials.
 
 **Environments are not hosts, and the distinction is load-bearing here.** The gateway's host
-changes across the product's life — development first tries deploymind, beta runs on Oracle Cloud,
-v1 on AWS (`docs/sonny-row-12-host-decision.md` §12.2) — while the three environments stay exactly
-as they are. **Nothing in this directory couples to a host** — the three are named in prose here
-and in the Dockerfile's own header, which is the point of saying which they are; what none of them
-gets is a code path, a build flag or a config default of its own. What each one receives is an OCI
-image and a set of environment variables, so moving between them is a redeploy.
+changes across the product's life — beta runs on Oracle Cloud, v1 on AWS
+(`docs/sonny-row-12-host-decision.md` §12.4) — while the three environments stay exactly as they
+are. **Nothing in this directory couples to a host** — both are named in prose here
+and in the Dockerfile's own header, which is the point of saying which they are; what neither of
+them gets is a code path, a build flag or a config default of its own. What each one receives is an
+OCI image and a set of environment variables, so moving between them is a redeploy.
 
 ### Staging is seeded with synthetic data and never holds real user data
 
@@ -980,10 +980,10 @@ names printed. That is deliberate: an operator who set three of them has said wh
 serving health-only there would answer 404 to every sign-in while looking perfectly healthy — which
 is indistinguishable from the defect SONNY-307 fixed, and was measured reading exactly that way.
 
-`staging` and `production` **are stubs and exit 3.** The founder confirmed on 2026-08-21 that
-deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The script builds the
-image, says plainly what did not happen, and lists the four things a real target needs. It does not
-pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
+`staging` and `production` **are stubs and exit 3.** No remote host is provisioned: Oracle Cloud is
+the first one, and neither it nor AWS exists yet. The script builds the image, says plainly what did
+not happen, and lists the four things a real target needs. It does not pretend. **The first real
+remote deploy is owed and is recorded on SONNY-126.**
 
 **The five model routes still answer `401` against that container**, and the reason is the one the
 subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
