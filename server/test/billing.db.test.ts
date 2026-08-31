@@ -655,6 +655,21 @@ describeDb("a subscription reaches the entitlement", () => {
 
     expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(false);
     expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
+
+    // **And the shape `billing_subscription_id IS NOT NULL` is actually about**, written directly
+    // because no writer in this repository produces it: `entitlement_billing_identity_is_whole`
+    // forbids a subscription id with no provider and permits the reverse, so a row naming the
+    // provider and no subscription is a legal state. Without the clause it answers both questions
+    // `true` — the portal would spend the call this guard exists to save, and the checkout route
+    // would refuse a subscribe with `already_subscribed` for an account that has no subscription at
+    // all. Found by a survivor: the operator-grant row above leaves `billing_provider` NULL, so it
+    // never reaches the clause. (SONNY-387, mutant P5.)
+    await client.query("UPDATE sonny.entitlement SET billing_provider = $2 WHERE account_id = $1", [
+      account,
+      POLAR,
+    ]);
+    expect(await hasSubscriptionRecord(client, POLAR, account)).toBe(false);
+    expect(await hasLiveSubscription(client, POLAR, account)).toBe(false);
   });
 
   itUnderHangBackstop("aSubscriptionCannotBeMovedOntoASecondAccount", async () => {
