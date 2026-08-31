@@ -2186,6 +2186,30 @@ sees when the workspace is no longer there.
 - [ ] **(SONNY-186, the blast-radius guard)** Open that same workspace **on its own** — "open my
       research workspace", no routine. Its URLs must still open in **its own** browser. Nothing
       outside a routine was meant to move.
+### A calculation phrased as a sentence (new 2026-08-30, SONNY-284)
+
+`what is 2 + 2` used to reach the planner, which has no calculator, and came back "Calculation is
+unsupported by the registered local tools". The resolver now takes the sentence's filler off before
+it decides. Both directions are on this list, and the second one is the one that matters more — the
+constraint on this ticket was that widening the calculator must not start swallowing commands that
+are not calculations.
+
+- [ ] **(SONNY-284, typed)** In the floating widget type each of these and press return:
+      `what is 2 + 2`, `what's 2+2`, `how much is 5 times 5`, `convert 5 km to miles`,
+      `5 km in miles please`, `please calculate 2 + 2`. **Each must answer instantly and locally —
+      `4`, `4`, `25`, `3.1068559612 mi`, `3.1068559612 mi`, `4` — with no planner round trip.**
+      The finding is any of them coming back "Calculation is unsupported by the registered local
+      tools", or taking a visible moment to think.
+- [ ] **(SONNY-284, spoken)** Hold the push-to-talk hotkey and say "what is two plus two", then
+      "how much is five times five", then "convert ten centimeters to inches". Same answers,
+      same instant local path. (Dictation writes a curly apostrophe in "what's"; that is handled,
+      and this row is where it gets seen for real.)
+- [ ] **(SONNY-284, the direction that must NOT have changed)** Ask for things that merely *look*
+      like the shapes above and confirm each still goes to the planner and does its real job:
+      **`convert <a real file>.docx to pdf`** on a document you have — this must still convert the
+      document, never a calculator error about `pdf` not being a unit — plus `what is the weather
+      today`, `what's on my calendar`, `how much is left on my disk` and `remind me in 5 minutes`.
+      **The finding is any of these answering with a calculator error or a "Calculate ..." card.**
 
 ## 8. How to report back
 
