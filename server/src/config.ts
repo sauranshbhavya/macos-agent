@@ -312,6 +312,68 @@ const schema = z.object({
    * prefix a value pattern could anchor on.
    */
   SUPABASE_SERVICE_ROLE_KEY: nonEmpty.optional(),
+
+  /**
+   * Which payment provider this deployment is wired to, and the **one variable whose presence means
+   * "mount the billing routes"** (SONNY-211) — the same intent-trigger shape `auth/deps.ts` uses for
+   * the three Supabase names, and for the same reason: a deployment that does no billing should not
+   * have to invent a webhook secret, and one that intends billing should not start half-configured.
+   *
+   * **An enum with one value in it, on purpose.** Polar is the provider and the founders' decision
+   * of 2026-08-30 is final; the same decision says the seam stays, because a merchant-of-record swap
+   * is a business decision that can recur. So a second provider is a second word here and a second
+   * file beside `billing/polar.ts`, rather than a rewrite — and until that word exists, a typo in
+   * this variable is a named startup failure instead of a gateway that mounts nothing and says
+   * nothing.
+   */
+  BILLING_PROVIDER: z.enum(["polar"]).optional(),
+  /**
+   * The webhook endpoint secret, from the provider's dashboard.
+   *
+   * **No default, for the reason `ENTITLEMENT_SIGNING_KEY` has none, and the consequence is the same
+   * class.** This value is the only thing standing between anyone on the internet and a paid
+   * entitlement: whoever holds it can sign a `subscription.active` delivery for any account. A
+   * development default would be a working forgery key committed to the repository.
+   * `npm run check:secrets` carries this name on its name-anchored list, because a webhook secret is
+   * an opaque string with no vendor prefix a value pattern could anchor on.
+   */
+  BILLING_WEBHOOK_SECRET: nonEmpty.optional(),
+  /**
+   * The hosted checkout link a user is sent to in order to subscribe.
+   *
+   * Neither secret nor guessable-wrong, like the model endpoints above — and configuration rather
+   * than code for the same reason: the sandbox link and the production link are different URLs, and
+   * moving between them must be a redeploy rather than an app release.
+   */
+  BILLING_CHECKOUT_URL: nonEmpty.optional(),
+  /**
+   * What each of the provider's products is worth, as
+   * `<product id>=<plan key>:<capability>|<capability>`, comma-separated.
+   *
+   * **This is the seam SONNY-212's numbers do not come through, and that is the point.** It names no
+   * price and no allowance — it maps an opaque product id the provider issued onto the opaque plan
+   * key and capability list `sonny.entitlement` has held since 0013. Which capability gates which
+   * feature is row 18's (SONNY-23); what a plan costs is SONNY-212's.
+   *
+   * A subscription whose product is absent here grants nothing and is recorded `unmapped` in
+   * `sonny.billing_event` — fail-closed, and visible, because the alternative to both is inventing a
+   * capability list for a product nobody configured.
+   */
+  BILLING_PLANS: z.string().trim().default(""),
+  /**
+   * How long a payment failure's grace window runs, in days. **Fourteen.**
+   *
+   * Spec §16.4 requires grace handling and names no number, so this is a mechanism default the
+   * founders may move rather than a decision this repository is making. Fourteen is chosen against
+   * what the window is actually for: the provider retries a failed payment over roughly two weeks
+   * and then tells us it has given up, at which point the entitlement is revoked by that event
+   * rather than by this clock. So this bounds the case where the provider never tells us — and it
+   * should be long enough that it is not the thing that cuts a paying customer off during a card
+   * reissue, which is the ordinary reason a renewal fails.
+   *
+   * Bounded at both ends so neither a zero nor a year is reachable by a typo.
+   */
+  BILLING_GRACE_DAYS: z.coerce.number().int().min(1).max(60).default(14),
 });
 
 export interface Config {
@@ -356,6 +418,11 @@ export interface Config {
   readonly dataPolicies: Readonly<Record<Provider, ProviderDataPolicy>>;
   readonly supabaseAnonKey: string | undefined;
   readonly supabaseServiceRoleKey: string | undefined;
+  readonly billingProvider: "polar" | undefined;
+  readonly billingWebhookSecret: string | undefined;
+  readonly billingCheckoutUrl: string | undefined;
+  readonly billingPlans: string;
+  readonly billingGraceDays: number;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -541,6 +608,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataPolicies: providerDataPolicies(env),
     supabaseAnonKey: value.SUPABASE_ANON_KEY,
     supabaseServiceRoleKey: value.SUPABASE_SERVICE_ROLE_KEY,
+    billingProvider: value.BILLING_PROVIDER,
+    billingWebhookSecret: value.BILLING_WEBHOOK_SECRET,
+    billingCheckoutUrl: value.BILLING_CHECKOUT_URL,
+    billingPlans: value.BILLING_PLANS,
+    billingGraceDays: value.BILLING_GRACE_DAYS,
     credentials: providerCredentials(env),
   };
 }

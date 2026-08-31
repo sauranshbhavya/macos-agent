@@ -37,7 +37,11 @@ export function registerEntitlementRoutes(app: FastifyInstance, deps: Entitlemen
   app.get("/v1/account/entitlements", async (request, reply) => {
     const caller = callerOf(request);
     const record = await deps.store.entitlementFor(caller.accountId);
-    const facts = claimFactsFor(record);
+    // One clock read for the whole response: the instant that decides whether a grace window has
+    // closed is the same instant the claim is issued at, so a claim cannot be minted as entitled and
+    // stamped a millisecond later as if it were not.
+    const issuedAt = now();
+    const facts = claimFactsFor(record, issuedAt);
     const claim = mintEntitlementClaim(
       {
         /**
@@ -61,7 +65,7 @@ export function registerEntitlementRoutes(app: FastifyInstance, deps: Entitlemen
         capabilities: facts.capabilities,
       },
       deps.signingKey,
-      now(),
+      issuedAt,
     );
     // §2.1 makes the client tolerant of unknown response fields, so this body can grow additively.
     return reply.send(claim);

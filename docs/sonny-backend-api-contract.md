@@ -520,6 +520,21 @@ here only so nobody adds a second one.
 | `POST /v1/search` | yes | Web search | SONNY-130 |
 | `POST /v1/screen/analyze` | yes | Screen control | SONNY-131 |
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
+| `POST /v1/billing/checkout` | yes | Where to send this account to subscribe | SONNY-211 |
+| `POST /v1/billing/webhook` | HMAC signature over the raw body, not a Bearer token | Subscription lifecycle from the payment provider | SONNY-211 |
+
+**`POST /v1/billing/webhook` is the one row in this table no client ever calls, and its `Auth` cell
+says a mechanism rather than `yes` or `none` for that reason** (added 2026-08-30, SONNY-211). Every
+other endpoint here is the Mac talking to the gateway, which is the boundary §1.1 draws. This one is
+the payment provider talking to the gateway: it carries no `Authorization` header, and it is not
+public either — it is authenticated by an HMAC signature over the exact bytes of its body, and a
+delivery that fails that check is refused before anything reads its payload. It is listed here
+because §2.2 makes this column the single source of truth for which endpoints carry a Bearer token,
+and `server/src/auth/gate.ts`'s deny-by-default list is derived from it: a route absent from this
+table and present in that list would make the gate's own stated invariant false. **It is deliberately
+absent from §2.2's convenience list**, which exists so a *client* does not attach an access token to
+a call made before it has one — no client makes this call, and naming it there would invite one to
+try.
 
 **`GET /v1/meta` and the version gate had no owning ticket when this section was written. They have
 one now: SONNY-204** (updated 2026-08-26, SONNY-288). Writing section 8 is what exposed the gap.
