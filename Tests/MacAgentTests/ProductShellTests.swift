@@ -982,6 +982,10 @@ struct ProductShellTests {
             // which `deleteLocalData` deliberately leaves alone — signing out and wiping local data
             // are different things, and branch 7's whole argument is that conflating them is a bug.
             "backendClient",
+            // One authenticated GET over that client, wrapped as a service (SONNY-214). A
+            // collaborator exactly as `backendClient` above is, and it holds nothing at all — the
+            // figure it reads lives on `screenControlAllowance` in group 3.
+            "screenControlAllowanceService",
 
             // 2. Written by `deleteLocalData` itself, immediately after the wipe returns. Clearing
             // them inside the wipe would be undone one line later.
@@ -997,6 +1001,12 @@ struct ProductShellTests {
             // `backendClient` gives above. A wipe that reset it would make the readiness page say
             // "sign in" to a user who still is.
             "modelAccessReadiness",
+            // `screenControlAllowance` sits beside it for the same reason (SONNY-214): the fact it
+            // carries — how many screen-control runs the account has left — lives on the gateway,
+            // derived from the server's own metering, and no local store this wipe reaches has ever
+            // held it. A wipe that cleared the figure would blank Command Center's usage line for a
+            // user who is still signed in, until the next refresh put the same number back.
+            "screenControlAllowance",
             // `plannerFallbackNotice` stood beside `scheduledRunNotice` and is gone with the widget
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
