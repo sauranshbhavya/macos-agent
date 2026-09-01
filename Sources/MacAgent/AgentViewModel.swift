@@ -1138,6 +1138,7 @@ final class AgentViewModel: ObservableObject {
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
         self.backendClient = backendClient
+        self.screenControlAllowanceService = ScreenControlAllowanceService(client: backendClient)
         self.makePlanner = makePlanner ?? OpenAIPlanner.throughSonnysBackend(client: backendClient)
         self.whitelist = whitelist
         // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
@@ -1561,11 +1562,12 @@ final class AgentViewModel: ObservableObject {
     /// line at all — not a placeholder, not a stale number, and not a sentence about why.
     @Published private(set) var screenControlAllowance: ScreenControlAllowance?
 
-    /// Built over the one backend client this process holds, the same client every other
-    /// authenticated read goes through. `lazy` rather than an initializer parameter because it
-    /// carries no state, no location and no configuration: threading a fourteenth argument through
-    /// every fixture would say nothing this line does not.
-    private lazy var screenControlAllowanceService = ScreenControlAllowanceService(client: backendClient)
+    /// Built in `init` over the one backend client this process holds, the same client every other
+    /// authenticated read goes through. Not an initializer parameter of its own, because it carries
+    /// no state, no location and no configuration: threading a fourteenth argument through every
+    /// fixture would say nothing the one assignment in `init` does not, and a test that wants to
+    /// script the read scripts the client — which is the seam the service is one request wide over.
+    private let screenControlAllowanceService: ScreenControlAllowanceService
 
     /// Ask the gateway for the allowance and publish it; a failure clears the figure.
     ///
