@@ -350,6 +350,14 @@ struct VisionSessionContainmentTests {
         case captureSendDeclined = "capture_send_declined"
         case approvalNotPresentable = "approval_not_presentable"
         case permissionRevoked = "permission_revoked"
+        // SONNY-213. **Three tags for one enum case, and that is the honest enrolment**: the
+        // case carries a `ScreenControlGateRefusal` and its reason code is that refusal's, so one
+        // tag would pin one of three codes and leave the other two unheld. `expectedReasonCode`
+        // switches on the payload exhaustively, so a fourth gate refusal does not compile until it
+        // has a tag here.
+        case screenControlEntitlementUnconfirmed = "entitlement_unconfirmed"
+        case screenControlAllowanceExhausted = "allowance_exhausted"
+        case screenControlAllowanceUnknown = "allowance_unknown"
     }
 
     /// A representative value for each tag. Exhaustive over ``Sample``, so a tag with no sample does
@@ -376,6 +384,12 @@ struct VisionSessionContainmentTests {
         case .captureSendDeclined: return .captureSendDeclined
         case .approvalNotPresentable: return .approvalNotPresentable
         case .permissionRevoked: return .permissionRevoked
+        case .screenControlEntitlementUnconfirmed:
+            return .screenControlUnavailable(.entitlementUnconfirmed(.lapsed))
+        case .screenControlAllowanceExhausted:
+            return .screenControlUnavailable(.allowanceExhausted)
+        case .screenControlAllowanceUnknown:
+            return .screenControlUnavailable(.allowanceUnknown)
         }
     }
 
@@ -402,6 +416,12 @@ struct VisionSessionContainmentTests {
         case .captureSendDeclined: return .captureSendDeclined
         case .approvalNotPresentable: return .approvalNotPresentable
         case .permissionRevoked: return .permissionRevoked
+        case .screenControlUnavailable(let gate):
+            switch gate {
+            case .entitlementUnconfirmed: return .screenControlEntitlementUnconfirmed
+            case .allowanceExhausted: return .screenControlAllowanceExhausted
+            case .allowanceUnknown: return .screenControlAllowanceUnknown
+            }
         }
     }
 
