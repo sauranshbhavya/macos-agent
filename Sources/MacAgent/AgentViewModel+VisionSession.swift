@@ -523,11 +523,17 @@ extension AgentViewModel: VisionSessionInteracting {
     /// not decided cannot compile. A defaulted client would be a second construction of the shared
     /// one, defeating the single-flight refresh guard §3.3 needs; a defaulted `taskContext` would be
     /// a defaulted `retention`, which is a privacy answer nobody chose.
+    /// **`screenControlGate` has no default either, and for a sharper version of the same reason**
+    /// (SONNY-213). A defaulted gate is a fail-open default arriving by silence — the one direction
+    /// a refusal must never take — and the alternative reading, defaulting to a gate that refuses,
+    /// would hide a wiring mistake behind a sentence about the user's allowance. The caller names
+    /// which one it means.
     static func makeVisionEnvironment(
         interaction: any VisionSessionInteracting,
         backendClient: SonnyBackendClient,
         taskContext: BackendTaskContext,
         usageRecorder: any TaskUsageRecording,
+        screenControlGate: any ScreenControlGating,
         userPauseMonitor: UserPausableAttentionMonitor? = nil,
         journalStore: VisionSessionJournalStore? = nil
     ) -> VisionSessionEnvironment {
@@ -544,6 +550,7 @@ extension AgentViewModel: VisionSessionInteracting {
             // session stops when the user does, and `AlwaysAttendedMonitor` is correct only for a
             // build with no way to ask the OS — which this is not.
             attentionMonitor: userPauseMonitor ?? UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor()),
+            screenControlGate: screenControlGate,
             journalStore: journalStore,
             interaction: interaction
         )

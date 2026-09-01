@@ -299,6 +299,9 @@ struct VisionSessionRunTests {
         /// The same store instance the view model was built with, so a test can seed a grant before
         /// a run and read back what an Allow wrote (SONNY-143).
         let approvedApps: ApprovedAppStore
+        /// The billing gate this session ran against, so a test can read *which moments* it was
+        /// consulted at and not only what it answered (SONNY-213).
+        let screenControlGate: ScriptedScreenControlGate
         let root: URL
 
         func tearDown() {
@@ -361,7 +364,15 @@ struct VisionSessionRunTests {
         /// what every test that is not about the network wants; the token-expiry test hands over the
         /// same signed-in client its vision client sends through, because §3.3's single-flight
         /// refresh guard is state on one actor and two clients would be two of them.
-        backendClient: SonnyBackendClient? = nil
+        backendClient: SonnyBackendClient? = nil,
+        /// SONNY-213's billing gate. **Defaults to permissive for the reason
+        /// `appControlAlreadyGranted` defaults to `true`**: every test in this suite that is not
+        /// about billing would otherwise be a test of two things, and a session refused at its own
+        /// door records nothing for those tests to assert on. The gate's own tests pass a scripted
+        /// one. There is no permissive default anywhere in `Sources/` —
+        /// `VisionSessionEnvironment.init` and `makeVisionEnvironment` both require it, so a
+        /// shipping call site cannot acquire one by saying nothing.
+        screenControlGate: ScriptedScreenControlGate? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -432,6 +443,7 @@ struct VisionSessionRunTests {
         let model = ScriptedVisionModel(replies, failingAt: modelFailure)
         let synthesizer = RecordingSynthesizer(frontmost: frontmost)
         let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
+        let gate = screenControlGate ?? .permissive()
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(
             captureService: ScreenCaptureService(
                 permissionChecker: permissions ?? DeterministicScreenPermissions(),
@@ -446,6 +458,7 @@ struct VisionSessionRunTests {
             limits: limits,
             attentionMonitor: attention ?? AlwaysAttendedMonitor(),
             permissionChecker: permissions ?? DeterministicScreenPermissions(),
+            screenControlGate: gate,
             journalStore: journal,
             interaction: viewModel
         )
@@ -459,6 +472,7 @@ struct VisionSessionRunTests {
             taskPlanDetailStore: taskPlanDetailStore,
             routineStore: routineStore,
             approvedApps: approvedAppStore,
+            screenControlGate: gate,
             root: root
         )
     }
@@ -2340,6 +2354,146 @@ struct VisionSessionRunTests {
 
         #expect(ledger.built == 0)
         #expect(fixture.viewModel.visionEmergencyStopHotKey == nil)
+    }
+
+    // MARK: - Row 13: the billing gate (SONNY-213)
+
+    /// **The door refuses, and nothing happens.** No capture, no send, no click, no session record.
+    ///
+    /// This is the ticket's first direction through the real dispatch path — `startVisionSession` →
+    /// `performStart` → the real assessment → the real adapter — rather than through a unit call on
+    /// the adapter, for `anAppOutsideTheStarterListAsksInNormalModeThroughTheRealPath`'s recorded
+    /// reason: a hook nothing calls looks exactly like a hook that passes.
+    @Test
+    func aSessionWithNoAllowanceIsRefusedAtTheDoorAndTouchesNothing() async throws {
+        let gate = ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceExhausted))
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#],
+            screenControlGate: gate
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("You've used your screen-control allowance — top up or wait."))
+        // Nothing ran: no synthesized input, no model call, and no journal row — a session refused
+        // at the door is a session that did not start rather than one that started and stopped.
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.model.prompts.isEmpty, "a refused session sent \(fixture.model.prompts.count) prompts")
+        #expect(try fixture.journal.loadAll().isEmpty)
+        // Exactly one consult, and it is the door's.
+        #expect(gate.consults == [.sessionStart])
+    }
+
+    /// An entitlement the cache cannot confirm refuses at the door too, in that refusal's own words.
+    ///
+    /// **The second of the two grounds the ticket names, and it is not the allowance one.** A gate
+    /// that refused everything with the allowance sentence would pass the test above and tell a
+    /// signed-out user they had spent something.
+    @Test
+    func aSessionWithNoConfirmableEntitlementIsRefusedAtTheDoorInItsOwnWords() async throws {
+        let gate = ScriptedScreenControlGate(
+            answers: [],
+            thereafter: .refused(.entitlementUnconfirmed(.notSignedIn))
+        )
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            screenControlGate: gate
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("Sign in to Sonny to use this."))
+        #expect(!told.contains("allowance"), "the entitlement refusal borrowed the allowance's words")
+        #expect(fixture.synthesizer.clickCount == 0)
+    }
+
+    /// **The mid-run graceful halt** — the step under way finishes, and the session stops at the
+    /// *next* boundary rather than mid-action.
+    ///
+    /// The gate allows the door and the second iteration's boundary, then refuses. So iteration 2's
+    /// click happens and iteration 3 never captures: two clicks, not one and not three. That
+    /// distinction is the whole of what "finish the current atomic step, then stop cleanly at the
+    /// next step boundary" means, and a halt that yanked would show one click here.
+    @Test
+    func anAllowanceExhaustedMidRunFinishesTheStepAndHaltsAtTheNextBoundary() async throws {
+        // Consults: the door, then a boundary before each iteration from the second on. Allowing two
+        // means the session runs iterations 1 and 2 and is refused before iteration 3.
+        let gate = ScriptedScreenControlGate.allowing(steps: 2, thenRefusing: .allowanceExhausted)
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"one"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"Reading List","consequence":"ordinary","rationale":"two"}"#,
+                #"{"action":"done","rationale":"never reached."}"#
+            ],
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0),
+            screenControlGate: gate
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The step under way completed. Both clicks landed, and the third iteration captured
+        // nothing — the model was asked twice, not three times.
+        #expect(fixture.synthesizer.clickCount == 2)
+        #expect(fixture.model.prompts.count == 2, "the halted iteration still sent a capture")
+        #expect(
+            fixture.viewModel.finalSummary
+                == "You've used your screen-control allowance — top up or wait."
+        )
+        // One consult at the door and one before each of iterations 2 and 3 — the first iteration's
+        // permission is the door's answer and is not asked for twice.
+        #expect(gate.consults == [.sessionStart, .stepBoundary, .stepBoundary])
+
+        // The halt goes through the same stop path every other refusal uses, so it leaves a record
+        // with its own reason code rather than a generic failure.
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "allowance_exhausted")
+        #expect(record.endSummary == "You've used your screen-control allowance — top up or wait.")
+        #expect(record.entries.count == 2, "the journal lost an action the session actually took")
+    }
+
+    /// **The asymmetry, at the loop rather than at the gate.** An allowance the gateway would not
+    /// answer refuses at the door and does not halt a running session — so a session admitted with
+    /// runs in hand survives a blip that a fail-closed boundary would have destroyed.
+    ///
+    /// `ScreenControlGateTests` holds the rule; this holds that the loop actually carries on, which
+    /// a decision-level test cannot show.
+    @Test
+    func anUnreadableAllowanceMidRunDoesNotHaltTheSession() async throws {
+        // Runs in hand at the door, and every read after it fails — a session admitted and then
+        // losing the network, which is the only way to reach the boundary's read-failure branch. A
+        // reader that failed from the first call is refused at the door, which is the other branch
+        // and is `anUnreadableAllowanceRefusesAtTheDoorAndDoesNotHaltARunningSession`'s.
+        let gate = SonnyScreenControlGate(
+            entitlements: StubEntitlementConfirmation(.entitled),
+            allowance: StubAllowanceReading(answers: [.runsLeft(5)], thereafter: .failure)
+        )
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"one"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#
+            ],
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0)
+        )
+        defer { fixture.tearDown() }
+        // The real gate rather than the scripted one, because the behaviour under test is this
+        // gate's own reading of a failed fetch and a scripted answer would be asserting the script.
+        fixture.viewModel.visionSessionEnvironment?.screenControlGate = gate
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(fixture.viewModel.finalSummary == "The reading list is open.")
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "completed")
     }
 
     // MARK: - The HUD (SONNY-95)

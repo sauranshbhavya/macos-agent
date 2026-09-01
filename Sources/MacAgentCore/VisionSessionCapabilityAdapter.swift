@@ -8,6 +8,15 @@ public enum VisionSessionError: Error, Equatable, LocalizedError {
     case targetNotControllable(ScreenControlRefusal)
     case visionUnavailable
     case targetAppNotRunning(String)
+    /// Screen control's billing gate refused before the session started (SONNY-213).
+    ///
+    /// **A throw rather than a `VisionSessionOutcome`, because this is the door and not the loop.**
+    /// The two refusals already at this door — `targetNotControllable` and `missingTargetApp` —
+    /// throw, and the runner does not exist yet, so there is no session to end, no record to close
+    /// and no `end(with:)` to route through. Once a session is running the same gate's refusal
+    /// arrives as `VisionContainmentRefusal.screenControlUnavailable` instead, which is the graceful
+    /// halt; both carry the same `ScreenControlGateRefusal` and therefore the same sentence.
+    case screenControlUnavailable(ScreenControlGateRefusal)
 
     public var errorDescription: String? {
         switch self {
@@ -23,6 +32,8 @@ public enum VisionSessionError: Error, Equatable, LocalizedError {
             return "Screen control is not available in this build."
         case .targetAppNotRunning(let name):
             return "Sonny could not bring \(name) to the front. Is it running?"
+        case .screenControlUnavailable(let refusal):
+            return refusal.userFacingReason
         }
     }
 }
@@ -273,6 +284,21 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         }
         guard let environment = context.visionSession else {
             throw VisionSessionError.visionUnavailable
+        }
+
+        // **The gate, at the session entry, and this is one of its two consult sites** (SONNY-213).
+        // The other is the same gate at a step boundary inside `VisionSessionRunner`; there is no
+        // third, and no other capability in this product consults it at all.
+        //
+        // **Here rather than in `resolveDefaultOutputs` or `assessRisk`**, for two reasons that both
+        // point the same way. Those two are synchronous and this decision reads the network, so it
+        // could not be taken there at all; and this is the last moment before anything happens and
+        // the first moment where anything would, so a plan the user never confirms costs no
+        // allowance read. It sits below the terminal ban deliberately: a structural deny should not
+        // depend on a billing answer, and the third door's own comment a few lines up says why that
+        // ordering is a principle rather than a convenience.
+        if case .refused(let refusal) = await environment.screenControlGate.decide(at: .sessionStart) {
+            throw VisionSessionError.screenControlUnavailable(refusal)
         }
 
         let session = VisionSessionRunner(

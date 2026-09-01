@@ -304,6 +304,30 @@ final class VisionSessionRunner {
                 }
             }
 
+            // **The mid-run graceful halt** (SONNY-213), and the second of the billing gate's two
+            // consult sites — the first is `VisionSessionCapabilityAdapter.execute`, which admitted
+            // this session.
+            //
+            // **Position.** Below the containment block, so a user who pressed stop, locked the Mac
+            // or revoked Accessibility is told *that* rather than told about their allowance — those
+            // are more urgent and more accurate, and iteration 1's activation has already happened
+            // by here so nothing steals focus for a session about to halt. Above the capture, so a
+            // session this gate is ending sends nothing: no pixels leave the device, no prompt is
+            // built, nothing is metered. That is the same argument the per-app control gate below
+            // makes for its own position.
+            //
+            // **From the second iteration only, and the guard is the halt's whole shape.** The door
+            // decided iteration 1 and its answer is not re-litigated here; what this adds is a fresh
+            // decision before each *subsequent* step. So the step already under way always finishes
+            // — the ticket's "finish the current atomic step, then stop cleanly at the next step
+            // boundary" — and an allowance exhausted by iteration N's own draw halts at N+1 rather
+            // than yanking N mid-action. It also means the door's read is never paid twice for one
+            // session.
+            if iteration > 1,
+               case .refused(let refusal) = await environment.screenControlGate.decide(at: .stepBoundary) {
+                return end(with: .screenControlUnavailable(refusal), iteration: iteration)
+            }
+
             let capture = try await environment.captureService.captureFrontmostWindow(
                 ofBundleIdentifier: target.bundleIdentifier
             )

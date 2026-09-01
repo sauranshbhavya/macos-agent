@@ -38,6 +38,11 @@ struct EntitlementDecisionTests {
         EntitlementJudgement.judge(claim: claim, capability: capability, session: session, now: now)
     }
 
+    /// The confirmation, which is `judge` with the capability question removed (SONNY-213).
+    static func confirm(at now: Date, claim: EntitlementClaim = claim()) -> EntitlementDecision {
+        EntitlementJudgement.confirm(claim: claim, session: session, now: now)
+    }
+
     // MARK: - The ordinary answers
 
     @Test
@@ -165,5 +170,49 @@ struct EntitlementDecisionTests {
         #expect(EntitlementJudgement.shouldRefresh(
             claim: Self.claim(lifetime: 0), now: Self.issuedAt.addingTimeInterval(-1)
         ))
+    }
+
+    // MARK: - Confirmation, which is judge minus the one question (SONNY-213)
+
+    /// **`confirm` and `judge` agree everywhere except the capability**, over the whole population
+    /// of instants that decide this — which is what makes the gate's use of it a narrowing rather
+    /// than a second, weaker rule.
+    ///
+    /// Asserted as agreement rather than by restating `confirm`'s own expected answers: two lists of
+    /// expected values drift, and the property that matters is that one function is the other with
+    /// exactly one guard removed.
+    @Test
+    func confirmAgreesWithJudgeAtEveryInstantWhenTheClaimNamesTheCapability() {
+        let claim = Self.claim()
+        for offset in [
+            -claim.skewToleranceSeconds - 1,   // before the tolerance opens
+            -claim.skewToleranceSeconds,       // exactly at it
+            60.0,                              // ordinarily current
+            claim.honouredUntil.timeIntervalSince(Self.issuedAt),      // the last honoured instant
+            claim.honouredUntil.timeIntervalSince(Self.issuedAt) + 1   // one second past it
+        ] {
+            let now = Self.issuedAt.addingTimeInterval(offset)
+            #expect(
+                Self.confirm(at: now, claim: claim) == Self.decide(at: now, claim: claim),
+                "offset \(offset)"
+            )
+        }
+        // And the one case they must differ on: a current claim that grants nothing confirms, and is
+        // not entitled. That is the whole of the difference, and it is the row-18 question this
+        // ticket declines to ask.
+        let grantsNothing = Self.claim(capabilities: [])
+        let current = Self.issuedAt.addingTimeInterval(60)
+        #expect(Self.confirm(at: current, claim: grantsNothing) == .entitled)
+        #expect(Self.decide(at: current, claim: grantsNothing) == .refused(.notEntitled))
+    }
+
+    /// A claim about somebody else is refused by the confirmation too, and before anything about
+    /// time — the same ordering `judge` keeps, because the sentence a user is shown depends on it.
+    @Test
+    func confirmRefusesAForeignClaimBeforeItLooksAtTheClock() {
+        let foreign = Self.claim(subject: "user-2")
+        // Long past every window, so a time check would answer `.lapsed` if it ran first.
+        let farFuture = Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60)
+        #expect(Self.confirm(at: farFuture, claim: foreign) == .refused(.claimIsForAnotherSession))
     }
 }
