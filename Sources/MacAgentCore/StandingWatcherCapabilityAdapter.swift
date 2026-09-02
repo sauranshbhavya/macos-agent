@@ -155,6 +155,11 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
         guard !subject.isEmpty else {
             throw AgentExecutionError.invalidPlan("start_watching needs watchSubject: what to tell the user about.")
         }
+        // Capped here rather than only in the record (PR #187, F4). Every other surface reads the
+        // stored watcher, which `StandingWatcher.init` caps; the approval panel below reads this
+        // spec, one gate before any record exists — so without this the one surface the user is
+        // asked to read before consenting was the only uncapped one.
+        let label = StandingWatcher.cappedSubject(subject)
 
         // Asked before an approval panel is raised, so "you already have five" arrives instead of a
         // panel the user approves and a refusal underneath it. `ResumableTaskStore.saveWatcher` is
@@ -165,7 +170,7 @@ public struct StandingWatcherCapabilityAdapter: CapabilityAdapter {
             throw StandingWatcherStoreError.tooManyWatchers(limit: limit)
         }
 
-        return WatchSpec(subject: subject, url: url)
+        return WatchSpec(subject: label, url: url)
     }
 
     /// "15 minutes", "1 minute" — derived from the cap for `StandingWatcherNoticeCopy.dayCount`'s

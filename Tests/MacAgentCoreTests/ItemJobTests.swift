@@ -1088,6 +1088,75 @@ struct ItemJobTests {
         }
     }
 
+    // MARK: - The operations a job may not repeat (PR #187, F1)
+
+    /// The classification itself, pinned in both directions over the whole population.
+    ///
+    /// The complement is the half that carries the risk here, and it is asserted over
+    /// `AgentOperation.allCases` rather than over a hand-picked five: this rule refuses work a user
+    /// legitimately asked for, and a job is *for* doing one thing many times, so a rule that crept
+    /// wider would break the feature it lives inside. Exactly one operation is refused, and the
+    /// sweep is what says so.
+    @Test
+    func theOnlyOperationAJobMayNotRepeatIsTheOneThatSpendsAStandingCap() {
+        let refused = AgentOperation.allCases.filter { $0.jobTemplateRefusal != nil }
+        #expect(refused == [.startWatching])
+        #expect(
+            AgentOperation.startWatching.jobTemplateRefusal
+                == "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+        )
+        // The everyday job operations, named rather than merely absent above, so that adding one
+        // here later fails on the direction the feature is about.
+        for operation in [AgentOperation.invokeShortcut, .convertDocxToPDF, .createZip, .revealInFinder, .openURL] {
+            #expect(operation.jobTemplateRefusal == nil, "\(operation.rawValue) is ordinary job work")
+        }
+    }
+
+    /// The refusal is asked **before** the folder is read, so a job that cannot run never looks at
+    /// the user's files.
+    ///
+    /// Measured by pointing the job at a folder that does not exist: a resolver that read the folder
+    /// first would fail with `PathWhitelist`'s own error instead, and the control below is that same
+    /// plan without the forbidden step, which does fail that way.
+    @Test
+    func aForbiddenTemplateIsRefusedBeforeTheFolderIsEvenRead() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let missing = root.appendingPathComponent("not-there", isDirectory: true).path
+
+        func job(_ steps: [AgentStep]) -> AgentPlan {
+            AgentPlan(
+                summary: "Do this to each of these.",
+                requiresConfirmation: true,
+                steps: steps,
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: missing,
+                    itemKind: .files,
+                    itemField: .inputPath
+                )
+            )
+        }
+        let reveal = AgentStep(id: "r", operation: .revealInFinder, description: "Show it.")
+        let watch = AgentStep(
+            id: "w",
+            operation: .startWatching,
+            description: "Watch it.",
+            targetURL: "https://example.com/status",
+            watchSubject: "the status"
+        )
+
+        #expect(throws: PlanItemJobError.self) {
+            _ = try executor.prepare(plan: job([reveal, watch]))
+        }
+        // The control: without the forbidden step the same declaration gets as far as the folder and
+        // fails there instead, which is what proves the refusal above arrived first.
+        #expect(throws: PathValidationError.notFound(missing)) {
+            _ = try executor.prepare(plan: job([reveal]))
+        }
+    }
+
     // MARK: - The whitelist guards on a job's items (PR #185, F3)
 
     /// A symbolic link is not an item, so a link inside the folder pointing outside the whitelist

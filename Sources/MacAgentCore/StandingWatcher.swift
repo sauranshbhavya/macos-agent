@@ -304,7 +304,16 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
         createdAt.addingTimeInterval(limits.maxLifetime)
     }
 
-    private static func cappedSubject(_ value: String) -> String {
+    /// The subject cap, as a rule two callers share rather than a private step of `init`.
+    ///
+    /// **Public because the approval panel needs the same answer** (PR #187, F4). `init` capping was
+    /// enough while the record was the only surface; the approval reads the *plan's* subject, one
+    /// gate before a record exists, so a model that echoed a paragraph back put the paragraph on the
+    /// one surface a user is meant to read before consenting and 200 characters everywhere after it.
+    /// `StandingWatcherCapabilityAdapter.watchSpec` applies this once, so preview, summary and record
+    /// all show the same string; `init` still applies it too, because a decoded record has no spec
+    /// behind it.
+    public static func cappedSubject(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > maxSubjectCharacters else {
             return trimmed

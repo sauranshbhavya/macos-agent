@@ -47,14 +47,17 @@ struct StandingWatcherCreationTests {
         page: String = "Status: pending",
         failing: Bool = false,
         memoryRecording: MemoryRecordingSettings = .recordEverything,
+        whitelist: PathWhitelist = PathWhitelist(),
+        fetcher: (any WebPageFetching)? = nil,
         now: Date = Date(timeIntervalSince1970: 1_800_000_000)
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             memoryRecording: memoryRecording,
+            whitelist: whitelist,
             routineStore: UnreachableLocalStores.routines(),
             workspaceStore: UnreachableLocalStores.workspaces(),
             webPageLoader: PublicWebPageLoader(
-                fetcher: OneWatchedPageFetcher(text: page, failing: failing),
+                fetcher: fetcher ?? OneWatchedPageFetcher(text: page, failing: failing),
                 robotsChecker: AllowEveryPage(),
                 extractor: OneWatchedPageExtractor(text: page)
             ),
@@ -247,17 +250,33 @@ struct StandingWatcherCreationTests {
 
     /// The subject is a label and is capped like one — a model that echoes a paragraph back does not
     /// get to put a paragraph in a notification.
+    ///
+    /// **Every surface, and the approval is the one that was missing** (PR #187, F4). The record was
+    /// capped from the start, so the row, the notification and the summary all read a capped string.
+    /// The approval panel reads the *plan's* subject, one gate before a record exists — so the one
+    /// surface a user is asked to read before consenting was the only uncapped one, which is exactly
+    /// backwards. The record assertion below is the control: without it a cap applied only in the
+    /// preview would satisfy this test.
     @Test
-    func aVeryLongSubjectIsCappedByTheRecordRatherThanStoredWhole() async throws {
+    func aVeryLongSubjectIsCappedOnEverySurfaceIncludingTheApproval() async throws {
         let (store, root) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = makeExecutor(store: store)
         let long = String(repeating: "a", count: StandingWatcher.maxSubjectCharacters + 50)
 
-        _ = try await executor.execute(plan: watchPlan(subject: long), log: { _, _ in })
+        let prepared = try executor.prepare(plan: watchPlan(subject: long))
+        let detail = try #require(
+            prepared.previews.flatMap(\.details).first { $0.hasPrefix("Watching for: ") }
+        )
+        #expect(detail.count == "Watching for: ".count + StandingWatcher.maxSubjectCharacters)
+
+        let result = try await executor.execute(plan: watchPlan(subject: long), log: { _, _ in })
 
         let watcher = try #require(try store.loadWatchers().first)
         #expect(watcher.subject.count == StandingWatcher.maxSubjectCharacters)
+        // The three surfaces agree by value, not merely by length: one capping rule, applied once.
+        #expect(detail == "Watching for: \(watcher.subject)")
+        #expect(result.summary == "Sonny is watching \u{201C}\(watcher.subject)\u{201D}.")
     }
 
     /// **A routine may not carry one**, and the store's own write door is what enforces it — not the
@@ -268,6 +287,155 @@ struct StandingWatcherCreationTests {
         #expect(throws: AutomationStoreError.unsafeRoutineStep(AgentOperation.startWatching.rawValue)) {
             try StoredRoutine.validateStepSafety(watchPlan().steps)
         }
+    }
+
+    /// **A job over many items may not carry one either — the third repetition door** (PR #187, F1).
+    ///
+    /// This is the shape the reviewer ran rather than a hypothetical: an eight-file folder job whose
+    /// template is `[reveal_in_finder, start_watching]` passed every existing check, because
+    /// `validateTemplateReadsTheItemField` is satisfied by the *first* step alone and
+    /// `PlanItemJobResolver.expanding` then copies every step once per item. What came out was five
+    /// identical watchers of one page, the user's whole cap spent on duplicates, three refusals, and
+    /// a run reporting "Worked through 5 of 8 files."
+    ///
+    /// Driven through the real `prepare` over a real folder, so what is pinned is the door and not
+    /// the classification behind it — and the assertion that **nothing was written** is the half that
+    /// matters, since the old behaviour wrote five before refusing.
+    @Test
+    func aJobOverManyItemsMayNotCarryAStartWatchingStep() throws {
+        let (store, root) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            try Data("x".utf8).write(to: root.appendingPathComponent("\(name).pdf"))
+        }
+        let executor = makeExecutor(store: store, whitelist: PathWhitelist(roots: [root]))
+
+        func job(_ steps: [AgentStep]) -> AgentPlan {
+            AgentPlan(
+                summary: "Do this to each of these.",
+                requiresConfirmation: true,
+                steps: steps,
+                itemJob: PlanItemJob(
+                    source: .folder,
+                    folderPath: root.path,
+                    itemKind: .files,
+                    fileExtensions: ["pdf"],
+                    itemField: .inputPath
+                )
+            )
+        }
+        let reveal = AgentStep(id: "r", operation: .revealInFinder, description: "Show it.")
+        let watch = AgentStep(
+            id: "w",
+            operation: .startWatching,
+            description: "Watch the status page.",
+            targetURL: Self.watchedURL,
+            watchSubject: "the order status"
+        )
+
+        #expect(
+            throws: PlanItemJobError.forbiddenStepOperation(
+                "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+            )
+        ) {
+            _ = try executor.prepare(plan: job([reveal, watch]))
+        }
+        #expect(try store.loadWatchers().isEmpty, "a refused job must not have started any watcher")
+
+        // A template that is *only* the watch step is refused by the same door and with the same
+        // sentence, rather than falling through to "nothing reads the file it would put each item in"
+        // — which is true of it and tells the user nothing they can act on.
+        #expect(
+            throws: PlanItemJobError.forbiddenStepOperation(
+                "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+            )
+        ) {
+            _ = try executor.prepare(plan: job([watch]))
+        }
+
+        // Two controls, because a refusal is worthless if it fires on the fixture. The same job
+        // without the watch step prepares into eight copies, and the same watch step outside a job
+        // still starts a watcher.
+        let allowed = try executor.prepare(plan: job([reveal]))
+        #expect(allowed.plan.steps.count == 8)
+        #expect(try executor.prepare(plan: watchPlan()).plan.steps.count == 1)
+    }
+
+    /// **The two doors, shown disagreeing** (PR #187, F5). The branch asks the cap twice and the
+    /// stated reason is that neither ask is redundant — the adapter's is early so a refusal arrives
+    /// instead of an approval, and `ResumableTaskStore.saveWatcher`'s is the choke point every door
+    /// goes through. Nothing exercised the second half: with the store's ask deleted, every test
+    /// still passed, because in a quiet fixture the two doors always agree.
+    ///
+    /// They can only disagree across the one suspension between them — the page fetch — so the
+    /// fixture puts a watcher there. Four exist when `prepare` runs, so the early door passes on its
+    /// own terms; the loader takes the fifth slot while the page is being read; and the write that
+    /// follows is the only thing left standing between that and a sixth.
+    @Test
+    func aWatcherArrivingWhileThePageIsBeingReadIsRefusedByTheStore() async throws {
+        let (store, root) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let limit = StandingWatcherLimits.standard.maxActive
+        for index in 0..<(limit - 1) {
+            try store.saveWatcher(
+                StandingWatcher(
+                    subject: "existing \(index)",
+                    url: URL(string: "https://example.com/\(index)")!,
+                    createdAt: Date(timeIntervalSince1970: 1_800_000_000),
+                    baselineDigest: "seed-\(index)"
+                )
+            )
+        }
+        let fetcher = FillsTheLastSlotWhileFetching(store: store, limit: limit)
+        let executor = makeExecutor(store: store, fetcher: fetcher)
+
+        // The early door passes: four is below the cap, so this is an approval the user really is
+        // offered.
+        _ = try executor.prepare(plan: watchPlan())
+
+        await #expect(throws: StandingWatcherStoreError.tooManyWatchers(limit: limit)) {
+            _ = try await executor.execute(plan: watchPlan(), log: { _, _ in })
+        }
+        // The fetch happened, which is what places the refusal after the early door rather than at
+        // it — with four watchers that door cannot refuse, so the throw is the store's.
+        #expect(fetcher.fetched)
+        let watchers = try store.loadWatchers()
+        #expect(watchers.count == limit)
+        #expect(watchers.contains { $0.subject == "the order status" } == false)
+    }
+}
+
+/// Takes the last free watcher slot while it is serving the page, so the adapter's early cap check
+/// and the store's write-door check see different worlds (PR #187, F5).
+///
+/// A class rather than a struct because `fetched` is read back after the run: what makes the refusal
+/// attributable to the store rather than to the early door is that the fetch happened at all.
+@MainActor
+private final class FillsTheLastSlotWhileFetching: WebPageFetching {
+    let store: ResumableTaskStore
+    let limit: Int
+    var fetched = false
+
+    init(store: ResumableTaskStore, limit: Int) {
+        self.store = store
+        self.limit = limit
+    }
+
+    func fetch(_ url: URL) async throws -> FetchedWebPage {
+        fetched = true
+        try store.saveWatcher(
+            StandingWatcher(
+                subject: "arrived mid-fetch",
+                url: URL(string: "https://example.com/late")!,
+                createdAt: Date(timeIntervalSince1970: 1_800_000_000),
+                baselineDigest: "late"
+            )
+        )
+        return FetchedWebPage(
+            requestedURL: url,
+            html: "Status: pending",
+            retrievedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
     }
 }
 
