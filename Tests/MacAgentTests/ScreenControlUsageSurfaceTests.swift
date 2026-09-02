@@ -380,6 +380,17 @@ struct ScreenControlUsageSurfaceTests {
         // The control for those two zeros: both shapes are plentiful in this file.
         #expect(MacAgentSource.count(of: "if ", inText: source) > 0)
         #expect(MacAgentSource.count(of: "guard ", inText: source) > 0)
+
+        // **This dialog's other host passes no figure, and that is a decision rather than an
+        // omission.** First run exists to get somebody signed in; a plan's remaining screen-control
+        // runs is not something they can use before they have run anything, and it is one request
+        // they do not need to wait on there. It is pinned because it was not: a mutant handing first
+        // run a real allowance passed the entire suite, which made "the ruling put the figure in
+        // Account" a sentence in a comment rather than a property of the tree.
+        let firstRun = try MacAgentSource.read("FirstRunSequence.swift")
+        #expect(MacAgentSource.count(of: "SignInDialogView(", inText: firstRun) == 1)
+        #expect(MacAgentSource.count(of: "screenControlAllowance: nil", inText: firstRun) == 1)
+        #expect(MacAgentSource.count(of: "refreshScreenControlAllowance: nil", inText: firstRun) == 1)
     }
 
     /// **Insights shows no usage or quota figure of any kind, and until now that founder decision
