@@ -963,42 +963,16 @@ it feels confusing in practice, not just whether it's "technically correct."
       excluded cleanly, not silently miscounted into one
 - [x] "Recently Completed" shows only truly `.completed` tasks — re-verify failed/canceled don't leak
       in (this was a real, previously-fixed bug — easy to regress)
-- [x] ~~No usage/quota metric anywhere on this page (deliberate — its absence is correct)~~ —
-      **SONNY-214 added one on 2026-09-02, and whether that is right is an open founder question
-      rather than a settled supersession. Do not check either state until it is answered.**
-      Confirmed 2026-07-24, when it was true. This row is the checklist's reflection of an explicit
-      product decision in `docs/sonny-founder-design-decisions.md` (§Insights): *do not show
-      usage/quota-consumption metrics on this page*, refused there on stated strategy grounds —
-      cancellation anxiety in heavy users, "am I getting my money's worth" doubt in light ones. That
-      decision predates billing; the ticket that added the row postdates it and asks for it, so one
-      of the two has to give and it is not a session's call which. **This row was first superseded
-      on the authority of the wireframe alone, which is the weaker record; PR #188's fix round found
-      the stronger one and reopened it.** If the ruling keeps the row, this line is superseded and
-      the rows below are what to check; if it removes the row, this line is live again and the first
-      row below it should fail.
-- [ ] **(new 2026-09-02, SONNY-214)** With the gateway container up and a signed-in session
-      (SONNY-212's setup), open Insights. **A "Screen Control" row sits under the three stat cards**
-      reading `N of M runs left this month`, and N and M match `screen_control_runs_left` /
-      `screen_control_runs_included` from `curl .../v1/account/credits`. Label and number only — any
-      sentence explaining what a run is, what counts as one, or what happens at zero would be the
-      finding.
-- [ ] **(new 2026-09-02, SONNY-214)** Run one screen-control task, come back to Insights (leave and
-      return — the figure is fetched when the page appears). **The number has gone down** by what
-      the session cost, agreeing with the curl.
-- [ ] **(new 2026-09-02, SONNY-214)** With the container stopped, open Insights. **The row is absent
-      entirely** — no zero, no placeholder, no error line; the page reads as it did before this
-      ticket.
-- [ ] **(new 2026-09-02, SONNY-214)** **Sign out while you are already looking at Insights, and do
-      not navigate.** The row must **disappear on the spot**. This one is worded the way it is on
-      purpose: the obvious phrasing — "sign out, then open Insights" — cannot fail, because opening
-      the page is itself what fetches the figure, so it would come back green over a real defect
-      (PR #188's F1). Signing out is a menu item and signing in is a sheet, so neither re-opens the
-      page; staying put is the whole test.
-- [ ] **(new 2026-09-02, SONNY-214)** Still without navigating, **sign in as a second account from
-      that same screen**. No figure from the previous account may appear at any point — the row
-      stays absent until you open Insights again, and then it reads the new account's numbers.
-      Check the widget too: start a screen-control task as the second user and the line must show
-      that account's figure or none, never the first user's.
+- [x] No usage/quota metric anywhere on this page (deliberate — its absence is correct) —
+      **confirmed 2026-07-24, and still correct.** Briefly retired on 2026-09-02, when SONNY-214
+      added a `Screen Control — 12 of 20 runs left this month` row to this page, and reinstated the
+      same day when the founders ruled that the row moves to the Account section instead (PR #188).
+      **Why that nearly stuck is worth more than the row:** this line is the only visible reflection
+      in the repository of `docs/sonny-founder-design-decisions.md`'s Insights decision — no usage or
+      quota metric here, on stated product-strategy grounds — so retiring it as a stale wireframe
+      note retired a founder decision without anybody naming it. It is now held by a test as well
+      (`ScreenControlUsageSurfaceTests.insightsCarriesNoUsageMetricOfAnyKind`), so the next attempt
+      fails the suite instead of reaching a founder's manual pass.
 
 ### Routines — `11-MainAppRoutines.svg`/`.png`
 - [x] Create a routine, confirm correct icon/name/step-summary in the list — **confirmed 2026-07-24**
@@ -2246,6 +2220,34 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       outcome the 422 reasoning calls a support incident that reads like data loss. Note that
       `BILLING_API_BASE_URL` now refuses a non-https origin and one carrying a path, so use an https
       origin with no path.
+- [ ] **(new 2026-09-02, SONNY-214) — how many screen-control runs the plan has left, beside the
+      plan.** Same setup and same account as SONNY-216's portal row above; do it straight after that
+      one, so the `<plan> · Active` line and the **Manage subscription** button are already on screen
+      and confirmed. A third line sits with them: **`Screen Control`** on the left and
+      **`N of M runs left this month`** on the right. N and M must match `screen_control_runs_left`
+      and `screen_control_runs_included` from `curl .../v1/account/credits` for that account. Label
+      and number only — **any sentence explaining what a run is, what draws on the allowance, or what
+      happens at zero is the finding.** (It was built on Insights first; the founders moved it here
+      on 2026-09-02 so that page stays free of quota metrics. Insights must show nothing of the kind
+      — §7's Insights row is the check for that.)
+- [ ] **(new 2026-09-02, SONNY-214) — the figure goes down when a run is spent.** Run one
+      screen-control task to completion, then **close Account and reopen it** — the figure is fetched
+      when the dialog appears, not on a timer. The number has dropped by what the session cost, and
+      still agrees with the curl.
+- [ ] **(new 2026-09-02, SONNY-214) — no figure rather than a wrong one.** With the gateway container
+      stopped, open Account. **The `Screen Control` line is absent entirely** — no zero, no
+      placeholder, no error sentence — while the rest of the dialog behaves exactly as SONNY-216's
+      rows describe. A failed read renders nothing rather than a number nobody served.
+- [ ] **(new 2026-09-02, SONNY-214) — one account's figure never reaches the next.** With Account
+      open and the figure showing, **sign out from inside that dialog and do not navigate anywhere**.
+      The `Screen Control` line must go at once, alongside the subscription line. Then **sign in as a
+      second account from that same screen**: no figure from the first account may appear at any
+      point, and once the dialog has read for the new one it shows *that* account's numbers. Check
+      the widget too — start a screen-control task as the second user and the in-task line must show
+      the second account's figure or none, never the first's. **This row is worded to keep you on the
+      screen on purpose**: the obvious version ("sign out, then open Account") cannot fail, because
+      opening the dialog is itself what fetches the figure, so it would read green over a live defect
+      (PR #188's F1).
 - [ ] **(new 2026-08-31, SONNY-216) — the access token rotates without taking the portal down.**
       Follow `server/README.md`'s three steps in order: create a **second** Organization Access Token
       in the Polar dashboard, redeploy the gateway with `BILLING_PROVIDER_ACCESS_TOKEN` set to it,
