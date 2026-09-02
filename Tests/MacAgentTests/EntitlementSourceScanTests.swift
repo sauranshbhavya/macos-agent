@@ -219,10 +219,41 @@ struct EntitlementFreePathScanTests {
 /// designed, the same shape as `theWipesOwnSentenceNamesEveryStoreItDeletes` stopping an unnamed
 /// store.
 ///
-/// **The honest limit, stated as `MacAgentSource`'s own doc demands**: this is a textual scan of
-/// one file's `public` declaration lines. It cannot chase types — a public member returning some
-/// wrapper that carries a claim would pass the token check, and is caught only by the enumeration
-/// forcing a human read of the new line. Anything needing more than that needs a different tool.
+/// **A `public ` prefix is not the same thing as a public declaration, and the first version of this
+/// suite confused them** (PR #189's review, F1 and F2 — both blocking, one fix). The extractor
+/// selected lines with `hasPrefix("public ")`, so a member written `nonisolated public func …` was
+/// invisible to it — and that is not a hypothetical spelling: it is the only ordering this
+/// repository uses for that pair, in the same target this scan reads
+/// (`git grep -nE '^\s*nonisolated (public|private|internal)' -- Sources` names
+/// `OpenAIPlanner.swift` twice; the reversed `^\s*public nonisolated` exits 1). The reviewer's
+/// mutants settled it rather than arguing it: a `nonisolated public` claim door **survived** the
+/// whole suite, the same door reached through an `extension EntitlementService` in another file
+/// **survived**, and a plainly written control **was killed by both tests below** — so the control
+/// fired and the two survivors were this guard's. The extractor now selects a `public` **token** at
+/// declaration position, which is what "public declaration" meant all along.
+///
+/// **The reason it could stand was in the held-sample test, not in the extractor** — and that half
+/// is the more useful one. `theScanWouldFlagASurfaceThatWidenedBack` compared string literals
+/// against the table and against the token, with both samples supplied *already in `public `-prefixed
+/// form*, so the extractor was never on the path the sample took. A guard whose own held sample
+/// skips the component under suspicion has been shown to do nothing; its sibling one screen up gets
+/// this right, reading a real file and then asserting the read happened. Every held sample here now
+/// goes through `publicDeclarationLines(in:)`, and the `nonisolated` one fails against the extractor
+/// this suite shipped with — which is what makes it worth writing.
+///
+/// **The one-file scope has its own consequence, and stating the type-chasing one is not stating
+/// this one.** A `public` member declared in an `extension EntitlementService` anywhere else in
+/// `MacAgentCore` reaches the same surface and no filter over this one file can see it. That is why
+/// `noOtherFileInTheTargetExtendsTheServiceIntoANewSurface` sweeps the whole target: today no such
+/// extension exists, so the cheap assertion is true now and fails the day it stops being — at which
+/// point the population has to be widened rather than the assertion relaxed.
+///
+/// **The honest limit that remains, stated as `MacAgentSource`'s own doc demands**: this is still a
+/// textual scan. It cannot chase types — a public member returning some wrapper that carries a claim
+/// passes the token sweep and is caught only by the enumeration forcing a human read of the new
+/// line — and a `public` token inside a multi-line signature's continuation would be read as its own
+/// declaration. Anything needing more than that needs a different tool, not a stronger claim about
+/// this one.
 @Suite
 @MainActor
 struct EntitlementClaimSurfaceScanTests {
@@ -240,18 +271,58 @@ struct EntitlementClaimSurfaceScanTests {
         "public func awaitPendingRefresh() async {"
     ]
 
-    /// Every comment-stripped line of `EntitlementService.swift` that declares something public,
-    /// trimmed. Multi-line signatures are represented by their first line (`public init(` today),
-    /// which is enough for equality against the table and is where a return type cannot hide — a
-    /// Swift function's arrow sits on the line its parameter list closes on, so a single-line
-    /// signature that grew an arrow no longer equals its table entry.
-    static func publicDeclarationLines() throws -> [String] {
-        let source = try MacAgentSource.read(
-            MacAgentSource.coreSourceDirectory.appendingPathComponent("EntitlementService.swift")
-        )
-        return source.split(separator: "\n", omittingEmptySubsequences: false)
+    /// The keywords a Swift declaration is built on. A line carrying a `public` token *and* one of
+    /// these is a declaration; a line carrying `public` and none of them is something else.
+    static let declarationKeywords: Set<String> = [
+        "func", "var", "let", "init", "deinit", "subscript", "actor", "class", "struct",
+        "enum", "protocol", "extension", "typealias", "associatedtype", "case", "operator"
+    ]
+
+    /// Whether one already-trimmed, comment-stripped line declares something public.
+    ///
+    /// **Token-based rather than prefix-based, which is the whole of PR #189's F1.** Swift lets
+    /// attributes and modifiers precede the access modifier, and this repository writes
+    /// `nonisolated public func` — so `hasPrefix("public ")` answers false for a public member and
+    /// the enumeration silently shrinks. Matching a whitespace-separated `public` token also refuses
+    /// the two ways a prefix match would have gone wrong in the other direction: `publicURL` is one
+    /// token and not this one, and a `"public func"` inside a string literal carries its quote into
+    /// the token, so neither reaches the declaration test.
+    static func declaresSomethingPublic(_ line: String) -> Bool {
+        let words = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        guard words.contains("public") else { return false }
+        // `init(` and `subscript(` carry their parenthesis into the token, so the keyword is the
+        // leading run of letters rather than the whole word.
+        return words.contains { declarationKeywords.contains(String($0.prefix(while: \.isLetter))) }
+    }
+
+    /// Every line of already-read source that declares something public, trimmed. Split out from the
+    /// file-reading form **so a held sample can be driven through the extractor** — the component
+    /// F1's hole was in, and the one F2 found the old held-sample test walking around.
+    ///
+    /// Multi-line signatures are represented by their first line (`public init(` today), which is
+    /// enough for equality against the table and is where a return type cannot hide: a Swift
+    /// function's arrow sits on the line its parameter list closes on, so a single-line signature
+    /// that grew an arrow no longer equals its table entry.
+    static func publicDeclarationLines(in source: String) -> [String] {
+        source.split(separator: "\n", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.hasPrefix("public ") }
+            .filter { declaresSomethingPublic($0) }
+    }
+
+    /// The same, over the real `EntitlementService.swift` with both comment syntaxes stripped.
+    static func publicDeclarationLines() throws -> [String] {
+        publicDeclarationLines(in: try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("EntitlementService.swift")
+        ))
+    }
+
+    /// Whether a line opens an extension **of this actor** — `extension EntitlementServiceTests`
+    /// must not match, so the character after the name has to be one that ends an identifier.
+    static func extendsTheService(_ line: String) -> Bool {
+        let opener = "extension EntitlementService"
+        guard line.hasPrefix(opener) else { return false }
+        guard let next = line.dropFirst(opener.count).first else { return true }
+        return !(next.isLetter || next.isNumber || next == "_")
     }
 
     @Test
@@ -271,10 +342,15 @@ struct EntitlementClaimSurfaceScanTests {
     @Test
     func noPublicDeclarationOnTheServiceNamesTheClaim() throws {
         // The property itself, swept over what the file actually declares rather than over the
-        // table, so both tests must be defeated at once for a widening to land. The full type name
+        // table, so a widening has to defeat this and the enumeration at once. The full type name
         // is the token: `EntitlementCapability` and `EntitlementDecision` share the prefix and must
         // keep passing.
-        for line in try Self.publicDeclarationLines() {
+        let lines = try Self.publicDeclarationLines()
+        // **Zero lines is zero assertions and a green test** (PR #189's review, F4). The sibling
+        // above guards this and this one used to lean on that, which is a coupling nothing stated —
+        // and it is not even the same guard, since a file that moved defeats both at once.
+        try #require(!lines.isEmpty, "the scan read no public declarations — the file moved or the filter broke")
+        for line in lines {
             #expect(
                 !line.contains("EntitlementClaim"),
                 "a public declaration hands out or takes in the claim: \(line)"
@@ -286,15 +362,90 @@ struct EntitlementClaimSurfaceScanTests {
     func theScanWouldFlagASurfaceThatWidenedBack() throws {
         // The rule run over held samples, the shape `theScanWouldFlagAFreePathThatAcquiredTheDependency`
         // records the reason for: a guard only ever run against the tree it currently passes on has
-        // never been shown to catch anything. Both halves of the widening are here — the return
-        // value put back, which changes an existing line out of the table, and a fresh accessor,
-        // which adds a line the table does not hold. Each trips both tests above.
-        let widenedBack = "public func refreshNow() async throws -> EntitlementClaim {"
-        #expect(!Self.publicSurface.contains(widenedBack))
-        #expect(widenedBack.contains("EntitlementClaim"))
+        // never been shown to catch anything.
+        //
+        // **Every sample goes through the extractor, which is what this test used to skip** (PR
+        // #189's F2). It compared literals already written in `public `-prefixed form against the
+        // table and against the token — both of which worked — while the extractor, where the hole
+        // actually was, sat off the path. Feeding a source fragment in instead means the assertion
+        // below fails against the filter this suite shipped with.
+        for sample in [
+            // The return value put back: an existing table line changes, so the enumeration sees it.
+            "    public func refreshNow() async throws -> EntitlementClaim {",
+            // A fresh accessor: a line the table does not hold.
+            "    public var latestClaim: EntitlementClaim? {",
+            // The same door in this repository's own house style for that modifier pair. A
+            // `hasPrefix("public ")` extractor returns nothing at all for this line, so the mutant
+            // carrying it survived the whole suite until F1 was fixed.
+            "    nonisolated public func latestClaim() -> EntitlementClaim? { nil }",
+            // And with the attribute in front, the other way a declaration can begin.
+            "    @MainActor public func latestClaim() -> EntitlementClaim? { nil }"
+        ] {
+            let declared = Self.publicDeclarationLines(in: sample)
+            let trimmed = sample.trimmingCharacters(in: .whitespaces)
+            #expect(declared == [trimmed], "the extractor did not see this as a declaration: \(trimmed)")
+            // Caught twice over: the table does not hold it, and it names the claim.
+            #expect(!Self.publicSurface.contains(trimmed))
+            #expect(declared.contains { $0.contains("EntitlementClaim") })
+        }
 
-        let freshDoor = "public var latestClaim: EntitlementClaim? {"
-        #expect(!Self.publicSurface.contains(freshDoor))
-        #expect(freshDoor.contains("EntitlementClaim"))
+        // And the extractor is not simply matching everything: a line that carries the word without
+        // declaring anything, and one that carries it inside a literal, are both refused. Without
+        // this, widening the filter to fix F1 could have been widened into a filter that passes
+        // every line and an enumeration that means nothing.
+        // Comment-prefixed lines are gone before the extractor sees them — `MacAgentSource.read`
+        // strips both syntaxes — so they are not this function's job and are not asserted here. A
+        // *trailing* comment does survive that strip, and one carrying both a `public` token and a
+        // declaration keyword would be read as a declaration: that direction adds a line the value
+        // table does not hold, so it fails loudly rather than hiding a door, which is the direction
+        // to be wrong in.
+        for notADeclaration in [
+            "return publicClaim",
+            #"log("public func latestClaim() -> EntitlementClaim?")"#
+        ] {
+            #expect(
+                Self.publicDeclarationLines(in: notADeclaration).isEmpty,
+                "the extractor read a non-declaration as one: \(notADeclaration)"
+            )
+        }
+    }
+
+    @Test
+    func noOtherFileInTheTargetExtendsTheServiceIntoANewSurface() throws {
+        // **The one-file scope's own consequence** (PR #189's F1, second half). A `public` member
+        // declared in an `extension EntitlementService` in any other file of this target reaches the
+        // same surface, and no filter over `EntitlementService.swift` can see it — a mutant doing
+        // exactly that survived the whole suite. Folding those bodies into the enumeration is the
+        // thorough fix; asserting there are none is the cheap one, and it is enough because it fails
+        // the day the assumption stops holding, which is when the population has to be widened.
+        let files = try MacAgentSource.coreSourceFiles()
+        try #require(!files.isEmpty, "no source files were read — the target moved or the walk broke")
+        var offenders: [String] = []
+        var sawTheService = false
+        for url in files {
+            let relativePath = MacAgentSource.coreRelativePath(of: url)
+            if relativePath == "EntitlementService.swift" {
+                sawTheService = true
+                continue
+            }
+            for line in try MacAgentSource.read(url).split(separator: "\n")
+            where Self.extendsTheService(line.trimmingCharacters(in: .whitespaces)) {
+                offenders.append("\(relativePath): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        // The walk really reached the actor's own file; without this, a renamed or moved
+        // `EntitlementService.swift` leaves an empty sweep that reads exactly like a clean one.
+        #expect(sawTheService, "EntitlementService.swift was not among the files walked")
+        #expect(
+            offenders.isEmpty,
+            Comment(rawValue: "the service's surface is extended outside its own file, so the "
+                + "enumeration above no longer sees all of it:\n" + offenders.joined(separator: "\n"))
+        )
+
+        // The rule shown to flag what it names, and to leave the near-miss alone.
+        #expect(Self.extendsTheService("extension EntitlementService {"))
+        #expect(Self.extendsTheService("extension EntitlementService: Sendable {"))
+        #expect(!Self.extendsTheService("extension EntitlementServiceTests {"))
+        #expect(!Self.extendsTheService("extension EntitlementClaim {"))
     }
 }
