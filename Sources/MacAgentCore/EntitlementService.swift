@@ -31,8 +31,8 @@ import Foundation
 /// this actor starts when the cached claim is stale — the same shape, and the same generation-free
 /// reasoning, as `SonnyBackendClient`'s token refresh: one request whatever the number of callers,
 /// and a failure that costs nothing because the cached claim keeps working until its grace runs out.
-/// `refreshNow()` is the explicit form, for a caller that wants the new claim rather than the next
-/// answer.
+/// `refreshNow()` is the explicit form, for a caller that wants the refresh to have happened — and
+/// to hear that it failed — rather than the next answer. It hands back no claim (SONNY-388).
 public actor EntitlementService {
     private let client: SonnyBackendClient
     private let store: any EntitlementStoring
@@ -284,8 +284,18 @@ public actor EntitlementService {
     /// **Verified before it is stored**, so a response this build cannot check never becomes the
     /// cached answer — and the claim already on disk, which may still be inside its grace window,
     /// survives a bad one rather than being replaced by it.
-    @discardableResult
-    public func refreshNow() async throws -> EntitlementClaim {
+    ///
+    /// **Returns nothing, and the nothing is the point** (SONNY-388, founders' ratification
+    /// 2026-08-31). This used to return the verified `EntitlementClaim`, which made the
+    /// narrow-surface property above `currentSubscription()` a convention rather than a shape: a
+    /// caller holding the claim can read `capabilities` and decide entitlement itself, with no
+    /// judge, no session check and no `effectiveNow` clock defence, none of it enforceable once the
+    /// value leaves this actor. No public surface on this type hands out a claim now, so the
+    /// property holds by shape — `EntitlementClaimSurfaceScanTests` enumerates the public surface
+    /// and holds it there. What a caller still gets is the half that matters: this throws, so
+    /// unlike the background refresh it *reports*, and success means the store now holds the
+    /// verified claim for `decision(for:)` and `currentSubscription()` to answer from.
+    public func refreshNow() async throws {
         let response = try await client.send(SonnyBackendRequest(
             method: "GET",
             path: "/v1/account/entitlements",
@@ -312,7 +322,6 @@ public actor EntitlementService {
         let observedAt = await client.lastObservedServerTime()?.projected(to: monotonicNow())
         let fallback = await client.serverNow()
         try await adopt(claim, compact: envelope.entitlement, observedAt: observedAt ?? fallback)
-        return claim
     }
 
     /// Take a verified claim, **keeping the later of the two high-water marks**.
@@ -444,7 +453,7 @@ public actor EntitlementService {
             // Failure is deliberately swallowed: this is the *background* refresh, its whole point is
             // that the cached claim keeps working when it cannot run, and a caller asking whether it
             // is entitled is not asking about the network. `refreshNow()` is the form that reports.
-            _ = try? await self?.refreshNow()
+            try? await self?.refreshNow()
             await self?.clearRefreshTask()
         }
     }

@@ -498,7 +498,7 @@ struct EntitlementServiceTests {
             monotonicNow: clocks.monotonic
         )
 
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         #expect(await service.decision(for: Self.capability) == .entitled)
 
         // A hundred hours of real time pass with the Mac offline — past the claim's 24-hour life and
@@ -577,7 +577,7 @@ struct EntitlementServiceTests {
         // header is read before a status is looked at, so the observation lands anyway.
         clocks.advance(by: 100 * 60 * 60)
         serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
-        _ = try? await service.refreshNow()
+        try? await service.refreshNow()
 
         // Now the owner sets the Mac back. §3.5's offset moves with them; the observation does not.
         clocks.setWallClock(to: Self.issuedAt.addingTimeInterval(3600))
@@ -610,7 +610,7 @@ struct EntitlementServiceTests {
                 body: try! JSONSerialization.data(withJSONObject: ["entitlement": compact])
             )
         }
-        _ = try await EntitlementService(
+        try await EntitlementService(
             client: first.client,
             store: store,
             keys: signer.keys,
@@ -641,7 +641,7 @@ struct EntitlementServiceTests {
             monotonicNow: clocks.monotonic
         )
         // One response. It fails, so no claim is adopted; the `Date` header is still read.
-        _ = try? await relaunched.refreshNow()
+        try? await relaunched.refreshNow()
 
         // **Only now does the owner set the clock back, and the order is the whole test.** Rolling
         // back *before* the response would leave §3.5's offset carrying the truth — the header is
@@ -695,14 +695,14 @@ struct EntitlementServiceTests {
             keys: signer.keys,
             monotonicNow: clocks.monotonic
         )
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         #expect(await service.decision(for: Self.capability) == .entitled)
 
         // A minute of local time, and a server that reports a hundred hours.
         clocks.advance(by: 60)
         succeed.goOffline()
         serverSays.set(Self.issuedAt.addingTimeInterval(100 * 60 * 60))
-        _ = try? await service.refreshNow()
+        try? await service.refreshNow()
 
         #expect(await service.decision(for: Self.capability) == .refused(.lapsed))
     }
@@ -737,7 +737,7 @@ struct EntitlementServiceTests {
             keys: signer.keys,
             monotonicNow: clocks.monotonic
         )
-        _ = try await live.refreshNow()
+        try await live.refreshNow()
         // **The network goes away before the refusal, and saying so is the point** (PR #173's
         // review, finding 6). The refusal below starts a refresh, and a refresh that reached this
         // stub would adopt a claim issued a hundred hours ago against a mark that has just passed
@@ -804,7 +804,7 @@ struct EntitlementServiceTests {
             keys: signer.keys,
             monotonicNow: clocks.monotonic
         )
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
 
         // A year forward on the wall clock alone. It refuses — and the mark stays where real time
         // put it.
@@ -866,7 +866,7 @@ struct EntitlementServiceTests {
         // **While the gateway is wrong nothing is broken**, and that is why this reaches production
         // rather than a test: its header and its signed claim agree, so the Mac judges in the
         // gateway's own frame and answers yes. Everything below happens after it is put right.
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         #expect(await service.decision(for: Self.capability) == .entitled)
 
         // Ninety-seven hours of real time — past the poisoned claim's own 24-hour life and 72-hour
@@ -925,11 +925,11 @@ struct EntitlementServiceTests {
             keys: signer.keys,
             monotonicNow: clocks.monotonic
         )
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
 
         clocks.advance(by: 60)
         gatewaySays.set(Self.issuedAt.addingTimeInterval(365 * 24 * 60 * 60))
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
 
         // **The mark is read here, before any decision is asked for, and the order is not cosmetic.**
         // The bound is spent per response, so an exact figure is a statement about how many responses
@@ -955,7 +955,7 @@ struct EntitlementServiceTests {
         // the whole of SONNY-344: on the tree this was found at, this last answer stayed `.lapsed`
         // for a year and then forever.
         gatewaySays.set(Self.issuedAt.addingTimeInterval(60))
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         #expect(await service.decision(for: Self.capability) == .entitled)
         // Stated as the property rather than as arithmetic, for the reason given above: by now the
         // count of responses includes one this test did not write. A year is 31,536,000 seconds.
@@ -993,13 +993,13 @@ struct EntitlementServiceTests {
             keys: signer.keys,
             monotonicNow: clocks.monotonic
         )
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
 
         // The gateway steps ten minutes forward — four times what one response may carry.
         let step: TimeInterval = 600
         clocks.advance(by: 1)
         gatewaySays.set(Self.issuedAt.addingTimeInterval(step + 1))
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         let afterOne = try #require(await fixture.client.lastObservedServerTime()).serverInstant
         #expect(afterOne < gatewaySays.instant)
         #expect(
@@ -1009,7 +1009,7 @@ struct EntitlementServiceTests {
 
         clocks.advance(by: 1)
         gatewaySays.set(Self.issuedAt.addingTimeInterval(step + 2))
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
         let afterTwo = try #require(await fixture.client.lastObservedServerTime()).serverInstant
         #expect(afterTwo == gatewaySays.instant)
     }
@@ -1127,7 +1127,7 @@ struct EntitlementServiceTests {
             keys: signer.keys
         )
 
-        let claim = try await service.refreshNow()
+        try await service.refreshNow()
 
         #expect(seen.all.map(\.path) == ["/v1/account/entitlements"])
         // A `GET`, carrying the session's bearer token and no idempotency key — there is nothing for
@@ -1135,9 +1135,21 @@ struct EntitlementServiceTests {
         #expect(try seen.only.method == "GET")
         #expect(try seen.only.idempotencyKey == nil)
         #expect(try seen.only.authorization?.hasPrefix("Bearer ") == true)
-        #expect(claim.subject == "test-user")
-        #expect(claim.capabilities == ["test.capability"])
-        #expect(store.current?.compactClaim == compact)
+        // **This used to assert `claim.subject` and `claim.capabilities` on `refreshNow()`'s return
+        // value, and that value is gone** (SONNY-388) — it was the only site in the tree reading
+        // capabilities off a handed-out claim, which is what the ratification removed. The same
+        // facts are asserted through the store instead: the cached bytes are exactly what the
+        // gateway sent, and the claim they verify to is what the return value used to be. The
+        // throw is still the success signal — `awaitPendingRefresh()` could not replace that,
+        // because the detached refresh swallows failure.
+        let cached = try #require(store.current?.compactClaim)
+        #expect(cached == compact)
+        guard case .success(let adopted) = EntitlementVerifier.verify(cached, against: signer.keys) else {
+            Issue.record("the cached claim did not verify against the keys that signed it")
+            return
+        }
+        #expect(adopted.subject == "test-user")
+        #expect(adopted.capabilities == ["test.capability"])
         // And the answer is now available offline.
         #expect(await service.decision(for: Self.capability) == .entitled)
     }
@@ -1205,7 +1217,7 @@ struct EntitlementServiceTests {
             keys: signer.keys
         )
 
-        _ = try await service.refreshNow()
+        try await service.refreshNow()
 
         #expect(store.current?.compactClaim == current)
         // Which is the point: the revoked state survives the replay.
