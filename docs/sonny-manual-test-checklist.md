@@ -539,6 +539,40 @@ same owner the HUD and both approval panels read. The shipping cap is **12**
       "of" is the defect. Press **Send**, answer the action approval, and on the next capture review
       the same line must read **"Step 2 of 12"** — the left number moves, the right one does not
 
+### 3c-quinquies. A screen-control run says how many are left (new 2026-09-02, SONNY-214)
+
+**What changed:** the widget now shows a small muted line — `12 runs left`, SONNY-212's number,
+nothing else — at the foot of its glass panel whenever a **screen-control** task is waiting on its
+approval or in flight, and never beside an ordinary free task. The figure is fetched when the task
+goes in flight, so it needs the gateway container up and a signed-in session (SONNY-212's setup,
+`CREDIT_PLANS` included). No explanatory copy anywhere: the number, the word "left", and that is the
+whole sentence.
+
+The line's *window* is the one thing here that differs from the ticket's own wording, decided
+2026-08-31 and worth knowing before you test it: in **Normal** and **Power** a screen-control
+session raises no approval prompt at all, so there is no "about to run" moment to hang a line on and
+it shows during the run instead. In **Safe** mode the approval pause is that moment and the line is
+there before you press anything.
+
+- [ ] **(new 2026-09-02, SONNY-214)** In **Normal** mode, ask for a screen-control task ("open my
+      reading list in Safari using screen control"). **The line appears on the widget's panel while
+      the session runs** — there is no approval prompt in Normal, so the working/controlling panel is
+      where it shows — and it reads the same number `curl .../v1/account/credits` reports. It may
+      land a beat after the panel does; it is fetched, not cached.
+- [ ] **(new 2026-09-02, SONNY-214)** In **Safe** mode, ask for the same task. **The line is already
+      there on the approval panel, before you press Allow** — the literal "about to run" moment.
+- [ ] **(new 2026-09-02, SONNY-214)** Ask for an ordinary free task — a calculation, a web search,
+      opening an app. **No runs-left line anywhere**, on any panel state, working through result.
+      This is the row the ticket exists for; run it right after one of the two above so you know a
+      figure was in hand.
+- [ ] **(new 2026-09-02, SONNY-214)** Run one screen-control task to completion and read its result
+      panel. **The line is gone the moment nothing is pending or in flight** — the result does not
+      inherit it.
+- [ ] **(new 2026-09-02, SONNY-214)** With the gateway container stopped (or signed out), ask for a
+      screen-control task. **The run proceeds exactly as before and no line appears** — no zero, no
+      placeholder, no error sentence. A failed read renders nothing rather than a number nobody
+      served.
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying
@@ -929,7 +963,24 @@ it feels confusing in practice, not just whether it's "technically correct."
       excluded cleanly, not silently miscounted into one
 - [x] "Recently Completed" shows only truly `.completed` tasks — re-verify failed/canceled don't leak
       in (this was a real, previously-fixed bug — easy to regress)
-- [x] No usage/quota metric anywhere on this page (deliberate — its absence is correct)
+- [x] ~~No usage/quota metric anywhere on this page (deliberate — its absence is correct)~~ —
+      **superseded 2026-09-02 by SONNY-214: this page now carries one, and that is the correct
+      state.** Confirmed 2026-07-24, when it was true and deliberate; billing did not exist yet and
+      `14-MainAppInsights.svg` still predates it. The absence is no longer what to check for — the
+      three rows below are. Left in place rather than deleted so a reader who remembers the old rule
+      sees why it changed.
+- [ ] **(new 2026-09-02, SONNY-214)** With the gateway container up and a signed-in session
+      (SONNY-212's setup), open Insights. **A "Screen Control" row sits under the three stat cards**
+      reading `N of M runs left this month`, and N and M match `screen_control_runs_left` /
+      `screen_control_runs_included` from `curl .../v1/account/credits`. Label and number only — any
+      sentence explaining what a run is, what counts as one, or what happens at zero would be the
+      finding.
+- [ ] **(new 2026-09-02, SONNY-214)** Run one screen-control task, come back to Insights (leave and
+      return — the figure is fetched when the page appears). **The number has gone down** by what
+      the session cost, agreeing with the curl.
+- [ ] **(new 2026-09-02, SONNY-214)** Signed out, or with the container stopped, open Insights.
+      **The row is absent entirely** — no zero, no placeholder, no error line; the page reads as it
+      did before this ticket.
 
 ### Routines — `11-MainAppRoutines.svg`/`.png`
 - [x] Create a routine, confirm correct icon/name/step-summary in the list — **confirmed 2026-07-24**
