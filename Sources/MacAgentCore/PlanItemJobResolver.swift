@@ -219,13 +219,14 @@ public enum PlanItemJobResolver {
     /// not `expanding`'s deliberately: `expanding` is a pure rewrite that several tests drive
     /// directly, and a guard placed there would be one every caller could skip. `resolving` is the
     /// single door in `Sources/` — `git grep -n 'PlanItemJobResolver.resolving(' -- Sources | grep -vE ':[0-9]+: *[/][/]'`
-    /// → 1 at `8011deb`, `AgentActionExecutor.prepare`. Dropping the comment stage answers **3** at
+    /// → 1 at `0a12ed8`, `AgentActionExecutor.prepare`. Dropping the comment stage answers **3** at
     /// that same head — the one call plus the two doc comments citing it, `PlanItemJob.swift`'s and
     /// this one — which is the control that shows the stage rather than the pattern is doing the
-    /// excluding. This sentence first shipped stamped `73391ba` and saying 2, which was true of the
-    /// tree *before* it was written into: committing a citation into the population it greps adds a
-    /// match, so the stamp has to name a commit that already contains the sentence (`CLAUDE.md`'s
-    /// ninth write-the-command defect, arriving in the fix for its own F1).
+    /// excluding. This sentence first shipped stamped at a commit that predated it and saying 2,
+    /// which was a true reading of the tree *before* it was written into: committing a citation into
+    /// the population it greps adds a match, so the stamp has to name a commit that already contains
+    /// the sentence (`CLAUDE.md`'s ninth write-the-command defect, arriving inside the fix for this
+    /// branch's own F1 — which is where that rule says attention is lowest).
     private static func validateTemplateOperations(_ steps: [AgentStep]) throws {
         for step in steps {
             if let refusal = step.operation.jobTemplateRefusal {
