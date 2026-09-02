@@ -32,6 +32,13 @@ let agentViewModel = AgentViewModel.atItsRealStoreLocations(backendClient: accou
 // why the wiring is a line here rather than a reference inside either.
 accountModel.sessionDidChange = { [weak agentViewModel] in
     agentViewModel?.refreshPermissions()
+    // **And the screen-control figure, for the same reason one line up** (SONNY-214; PR #188's F1).
+    // It is an account-scoped number read over an authenticated session, and the only things that
+    // ask for it are the two surfaces that show it, when they appear — which is precisely what a
+    // sheet and a menu item do not re-fire. Without this line a signed-out user went on reading
+    // "12 of 20 runs left this month" on the page they were already on, and the next user to sign in
+    // on this Mac read the previous one's figure.
+    agentViewModel?.forgetScreenControlAllowance()
 }
 let delegate = AppDelegate(
     viewModel: agentViewModel,

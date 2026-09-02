@@ -50,11 +50,130 @@ struct ScreenControlUsageSurfaceTests {
         fixture.viewModel.start(prebuiltPlan: Self.freePlan)
         try await fixture.waitForApproval()
 
+        // **Asserted before the gate is read, and this is the half that carries the test** (PR
+        // #188's F2). Every expectation below is also true of a view model that has never run
+        // anything at all — `false`, `nil` and an allowance nobody consumed are exactly the empty
+        // state — so on their own they prove that *nothing* is in flight rather than that a free
+        // task is. These two say which task the gate is answering about: a free plan, prepared, and
+        // parked in the same pause the screen-control run above was read in.
+        #expect(fixture.viewModel.isAwaitingApproval)
+        #expect(fixture.viewModel.plan?.steps.first?.operation == .calculateUtility)
+
         #expect(fixture.viewModel.isScreenControlTaskInFlight == false)
         #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == nil)
         // And the figure really is still there to be shown, so the `nil` above is the gate's answer
         // and not a read that expired between the two halves.
         #expect(try #require(fixture.viewModel.screenControlAllowance).runsLeft == 12)
+    }
+
+    /// **The window between a dispatch and its plan**, which the gate used to answer wrongly (PR
+    /// #188's F3, reviewer probe P2 — this is that probe, kept).
+    ///
+    /// `start()` flips `isRunning` synchronously and `performStart` is the body of an unstructured
+    /// `Task`, so for one main-actor turn the two published properties the gate reads described two
+    /// different runs: the new free task's `isRunning`, and the previous screen-control run's
+    /// `plan`. Nothing is awaited between the dispatch and the expectation below, so this test has
+    /// no race of its own — it reads exactly that turn, and it failed on the tree this branch was
+    /// reviewed at.
+    @Test
+    func aFreeTaskDispatchedAfterAScreenControlRunShowsNoFigureInTheTurnBeforeItsPlanArrives() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20)
+        await fixture.viewModel.refreshScreenControlAllowance()
+
+        fixture.viewModel.command = "open my reading list in Safari"
+        fixture.viewModel.start(prebuiltPlan: Self.screenControlPlan, prebuiltPlanSource: .visionSession)
+        try await fixture.waitForApproval()
+        fixture.viewModel.cancelCurrentRun()
+        try await fixture.waitForIdle()
+        // A cancel at the pause deliberately leaves the plan behind — that is what makes the window
+        // reachable at all, and `aFigureThatWasReadDoesNotOutliveTheRunItWasShownBeside` is the
+        // test of the property itself.
+        #expect(fixture.viewModel.plan?.steps.first?.operation == .visionSession)
+
+        fixture.viewModel.command = "what is 2 + 2"
+        fixture.viewModel.start(prebuiltPlan: Self.freePlan)
+
+        #expect(fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == nil, "the gate answered a figure for a free task")
+
+        try await fixture.waitForApproval()
+        fixture.viewModel.cancelCurrentRun()
+        try await fixture.waitForIdle()
+    }
+
+    /// **A scheduled routine is not the user's screen-control task** (PR #188's F3, second door).
+    ///
+    /// `performScheduledRun` sets `isRunning` and deliberately leaves `plan` alone — its own doc
+    /// comment lists `plan` among the properties a background run must not disturb — so a routine
+    /// firing after a screen-control run inherited that plan and the gate answered `true` for the
+    /// whole of it. The consequence was a `GET /v1/account/credits` for a run nobody is watching,
+    /// against the widget's own comment that an ordinary task asks for nothing. The gate reads
+    /// `activeTaskOrigin` now, which is the property that method names as the one keeping widget
+    /// surfaces off a task the user never started.
+    @Test
+    func aScheduledRoutineRunNeverCarriesTheFigureEvenAfterAScreenControlRun() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20)
+        await fixture.viewModel.refreshScreenControlAllowance()
+        try fixture.saveScheduledRoutine()
+
+        fixture.viewModel.command = "open my reading list in Safari"
+        fixture.viewModel.start(prebuiltPlan: Self.screenControlPlan, prebuiltPlanSource: .visionSession)
+        try await fixture.waitForApproval()
+        fixture.viewModel.cancelCurrentRun()
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.plan?.steps.first?.operation == .visionSession)
+
+        fixture.viewModel.checkScheduledRoutines(now: UsageFixture.tenAM)
+
+        // The routine really did start — without this the two expectations below are the empty
+        // state again, which is the shape F2 was filed for.
+        #expect(fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.isScreenControlTaskInFlight == false)
+        #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == nil)
+
+        try await fixture.waitForIdle()
+    }
+
+    /// **Signing out forgets the figure** (PR #188's F1).
+    ///
+    /// It is an account-scoped number read over an authenticated session, and nothing in the two
+    /// surfaces re-reads it when the session changes: signing in is a sheet over Command Center and
+    /// signing out a menu item, so neither re-fires the `onAppear` that is otherwise the only thing
+    /// that asks. Left alone, a user who signed out went on reading their own figure and the next
+    /// user on the same Mac read it too. `SignInView.signOut()` clears `subscription` synchronously
+    /// for exactly this reason (PR #183's F13); this is the same class of datum.
+    @Test
+    func theFigureIsForgottenWhenTheSessionChanges() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20)
+
+        await fixture.viewModel.refreshScreenControlAllowance()
+        #expect(try #require(fixture.viewModel.screenControlAllowance).runsLeft == 12)
+
+        fixture.viewModel.forgetScreenControlAllowance()
+
+        #expect(fixture.viewModel.screenControlAllowance == nil)
+        #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == nil)
+    }
+
+    /// The wiring itself: `main.swift` is the one file that holds both the account model and the
+    /// view model, so it is the only place that can join a session change to this figure — and a
+    /// method nothing calls would pass the test above while shipping the defect.
+    @Test
+    func theSessionChangeHandlerForgetsTheFigure() throws {
+        let source = try MacAgentSource.read("main.swift")
+        let handler = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "accountModel.sessionDidChange = { [weak agentViewModel] in"
+        )
+        #expect(MacAgentSource.count(of: "accountModel.sessionDidChange = {", inText: source) == 1)
+        #expect(MacAgentSource.count(of: "forgetScreenControlAllowance()", inText: handler) == 1)
+        #expect(MacAgentSource.count(of: "forgetScreenControlAllowance", inText: source) == 1)
     }
 
     @Test
@@ -115,6 +234,46 @@ struct ScreenControlUsageSurfaceTests {
         #expect(ScreenControlUsagePresentation.usageLine(Self.allowance(runsLeft: 12)) == "12 of 20 runs left this month")
         #expect(ScreenControlUsagePresentation.usageLine(Self.allowance(runsLeft: 1)) == "1 of 20 runs left this month")
         #expect(ScreenControlUsagePresentation.usageLine(Self.allowance(runsLeft: 0)) == "0 of 20 runs left this month")
+        // **The denominator's own singular, which is the branch's one decided-and-unheld branch**
+        // (PR #188's F6). Every case above holds `runsIncluded` at 20, so the ternary that makes the
+        // noun agree with the denominator never took its true arm — and a mutant flipping its
+        // boundary from `== 1` to `== 0` passed the whole suite. Whether a one-run plan exists in
+        // `CREDIT_PLANS` today is the server's business and not this side's: the rule is that the
+        // noun agrees with the number it counts, and it is held here at the only value that can
+        // show it.
+        #expect(
+            ScreenControlUsagePresentation.usageLine(Self.allowance(runsLeft: 1, runsIncluded: 1))
+                == "1 of 1 run left this month"
+        )
+        #expect(
+            ScreenControlUsagePresentation.usageLine(Self.allowance(runsLeft: 0, runsIncluded: 1))
+                == "0 of 1 run left this month"
+        )
+    }
+
+    /// **The figure is observable, which is the branch's own central claim about it** (PR #188's
+    /// F9).
+    ///
+    /// `isScreenControlTaskInFlight`'s doc rejects the `preparedRun` spelling because it is
+    /// unpublished and "would leave a view showing the wrong answer until something else happened to
+    /// redraw it". The same is true of this property the moment the attribute comes off it, and
+    /// deleting it passed all 2710 tests — the two surfaces would go on compiling and simply stop
+    /// updating. A scan is the available tool: this repository has no SwiftUI inspection harness,
+    /// and `MacAgentSource` strips comments before counting, so the sentence above cannot satisfy it.
+    @Test
+    func theAllowanceIsPublishedSoTheTwoSurfacesSeeItChange() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        #expect(
+            MacAgentSource.count(
+                of: "@Published private(set) var screenControlAllowance: ScreenControlAllowance?",
+                inText: source
+            ) == 1
+        )
+        // The control: the declaration is found without its attribute too, so the count above is
+        // reading the attribute rather than answering zero for a property that has been renamed.
+        #expect(
+            MacAgentSource.count(of: "var screenControlAllowance: ScreenControlAllowance?", inText: source) == 1
+        )
     }
 
     /// **The standing rule, held by value** (`CLAUDE.md`: no explanatory or how-it-works copy in the
@@ -147,6 +306,14 @@ struct ScreenControlUsageSurfaceTests {
     @Test
     func theWidgetShowsTheFigureThroughTheGateAndRefreshesWhenAScreenControlRunBegins() throws {
         let source = try MacAgentSource.read("FloatingWidgetView.swift")
+        // **Each anchor is pinned to one occurrence before it is sliced on** (PR #188's F11).
+        // `braceBlock` takes the *first* match, so a second identical anchor arriving later would
+        // silently redirect the slice to a region that satisfies these counts for the wrong reason —
+        // SONNY-378's own remedy, applied to the anchors rather than to the tokens inside them.
+        #expect(MacAgentSource.count(of: "private var styledPanel: some View {", inText: source) == 1)
+        #expect(
+            MacAgentSource.count(of: ".onChange(of: viewModel.isScreenControlTaskInFlight) {", inText: source) == 1
+        )
         let panel = try MacAgentSource.braceBlock(of: source, openedBy: "private var styledPanel: some View {")
         #expect(MacAgentSource.count(of: "viewModel.screenControlRunsLeftForTaskInFlight", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.inTaskLine(", inText: panel) == 1)
@@ -168,6 +335,15 @@ struct ScreenControlUsageSurfaceTests {
     @Test
     func commandCenterShowsTheUsageRowInTheStatsAreaAndAsksForTheFigureThere() throws {
         let source = try MacAgentSource.read("CommandCenterView.swift")
+        // Each anchor pinned to one occurrence before it is sliced on — see the widget test above.
+        for anchor in [
+            "private struct InsightsView: View {",
+            "private struct InsightsOverviewBento: View {",
+            "private struct ScreenControlUsageRow: View {"
+        ] {
+            #expect(MacAgentSource.count(of: anchor, inText: source) == 1, "anchor is not unique: \(anchor)")
+        }
+
         let bento = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsOverviewBento: View {")
         #expect(MacAgentSource.count(of: "ScreenControlUsageRow(allowance:", inText: bento) == 1)
 
@@ -176,6 +352,23 @@ struct ScreenControlUsageSurfaceTests {
         // System A, and only System A — the widget's tokens have no business on this page.
         #expect(MacAgentSource.count(of: "WidgetTheme.", inText: row) == 0)
         #expect(MacAgentSource.count(of: "WidgetType.", inText: row) == 0)
+        // **The control for the two zeros above** (PR #188's F11, and CLAUDE.md's rule that a search
+        // has to be shown able to find something before its zero is evidence). Those tokens are
+        // absent from this whole file, so the zeros would also be answered by a scan that cannot see
+        // this token shape at all. The widget's file is where they live, and the count there is what
+        // shows the shape is findable.
+        let widgetSource = try MacAgentSource.read("FloatingWidgetView.swift")
+        #expect(MacAgentSource.count(of: "WidgetTheme.", inText: widgetSource) > 0)
+        #expect(MacAgentSource.count(of: "WidgetType.", inText: widgetSource) > 0)
+
+        // **Sliced to the page's own `.onAppear`, not counted over the file** (PR #188's F5). The
+        // file-wide count below is the "one place" backstop and says nothing about *where* — a
+        // mutant that left the call in the file and made it unreachable passed the whole suite,
+        // which in the product is a row that never appears for anyone who opens Insights while idle.
+        let insights = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsView: View {")
+        #expect(MacAgentSource.count(of: ".onAppear {", inText: insights) == 1)
+        let appear = try MacAgentSource.braceBlock(of: insights, openedBy: ".onAppear {")
+        #expect(MacAgentSource.count(of: "viewModel.refreshScreenControlAllowance()", inText: appear) == 1)
 
         #expect(MacAgentSource.count(of: "refreshScreenControlAllowance", inText: source) == 1)
     }
@@ -219,8 +412,44 @@ struct ScreenControlUsageSurfaceTests {
 private struct UsageFixture {
     let viewModel: AgentViewModel
     let backend: SignedInBackendFixture
+    let routineStore: RoutineStore
     let root: URL
     let defaultsSuiteName: String
+
+    static var nineAM: Date {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 8
+        components.day = 31
+        components.hour = 9
+        return Calendar.current.date(from: components) ?? Date()
+    }
+
+    static var tenAM: Date { nineAM.addingTimeInterval(3_600) }
+
+    /// A daily 9am routine, enabled a day earlier so `checkScheduledRoutines(now: tenAM)` finds an
+    /// occurrence, and unattended-trusted so the run is not paused for an approval nobody is there
+    /// to give. Its one step is a calculation: this fixture wires no vision environment, and the
+    /// subject here is which task the gate answers about rather than what the routine does.
+    func saveScheduledRoutine() throws {
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
+        schedule.setEnabled(true, now: Self.nineAM.addingTimeInterval(-24 * 60 * 60))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "calc",
+                        operation: .calculateUtility,
+                        description: "Calculate 1 + 1.",
+                        searchQuery: "1 + 1"
+                    )
+                ],
+                schedule: schedule
+            )
+        )
+        viewModel.refreshSavedItems()
+    }
 
     /// The gateway's own body shape, field for field — `ScreenControlAllowanceTests` in the core
     /// target carries the same one, and contract §5.4 is where it comes from.
@@ -241,24 +470,26 @@ private struct UsageFixture {
         }
     }
 
-    /// Waits for the run to park on its approval. The assertions that follow every call read
-    /// concrete values, so a wait that gave up leaves a failing value expectation rather than a
-    /// timeout standing in for one.
-    func waitForApproval(timeout: TimeInterval = 30) async throws {
-        try await wait(timeout: timeout) { viewModel.isAwaitingApproval }
+    /// Waits for the run to park on its approval.
+    ///
+    /// **`HangBackstop.waitOrAbandon`, and the reason is that the obvious hand-rolled loop returns
+    /// silently when it gives up** (PR #188's F2). This suite's own first version did, and it was
+    /// the only wait in either test tree that recorded nothing on timeout. Two things follow from
+    /// that, both bad in the reassuring direction: every assertion after the wait then reads a state
+    /// the run never reached — and the free-task half below is *satisfiable by an empty state*, so
+    /// it would have gone green while proving nothing about the gate — and a red produced that way
+    /// carries no declared signature, so `scripts/mutate` reads it as a kill (SONNY-224). The
+    /// backstop records its own stuck/starved wording, both declared in
+    /// `scripts/mutate-untrusted-failures`, and then throws so that nothing after it runs at all.
+    func waitForApproval() async throws {
+        try await HangBackstop.waitOrAbandon(for: "the run to park on its approval") {
+            viewModel.isAwaitingApproval
+        }
     }
 
-    func waitForIdle(timeout: TimeInterval = 30) async throws {
-        try await wait(timeout: timeout) { !viewModel.isRunning && !viewModel.isAwaitingApproval }
-    }
-
-    private func wait(timeout: TimeInterval, until condition: () -> Bool) async throws {
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while !condition() {
-            if Date() > deadline {
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
+    func waitForIdle() async throws {
+        try await HangBackstop.waitOrAbandon(for: "the run to end") {
+            !viewModel.isRunning && !viewModel.isAwaitingApproval
         }
     }
 
@@ -283,8 +514,9 @@ private func makeUsageFixture() throws -> UsageFixture {
     userDefaults.removePersistentDomain(forName: suiteName)
 
     let backend = SignedInBackendFixture()
+    let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
     let viewModel = AgentViewModel(
-        routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+        routineStore: routineStore,
         workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
         snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
         recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
@@ -326,7 +558,13 @@ private func makeUsageFixture() throws -> UsageFixture {
         whitelist: PathWhitelist(roots: [root])
     )
     viewModel.interactionMode = .safe
-    return UsageFixture(viewModel: viewModel, backend: backend, root: root, defaultsSuiteName: suiteName)
+    return UsageFixture(
+        viewModel: viewModel,
+        backend: backend,
+        routineStore: routineStore,
+        root: root,
+        defaultsSuiteName: suiteName
+    )
 }
 
 private struct UnreachableUsagePlanner: Planning {
