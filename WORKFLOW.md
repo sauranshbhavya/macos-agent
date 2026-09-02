@@ -209,7 +209,7 @@ has documented consequences:
 **A long lane is a coordination failure before it is a session's.** The five levers that keep
 lanes short are all the coordinator's, and they sit in three different steps because that is
 where each one bites: the concurrency cap and the rebase-timing rule above, step 5's scoped
-post-rebase battery re-runs, and step 7's right-sizing and its limit on what one round
+battery re-runs, and step 7's right-sizing and its limit on what one round
 carries. Step 5's ninety-minute stop is the one a session owns, and it is a backstop for when
 the five were got wrong rather than a substitute for them. (Founder
 instruction 2026-08-28, at the tail of the 2026-08-27/28 wave, after three lanes ran one to
@@ -306,10 +306,12 @@ something up.)
   protect and every test whose name claims a guarantee — not one mutant per changed file. A
   reviewer runs the shapes its own findings are about, plus any the implementer's plan
   missed, and reads the implementer's killers by name rather than re-running the whole plan.
-- **After a rebase, a mutant is carried only when four things hold; otherwise it is re-run.**
-  Its target file did not move in the merged range; its killing test's file did not move; the
-  killer does not scan a population the range changed; and the killer does not drive a helper
-  or fixture the range changed. If all four cannot be established cheaply, re-run it.
+- **After a rebase or a fix round, a mutant is carried only when four things hold; otherwise it
+  is re-run.** The range is whatever moved — the merged commits after a rebase, the round's own
+  edits after a fix round. Its target file did not move in that range; its killing test's file
+  did not move; the killer does not scan a population the range changed; and the killer does not
+  drive a helper or fixture the range changed. If all four cannot be established cheaply, re-run
+  it.
   **The fail-safe wording is the rule rather than decoration.** This was first written as file
   identity alone, and SONNY-137's lane computed both versions against a real merged range the
   same day: the sole killer of three mutants drove `HermeticBackendClient.swift`, which had
