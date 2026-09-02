@@ -32,17 +32,34 @@ struct ScreenControlGateReachTests {
         "SonnyScreenControlGate",
         "ClosedScreenControlGate",
         "screenControlGate",
-        "ScreenControlAllowance",
         "ScreenControlEntitlementConfirming"
     ]
+
+    /// The *figure* the gate reads, which is a different population from the gate and has to be
+    /// scanned separately — **it was one list until SONNY-214 landed** (PR #188).
+    ///
+    /// `ScreenControlAllowance` sat in `gateTokens` while the gate was its only consumer, and that
+    /// stopped being true the moment SONNY-214 put "3 of 20 left" in the Account section and a runs-
+    /// left line in the widget. Five app files legitimately name it now, and none of them names a
+    /// gate token.
+    ///
+    /// **Merging the two lists would have been the quiet mistake, so it is written down rather than
+    /// avoided by luck.** Adding those five files to one shared permitted set makes the set say
+    /// "these files may name *anything* in the billing vocabulary" — after which a usage view
+    /// acquiring `screenControlGate` and refusing to render on it passes the scan, because the file
+    /// is already permitted. Splitting keeps the enforcement surface's set at exactly the files that
+    /// enforce, which is the criterion this suite exists for; the figure's own set is wider because
+    /// reading a number a user is shown is not gating on it. This is the same reasoning the token
+    /// list already gives for excluding the terminal ban: a rule many files legitimately consult
+    /// makes a scan fail for reasons that have nothing to do with billing.
+    static let allowanceTokens = ["ScreenControlAllowance"]
 
     /// The files in `Sources/` allowed to name any of the above, and **why each one is on the list**.
     /// Exact equality below, so this fails in both directions: a tenth file acquiring the dependency
     /// fails it, and so does one of these losing it under a rename.
     static let permittedFiles: Set<String> = [
-        // The gate itself, and the allowance figure it reads.
+        // The gate itself.
         "ScreenControlGate.swift",
-        "ScreenControlAllowance.swift",
         // The vision path: the aggregate that carries the gate, the door, the loop's halt, and the
         // refusal the halt ends with.
         "VisionSessionEnvironment.swift",
@@ -56,16 +73,40 @@ struct ScreenControlGateReachTests {
         "main.swift"
     ]
 
+    /// The files that may name the allowance *figure*. Wider than the set above by exactly SONNY-214's
+    /// readers, and each one is a place a user is shown a number rather than a place anything is
+    /// refused.
+    static let permittedAllowanceFiles: Set<String> = [
+        // The figure's own type, and the gate that reads it to decide.
+        "ScreenControlAllowance.swift",
+        "ScreenControlGate.swift",
+        // The app's wiring: the view model holds the last read and the composition root builds the
+        // service.
+        "AgentViewModel.swift",
+        "main.swift",
+        // SONNY-214's surfaces (PR #188): the sentence, the Account section that hosts it, the
+        // widget's in-task line, and the first-run sequence that shows what a new account has.
+        "ScreenControlUsagePresentation.swift",
+        "SignInView.swift",
+        "CommandCenterView.swift",
+        "FloatingWidgetView.swift",
+        "FirstRunSequence.swift"
+    ]
+
     @Test
     func onlyTheVisionPathAndItsWiringCanNameTheGate() throws {
-        var naming: Set<String> = []
+        var namingTheGate: Set<String> = []
+        var namingTheFigure: Set<String> = []
         var scanned = 0
 
         for url in try MacAgentSource.coreSourceFiles() + MacAgentSource.appSourceFiles() {
             scanned += 1
             let source = try MacAgentSource.read(url)
             if Self.gateTokens.contains(where: source.contains) {
-                naming.insert(url.lastPathComponent)
+                namingTheGate.insert(url.lastPathComponent)
+            }
+            if Self.allowanceTokens.contains(where: source.contains) {
+                namingTheFigure.insert(url.lastPathComponent)
             }
         }
 
@@ -73,13 +114,26 @@ struct ScreenControlGateReachTests {
         // repository has had a scan pass by matching no file at all.
         #expect(scanned > 150, "the scan read \(scanned) files — too few to be both source trees")
         #expect(
-            naming == Self.permittedFiles,
+            namingTheGate == Self.permittedFiles,
             Comment(rawValue: """
             The set of files naming the screen-control gate is not the permitted set.
-            Unexpected: \(naming.subtracting(Self.permittedFiles).sorted())
-            Missing:    \(Self.permittedFiles.subtracting(naming).sorted())
+            Unexpected: \(namingTheGate.subtracting(Self.permittedFiles).sorted())
+            Missing:    \(Self.permittedFiles.subtracting(namingTheGate).sorted())
             """)
         )
+        #expect(
+            namingTheFigure == Self.permittedAllowanceFiles,
+            Comment(rawValue: """
+            The set of files naming the allowance figure is not the permitted set.
+            Unexpected: \(namingTheFigure.subtracting(Self.permittedAllowanceFiles).sorted())
+            Missing:    \(Self.permittedAllowanceFiles.subtracting(namingTheFigure).sorted())
+            """)
+        )
+        // **The split is only safe while the two vocabularies stay distinct.** If a token ever
+        // appeared in both lists, the wider permitted set would silently license the narrower one's
+        // files — the exact weakening the header argues against — so the disjointness is asserted
+        // rather than maintained by care.
+        #expect(Set(Self.gateTokens).isDisjoint(with: Set(Self.allowanceTokens)))
     }
 
     /// **No capability adapter but the vision one names the gate**, stated over the adapters as a
@@ -99,7 +153,11 @@ struct ScreenControlGateReachTests {
             adapters.append(url.lastPathComponent)
             guard url.lastPathComponent != "VisionSessionCapabilityAdapter.swift" else { continue }
             let source = try MacAgentSource.read(url)
-            for token in Self.gateTokens where source.contains(token) {
+            // **Both vocabularies here, unlike the file-set scan above.** No capability adapter
+            // should reach the gate *or* the figure: reading a run count is how an adapter would
+            // build a second gate under another name, and SONNY-214's readers are surfaces rather
+            // than adapters, so nothing legitimate is caught by widening this one.
+            for token in Self.gateTokens + Self.allowanceTokens where source.contains(token) {
                 offenders.append("\(url.lastPathComponent) names \(token)")
             }
         }
@@ -158,6 +216,52 @@ struct ScreenControlGateReachTests {
         #expect(!door.contains("screenControlGate.decide(at: .stepBoundary)"))
         #expect(loop.contains("screenControlGate.decide(at: .stepBoundary)"))
         #expect(!loop.contains("screenControlGate.decide(at: .sessionStart)"))
+    }
+
+    /// **The boundary's figure reaches no surface, so the gate and SONNY-214's usage line cannot
+    /// tell the user two different things.**
+    ///
+    /// The two consumers of one allowance read the product's *published* number differently on
+    /// purpose: SONNY-214 renders `runsLeft` ("3 of 20 left", and the in-task "1 run left"), and this
+    /// gate's **door** refuses on exactly that same field, so a user shown "0 left" is refused and a
+    /// user shown "1 left" is admitted — they cannot disagree, because they are one number.
+    ///
+    /// `creditsRemaining` is the other half of the gate's reading and it answers a different
+    /// question — may the run already admitted *continue* — which no surface asks and no surface
+    /// should answer. **If it were ever rendered it would be the second number in the product that
+    /// `WireScreenControlAllowance`'s own note was written to prevent**, and the first thing it would
+    /// do is contradict the line beside it: an account reading "0 runs left" has real credit behind
+    /// it for the length of one session. So the property is that the figure stays inside `MacAgentCore`.
+    ///
+    /// A file count rather than a token search over one file, and a floor under the walk, for the
+    /// same reason as the scans above: an empty walk reads exactly like a clean one.
+    @Test
+    func theBoundarysFigureNeverReachesAUserFacingSurface() throws {
+        var naming: [String] = []
+        var scanned = 0
+
+        for url in try MacAgentSource.appSourceFiles() {
+            scanned += 1
+            if try MacAgentSource.read(url).contains("creditsRemaining") {
+                naming.append(url.lastPathComponent)
+            }
+        }
+
+        #expect(scanned > 25, "the scan read \(scanned) app files — too few to be the app target")
+        #expect(
+            naming.isEmpty,
+            Comment(rawValue: "the step boundary's credit figure reached the app target, where the "
+                + "only allowance number a user may be shown is `runsLeft`:\n"
+                + naming.joined(separator: "\n"))
+        )
+
+        // The control: the field really is in the tree under the name this scan looks for, so an
+        // empty result above is a measurement rather than a typo. It is read from the core target,
+        // which is where it is allowed to be.
+        let allowance = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("ScreenControlAllowance.swift")
+        )
+        #expect(allowance.contains("creditsRemaining"))
     }
 
     /// The rule run over a held sample, so it is shown to flag what it names rather than only to
@@ -260,9 +364,7 @@ struct ScreenControlGateWiringTests {
             clipboardHistorySettingsStore: clipboardSettings,
             approvedAppStore: UnreachableLocalStores.approvedApps(),
             outputLocationStore: UnreachableLocalStores.outputLocations(),
-            resumableTaskStore: ResumableTaskStore(
-                fileURL: scratch.appendingPathComponent("resumable-tasks.json")
-            ),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 store: UnreachableLocalStores.clipboardHistory(),

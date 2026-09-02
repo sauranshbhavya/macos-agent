@@ -287,6 +287,16 @@ struct EntitlementClaimSurfaceScanTests {
         "public actor EntitlementService {",
         "public init(",
         "public func decision(for capability: EntitlementCapability) async -> EntitlementDecision {",
+        // **Classified here, under this header, as SONNY-388's design requires** (SONNY-213's lane,
+        // which this suite's own doc above anticipated arriving). `claimConfirmation()` asks whether
+        // this Mac holds a claim it can confirm *without naming a capability*, and it hands out no
+        // `EntitlementClaim`: it returns an `EntitlementDecision`, which is `.entitled` or
+        // `.refused(EntitlementRefusal)` and carries no claim, no capability list and no plan. So a
+        // caller cannot read `capabilities` off it and decide entitlement for itself, which is the
+        // whole property this table exists to hold. `decision(for:)` remains the only member that
+        // answers whether a capability is granted; this one runs the same path and stops one
+        // question short of that.
+        "public func claimConfirmation() async -> EntitlementDecision {",
         "public func currentSubscription() async -> SubscriptionSnapshot? {",
         "public func refreshNow() async throws {",
         "public func discardLocally() throws {",
@@ -403,6 +413,26 @@ struct EntitlementClaimSurfaceScanTests {
         return keyword(of: words[position + 1]) == "EntitlementService"
     }
 
+    /// An extension whose body is **provably empty** — `{}` closed on the declaration's own line.
+    ///
+    /// **The exemption the sweep below needed, and the narrowest one that answers** (SONNY-213).
+    /// That sweep asserts there are *no* extensions of the actor outside its own file, and its own
+    /// comment names that as the cheap proxy for the real property — no public member reaching the
+    /// surface unenumerated — "enough because it fails the day the assumption stops holding, which
+    /// is when the population has to be widened". SONNY-213 is that day: it adds
+    /// `extension EntitlementService: ScreenControlEntitlementConfirming {}` in `ScreenControlGate.swift`,
+    /// a conformance declaring **no members at all**, whose one protocol requirement
+    /// (`claimConfirmation()`) is declared in `EntitlementService.swift` and enumerated in the table
+    /// above like every other member.
+    ///
+    /// So the widening is by exactly one case and no more: a body closed on its own line can contain
+    /// nothing, so it can add nothing to the surface. **Every other extension is still flagged**,
+    /// including an empty-looking one whose body opens across lines — which is the direction that
+    /// matters, since a `{` alone is where a member would go next.
+    static func isMemberlessExtension(_ line: String) -> Bool {
+        line.hasSuffix("{}")
+    }
+
     @Test
     func everyPublicDeclarationOnTheServiceIsOneThisSuiteHasClassified() throws {
         let lines = try Self.publicDeclarationLines()
@@ -514,14 +544,44 @@ struct EntitlementClaimSurfaceScanTests {
                 sawTheService = true
                 continue
             }
-            for line in try MacAgentSource.read(url).split(separator: "\n")
-            where Self.extendsTheService(line.trimmingCharacters(in: .whitespaces)) {
-                offenders.append("\(relativePath): \(line.trimmingCharacters(in: .whitespaces))")
+            for line in try MacAgentSource.read(url).split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard Self.extendsTheService(trimmed) else { continue }
+                // A conformance that declares nothing cannot widen the surface; anything else is
+                // flagged and a person decides. See `isMemberlessExtension`.
+                guard !Self.isMemberlessExtension(trimmed) else { continue }
+                offenders.append("\(relativePath): \(trimmed)")
             }
         }
         // The walk really reached the actor's own file; without this, a renamed or moved
         // `EntitlementService.swift` leaves an empty sweep that reads exactly like a clean one.
         #expect(sawTheService, "EntitlementService.swift was not among the files walked")
+
+        // **The exemption run over held samples, in both directions** (SONNY-213). The sweep now
+        // lets a member-less conformance through, and an exemption that has only ever been run
+        // against the one line it was written for has not been shown to stop at that line. The
+        // repository's own case is first; everything under it must still be flagged, and the third
+        // is the one that matters — an extension that looks empty because its brace opens alone.
+        for exempt in [
+            "extension EntitlementService: ScreenControlEntitlementConfirming {}",
+            "public extension EntitlementService: SomeProtocol {}"
+        ] {
+            #expect(
+                Self.extendsTheService(exempt) && Self.isMemberlessExtension(exempt),
+                "a member-less conformance should be recognised as one: \(exempt)"
+            )
+        }
+        for flagged in [
+            "extension EntitlementService {",
+            "public extension EntitlementService {",
+            "extension EntitlementService: ScreenControlEntitlementConfirming {",
+            "extension EntitlementService { public func latestClaim() -> EntitlementClaim? { nil } }"
+        ] {
+            #expect(
+                Self.extendsTheService(flagged) && !Self.isMemberlessExtension(flagged),
+                "an extension that can carry a member must still be flagged: \(flagged)"
+            )
+        }
         #expect(
             offenders.isEmpty,
             Comment(rawValue: "the service's surface is extended outside its own file, so the "
