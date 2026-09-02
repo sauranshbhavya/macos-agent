@@ -2374,11 +2374,21 @@ with *"You've used your screen-control allowance — top up or wait."* **Nothing
 every other capability runs with no network and no entitlement exactly as before, and that is the
 direction most worth checking by hand.
 
-**The stock-build symptom, named so it is not reported as a defect.** A packaged build with no key
-override refuses every screen-control session at the door with **"Connect once so Sonny can check
-your plan."** (or "Sonny couldn't check your plan…"). That is the gate failing closed exactly as
-designed: this build ships no entitlement public key and no gateway is deployed, so no claim can
-ever verify. It is not a finding. To test the allowed direction at all, the rows below need the
+**The stock-build symptom, named so it is not reported as a defect.** A packaged build with no
+gateway to sign in against refuses every screen-control session at the door with **"Sign in to Sonny
+to use this."** That is the gate failing closed exactly as designed, and it is not a finding.
+
+*Which* sentence you get depends on how far the build gets, and all three are the same gate working
+— worth knowing so none of them is filed either (this paragraph named the wrong one until PR #190's
+F3, which is how a founder meeting the right one would have been handed a reason to file it):
+
+| what you see | what it means |
+|---|---|
+| "Sign in to Sonny to use this." | **The stock case.** No gateway is deployed, so there is no session to restore; the entitlement check refuses at its first guard, before the key set is ever read. |
+| "Connect once so Sonny can check your plan." | Signed in, but nothing cached yet — reachable once a container is running. |
+| "Sonny couldn't check your plan. Try again in a moment." | Something is cached that this build cannot verify — the empty shipped key set, reachable if you still hold a session from an earlier local-gateway run. |
+
+To test the allowed direction at all, the rows below need the
 SONNY-135 section's container setup **plus the debug key override** that section uses
 (`defaults write` of `SonnyEntitlementPublicKeys`, or `SONNY_ENTITLEMENT_PUBLIC_KEYS` for a
 terminal-launched debug build), plus SONNY-212's `CREDIT_PLANS` on the container.

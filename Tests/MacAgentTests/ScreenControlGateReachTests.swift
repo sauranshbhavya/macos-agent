@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgent
 @testable import MacAgentCore
@@ -179,5 +180,100 @@ struct ScreenControlGateReachTests {
         )
         #expect(!Self.gateTokens.contains { free.contains($0) })
         #expect(free.contains("RunRoutineCapabilityAdapter"))
+    }
+}
+
+/// **The wiring, driven rather than scanned** (PR #190's F2).
+///
+/// The scans above prove which files may *name* the gate. They cannot prove that the gate
+/// `main.swift` installs is the one a real session ends up consulting, and that turned out to be the
+/// difference between a held property and an unheld one: replacing `screenControlGate:` inside
+/// `AgentViewModel.makeLiveVisionEnvironment` with a fresh `ClosedScreenControlGate()` left the whole
+/// suite green. The scan could not see it — `ClosedScreenControlGate` is already a permitted name in
+/// that file, so the token set does not change — and no behavioural test could, because every vision
+/// test assigns `viewModel.visionSessionEnvironment` directly and never calls the builder.
+///
+/// One line of product behaviour, and it is the only line: this is the sole path from the installed
+/// gate to the environment a session runs against.
+@Suite
+@MainActor
+struct ScreenControlGateWiringTests {
+    /// The environment the view model builds carries **the gate that was installed on it**, not a
+    /// fresh one and not a default.
+    ///
+    /// Driven through `makeLiveVisionEnvironment`, the real builder, and asserted by *consulting* the
+    /// gate rather than by comparing identity: identity would pass on a copy that had lost its
+    /// answers, and what the product needs is that the installed gate's verdict is the verdict a
+    /// session gets. The scripted gate refuses, which no default in this path does — `AgentViewModel`
+    /// starts at `ClosedScreenControlGate`, which also refuses — so the assertion is on the
+    /// *distinguishing* evidence: the scripted gate records that it was the one asked.
+    @Test
+    func theEnvironmentCarriesTheGateThatWasInstalledOnTheViewModel() async {
+        let viewModel = Self.makeViewModel()
+        let installed = ScriptedScreenControlGate(thereafter: .refused(.allowanceExhausted))
+        viewModel.screenControlGate = installed
+
+        let environment = viewModel.makeLiveVisionEnvironment(recordingPolicy: .record)
+        let decision = await environment.screenControlGate.decide(at: .sessionStart)
+
+        // The installed gate answered, and it is the one that was asked — `consults` is what tells a
+        // carried gate apart from a look-alike default that happens to refuse for its own reasons.
+        #expect(decision == .refused(.allowanceExhausted))
+        #expect(installed.consults == [.sessionStart])
+    }
+
+    /// And the same builder carries a *permissive* gate through unchanged.
+    ///
+    /// **The direction that matters, because every default on this path refuses.** Without this the
+    /// test above passes on a mutant that ignores the installed gate entirely and hard-codes a closed
+    /// one — the exact mutant that survived — since a closed gate also answers "refused". A gate that
+    /// allows is a verdict no default in reach can produce.
+    @Test
+    func aPermissiveGateReachesTheEnvironmentUnchanged() async {
+        let viewModel = Self.makeViewModel()
+        viewModel.screenControlGate = ScriptedScreenControlGate.permissive()
+
+        let environment = viewModel.makeLiveVisionEnvironment(recordingPolicy: .record)
+
+        #expect(await environment.screenControlGate.decide(at: .sessionStart) == .allowed)
+        #expect(await environment.screenControlGate.decide(at: .stepBoundary) == .allowed)
+    }
+
+    /// Every store unreachable: this suite constructs a view model to read one wired dependency off
+    /// it and touches no local data at all.
+    private static func makeViewModel() -> AgentViewModel {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenControlGateWiringTests-\(UUID().uuidString)", isDirectory: true)
+        let clipboardSettings = ClipboardHistorySettingsStore(
+            fileURL: scratch.appendingPathComponent("clipboard-history-settings.json")
+        )
+        return AgentViewModel(
+            routineStore: UnreachableLocalStores.routines(),
+            workspaceStore: UnreachableLocalStores.workspaces(),
+            snippetStore: UnreachableLocalStores.snippets(),
+            recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
+            finderRevealer: { _ in },
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            taskHistoryStore: UnreachableLocalStores.taskHistory(),
+            taskPlanDetailStore: UnreachableLocalStores.taskPlanDetails(),
+            visionSessionJournalStore: UnreachableLocalStores.visionSessionJournal(),
+            clipboardHistorySettingsStore: clipboardSettings,
+            approvedAppStore: UnreachableLocalStores.approvedApps(),
+            outputLocationStore: UnreachableLocalStores.outputLocations(),
+            resumableTaskStore: ResumableTaskStore(
+                fileURL: scratch.appendingPathComponent("resumable-tasks.json")
+            ),
+            standingWatcherObserver: UnreachableStandingWatcherObserver(),
+            clipboardHistoryMonitor: ClipboardHistoryMonitor(
+                store: UnreachableLocalStores.clipboardHistory(),
+                settingsStore: clipboardSettings
+            ),
+            // Nothing here deletes anything.
+            localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+            backendClient: makeHermeticBackendClient(),
+            userDefaults: UserDefaults(
+                suiteName: "ScreenControlGateWiringTests-\(UUID().uuidString)"
+            ) ?? .standard
+        )
     }
 }

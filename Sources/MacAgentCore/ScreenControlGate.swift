@@ -6,10 +6,18 @@ import Foundation
 /// Screen control is the only capability in this product that blocks on billing; every other one —
 /// opening apps, listing files, routines, workspaces, instant utilities, web research, voice — runs
 /// regardless of network, entitlement or allowance, and §16.3's guarantee is that a network blip
-/// never breaks Sonny's instant feel. That direction is not enforced by anything here, and could not
-/// be: it is enforced by nothing else in the tree being able to reach this type at all.
-/// `ScreenControlGateReachTests` holds that as a population scan over every capability adapter, and
-/// `EntitlementFreePathTests` holds the behavioural half.
+/// never breaks Sonny's instant feel.
+///
+/// **That direction is held by nothing else *doing* it, which is a fact about the population rather
+/// than a structural impossibility** — and the difference is worth stating exactly, because this
+/// comment used to claim the stronger thing (PR #190's F5). `CapabilityExecutionContext.visionSession`
+/// is a plain optional field on the one context `AgentActionExecutor` builds and hands to whichever
+/// adapter runs, so in the shipping app every free adapter's `execute` receives the live gate and
+/// `context.visionSession?.screenControlGate.decide(...)` would compile from any of them. What stops
+/// it is that none does. `ScreenControlGateReachTests` holds that as an exact-set population scan
+/// over both source trees, and `ScreenControlGateFreeCapabilityTests` holds the behavioural half —
+/// running free capabilities both with no billing wiring at all *and* with the live wiring the app
+/// really hands them, which is the case that catches an adapter that had started reading it.
 ///
 /// ## Two moments, one decision function, and the asymmetry between them is deliberate
 ///
@@ -184,8 +192,17 @@ extension ScreenControlAllowanceService: ScreenControlAllowanceReading {}
 /// direction, so it is a visible operator action rather than a per-user drift. (3) It cannot un-run
 /// what already ran: this gate only ever decides whether the *next* step happens, so a re-price
 /// mid-session halts at a boundary — it never retracts an action, and never turns a completed
-/// session into a refused one. (4) A session already admitted keeps its first-iteration admission;
-/// the door's answer is not re-litigated, only added to.
+/// session into a refused one. (4) Iteration 1 always runs: the door's answer decides it and nothing
+/// re-asks within it.
+///
+/// **Bound (4) used to end "the door's answer is not re-litigated, only added to", and that was
+/// false in the very case the bound exists for** (PR #190's F4). A deploy landing between the door
+/// and a later boundary moves the figure under a running session and can halt it — which is a
+/// re-price re-deciding an admission the door granted. It is bound (3)'s territory, where it is
+/// argued honestly, and the boundary re-asks the whole question by design: the entitlement half runs
+/// at both moments too, so a claim that lapses or a sign-out mid-session refuses at the next
+/// boundary as well, exactly as §13.5's permission-revocation shape re-checks every iteration. What
+/// (4) actually buys is the `iteration > 1` guard, and that is now all it claims.
 ///
 /// **The two options that were rejected, and why.**
 ///
@@ -276,12 +293,48 @@ public struct SonnyScreenControlGate: ScreenControlGating {
             }
         }
 
-        // **`runsLeft`, the number the user is shown, and not the credit remainder underneath it.**
-        // The two are the same predicate — `runsLeft` is `floor(remaining / perRun)` — and choosing
-        // the published one is what makes it impossible for the product to say "1 left" and refuse,
-        // or say "0 left" and run. SONNY-214 renders this same field.
-        guard reading.runsLeft > 0 else {
-            return .refused(.allowanceExhausted)
+        // **Two moments, two questions, two figures — and reading one figure for both is what cost a
+        // paying user most of their last run** (PR #190's F1).
+        //
+        // This block used to be a single `guard reading.runsLeft > 0`, justified by a comment
+        // claiming the run count and the credit remainder were "the same predicate" and that
+        // choosing the published one made it "impossible for the product to say '1 left' and refuse".
+        // Both halves were wrong in the same way: they are true *at one instant*, and this gate
+        // exists to span two. What the code actually did was refuse a session for spending the very
+        // run it had just been admitted on — on a plan advertising ten runs, the tenth ran a single
+        // iteration and halted with "You've used your screen-control allowance". The comment is
+        // quoted here rather than deleted because a comment asserting a property the code lacks is
+        // what kept the defect invisible through implementation and self-review.
+        //
+        // The arithmetic underneath it: `runsLeft` is `floor(remaining / runCredits)` over a
+        // `remaining` from which the in-flight session's own metered iterations have **already** been
+        // subtracted — `balance.ts` derives the whole balance from the metering rows, this session's
+        // included. So `runsLeft` answers *"can this account afford a whole further run?"*, which is
+        // exactly the door's question and never the boundary's.
+        switch moment {
+        case .sessionStart:
+            // May a *new* run start? The user is about to spend a run, so the question is whether
+            // they have one — and this is the same field the product shows them, so the door can
+            // never refuse someone reading "1 left" or admit someone reading "0 left".
+            guard reading.runsLeft > 0 else {
+                return .refused(.allowanceExhausted)
+            }
+        case .stepBoundary:
+            // May the run already admitted *continue*? Not whether another one could start — the
+            // door granted this one, and a run the user was granted is theirs to finish. So the only
+            // thing that halts here is the account having actually run out, which is the remainder
+            // reaching zero. The server floors it at zero, so this is a confirmed exhaustion and not
+            // a sign error.
+            //
+            // This is also what makes the ticket's own acceptance criterion mean something: the halt
+            // now fires when the allowance genuinely runs out mid-session, rather than one step into
+            // every period's last run. And it is what the gateway already expects — `balance.ts`
+            // says in as many words that "a session already in flight when the allowance runs out
+            // finishes and is metered", so permitting that overdraw is the server's stated design
+            // and not this client conceding something.
+            guard reading.creditsRemaining > 0 else {
+                return .refused(.allowanceExhausted)
+            }
         }
         return .allowed
     }

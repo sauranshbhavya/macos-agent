@@ -5099,7 +5099,18 @@ final class AgentViewModel: ObservableObject {
     /// **No longer Optional** (SONNY-131): the vision client holds no credential, so there is nothing
     /// left that can fail to construct. `makeVisionEnvironment`'s own doc comment carries the reason
     /// and what it means for `visionUnavailable`.
-    private func makeLiveVisionEnvironment(recordingPolicy: TaskRecordingPolicy) -> VisionSessionEnvironment {
+    /// **Internal rather than private so a test can execute it at all** (PR #190's F2).
+    ///
+    /// `visionSessionJournalStoreForThisRun`'s doc a few thousand lines up records the standing
+    /// problem: every vision test injects `visionSessionEnvironment` directly, so this function is
+    /// never the thing under test and a mutation inside it survives the whole suite. PR #67 solved
+    /// that once by lifting the journal decision *out* into a testable property. The gate has no
+    /// decision to lift — it is a stored property handed straight over — so the alternative was for
+    /// the one line carrying the product's only billing gate into a real session to stay held by
+    /// nothing, which is what it was: replacing `screenControlGate:` below with a closed gate passed
+    /// all 2722 tests. Widening this to internal is the smaller change and it closes the class rather
+    /// than one instance.
+    func makeLiveVisionEnvironment(recordingPolicy: TaskRecordingPolicy) -> VisionSessionEnvironment {
         let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
         let environment = Self.makeVisionEnvironment(
             interaction: self,

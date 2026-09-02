@@ -2496,6 +2496,90 @@ struct VisionSessionRunTests {
         #expect(record.endReasonCode == "completed")
     }
 
+    /// **The account's last run is a whole run, not one step of one** (PR #190's F1 — the money
+    /// path, through the real loop).
+    ///
+    /// `ScreenControlGateTests.aSessionAdmittedOnItsLastRunIsNotHaltedForSpendingIt` holds the rule
+    /// at the gate; this holds what the user actually gets, because the defect was only visible as a
+    /// session. The reading is the one a session in flight really produces: the door sees a run in
+    /// hand, and from the first metered iteration onward `runsLeft` has floored to zero while most of
+    /// the run's credit is still unspent — the account's own draw having been subtracted from the
+    /// remainder it is derived from.
+    ///
+    /// Under the single `runsLeft > 0` predicate this test's session clicked **once** and halted with
+    /// "You've used your screen-control allowance — top up or wait." on a plan that had just told the
+    /// user they had a run left.
+    @Test
+    func aSessionAdmittedOnItsLastRunFinishesItRatherThanHaltingAtTheFirstBoundary() async throws {
+        let gate = SonnyScreenControlGate(
+            entitlements: StubEntitlementConfirmation(.entitled),
+            allowance: StubAllowanceReading(
+                answers: [.runsLeft(1)],
+                thereafter: .runsAndCredits(runsLeft: 0, creditsRemaining: 0.6)
+            )
+        )
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"one"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"Reading List","consequence":"ordinary","rationale":"two"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#
+            ],
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0)
+        )
+        defer { fixture.tearDown() }
+        // The real gate, because the behaviour under test is this gate's own reading of the two
+        // figures; a scripted gate would be asserting the script.
+        fixture.viewModel.visionSessionEnvironment?.screenControlGate = gate
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // Both clicks happened and the session reached its own ending, rather than being cut off
+        // after the first step by the allowance it had just been granted.
+        #expect(fixture.synthesizer.clickCount == 2)
+        #expect(fixture.viewModel.finalSummary == "The reading list is open.")
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "completed")
+    }
+
+    /// And the halt still fires when the credit is genuinely gone — F1's fix corrects the predicate
+    /// without deleting the ticket's acceptance criterion.
+    ///
+    /// Same shape as the test above and the same door reading; only the remainder differs, so the
+    /// pair isolates exactly the figure the boundary now turns on.
+    @Test
+    func aSessionWhoseCreditRunsOutMidRunStillHaltsAtTheNextBoundary() async throws {
+        let gate = SonnyScreenControlGate(
+            entitlements: StubEntitlementConfirmation(.entitled),
+            allowance: StubAllowanceReading(
+                answers: [.runsLeft(1)],
+                thereafter: .runsAndCredits(runsLeft: 0, creditsRemaining: 0)
+            )
+        )
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"one"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"Reading List","consequence":"ordinary","rationale":"two"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#
+            ],
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 0)
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionSessionEnvironment?.screenControlGate = gate
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The step under way finished — one click — and the halt landed at the next boundary.
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(
+            fixture.viewModel.finalSummary
+                == "You've used your screen-control allowance — top up or wait."
+        )
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "allowance_exhausted")
+    }
+
     // MARK: - The HUD (SONNY-95)
 
     /// **Power without covertness.** While Sonny controls an app the HUD says so, says which app,
