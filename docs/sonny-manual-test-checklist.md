@@ -978,9 +978,20 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [ ] **(new 2026-09-02, SONNY-214)** Run one screen-control task, come back to Insights (leave and
       return — the figure is fetched when the page appears). **The number has gone down** by what
       the session cost, agreeing with the curl.
-- [ ] **(new 2026-09-02, SONNY-214)** Signed out, or with the container stopped, open Insights.
-      **The row is absent entirely** — no zero, no placeholder, no error line; the page reads as it
-      did before this ticket.
+- [ ] **(new 2026-09-02, SONNY-214)** With the container stopped, open Insights. **The row is absent
+      entirely** — no zero, no placeholder, no error line; the page reads as it did before this
+      ticket.
+- [ ] **(new 2026-09-02, SONNY-214)** **Sign out while you are already looking at Insights, and do
+      not navigate.** The row must **disappear on the spot**. This one is worded the way it is on
+      purpose: the obvious phrasing — "sign out, then open Insights" — cannot fail, because opening
+      the page is itself what fetches the figure, so it would come back green over a real defect
+      (PR #188's F1). Signing out is a menu item and signing in is a sheet, so neither re-opens the
+      page; staying put is the whole test.
+- [ ] **(new 2026-09-02, SONNY-214)** Still without navigating, **sign in as a second account from
+      that same screen**. No figure from the previous account may appear at any point — the row
+      stays absent until you open Insights again, and then it reads the new account's numbers.
+      Check the widget too: start a screen-control task as the second user and the line must show
+      that account's figure or none, never the first user's.
 
 ### Routines — `11-MainAppRoutines.svg`/`.png`
 - [x] Create a routine, confirm correct icon/name/step-summary in the list — **confirmed 2026-07-24**
