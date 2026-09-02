@@ -199,3 +199,102 @@ struct EntitlementFreePathScanTests {
         )
     }
 }
+
+/// The narrow-surface property, held by shape rather than by convention (SONNY-388).
+///
+/// `EntitlementService.decision(for:)` is the one place the entitlement question is answered, and
+/// the reasoning above `currentSubscription()` says why nothing else may hand out the raw claim: a
+/// caller holding an `EntitlementClaim` can read `capabilities` and decide entitlement itself, with
+/// no judge, no session check and no clock defence, none of it enforceable once the value leaves
+/// the actor. `refreshNow()` handed the claim out anyway, so the property was a convention every
+/// future caller had to remember — and SONNY-216's own record claimed it was structural when it was
+/// not. The founders' ratification (2026-08-31, on SONNY-388) removed the return value; this suite
+/// is what makes the removal stick.
+///
+/// **The population is enumerated by value, not merely swept.** A blanket "no signature names the
+/// claim" would pass silently over a public member the sweep failed to parse, and a parallel branch
+/// is adding to this surface right now (`claimConfirmation()`, SONNY-213's lane) — so every public
+/// declaration on the actor must equal a line in the pinned table below, and a new arrival fails
+/// this suite until a person classifies it here, under this header. That is the stop working as
+/// designed, the same shape as `theWipesOwnSentenceNamesEveryStoreItDeletes` stopping an unnamed
+/// store.
+///
+/// **The honest limit, stated as `MacAgentSource`'s own doc demands**: this is a textual scan of
+/// one file's `public` declaration lines. It cannot chase types — a public member returning some
+/// wrapper that carries a claim would pass the token check, and is caught only by the enumeration
+/// forcing a human read of the new line. Anything needing more than that needs a different tool.
+@Suite
+@MainActor
+struct EntitlementClaimSurfaceScanTests {
+    /// Every public declaration on `EntitlementService`, verbatim. The value table IS the review:
+    /// adding a public member means adding its exact signature line here, having decided it hands
+    /// out no `EntitlementClaim` — and a signature that changes (a return type widened back) is a
+    /// line this table no longer contains.
+    static let publicSurface = [
+        "public actor EntitlementService {",
+        "public init(",
+        "public func decision(for capability: EntitlementCapability) async -> EntitlementDecision {",
+        "public func currentSubscription() async -> SubscriptionSnapshot? {",
+        "public func refreshNow() async throws {",
+        "public func discardLocally() throws {",
+        "public func awaitPendingRefresh() async {"
+    ]
+
+    /// Every comment-stripped line of `EntitlementService.swift` that declares something public,
+    /// trimmed. Multi-line signatures are represented by their first line (`public init(` today),
+    /// which is enough for equality against the table and is where a return type cannot hide — a
+    /// Swift function's arrow sits on the line its parameter list closes on, so a single-line
+    /// signature that grew an arrow no longer equals its table entry.
+    static func publicDeclarationLines() throws -> [String] {
+        let source = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("EntitlementService.swift")
+        )
+        return source.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("public ") }
+    }
+
+    @Test
+    func everyPublicDeclarationOnTheServiceIsOneThisSuiteHasClassified() throws {
+        let lines = try Self.publicDeclarationLines()
+        // The scan found the real surface rather than an empty or renamed file: zero would read
+        // exactly like a tree with nothing to find, and zero must fail (the clean-zero rule).
+        try #require(!lines.isEmpty, "the scan read no public declarations — the file moved or the filter broke")
+        #expect(lines.sorted() == Self.publicSurface.sorted(), """
+            the service's public surface is not the classified one. A member is added to the table \
+            only after deciding, under this suite's header, that it hands out no EntitlementClaim. \
+            Declared:
+            \(lines.joined(separator: "\n"))
+            """)
+    }
+
+    @Test
+    func noPublicDeclarationOnTheServiceNamesTheClaim() throws {
+        // The property itself, swept over what the file actually declares rather than over the
+        // table, so both tests must be defeated at once for a widening to land. The full type name
+        // is the token: `EntitlementCapability` and `EntitlementDecision` share the prefix and must
+        // keep passing.
+        for line in try Self.publicDeclarationLines() {
+            #expect(
+                !line.contains("EntitlementClaim"),
+                "a public declaration hands out or takes in the claim: \(line)"
+            )
+        }
+    }
+
+    @Test
+    func theScanWouldFlagASurfaceThatWidenedBack() throws {
+        // The rule run over held samples, the shape `theScanWouldFlagAFreePathThatAcquiredTheDependency`
+        // records the reason for: a guard only ever run against the tree it currently passes on has
+        // never been shown to catch anything. Both halves of the widening are here — the return
+        // value put back, which changes an existing line out of the table, and a fresh accessor,
+        // which adds a line the table does not hold. Each trips both tests above.
+        let widenedBack = "public func refreshNow() async throws -> EntitlementClaim {"
+        #expect(!Self.publicSurface.contains(widenedBack))
+        #expect(widenedBack.contains("EntitlementClaim"))
+
+        let freshDoor = "public var latestClaim: EntitlementClaim? {"
+        #expect(!Self.publicSurface.contains(freshDoor))
+        #expect(freshDoor.contains("EntitlementClaim"))
+    }
+}
