@@ -28,6 +28,11 @@ public enum PlanItemJobResolver {
         guard !job.isResolved else {
             return plan
         }
+        // Asked first, so a template that is both forbidden and field-less says the thing the user
+        // can act on ("ask for the watcher on its own") rather than "nothing in this task reads the
+        // file it would put each item in", which is true and useless. A lone `[start_watching]`
+        // template declaring `.inputPath` is exactly that pair.
+        try validateTemplateOperations(plan.steps)
         try validateTemplateReadsTheItemField(job, steps: plan.steps)
 
         let items = try resolveItems(
@@ -202,6 +207,34 @@ public enum PlanItemJobResolver {
     /// Checked against the template rather than the expansion, so the refusal arrives before the
     /// folder or the Finder selection is read — a declaration that cannot work should not first go
     /// looking at the user's files.
+    /// **An operation a job may not repeat once per item is refused before the folder is read**
+    /// (SONNY-382, PR #187 F1).
+    ///
+    /// `AgentOperation.jobTemplateRefusal` holds both the membership and the sentence; this is only
+    /// the door that asks. Refuses on the first offending step, `StoredRoutine.validateStepSafety`'s
+    /// reason: one sentence reaches the user, and the operation named in it is the one to change.
+    ///
+    /// **Checked on the template rather than on the expansion**, like the check below it, so nothing
+    /// looks at the user's files on behalf of a job that cannot run. This is `resolving`'s job and
+    /// not `expanding`'s deliberately: `expanding` is a pure rewrite that several tests drive
+    /// directly, and a guard placed there would be one every caller could skip. `resolving` is the
+    /// single door in `Sources/` — `git grep -n 'PlanItemJobResolver.resolving(' -- Sources | grep -vE ':[0-9]+: *[/][/]'`
+    /// → 1 at `0a12ed8`, `AgentActionExecutor.prepare`. Dropping the comment stage answers **3** at
+    /// that same head — the one call plus the two doc comments citing it, `PlanItemJob.swift`'s and
+    /// this one — which is the control that shows the stage rather than the pattern is doing the
+    /// excluding. This sentence first shipped stamped at a commit that predated it and saying 2,
+    /// which was a true reading of the tree *before* it was written into: committing a citation into
+    /// the population it greps adds a match, so the stamp has to name a commit that already contains
+    /// the sentence (`CLAUDE.md`'s ninth write-the-command defect, arriving inside the fix for this
+    /// branch's own F1 — which is where that rule says attention is lowest).
+    private static func validateTemplateOperations(_ steps: [AgentStep]) throws {
+        for step in steps {
+            if let refusal = step.operation.jobTemplateRefusal {
+                throw PlanItemJobError.forbiddenStepOperation(refusal)
+            }
+        }
+    }
+
     private static func validateTemplateReadsTheItemField(_ job: PlanItemJob, steps: [AgentStep]) throws {
         let written = steps.enumerated().contains { position, step in
             writesTheItem(into: step, at: position, field: job.itemField)

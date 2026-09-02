@@ -38,6 +38,11 @@ struct EgressClassificationTests {
         // capture, so there is no shape of this operation that egresses nothing.
         case .visionSession:
             return .alwaysLeavesDevice
+        // SONNY-382. Executing it fetches the watched page once, to record the baseline, so every
+        // execution egresses. The repeated checks afterwards egress as well and are outside this
+        // classification, which is about what a *step* does.
+        case .startWatching:
+            return .alwaysLeavesDevice
         case .openWorkspace, .runRoutine:
             return .dependsOnSavedContent
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .openApp,
@@ -66,8 +71,9 @@ struct EgressClassificationTests {
                 #expect(!inSet, "\(operation.rawValue) must not be in dataEgressOperations")
             }
         }
-        // 7 before row I; the eighth is `.visionSession`. Re-measured, not incremented on faith.
-        #expect(AgentActionExecutor.dataEgressOperations.count == 8)
+        // 7 before row I; the eighth is `.visionSession` and the ninth `.startWatching`
+        // (SONNY-382). Re-measured, not incremented on faith.
+        #expect(AgentActionExecutor.dataEgressOperations.count == 9)
     }
 }
 
@@ -113,7 +119,8 @@ struct SolitaryWriteMarkdownTests {
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: EmptyShortcutCatalog(),
-            shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json"))
+            shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json")),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
     }
 

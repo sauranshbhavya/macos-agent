@@ -63,6 +63,11 @@ enum AgentActivityPresentation {
             return "Reveal in Finder"
         case .showPermissionReadiness:
             return "Check permissions"
+        case .startWatching:
+            // Names the page rather than the subject, matching `openURL` directly above: the widget
+            // line is read while the step runs, and what the step is doing at that moment is
+            // fetching this URL once. The subject is what the notification says, days later.
+            return "Watch \(step.targetURL ?? "page")"
         case .saveRoutine:
             return "Save routine"
         case .runRoutine:

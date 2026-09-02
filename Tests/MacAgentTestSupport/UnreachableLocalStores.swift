@@ -119,4 +119,14 @@ public extension UnreachableLocalStores {
     static func outputLocations() -> OutputLocationStore {
         OutputLocationStore(fileURL: fileURL("output-locations.json"))
     }
+
+    /// Unfinished runs and standing watchers (SONNY-382).
+    ///
+    /// Needed here the day `CapabilityExecutionContext` and `AgentActionExecutor` gained the store,
+    /// for the same reason as the five above: every fixture that builds an executor now names this
+    /// store whether or not it has ever heard of a watcher, and the one thing none of them may name
+    /// is the real file.
+    static func resumableTasks() -> ResumableTaskStore {
+        ResumableTaskStore(fileURL: fileURL("resumable-tasks.json"))
+    }
 }

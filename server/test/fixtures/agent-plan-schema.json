@@ -189,6 +189,7 @@
               "switch_running_app",
               "invoke_shortcut",
               "vision_session",
+              "start_watching",
               "clarify",
               "unsupported"
             ],
@@ -333,6 +334,7 @@
                     "switch_running_app",
                     "invoke_shortcut",
                     "vision_session",
+                    "start_watching",
                     "clarify",
                     "unsupported"
                   ],
@@ -403,6 +405,13 @@
                 },
                 "visionGoal" : {
                   "description" : "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
+                "watchSubject" : {
+                  "description" : "For start_watching: what the user asked to be told about, in their own words and as a short noun phrase — \"the price on that page\", \"the status of my order\". Null for every other operation.",
                   "type" : [
                     "string",
                     "null"
@@ -506,7 +515,8 @@
                 "shortcutName",
                 "shortcutInput",
                 "visionGoal",
-                "browserName"
+                "browserName",
+                "watchSubject"
               ],
               "type" : "object"
             },
@@ -555,6 +565,13 @@
           },
           "visionGoal" : {
             "description" : "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
+          "watchSubject" : {
+            "description" : "For start_watching: what the user asked to be told about, in their own words and as a short noun phrase — \"the price on that page\", \"the status of my order\". Null for every other operation.",
             "type" : [
               "string",
               "null"
@@ -658,7 +675,8 @@
           "shortcutName",
           "shortcutInput",
           "visionGoal",
-          "browserName"
+          "browserName",
+          "watchSubject"
         ],
         "type" : "object"
       },

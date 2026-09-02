@@ -1810,6 +1810,7 @@ struct AgentRunnerTests {
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             capabilityRegistry: capabilityRegistry
         )
     }

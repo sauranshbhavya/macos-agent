@@ -2739,6 +2739,125 @@ completion** — if you lose track, delete every `.pdf` under it and it is as go
       open question the founders are deciding (PR #185's R1), and what a real run says is the input to
       that decision. Report the exact sentence either way.
 
+### Starting and stopping a watcher yourself (new 2026-08-31, SONNY-382)
+
+**These rows finish the section above, from the other end.** SONNY-236's rows start from a watcher
+seeded by hand in `AppDelegate.swift`, because at that point nothing in the product created one.
+This ticket builds the two halves that make a watcher a feature a person can use: **asking Sonny to
+start one**, and **the Routines page's Watching card with its Stop control**. So delete that seeding
+snippet before you start here — a watcher you asked for is the thing under test.
+
+**Run these in the same build as the section above, with the same two constants shortened.** Nothing
+here needs a third build:
+
+- `checkInterval: 15 * 60` → `checkInterval: 30`
+- `maxLifetime: 7 * 24 * 60 * 60` → `maxLifetime: 600`
+
+and a packaged build for the same reason (`./scripts/package-app.sh`, then open
+`.build/arm64-apple-macosx/debug/MacAgent.app`) — without bundle identity there is no notification
+path at all, so the last row would look broken while being fine.
+
+**Two numbers on screen come out of that shortened build looking odd, and neither is a finding.**
+Both are stated here rather than left to be discovered, because the section above had two rounds of
+manual rows whose arithmetic did not compose.
+
+- **The approval says "Checks every 1 minute", not "every 30 seconds".** It renders
+  `max(1, round(checkInterval / 60))`, exactly as the expiry notice renders
+  `max(1, round(maxLifetime / 86400))` — the same rounding you were told about for "1 day" in the
+  section above. At the **shipped** value it reads "every 15 minutes" and is exact. Seeing "every 15
+  minutes" here **would** be the finding: it would mean the number is coming from somewhere other
+  than the constant you edited.
+- **The approval says "for up to 1 day", and the Routines row says "until \<today's date\>".** Both are
+  the same ten-minute lifetime seen through different formatters — the notice rounds to days, the row
+  prints the actual expiry date, which at ten minutes is today. They are not contradicting each
+  other.
+
+**One rule governs every row below, and it is the one thing that makes them composable.** In this
+build a watcher **stops by itself ten minutes after you started it**, notifies you that it did, and
+disappears from the card. That is row 7's whole subject and it is background noise in every other
+row. So:
+
+- **Start each row with the Watching card empty**, and press Stop on anything left over from the row
+  before. A "Sonny stopped watching …" banner arriving in the middle of the Stop row or the
+  three-minute wait is a *previous* row's watcher expiring on schedule, not a finding.
+- **A row that starts a watcher is finished within a few minutes of starting it.** If you break off
+  and come back later, the watcher is gone and the row is measuring nothing.
+- **Sonny checks one watcher per pulse.** With one watcher alive it is looked at every 30 seconds;
+  with five alive each one is looked at roughly every two and a half minutes. Every "wait n minutes"
+  below assumes **one** watcher, which the first rule already gives you.
+
+*(This paragraph is PR #187's F3. Row 8 used to ask for five watchers and then a sixth with no window
+stated, and five ask-and-approve cycles take long enough that the first watcher can expire before the
+sixth ask — the sixth is then accepted, correctly, and reads as the cap failing. That section's
+arithmetic had already been wrong twice; this is the third and every row was re-derived, not just
+that one.)*
+
+- [ ] **(SONNY-382)** In the widget, ask Sonny in your own words to **tell you when a page changes** —
+      "tell me when https://… changes", pointed at a page you can edit. **An approval appears before
+      anything happens.** Read it: it names **the page**, a line beginning **Watching for:** with
+      your own phrase after it, and the cadence line above. **The finding is no approval at all**, or
+      an approval that does not say the page will be fetched repeatedly — a watcher's real cost is a
+      week of requests to somebody else's server, and that is what the panel is for.
+- [ ] **(SONNY-382)** Approve it, then open **Command Center → Routines**. **A second card headed
+      "Watching" is below the routines card**, with one row: your own phrase on the first line, and
+      **the page's host and the day it stops by itself** on the second. **The finding is a watcher
+      listed among the routines** rather than in its own card, or a row that says only what is being
+      watched — a row that never mentions the watcher ending would make Stop read as the only way out.
+- [ ] **(SONNY-382)** Look at that card again with **no watcher running** (before this run, or after
+      the Stop row below). **The card is not there at all** — no empty state, no explanation of what
+      a watcher is. **The finding is a permanent "no watchers yet" panel** on a page most sessions
+      will never start one from.
+- [ ] **(SONNY-382)** Press **Stop** on that row, **within a few minutes of starting it**. **It goes
+      immediately, with no confirmation dialog** — asking to confirm a Stop is friction on the one
+      control this whole ticket exists to provide, and nothing is destroyed: you can ask for the
+      watcher again. The card disappears with the last row. **No notification appears**: you pressed
+      the button, so Sonny has no news for you. (If a banner does appear, check it is not a *ten
+      minutes are up* notice for this same watcher — that is row 7, and it means you waited too long
+      rather than that Stop is noisy.)
+- [ ] **(SONNY-382)** **The row that proves Stop actually stopped it**, and it needs the edit to come
+      *after* the press. Start a watcher, press **Stop**, and only then **change the watched page and
+      leave it changed**. Wait **three minutes** — comfortably more than the two checks a change
+      needs at a 30-second interval. **Nothing arrives, ever.** A notification here means the record
+      is still being checked, which is the exact failure a Stop control that does not stop would have.
+- [ ] **(SONNY-382)** Start a watcher by asking, then **change the page within a minute or two and
+      leave it changed**, and this time let it run. Within about **a minute or two** of the edit (it
+      takes two checks 30 seconds apart, and the first of them can be up to 30 seconds after you
+      save) the notification arrives reading
+      **“\<your phrase\>” changed.** Then open **Routines**: **the Watching card is gone** — the
+      watcher fired and deleted itself. This is SONNY-236's first row re-run from the creation end,
+      and the new half is the card agreeing with the notification.
+- [ ] **(SONNY-382)** **The other ending, beside Stop.** Start a watcher on a page you leave alone and
+      **do not touch anything for ten minutes** — allow it a minute over, since the lifetime is
+      noticed on the next 30-second pulse rather than to the second. A notification says Sonny
+      stopped watching it, and **the Routines card is gone without you pressing anything**. The point
+      of this row is the pair: a user meets two ways a watcher ends, and the page has to be right
+      about both.
+- [ ] **(SONNY-382)** **The cap, from the user's side — and read the next sentence before you
+      start.** Watchers stop by themselves after ten minutes in this build, so what this row needs is
+      five alive **at the same moment**, not five started. Work briskly, and then **open Routines and
+      count the rows in the Watching card immediately before the sixth ask: there must be five.**
+      That count, not the clock, is what makes the row valid.
+      Start **five** watchers by asking — any five public pages. Check the card says five. Then ask
+      for a **sixth**. **Sonny refuses and says you already have five**, and **no approval appears
+      for it** — the refusal must arrive *before* you are asked to approve something that is then
+      declined underneath you. Routines still lists exactly five. **If the sixth is accepted, look at
+      the card again before reporting it**: four rows there means one expired while you were working
+      and the acceptance was correct — press Stop on the rest and run the row again, faster. Five
+      rows there and a sixth accepted is the finding.
+- [ ] **(SONNY-382)** **Not a pass/fail row — tell us what you saw.** Ask Sonny to **save a routine
+      that watches a page** ("create a routine called price check that tells me when … changes").
+      Sonny must not end up with a saved routine containing a watch step — a scheduled routine would
+      start a new watcher on every run until the cap refused. What we want to know is *how* it
+      declines: a clarifying question, a plain refusal, or something confusing. Report the exact
+      words.
+- [ ] **(SONNY-382)** **Not a pass/fail row — tell us what you saw.** The same question at the other
+      repetition door (PR #187's F1). Ask for something like **"for each folder on my Desktop, show it
+      in Finder, and tell me when https://… changes"**. Sonny must not start a watcher per folder —
+      five identical watchers of one page would spend the whole cap on duplicates. It should either
+      never build that shape, or refuse it saying to ask for the watcher on its own. Report which of
+      the two happened and the exact words, because whether a planner ever produces this shape is the
+      one thing no test can answer.
+
 ## 8. How to report back
 
 For each real finding, give me:

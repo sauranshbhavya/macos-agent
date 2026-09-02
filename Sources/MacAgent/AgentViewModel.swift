@@ -34,6 +34,15 @@ final class AgentViewModel: ObservableObject {
     /// on demand because the read is an actor hop and every reader of it is synchronous.
     @Published private(set) var modelAccessReadiness: ModelAccessReadiness = .undetermined
     @Published var savedRoutines: [StoredRoutine] = []
+    /// What Sonny is currently waiting on — the Routines page's Watching list (SONNY-382).
+    ///
+    /// **On Routines rather than in Memory, by founder decision** (recorded on SONNY-236 and
+    /// SONNY-109): Memory is what Sonny remembers, and a live watcher is what Sonny is doing.
+    ///
+    /// Loaded beside `savedRoutines` in `refreshSavedItems()` so the page's two lists are always as
+    /// fresh as each other, and so every path that already refreshes after a run, a delete or a wipe
+    /// refreshes this one too rather than needing to learn about it.
+    @Published var standingWatchers: [StandingWatcher] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
     /// The Safe-mode capture preview waiting for an answer, or `nil`. Safe mode only — founder
@@ -3091,6 +3100,19 @@ final class AgentViewModel: ObservableObject {
             recordLocalStorageLoadFailure(.savedWorkspaces, error: error)
         }
 
+        // **Emptied on a failure, unlike the two above** (SONNY-382). Those two leave their last
+        // good value in place; this list is the Routines page's answer to "what is Sonny watching",
+        // and a stale row offering a Stop for a record nothing can read is a control that cannot do
+        // what it says. Empty is the honest answer, and the banner this records says why. It is the
+        // rule `refreshResumableTasks` already follows for the other half of the same file.
+        do {
+            standingWatchers = try resumableTaskStore.loadWatchers()
+            clearLocalStorageLoadFailure(.resumableTasks)
+        } catch {
+            standingWatchers = []
+            recordLocalStorageLoadFailure(.resumableTasks, error: error)
+        }
+
         refreshSilentlyReadStoreHealth()
     }
 
@@ -4033,6 +4055,41 @@ final class AgentViewModel: ObservableObject {
         // different answer now — and a row still saying "Can't be read" about a file that has just
         // been moved aside is the same stale surface the four calls above exist to prevent.
         refreshStoreReadability()
+    }
+
+    /// Stops one standing watcher — the Routines page's Stop press (SONNY-382).
+    ///
+    /// **This is the half of SONNY-382 that must not have been cut.** A watcher a user can start
+    /// and cannot stop is a background process they forgot they started, spending a cap they cannot
+    /// see, which is the exact failure the founders' cap decision of 2026-08-31 exists to prevent.
+    ///
+    /// **No notification, and that is deliberate.** `StandingWatcherStopReason.cancelled` has a
+    /// sentence and nothing posts it: the four endings Sonny decides are news to somebody who was
+    /// not there, and this one is a button the user has their finger on. The row leaving the list is
+    /// the feedback. **What that must not become is the impression that Stop is the only way a
+    /// watcher ends** — the row's own second line says when it stops on its own, so a user meets
+    /// both endings without the product explaining either.
+    ///
+    /// **`setError`, not `recordLocalStorageWriteFailure`** — `CLAUDE.md`'s channel rule, and this
+    /// is the clear side of it: the user pressed a control and the thing they asked for did not
+    /// happen. The notice channel is for bookkeeping a *task* did on its own, which is what
+    /// `saveStandingWatcher` and `finishStandingWatcher` use, because there `errorMessage` would
+    /// replace the result of a run that succeeded.
+    ///
+    /// **A record that is already gone is not an error**, and that is `ResumableTaskStore.deleteWatcher`'s
+    /// own behaviour rather than something decided here: it returns without writing when no watcher
+    /// carries the id. So a press on a row a check finished a second earlier reports nothing, and the
+    /// refresh below is what makes the list agree with the file. The refresh runs on the failing path
+    /// too, because a write that threw may still have changed what is readable.
+    func stopWatching(_ watcher: StandingWatcher) {
+        do {
+            try resumableTaskStore.deleteWatcher(id: watcher.id)
+        } catch {
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(error.localizedDescription)")
+            refreshSavedItems()
+            return
+        }
+        refreshSavedItems()
     }
 
     /// Forgets one snippet.
@@ -5042,6 +5099,7 @@ final class AgentViewModel: ObservableObject {
             shortcutCatalog: shortcutCatalog,
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
+            resumableTaskStore: resumableTaskStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
             // The published answer rather than a fresh read: `PermissionReadinessCapabilityAdapter`
             // is synchronous and this is the same value the Settings page is showing, so the tool

@@ -233,7 +233,10 @@ struct AutomationStoresTests {
             "routineName", "routineSteps", "workspaceName", "workspaceApps", "workspaceURLs",
             "workspaceFileLocations", "workspaceAppsToRemove", "workspaceURLsToRemove",
             "workspaceFileLocationsToRemove", "sourceURLs", "searchQuery", "draftTitle",
-            "draftContent", "shortcutName", "shortcutInput", "visionGoal", "browserName"
+            "draftContent", "shortcutName", "shortcutInput", "visionGoal", "browserName",
+            // SONNY-382. Planner-writable for `visionGoal`'s reason — it is a phrase out of the
+            // user's own sentence — so it is in `stepKeys`, in the schema, and not stripped.
+            "watchSubject"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door — each one held by a behavioural test
@@ -358,6 +361,10 @@ struct AutomationStoresTests {
                 // door — independent of the scheduled path's own refusal and of the
                 // `.approved(.tier2)` ceiling a tier-3 vision assessment cannot pass.
                 .visionSession,
+                // SONNY-382. A scheduled routine runs unattended, so one carrying this step would
+                // create a watcher on every occurrence until the cap refuses — records the user
+                // never asked for, against a cap that exists to stop exactly that accumulation.
+                .startWatching,
                 .clarify,
                 .unsupported
             ]

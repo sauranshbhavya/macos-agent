@@ -195,6 +195,23 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// not built to answer is its own kind of drift.
     public var browserName: String?
 
+    /// What the user asked Sonny to watch for, in their own words — "the price on that page", "the
+    /// status going to shipped" (SONNY-382).
+    ///
+    /// **Planner-visible, for `visionGoal`'s reason and not `resolvedAppName`'s.** The model is the
+    /// only thing that reads the command text, so it is the only thing that can turn "tell me when
+    /// this page changes" into a phrase worth reading back days later. So this key is in
+    /// `AgentPlanDecoder.stepKeys` and in the schema, and it is not a second decode-excluded
+    /// identity field.
+    ///
+    /// **A label and nothing more.** Nothing compares it, nothing re-plans from it, and no part of
+    /// deciding whether the page changed reads it — that is `StandingWatcherEvaluator.digest(of:)`
+    /// over the page's own text. It exists because the notification has to name the thing the user
+    /// asked about rather than a URL, and because the Routines row has to be recognisable as theirs.
+    /// `StandingWatcher.subject` is where it lands, capped there at
+    /// `StandingWatcher.maxSubjectCharacters`.
+    public var watchSubject: String?
+
 
     public init(
         id: String,
@@ -230,7 +247,8 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         resolvedBundleIdentifier: String? = nil,
         resolvedFromFinderSelection: Bool? = nil,
         itemIndex: Int? = nil,
-        visionGoal: String? = nil
+        visionGoal: String? = nil,
+        watchSubject: String? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -266,6 +284,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.resolvedFromFinderSelection = resolvedFromFinderSelection
         self.itemIndex = itemIndex
         self.visionGoal = visionGoal
+        self.watchSubject = watchSubject
     }
 }
 
@@ -310,6 +329,20 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// steps are not knowable before the run starts, which is the entire reason this capability
     /// exists.
     case visionSession = "vision_session"
+    /// Sonny waits for a public page to change and tells the user when it does (SONNY-382).
+    ///
+    /// **The step starts a watcher; it is not the watching.** Executing it reads the page once,
+    /// stores that reading as the baseline, and returns — the checking happens afterwards on
+    /// `AgentViewModel.checkStandingWatchers`'s own pulse, days later, with no plan and no run
+    /// behind it. So this operation's whole consequence is one public GET and one local record,
+    /// which is what `StandingWatcherCapabilityAdapter.assessRisk` judges.
+    ///
+    /// **There is no matching stop operation, and that is a decision rather than an omission.**
+    /// Stopping is the Routines page's Stop control (`AgentViewModel.stopWatching`), because the
+    /// thing a user needs to stop is one of a list they are looking at — a planner step would have
+    /// to name a watcher in words and guess which one they meant. The founders' rule for this
+    /// ticket is that starting and stopping ship together; they do, through two different doors.
+    case startWatching = "start_watching"
     case clarify
     case unsupported
 
@@ -457,7 +490,10 @@ public enum AgentPlanDecoder {
         // Row I, SONNY-93. The pins beside it stay absent — the goal is the planner's to write,
         // and the identity (`resolvedAppName`, `resolvedBundleIdentifier`) and the Finder-read fact
         // (`resolvedFromFinderSelection`, SONNY-185) are the resolver's alone.
-        "visionGoal"
+        "visionGoal",
+        // SONNY-382. Planner-visible for the same reason as `visionGoal`: it is a phrase from the
+        // user's own sentence, and nothing but the model reads that sentence.
+        "watchSubject"
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
@@ -572,7 +608,8 @@ public enum AgentPlanSchema {
         "shortcutName",
         "shortcutInput",
         "visionGoal",
-        "browserName"
+        "browserName",
+        "watchSubject"
     ]
 
     /// The schema's own name, as `docs/sonny-backend-api-contract.md` §4.2's
@@ -819,6 +856,10 @@ public enum AgentPlanSchema {
             "visionGoal": [
                 "type": ["string", "null"],
                 "description": "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees."
+            ],
+            "watchSubject": [
+                "type": ["string", "null"],
+                "description": "For start_watching: what the user asked to be told about, in their own words and as a short noun phrase — \"the price on that page\", \"the status of my order\". Null for every other operation."
             ]
         ]
     }

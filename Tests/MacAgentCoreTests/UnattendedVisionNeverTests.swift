@@ -55,7 +55,8 @@ struct UnattendedVisionNeverTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
         let assessment = try executor.assessRisk(plan: Self.visionPlan(), scope: .unscoped)
         #expect(assessment.effectiveTier == .tier3)

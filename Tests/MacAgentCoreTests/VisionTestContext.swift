@@ -46,6 +46,7 @@ enum VisionTestContext {
             shortcutCatalog: ProcessShortcutCatalog(),
             shortcutInvoker: ProcessShortcutInvoker(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: scratchURL("shortcuts.json")),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             taskScope: .unscoped,
             assessNestedPlan: { _, _ in CapabilityRiskAssessment(defaultTier: .tier0) },
             previewNestedPlan: { _ in [] },

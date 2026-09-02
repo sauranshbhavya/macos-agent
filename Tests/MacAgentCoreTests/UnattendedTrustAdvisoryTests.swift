@@ -29,7 +29,8 @@ struct UnattendedTrustAdvisoryTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
 
         #expect(UnattendedTrustAdvisory.warning(forRoutineNamed: "Morning", executor: executor) == nil)
@@ -64,7 +65,8 @@ struct UnattendedTrustAdvisoryTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: snippetStore,
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
 
         // Guard the premise rather than assuming it: if this stops being tier 3, the test below
@@ -104,7 +106,8 @@ struct UnattendedTrustAdvisoryTests {
             clipboardHistoryStore: UnreachableLocalStores.clipboardHistory(),
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
-            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory()
+            shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
 
         #expect(UnattendedTrustAdvisory.warning(forRoutineNamed: "Ghost", executor: executor) == nil)
