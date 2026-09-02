@@ -309,19 +309,35 @@ export async function hasLiveSubscription(
  * `false` is what saves the call, and it is a refusal — so the question is whether this can be
  * `false` while the provider does hold a customer.
  *
- * **It can, in three enumerated shapes, and none of them is reachable from the app.** A checkout
- * whose webhook has not landed yet; a delivery this gateway recorded `unmatched`, `unmapped` or
- * `unreadable`, so a customer exists at the provider and no row was ever written; and a customer
- * created in the provider's own dashboard against this account's external id. In every one of them
- * the same missing row is what `claimFactsFor` reads, so the claim this Mac holds says
- * `plan: 'none'`, `SubscriptionReading.read` answers `nil`, and the Account section renders no
- * Manage control at all — the user cannot reach this refusal, because the app already refuses
- * itself, from the same row and for the same reason. The first shape closes itself when the delivery
- * lands. **The second is the real residual**: a paying customer whose product `BILLING_PLANS` does
- * not name could, before this guard, have been handed a portal link by a client that called the
- * route directly, and now cannot. That is a support path narrowing, recorded rather than discovered
- * later; the state it needs is already a support incident (`unmapped` is a paying customer with no
- * entitlement), and the fix for it is the mapping, not the portal.
+ * **It can, in three shapes that arrive through the provider, and none of those is reachable from
+ * the app.** A checkout whose webhook has not landed yet; a delivery this gateway recorded
+ * `unmatched`, `unmapped` or `unreadable`, so a customer exists at the provider and no row was ever
+ * written; and a customer created in the provider's own dashboard against this account's external
+ * id. In every one of them the same missing row is what `claimFactsFor` reads, so the claim this Mac
+ * holds says `plan: 'none'`, `SubscriptionReading.read` answers `nil`, and the Account section
+ * renders no Manage control at all — the user cannot reach this refusal, because the app already
+ * refuses itself, from the same row and for the same reason. The first shape closes itself when the
+ * delivery lands. **The second is the real residual**: a paying customer whose product
+ * `BILLING_PLANS` does not name could, before this guard, have been handed a portal link by a client
+ * that called the route directly, and now cannot. That is a support path narrowing, recorded rather
+ * than discovered later; the state it needs is already a support incident (`unmapped` is a paying
+ * customer with no entitlement), and the fix for it is the mapping, not the portal.
+ *
+ * **A fourth shape does reach the app, and the sentence above does not cover it** (PR #189's review,
+ * F3). The reachability argument leans on a missing row minting `plan: 'none'`, and that step holds
+ * only for an account whose entitlement came from the provider. The operator `grant` in
+ * `entitlements.ts` writes `plan` and `capabilities` onto **this same row** with `billing_provider`
+ * and `billing_subscription_id` left NULL, and clears `revoked_at` — so an operator-granted account
+ * mints a claim with a real plan, `SubscriptionReading.read` returns a snapshot, and `SignInView`
+ * renders a live Manage button while this predicate answers `false`. Combine that grant with any of
+ * the three shapes above — say a customer made in the provider's dashboard — and the user really can
+ * press Manage and be told there is no subscription. **It is pre-existing rather than a regression**:
+ * an operator-granted account with no provider customer got the identical 409 from the provider's own
+ * `noCustomer` before this guard existed, and this guard changes only the grant-*plus*-customer
+ * combination, from "maybe a link" to a refusal. It is written down here because the enumeration is
+ * what the whole argument rests on, and an enumeration that omits a case is the one kind of claim a
+ * reader cannot check against the code it sits on. `aPlanTheOperatorGrantedIsNotASubscriptionToManage`
+ * in `billing.db.test.ts` writes exactly this row and its own comment describes the rendering.
  */
 export async function hasSubscriptionRecord(
   client: pg.Client,

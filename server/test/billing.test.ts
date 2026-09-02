@@ -1076,12 +1076,19 @@ describe("where a subscriber manages the subscription", () => {
     // which one answered: `BillingPortalCopy` writes one sentence for this code, and a second
     // spelling would be a second sentence for the same fact about the same account. `request_id` is
     // dropped because it is per-request by construction and is the one field that must differ.
+    // **Each arm asserts which side actually answered, and without that this test does not test its
+    // own name** (PR #189's review, F5). Two equal bodies are equal whether or not the two arms
+    // reached different code: a mutant making the local guard fire on both stores leaves them equal
+    // and this green. It is the same vacuity closed one screen down on the mapping table's 404 row,
+    // not carried here at the time.
     const bodies: Record<string, unknown>[] = [];
+    const providerReached: boolean[] = [];
     for (const store of [recordingStore({ record: false }), recordingStore({ record: true })]) {
-      vi.stubGlobal(
-        "fetch",
-        async () => new Response(JSON.stringify({ error: "x" }), { status: 404 }),
-      );
+      let called = false;
+      vi.stubGlobal("fetch", async () => {
+        called = true;
+        return new Response(JSON.stringify({ error: "x" }), { status: 404 });
+      });
       const app = build(store);
       const response = await app.inject({
         method: "POST",
@@ -1091,12 +1098,25 @@ describe("where a subscriber manages the subscription", () => {
       expect(response.statusCode).toBe(409);
       const { request_id: _ignored, ...rest } = response.json().error as Record<string, unknown>;
       bodies.push(rest);
+      providerReached.push(called);
       await app.close();
     }
 
+    // No record: answered locally, no call. A record: the provider was asked and said noCustomer.
+    expect(providerReached, "the two arms did not answer from different sides").toEqual([
+      false,
+      true,
+    ]);
     expect(bodies).toHaveLength(2);
     expect(bodies[0]).toEqual(bodies[1]);
     expect(bodies[0]).toMatchObject({ code: "entitlement.no_subscription", retryable: false });
+    // **The sentence itself, pinned** (PR #189's review, F6). Nothing else in the suite held it, and
+    // the refactor onto one shared helper is what made that matter: both arms now move together, so
+    // the equality above cannot see a reword. §7.1 keeps this string off the user's screen —
+    // `BillingPortalCopy` owns that — but `polar.ts` and the SONNY-216 changelog entry both quote it
+    // verbatim as the thing a misconfigured deployment tells a paying subscriber, so the record
+    // treats the wording as load-bearing and something should.
+    expect(bodies[0]).toMatchObject({ message: "This account holds no subscription to manage." });
   });
 
   it("refuses an unauthenticated caller before it calls the provider", async () => {
