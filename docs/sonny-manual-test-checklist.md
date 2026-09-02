@@ -964,11 +964,18 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [x] "Recently Completed" shows only truly `.completed` tasks — re-verify failed/canceled don't leak
       in (this was a real, previously-fixed bug — easy to regress)
 - [x] ~~No usage/quota metric anywhere on this page (deliberate — its absence is correct)~~ —
-      **superseded 2026-09-02 by SONNY-214: this page now carries one, and that is the correct
-      state.** Confirmed 2026-07-24, when it was true and deliberate; billing did not exist yet and
-      `14-MainAppInsights.svg` still predates it. The absence is no longer what to check for — the
-      three rows below are. Left in place rather than deleted so a reader who remembers the old rule
-      sees why it changed.
+      **SONNY-214 added one on 2026-09-02, and whether that is right is an open founder question
+      rather than a settled supersession. Do not check either state until it is answered.**
+      Confirmed 2026-07-24, when it was true. This row is the checklist's reflection of an explicit
+      product decision in `docs/sonny-founder-design-decisions.md` (§Insights): *do not show
+      usage/quota-consumption metrics on this page*, refused there on stated strategy grounds —
+      cancellation anxiety in heavy users, "am I getting my money's worth" doubt in light ones. That
+      decision predates billing; the ticket that added the row postdates it and asks for it, so one
+      of the two has to give and it is not a session's call which. **This row was first superseded
+      on the authority of the wireframe alone, which is the weaker record; PR #188's fix round found
+      the stronger one and reopened it.** If the ruling keeps the row, this line is superseded and
+      the rows below are what to check; if it removes the row, this line is live again and the first
+      row below it should fail.
 - [ ] **(new 2026-09-02, SONNY-214)** With the gateway container up and a signed-in session
       (SONNY-212's setup), open Insights. **A "Screen Control" row sits under the three stat cards**
       reading `N of M runs left this month`, and N and M match `screen_control_runs_left` /
