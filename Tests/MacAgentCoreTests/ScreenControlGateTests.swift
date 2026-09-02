@@ -91,6 +91,50 @@ struct ScreenControlGateTests {
         #expect(await subject.decide(at: .stepBoundary) == .allowed)
     }
 
+    /// **A session admitted on the account's last run is not halted for spending that run**
+    /// (PR #190's F1 — the defect this test exists for, and the money path).
+    ///
+    /// This is the state no `runsLeft` value can express, which is exactly why one figure read at
+    /// both moments looked correct: the door reads 1 and admits, iteration 1 is metered, and because
+    /// `runsLeft` is `floor(remaining / runCredits)` over a remainder the session's *own* draw has
+    /// already been subtracted from, the very next boundary reads 0 with most of the run still
+    /// unspent. Under the old single predicate the tenth run of a ten-run plan was one step long.
+    ///
+    /// The two assertions are opposite answers to the *same reading*, which is the whole point: the
+    /// door refuses (no whole further run is affordable) and the boundary allows (this run is not
+    /// finished). A test that only asserted one of them would pass on the defect.
+    @Test
+    func aSessionAdmittedOnItsLastRunIsNotHaltedForSpendingIt() async {
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0.9)
+        )
+
+        #expect(await subject.decide(at: .sessionStart) == .refused(.allowanceExhausted))
+        #expect(await subject.decide(at: .stepBoundary) == .allowed)
+    }
+
+    /// **And the halt still fires when the account has actually run out**, or F1's fix would have
+    /// deleted the ticket's acceptance criterion instead of correcting it.
+    ///
+    /// Asserted at the boundary value on the figure that now decides it. `0.0` halts and any
+    /// positive remainder does not, so "ran out" means the remainder reached zero rather than the
+    /// run count flooring to zero — the distinction the two tests either side of this one turn on.
+    @Test
+    func theBoundaryHaltsWhenTheRemainderIsActuallyGone() async {
+        let (exhausted, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0)
+        )
+        #expect(await exhausted.decide(at: .stepBoundary) == .refused(.allowanceExhausted))
+
+        let (barely, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0.000001)
+        )
+        #expect(await barely.decide(at: .stepBoundary) == .allowed)
+    }
+
     /// **The one asymmetry in the gate, both directions in one test.**
     ///
     /// An allowance the gateway would not answer fails *closed* at the door — nothing has happened,
@@ -193,19 +237,36 @@ struct ScreenControlGateTests {
 @Suite
 @MainActor
 struct ScreenControlGateFreeCapabilityTests {
-    /// Three free capabilities execute with `visionSession: nil` — no gate, no entitlement service,
-    /// no allowance reader and nothing to reach one with.
+    /// Three free capabilities execute in **both** shapes a context comes in: with no billing wiring
+    /// at all, and with the live wiring the shipping app actually hands them.
     ///
-    /// **`nil` is the honest shape of "no billing wiring at all"**, and it is stronger than handing
-    /// these adapters a refusing gate would be: a refusing gate proves they ignore one particular
-    /// object, while this proves the object need not exist. That is §5.3.1's own code shape — "a
-    /// check that is never made cannot fail closed" — read in the direction this ticket is about.
+    /// **The second case is the one that holds the property, and its absence was a real hole**
+    /// (PR #190's F5). This test used to run `visionSession: nil` only, arguing that `nil` was
+    /// "stronger than handing these adapters a refusing gate would be" because it proves the object
+    /// need not exist. Measured, it is weaker, and in the one direction that matters: `nil` is the
+    /// single configuration in which an adapter that *did* consult the gate still passes, because
+    /// `context.visionSession?.screenControlGate` short-circuits to `nil` and execution carries on.
+    /// A mutant giving `CalculatorCapabilityAdapter` exactly that consult **survived** this suite
+    /// while dying against 50 tests elsewhere — so the property was held by tests written for other
+    /// things, and the test named for it was the one test that did not hold it.
+    ///
+    /// **`visionSession` is not a vision-only channel**, which is why the second case is the shipping
+    /// shape rather than a hypothetical: `AgentActionExecutor` builds one `CapabilityExecutionContext`
+    /// carrying it and hands that same context to whichever adapter runs, so in the real app every
+    /// free adapter's `execute` receives the live gate. Nothing structural stops one reading it; what
+    /// stops it is that none does, which is a fact about the population and is held as one by
+    /// `ScreenControlGateReachTests`' exact-set scan.
     ///
     /// **Each result is asserted by value, not by not-throwing.** An adapter that had acquired a
     /// billing dependency and failed soft would return an empty summary and pass a no-throw test.
-    @Test
-    func freeCapabilitiesExecuteWithNoBillingWiringInReach() async throws {
-        let context = VisionTestContext.make(installed: [], vision: nil)
+    @Test(arguments: [false, true])
+    func freeCapabilitiesExecuteWhateverBillingWiringIsInReach(withARefusingGate: Bool) async throws {
+        // `nil` is "no billing wiring exists"; the environment is the shipping shape, carrying a gate
+        // that refuses every moment. Neither may change what these three answer.
+        let context = VisionTestContext.make(
+            installed: [],
+            vision: withARefusingGate ? Self.environmentCarrying(ClosedScreenControlGate()) : nil
+        )
 
         let calculation = try await execute(
             AgentStep(
@@ -255,8 +316,70 @@ struct ScreenControlGateFreeCapabilityTests {
             DefaultCapabilityAdapters.all().first { $0.metadata.operations.contains(step.operation) },
             "no adapter is registered for \(step.operation)"
         )
-        // Nothing in this file constructs an `EntitlementService`, a `ScreenControlGate` or a
-        // `SonnyBackendClient`, and nothing these three adapters call can reach one.
+        // Nothing in this file constructs an `EntitlementService` or a `SonnyBackendClient`, so the
+        // only gate any of these adapters could reach is the refusing one the context may carry.
         return try await adapter.execute(plan: plan, context: context) { _, _ in }.summary
     }
+
+    /// A `VisionSessionEnvironment` whose only live part is the gate.
+    ///
+    /// Everything else is inert on purpose: this environment exists to be *carried* by a context, not
+    /// driven, and the three adapters under test never touch a capture service, a synthesizer or a
+    /// model client. Giving them real ones would put a screen capture and a network client inside a
+    /// test about capabilities that need neither.
+    private static func environmentCarrying(
+        _ gate: any ScreenControlGating
+    ) -> VisionSessionEnvironment {
+        let permissions = DeterministicScreenPermissions()
+        return VisionSessionEnvironment(
+            captureService: ScreenCaptureService(permissionChecker: permissions),
+            redactionService: LocalRedactionService(textRecognizer: InertTextRecognizer()),
+            synthesizer: InertSynthesizer(),
+            modelClient: InertVisionModel(),
+            permissionChecker: permissions,
+            screenControlGate: gate,
+            interaction: nil
+        )
+    }
+
+    /// Recognises nothing. Never called — the adapters under test capture no screen.
+    private struct InertTextRecognizer: ImageTextRecognizing {
+        func recognizeText(
+            inPNGData pngData: Data,
+            pixelWidth: Int,
+            pixelHeight: Int
+        ) async throws -> [RecognizedTextObservation] { [] }
+    }
+
+    /// Does nothing to the machine, and would be a defect if it were reached: these three
+    /// capabilities move no windows and press no keys.
+    private struct InertSynthesizer: ScreenActionSynthesizing {
+        func activateApp(bundleIdentifier: String) async -> Bool { false }
+        func frontmostBundleIdentifier() async -> String? { nil }
+        func currentWindowFrame(windowID: UInt32) async -> CGRect? { nil }
+        func ownWindowFrames() async -> [CGRect] { [] }
+        func click(atGlobalPoint point: CGPoint) async throws {}
+        func type(_ text: String) async throws {}
+        func press(_ key: VisionActionKey) async throws {}
+        func scroll(
+            atGlobalPoint point: CGPoint?,
+            direction: VisionScrollDirection,
+            amount: Int
+        ) async throws {}
+    }
+
+    /// Reaches no network. A call here would mean a free capability had started a vision session.
+    private struct InertVisionModel: VisionModelDeciding {
+        var transcriptDescription: String { "inert" }
+
+        func decide(
+            prompt: String,
+            payload: RedactedPayload,
+            session: VisionSessionRequestContext
+        ) async throws -> String {
+            throw InertModelReached()
+        }
+    }
+
+    private struct InertModelReached: Error {}
 }

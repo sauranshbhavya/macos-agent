@@ -77,7 +77,14 @@ public struct StubEntitlementConfirmation: ScreenControlEntitlementConfirming {
 /// most attackable thing in the gate — it is where a fail-closed rule is deliberately not applied.
 public final class StubAllowanceReading: ScreenControlAllowanceReading, @unchecked Sendable {
     public enum Answer: Sendable {
+        /// Whole runs in hand, with the credit remainder that implies. Models `runCredits == 1.0`,
+        /// so `runsLeft` and the remainder agree the way the gateway guarantees they do.
         case runsLeft(Int)
+        /// **The two figures apart, which is the state a session in flight is actually in** and the
+        /// one PR #190's F1 turned on: the account's own iterations have been subtracted, so the
+        /// floor has reached zero while real credit is still unspent. No `runsLeft` value can
+        /// express it, which is why reading one figure for both moments looked correct.
+        case runsAndCredits(runsLeft: Int, creditsRemaining: Double)
         case failure
     }
 
@@ -123,13 +130,20 @@ public final class StubAllowanceReading: ScreenControlAllowanceReading, @uncheck
         case .failure:
             throw ReadFailed()
         case .runsLeft(let runs):
-            return ScreenControlAllowance(
-                plan: "test.plan",
-                runsLeft: runs,
-                runsIncluded: max(runs, 1),
-                periodStart: Date(timeIntervalSince1970: 0),
-                periodEnd: Date(timeIntervalSince1970: 2_678_400)
-            )
+            return Self.allowance(runsLeft: runs, creditsRemaining: Double(runs))
+        case .runsAndCredits(let runs, let credits):
+            return Self.allowance(runsLeft: runs, creditsRemaining: credits)
         }
+    }
+
+    private static func allowance(runsLeft: Int, creditsRemaining: Double) -> ScreenControlAllowance {
+        ScreenControlAllowance(
+            plan: "test.plan",
+            runsLeft: runsLeft,
+            runsIncluded: max(runsLeft, 1),
+            creditsRemaining: creditsRemaining,
+            periodStart: Date(timeIntervalSince1970: 0),
+            periodEnd: Date(timeIntervalSince1970: 2_678_400)
+        )
     }
 }
