@@ -288,11 +288,60 @@ public extension AgentOperation {
              .saveSnippet, .switchRunningApp, .lookupRecentArtifacts, .visionSession, .clarify,
              // `start_watching` reads `targetURL` and `watchSubject`, and neither is a
              // `PlanItemField` — so a job cannot write an item into it, which is the honest answer
-             // rather than an omission. A watcher per item in a folder would also be five refusals
-             // and one watcher, against `StandingWatcherLimits.maxActive` (SONNY-382).
+             // to *this* switch's question (SONNY-382).
+             //
+             // **It is not a safety property, and this comment used to say it was** (PR #187, F1).
+             // It claimed a watcher per item would be "five refusals and one watcher". The reviewer
+             // ran the shape rather than reading it: an 8-file folder job produced **five watchers
+             // of one page and three refusals** — the inverse. Reading no item field decides only
+             // whether the item is *written into* a copy; `PlanItemJobResolver.expanding` makes the
+             // copy regardless, so the step is repeated verbatim once per item. What stops that is
+             // `jobTemplateRefusal` below, which is a door rather than an inference.
              .startWatching,
              .unsupported:
             return []
+        }
+    }
+
+    /// Why a job's template may not contain this operation, in the user's words — or `nil` when it
+    /// may (SONNY-382, PR #187 F1).
+    ///
+    /// **The third of three repetition doors, and until this it was the only one standing open.** A
+    /// scheduled routine may not carry a `start_watching` step (`StoredRoutine.forbiddenStepOperations`)
+    /// and a resume will not silently repeat one (`AgentOperation.resumeRepeatSafety`). A job over
+    /// many items repeats every template step once per item, and that door had nothing behind it —
+    /// so `[reveal_in_finder, start_watching]` over an eight-file folder created five identical
+    /// watchers of one page, spent the whole of `StandingWatcherLimits.maxActive` on duplicates the
+    /// user cannot tell apart, refused the remaining three, and reported it as "Worked through 5 of
+    /// 8 files."
+    ///
+    /// **Why the planner prompt was not the answer.** The prompt already says to produce one
+    /// `start_watching` step, and `StoredRoutine.forbiddenStepOperations` exists because a prompt is
+    /// advice — the same reason, at the same product, for the same operation. This is the door.
+    ///
+    /// **Exhaustive with no `default`, following `resumeRepeatSafety`'s precedent rather than
+    /// `forbiddenStepOperations`' set.** A set has no compiler guard: a fourteenth operation joins
+    /// the tree unclassified and the omission looks exactly like a decision. The bar is narrow and
+    /// worth stating, because most things are fine to repeat: an operation belongs here when each
+    /// copy **consumes a share of something capped and standing** that outlives the run. A second
+    /// local file, a second browser tab and a second identical save are all permitted — they are
+    /// untidy, and a job is *for* doing one thing many times.
+    ///
+    /// **The sentence lives here rather than at the throw site**, so a second entry cannot arrive
+    /// with a generic message covering two different harms; the classification and the words the
+    /// user reads are one decision in one place.
+    var jobTemplateRefusal: String? {
+        switch self {
+        case .startWatching:
+            return "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+        case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .revealInFinder,
+             .openGeneratedArtifact, .invokeShortcut, .openHackerNews, .fetchHNHeadlines,
+             .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL, .openURL, .playMedia,
+             .getFinderSelection, .showPermissionReadiness, .saveRoutine, .runRoutine,
+             .createWorkspace, .editWorkspace, .openWorkspace, .createLocalDraft, .calculateUtility,
+             .lookupClipboardHistory, .expandSnippet, .saveSnippet, .switchRunningApp,
+             .lookupRecentArtifacts, .visionSession, .clarify, .unsupported:
+            return nil
         }
     }
 }
@@ -339,6 +388,9 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
     /// No step of the template reads the field the job says carries the item, so the item would
     /// reach nothing and every item would be reported done (PR #185, F2).
     case noStepReadsTheItemField(String)
+    /// The template contains an operation a job may not repeat once per item — see
+    /// `AgentOperation.jobTemplateRefusal`, which is where the sentence comes from (PR #187, F1).
+    case forbiddenStepOperation(String)
     /// Not one item of the job could even be previewed, so there is nothing to ask approval for. The
     /// associated value is the first item's own error, which is the message that explains what is
     /// wrong with what the user pointed at.
@@ -359,6 +411,8 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
         case .notPrepared:
             return "Sonny could not work out which items this job covers."
         case .noStepReadsTheItemField(let detail):
+            return detail
+        case .forbiddenStepOperation(let detail):
             return detail
         case .everyItemUnavailable(let detail):
             return detail
