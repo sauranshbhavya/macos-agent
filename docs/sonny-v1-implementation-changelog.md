@@ -170,6 +170,55 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/a-screen-control-run-says-how-many-are-left
+Status: complete
+Date: 2026-09-02
+Tickets: SONNY-214 — the in-task usage indicator and the Command Center usage surface: a "Screen Control" row in Insights' stats area reading "12 of 20 runs left this month", and a small "12 runs left" the widget shows beside a screen-control task — never beside an ordinary free one.
+Reviewed by: pending (per WORKFLOW.md step 7).
+
+Spec sections covered: **§4A.9/§16.4's visibility half** — the usage/budget is visible so hitting a limit is never a surprise. Consumes §5.4 (`GET /v1/account/credits`, SONNY-212) and renders nothing of its own accounting: the one number shown is the server's `screen_control_runs_left`, with `screen_control_runs_included` as its denominator on the Command Center form. **Not covered, by the ticket's own never-touch list:** the credit mechanism (SONNY-212 — read, never edited; nothing under `server/` changed — `git diff origin/main...HEAD --stat -- server` prints nothing at `3f77727`, against a control that fires, `git diff origin/main...HEAD --name-only -- Sources | wc -l` → 4 at the same head) and the gate (SONNY-213 — nothing here decides what happens at zero).
+
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift` — `screenControlAllowance` (published, `private(set)`), `refreshScreenControlAllowance()`, the `isScreenControlTaskInFlight` / `screenControlRunsLeftForTaskInFlight` gate, and one `ScreenControlAllowanceService` built in `init` over the process's one backend client.
+- `Sources/MacAgent/ScreenControlUsagePresentation.swift` (new) — the two sentences, pure.
+- `Sources/MacAgent/FloatingWidgetView.swift` — the in-task line inside `styledPanel`'s glass (System B), and the `.onChange` that asks for the figure when a screen-control task goes in flight.
+- `Sources/MacAgent/CommandCenterView.swift` — `ScreenControlUsageRow` under Insights' three stat cards (System A), and the refresh in that page's `.onAppear`.
+- `Tests/MacAgentTests/ScreenControlUsageSurfaceTests.swift` (new); `Tests/MacAgentTests/ProductShellTests.swift` (the two new stored properties classified against the wipe).
+- `docs/sonny-manual-test-checklist.md` — this ticket's rows, and one confirmed row superseded in place (below).
+
+Tests: the flagged command from `CLAUDE.md` → **2710 tests in 182 suites passed with 7 known issues** at `3f77727`, no unexpected issue recorded. The battery's own baseline run at that same head is that same suite and reports the same figure (`PASSED 2710 tests in 182 suites`, and `grep -cE "Test [a-zA-Z]+\(\) recorded an issue" baseline.log` → 0 non-known issues), which is the durable copy of that measurement. `scripts/warnings` → **0 warnings** at `3f77727` (clean), every file in `Sources/` and `Tests/` recompiled into the script's own scratch, 144s. Battery: `scripts/mutate` over a 7-mutant plan → **7 killed, 0 survived, 0 unattributed** at `3f77727`, every killer named (M1 by two tests, the other six by one each; report kept at `.build/mutate/3f77727-20260831T202250-86154/report.log`). `scripts/changelog-order` → **exit 0**, "in merge order, 158 entries, both eras" (157 before this entry).
+
+Behavior added:
+- Command Center › Insights carries a usage row under the three stat cards: `Screen Control — 12 of 20 runs left this month`, on the cards' own surface tokens (System A). The figure is asked for when the page appears and rendered only when a read succeeded.
+- The floating widget shows `12 runs left` — one small muted line at the foot of its glass panel, System B — while a screen-control task is pending its approval or in flight, and shows nothing at all beside an ordinary free task.
+
+Behavior preserved (required, no blanket claims):
+- The three Insights stat cards, the weekly chart, the workspace breakdown and the recently-completed list are untouched; the new row is a sibling inside `InsightsOverviewBento` and renders only when an allowance is in hand, so the page with no figure is byte-identical in behaviour to before.
+- Every widget panel state renders exactly as before — the line is one gated insertion in `styledPanel`, beneath whatever panel is showing, and the gate is `nil` for every non-screen-control state.
+- No run path changed: `performStart`, the approval gate, and the vision loop are untouched, and the allowance read is issued by the two surfaces only, so no scripted backend fixture gained a request it never counted.
+- The local-data wipe reaches exactly what it reached before; the two new stored properties are classified `outsideTheWipe` (the figure lives on the gateway, not in any local store) and `ProductShellTests`' classifier is what forced the classification — it failed the branch's first full-suite run by name, which is that mechanism working.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The ticket's body says "about to run" and its title says "in-task", and in Normal and Power those cannot both be a pre-dispatch instant — resolved toward the title, coordinator-ratified 2026-08-31.** A screen-control session raises no plan-level prompt in Normal or Power: `VisionSessionCapabilityAdapter`'s tier-3 escalation is `.advisory` by founder decision (2026-08-14), so the consequence rule auto-runs it and the only pre-dispatch moment a line could render in the default mode is no moment at all — a strictly "about to run" indicator would have been invisible in exactly the mode the founders will test in. The widget therefore shows the line from the approval pause (where one exists — Safe mode, or an asks-first escalation) through the run itself, and drops it the moment nothing is pending or in flight. The constraint that carries the ticket — **never on an ordinary free task** — is held by tests in both directions either way, and the founders meet the resolution live in the manual pass rather than only here.
+
+**The gate is a view-model property with every term `@Published`, and the obvious spelling is wrong twice.** `screenControlRunsLeftForTaskInFlight` is non-nil only when the prepared plan carries a `vision_session` step, that run is pending or in flight, and a figure was actually read. Spelled inline in the widget it would be enforced by nothing but a reader noticing (`isVoiceControlDisabled`'s reasoning); spelled over `preparedRun` it would read an unpublished property and leave a view showing a stale answer until something else redrew it — `plan` is the same prepared plan, published, assigned one line later in `performStart` and cleared at the top of every run. The plan *survives* a cancel at the approval pause, which is exactly why the in-flight half of the gate is load-bearing: without it the result panel would inherit the line from the run that just ended. Battery mutant M2 is that defect built, and `aFigureThatWasReadDoesNotOutliveTheRunItWasShownBeside` is what caught it.
+
+**A failed read renders nothing, anywhere — no placeholder, no zero, no sentence.** `ScreenControlAllowanceService`'s own rule ("a failure is a failure and never a number": zero locks a user out of what they paid for, any positive number promises runs the server never granted) carried to both surfaces, with the one swallow site documented in `refreshScreenControlAllowance()`. The figure it does show is SONNY-212's derived estimate and re-prices when the founders re-price a weight — fine for a number a user reads, recorded in `server/src/credit/balance.ts`, and the reason nothing here may ever grow into a refusal (SONNY-213's decision, not this surface's).
+
+**The allowance is read by the two surfaces that show it and deliberately not from `performStart`.** A run must never wait on a usage read — and a `GET /v1/account/credits` issued from inside the run path would land in the middle of every scripted backend fixture that counts what a session put on the wire (`VisionSessionRunTests`' token-expiry test asserts exact per-path request counts against a shared attempt counter). The cost, stated: the widget's line appears when the fetch lands, so a figure fetched at Insights-appear may render for a beat before the fresh read replaces it.
+
+**Both copy sentences are pure, held by value, and the standing no-explanatory-copy rule is a test rather than a review item.** `ScreenControlUsagePresentation` is the sentences' one home; `neitherSentenceExplainsAnything` fails if either grows a second sentence or a how-it-works clause — the failure mode being nobody adding an explanation on purpose, only as a helpful half-sentence on the end of a line that already worked. The branch's one caught defect lived here: the first spelling of the Command Center line pluralised on the numerator and rendered `1 of 20 run left`. The value test caught it on the branch's first run, and the half worth stating is that it was **fixed in the source, not in the assertion** — the noun agrees with the denominator, whose twenty is the unit being counted, and moving the assertion to meet the string would have shipped the defect with a green suite over it.
+
+**Insights' wireframe has no usage element, and the row is a recorded exception rather than a drift.** `14-MainAppInsights.svg` predates billing, and the manual-test checklist carried a *confirmed* row reading "No usage/quota metric anywhere on this page (deliberate — its absence is correct)". That row is superseded in place with the arc dated, per the checklist's own convention — a stale `[x]` being worse than no row at all — and the presence is now the deliberate thing.
+
+Known limitations / deferred scope:
+- What happens at `0 runs left` is rendered exactly like any other number, deliberately: refusing, warning, or upselling on it is the gate's ticket (SONNY-213), and this surface saying anything about it would be that decision taken here.
+- The Command Center row appears only after a successful read on a signed-in session; there is no cached last-known figure, matching the service's own no-cache decision — a stored run count is wrong most of the time it is read, in the direction that matters.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: SONNY-213 (the gate — the one consumer of this number that must not inherit its derivation, per SONNY-212's hand-off).
 ### Branch: fix/the-portal-asks-locally-and-the-claim-stays-inside
 Status: complete
 Date: 2026-09-02
