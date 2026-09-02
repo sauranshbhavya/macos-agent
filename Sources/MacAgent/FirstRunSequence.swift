@@ -317,7 +317,16 @@ struct FirstRunSequenceView: View {
     private var stepContent: some View {
         switch coordinator.presentedStep {
         case .signIn:
-            SignInDialogView(model: accountModel, isPresented: skipBinding)
+            SignInDialogView(
+                model: accountModel,
+                isPresented: skipBinding,
+                // **No allowance during first run, in words rather than by a default** (SONNY-214).
+                // This step exists to get somebody signed in; a plan's remaining screen-control runs
+                // is not something they have any use for before they have run anything, and the
+                // figure is one request they do not need to wait on here. Account is where it shows.
+                screenControlAllowance: nil,
+                refreshScreenControlAllowance: nil
+            )
         case .screenAccess:
             ScreenAccessOnboardingView(model: screenAccessModel, isPresented: skipBinding)
         case nil:

@@ -406,6 +406,20 @@ struct SignInDialogView: View {
     @ObservedObject var model: SonnyAccountModel
     @Binding var isPresented: Bool
 
+    /// The screen-control allowance to show beside the plan, or `nil` for none (SONNY-214, moved
+    /// here from Insights by the founder decision of 2026-09-02).
+    ///
+    /// **Passed in rather than read from a second copy of the state.** It lives on the one
+    /// `AgentViewModel` both surfaces observe — the widget's in-task line reads the same property —
+    /// which is `.claude/rules/macagent-ui-conventions.md`'s shared-state rule: new published state
+    /// goes on that instance and never gets a second, independently-coded path per surface.
+    ///
+    /// **Both parameters are required and first run passes `nil` in words.** A default would let a
+    /// third host of this dialog silently show no figure, and where the line does *not* belong is a
+    /// decision worth being able to read at the call site.
+    let screenControlAllowance: ScreenControlAllowance?
+    let refreshScreenControlAllowance: (() async -> Void)?
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -470,6 +484,14 @@ struct SignInDialogView: View {
         .onChange(of: model.step) { _, step in
             guard step == .signedIn else { return }
             Task { await model.refreshSubscription() }
+        }
+        // The allowance is read on the same two occasions and for the same reason (SONNY-214). Its
+        // own read rather than folded into the subscription's, so neither waits on the other: they
+        // are two requests to two routes, and a slow one must not hold the other's row off screen.
+        .task { await refreshScreenControlAllowance?() }
+        .onChange(of: model.step) { _, step in
+            guard step == .signedIn else { return }
+            Task { await refreshScreenControlAllowance?() }
         }
     }
 
@@ -568,8 +590,44 @@ struct SignInDialogView: View {
             }
 
             subscriptionRow
+            screenControlUsageRow
         }
         .padding(.top, 12)
+    }
+
+    /// How many screen-control runs the plan has left, beside the plan itself (SONNY-214).
+    ///
+    /// **Here, and deliberately not on Insights.** It was built there first, against a founder
+    /// decision of 2026-07-24 that nobody in the chain had read: that page refuses
+    /// usage/quota-consumption metrics outright, on stated product-strategy grounds — cancellation
+    /// anxiety in heavy users, "am I getting my money's worth" doubt in light ones. The ruling of
+    /// 2026-09-02 moved the line here instead of overriding that decision, so both stand: Insights
+    /// stays encouraging, and the figure appears where somebody is already thinking about their
+    /// plan. The widget's in-task line is a different surface and did not move.
+    ///
+    /// **Absent, not zeroed, when there is no figure** — the same rule the subscription row above
+    /// follows and the same one `ScreenControlAllowanceService` states: a failed read is a failure
+    /// and never a number, because zero locks a user out of what they paid for and any positive
+    /// number promises runs the server never granted.
+    @ViewBuilder
+    private var screenControlUsageRow: some View {
+        if let screenControlAllowance {
+            // Formatted once and read twice — the visible line and the screen reader's must be the
+            // same sentence, and two calls are two places for them to stop being.
+            let line = ScreenControlUsagePresentation.usageLine(screenControlAllowance)
+            SettingsAdaptiveControlRow {
+                Text(ScreenControlUsagePresentation.label)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } trailing: {
+                Text(line)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("\(ScreenControlUsagePresentation.label), \(line)")
+            }
+        }
     }
 
     /// The subscription state and the way to the provider's hosted portal (SONNY-216).

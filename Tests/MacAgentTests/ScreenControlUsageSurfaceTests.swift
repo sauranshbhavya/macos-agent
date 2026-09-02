@@ -330,61 +330,101 @@ struct ScreenControlUsageSurfaceTests {
         #expect(MacAgentSource.count(of: "refreshScreenControlAllowance", inText: source) == 1)
     }
 
-    /// Command Center's stats area renders the row, and Insights is the page that asks for the
-    /// figure.
+    /// The Account section renders the figure beside the plan, and asks for it when it appears.
+    ///
+    /// **This is where the line lives, by the founder ruling of 2026-09-02.**
+    /// `insightsCarriesNoUsageMetricOfAnyKind` below is the other half, and it is the half that
+    /// keeps the row from drifting back onto the page it was moved off.
     @Test
-    func commandCenterShowsTheUsageRowInTheStatsAreaAndAsksForTheFigureThere() throws {
-        let source = try MacAgentSource.read("CommandCenterView.swift")
+    func theAccountSectionShowsTheUsageRowBesideThePlanAndAsksForTheFigureThere() throws {
+        let source = try MacAgentSource.read("SignInView.swift")
         // Each anchor pinned to one occurrence before it is sliced on — see the widget test above.
         for anchor in [
-            "private struct InsightsView: View {",
-            "private struct InsightsOverviewBento: View {",
-            "private struct ScreenControlUsageRow: View {"
+            "private var signedInStep: some View {",
+            "private var screenControlUsageRow: some View {"
         ] {
             #expect(MacAgentSource.count(of: anchor, inText: source) == 1, "anchor is not unique: \(anchor)")
         }
 
-        let bento = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsOverviewBento: View {")
-        #expect(MacAgentSource.count(of: "ScreenControlUsageRow(allowance:", inText: bento) == 1)
+        // Beside the plan, which is the placement the ruling names — not merely "in this file".
+        let signedIn = try MacAgentSource.braceBlock(of: source, openedBy: "private var signedInStep: some View {")
+        #expect(MacAgentSource.count(of: "subscriptionRow", inText: signedIn) == 1)
+        #expect(MacAgentSource.count(of: "screenControlUsageRow", inText: signedIn) == 1)
 
-        let row = try MacAgentSource.braceBlock(of: source, openedBy: "private struct ScreenControlUsageRow: View {")
-        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.usageLine(allowance)", inText: row) == 1)
-        // System A, and only System A — the widget's tokens have no business on this page.
+        let row = try MacAgentSource.braceBlock(of: source, openedBy: "private var screenControlUsageRow: some View {")
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.usageLine(", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.label", inText: row) > 0)
+        // System A, and only System A — the widget's tokens have no business in Command Center.
         #expect(MacAgentSource.count(of: "WidgetTheme.", inText: row) == 0)
         #expect(MacAgentSource.count(of: "WidgetType.", inText: row) == 0)
         // **The control for the two zeros above** (PR #188's F11, and CLAUDE.md's rule that a search
         // has to be shown able to find something before its zero is evidence). Those tokens are
         // absent from this whole file, so the zeros would also be answered by a scan that cannot see
-        // this token shape at all. The widget's file is where they live, and the count there is what
-        // shows the shape is findable.
+        // this token shape at all. The widget's file is where they live.
         let widgetSource = try MacAgentSource.read("FloatingWidgetView.swift")
         #expect(MacAgentSource.count(of: "WidgetTheme.", inText: widgetSource) > 0)
         #expect(MacAgentSource.count(of: "WidgetType.", inText: widgetSource) > 0)
 
-        // **Sliced to the page's own `.onAppear`, not counted over the file** (PR #188's F5). The
-        // file-wide count below is the "one place" backstop and says nothing about *where* — a
-        // mutant that left the call in the file and made it unreachable passed the whole suite,
-        // which in the product is a row that never appears for anyone who opens Insights while idle.
-        let insights = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsView: View {")
-        #expect(MacAgentSource.count(of: ".onAppear {", inText: insights) == 1)
-        let appear = try MacAgentSource.braceBlock(of: insights, openedBy: ".onAppear {")
-        #expect(MacAgentSource.count(of: "viewModel.refreshScreenControlAllowance()", inText: appear) == 1)
-        // **And asked unconditionally, which slicing to the handler still does not say** (PR #188's
-        // F5, and the first fix for it was not enough — the mutant that leaves the call where it is
-        // and wraps it in `if viewModel.isRunning { … }` survived a scan that had been narrowed from
-        // the file to this block, because the count is 1 either way). In the product that mutant is
-        // a row nobody ever sees: it would appear only for someone who opens Insights while a task
-        // happens to be running. The page asks for the figure whenever it appears, so there is
-        // nothing in this handler for the ask to be conditional on.
-        #expect(MacAgentSource.count(of: "if ", inText: appear) == 0)
-        #expect(MacAgentSource.count(of: "guard ", inText: appear) == 0)
-        // The control for those two zeros, per CLAUDE.md's make-the-search-find-something rule:
-        // both shapes are plentiful in this file, so the zeros are a property of the handler rather
-        // than of a scan that cannot see a conditional.
+        // **Two triggers, mirroring the subscription row's own two** — a sheet is not re-appeared by
+        // a sign-in that happens inside it, so appearing is not enough on its own.
+        #expect(MacAgentSource.count(of: "await refreshScreenControlAllowance?()", inText: source) == 2)
+        // **And the ask is unconditional** (PR #188's F5, whose first fix was not enough: a mutant
+        // leaving the call in place and wrapping it in a state check answers the same count either
+        // way, so what has to be asserted is that nothing gates it).
+        let task = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: ".task { await refreshScreenControlAllowance?()"
+        )
+        #expect(MacAgentSource.count(of: "if ", inText: task) == 0)
+        #expect(MacAgentSource.count(of: "guard ", inText: task) == 0)
+        // The control for those two zeros: both shapes are plentiful in this file.
         #expect(MacAgentSource.count(of: "if ", inText: source) > 0)
         #expect(MacAgentSource.count(of: "guard ", inText: source) > 0)
+    }
 
-        #expect(MacAgentSource.count(of: "refreshScreenControlAllowance", inText: source) == 1)
+    /// **Insights shows no usage or quota figure of any kind, and until now that founder decision
+    /// had no mechanical hold on the product at all.**
+    ///
+    /// `docs/sonny-founder-design-decisions.md` (§Insights, 2026-07-24) refuses
+    /// usage/quota-consumption metrics on that page outright, and for a stated product reason:
+    /// cancellation anxiety in heavy users, "am I getting my money's worth" doubt in light ones.
+    /// SONNY-214 built one there anyway — written, implemented, reviewed by a fresh session and
+    /// coordinator-verified without anybody opening that file — and the decision's only visible
+    /// trace was a single manual-checklist row, which this branch then retired as a stale wireframe
+    /// note. **That is the transferable half of the episode: a checklist row can be the last
+    /// surviving reflection of a decision recorded elsewhere, so retiring one can retire a founder
+    /// decision without anybody naming it.** The ruling of 2026-09-02 moved the line to the Account
+    /// section and left the decision standing. This is the guard it never had.
+    @Test
+    func insightsCarriesNoUsageMetricOfAnyKind() throws {
+        let source = try MacAgentSource.read("CommandCenterView.swift")
+        #expect(MacAgentSource.count(of: "private struct InsightsView: View {", inText: source) == 1)
+        #expect(MacAgentSource.count(of: "private struct InsightsOverviewBento: View {", inText: source) == 1)
+
+        let insights = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsView: View {")
+        let bento = try MacAgentSource.braceBlock(of: source, openedBy: "private struct InsightsOverviewBento: View {")
+        for region in [insights, bento] {
+            #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: region) == 0)
+            #expect(MacAgentSource.count(of: "screenControlAllowance", inText: region) == 0)
+        }
+        // **The whole page rather than only those two regions**, because the row could come back
+        // anywhere on it. The one surviving mention of the figure in this file is the Account
+        // dialog's argument, which is the door the ruling put it behind.
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: source) == 0)
+        #expect(MacAgentSource.count(of: "screenControlAllowance", inText: source) == 2)
+
+        // **The controls, without which every zero above is also what a broken scan answers.** Both
+        // tokens are findable where the figure does live, and the two surviving mentions in this
+        // file are the two arguments handed to the Account dialog and nothing else.
+        let account = try MacAgentSource.read("SignInView.swift")
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: account) > 0)
+        #expect(MacAgentSource.count(of: "screenControlAllowance", inText: account) > 0)
+        let sheet = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: ".sheet(isPresented: $isSignInPresented) {"
+        )
+        #expect(MacAgentSource.count(of: "screenControlAllowance: viewModel.screenControlAllowance", inText: sheet) == 1)
+        #expect(MacAgentSource.count(of: "refreshScreenControlAllowance", inText: sheet) > 0)
     }
 
     // MARK: - Fixtures
