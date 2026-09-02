@@ -537,6 +537,66 @@ struct VisionSessionRunTests {
         #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.Safari") }.count == 1)
     }
 
+    /// **The runs-left figure during a Normal-mode session — the mode SONNY-214's resolution rests
+    /// on** (PR #188's F4).
+    ///
+    /// SONNY-214 shows a small "12 runs left" beside a screen-control task and never beside an
+    /// ordinary free one. Its coordinator-ratified resolution turned on the fact the test above
+    /// proves: in Normal mode a session raises **no plan-level approval at all**, so there is no
+    /// "about to run" pause to hang the line on and `isRunning` is the only term that can put it on
+    /// screen. Every test in `ScreenControlUsageSurfaceTests` parks at a Safe-mode approval, where
+    /// `isAwaitingApproval` answers instead — so removing `isRunning ||` from the gate left that
+    /// whole suite green while, in the shipped product, the line would never have appeared in the
+    /// default mode at all. This is that direction, driven through a real session in this suite
+    /// because this is where the hermetic vision environment lives.
+    @Test
+    func aNormalModeScreenControlSessionCarriesTheRunsLeftFigure() async throws {
+        let backend = SignedInBackendFixture()
+        backend.register { _ in
+            .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: [
+                    "plan": "test-plan-a",
+                    "period_start": "2026-08-01T00:00:00.000Z",
+                    "period_end": "2026-09-01T00:00:00.000Z",
+                    "screen_control_runs_left": 12,
+                    "screen_control_runs_included": 20,
+                    "credits": ["allowance": 200, "drawn": 80, "remaining": 120, "per_run": 10]
+                ])
+            )
+        }
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":100,"y":100,"target":"Bookmarks","consequence":"ordinary","rationale":"open the sidebar"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#
+            ],
+            backendClient: backend.client
+        )
+        defer {
+            backend.unregister()
+            fixture.tearDown()
+        }
+
+        await fixture.viewModel.refreshScreenControlAllowance()
+        #expect(try #require(fixture.viewModel.screenControlAllowance).runsLeft == 12)
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitUntil("the session to be live") { fixture.viewModel.visionSessionProgress != nil }
+
+        // No approval was ever raised — this is the mode's whole point, and it is what makes
+        // `isRunning` the only term available to the gate here.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.isAwaitingApproval == false)
+        #expect(fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.isScreenControlTaskInFlight)
+        #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == 12)
+
+        try await waitForIdle(fixture.viewModel)
+        // And it does not outlive the run it was shown beside.
+        #expect(fixture.viewModel.screenControlRunsLeftForTaskInFlight == nil)
+    }
+
     // MARK: - Row J: the per-app control gate, through the real dispatch path
 
     /// **The test that discharges the dead-hook risk** (SONNY-143), and the reason it is written

@@ -539,6 +539,40 @@ same owner the HUD and both approval panels read. The shipping cap is **12**
       "of" is the defect. Press **Send**, answer the action approval, and on the next capture review
       the same line must read **"Step 2 of 12"** — the left number moves, the right one does not
 
+### 3c-quinquies. A screen-control run says how many are left (new 2026-09-02, SONNY-214)
+
+**What changed:** the widget now shows a small muted line — `12 runs left`, SONNY-212's number,
+nothing else — at the foot of its glass panel whenever a **screen-control** task is waiting on its
+approval or in flight, and never beside an ordinary free task. The figure is fetched when the task
+goes in flight, so it needs the gateway container up and a signed-in session (SONNY-212's setup,
+`CREDIT_PLANS` included). No explanatory copy anywhere: the number, the word "left", and that is the
+whole sentence.
+
+The line's *window* is the one thing here that differs from the ticket's own wording, decided
+2026-08-31 and worth knowing before you test it: in **Normal** and **Power** a screen-control
+session raises no approval prompt at all, so there is no "about to run" moment to hang a line on and
+it shows during the run instead. In **Safe** mode the approval pause is that moment and the line is
+there before you press anything.
+
+- [ ] **(new 2026-09-02, SONNY-214)** In **Normal** mode, ask for a screen-control task ("open my
+      reading list in Safari using screen control"). **The line appears on the widget's panel while
+      the session runs** — there is no approval prompt in Normal, so the working/controlling panel is
+      where it shows — and it reads the same number `curl .../v1/account/credits` reports. It may
+      land a beat after the panel does; it is fetched, not cached.
+- [ ] **(new 2026-09-02, SONNY-214)** In **Safe** mode, ask for the same task. **The line is already
+      there on the approval panel, before you press Allow** — the literal "about to run" moment.
+- [ ] **(new 2026-09-02, SONNY-214)** Ask for an ordinary free task — a calculation, a web search,
+      opening an app. **No runs-left line anywhere**, on any panel state, working through result.
+      This is the row the ticket exists for; run it right after one of the two above so you know a
+      figure was in hand.
+- [ ] **(new 2026-09-02, SONNY-214)** Run one screen-control task to completion and read its result
+      panel. **The line is gone the moment nothing is pending or in flight** — the result does not
+      inherit it.
+- [ ] **(new 2026-09-02, SONNY-214)** With the gateway container stopped (or signed out), ask for a
+      screen-control task. **The run proceeds exactly as before and no line appears** — no zero, no
+      placeholder, no error sentence. A failed read renders nothing rather than a number nobody
+      served.
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying
@@ -929,7 +963,16 @@ it feels confusing in practice, not just whether it's "technically correct."
       excluded cleanly, not silently miscounted into one
 - [x] "Recently Completed" shows only truly `.completed` tasks — re-verify failed/canceled don't leak
       in (this was a real, previously-fixed bug — easy to regress)
-- [x] No usage/quota metric anywhere on this page (deliberate — its absence is correct)
+- [x] No usage/quota metric anywhere on this page (deliberate — its absence is correct) —
+      **confirmed 2026-07-24, and still correct.** Briefly retired on 2026-09-02, when SONNY-214
+      added a `Screen Control — 12 of 20 runs left this month` row to this page, and reinstated the
+      same day when the founders ruled that the row moves to the Account section instead (PR #188).
+      **Why that nearly stuck is worth more than the row:** this line is the only visible reflection
+      in the repository of `docs/sonny-founder-design-decisions.md`'s Insights decision — no usage or
+      quota metric here, on stated product-strategy grounds — so retiring it as a stale wireframe
+      note retired a founder decision without anybody naming it. It is now held by a test as well
+      (`ScreenControlUsageSurfaceTests.insightsCarriesNoUsageMetricOfAnyKind`), so the next attempt
+      fails the suite instead of reaching a founder's manual pass.
 
 ### Routines — `11-MainAppRoutines.svg`/`.png`
 - [x] Create a routine, confirm correct icon/name/step-summary in the list — **confirmed 2026-07-24**
@@ -2177,6 +2220,34 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       outcome the 422 reasoning calls a support incident that reads like data loss. Note that
       `BILLING_API_BASE_URL` now refuses a non-https origin and one carrying a path, so use an https
       origin with no path.
+- [ ] **(new 2026-09-02, SONNY-214) — how many screen-control runs the plan has left, beside the
+      plan.** Same setup and same account as SONNY-216's portal row above; do it straight after that
+      one, so the `<plan> · Active` line and the **Manage subscription** button are already on screen
+      and confirmed. A third line sits with them: **`Screen Control`** on the left and
+      **`N of M runs left this month`** on the right. N and M must match `screen_control_runs_left`
+      and `screen_control_runs_included` from `curl .../v1/account/credits` for that account. Label
+      and number only — **any sentence explaining what a run is, what draws on the allowance, or what
+      happens at zero is the finding.** (It was built on Insights first; the founders moved it here
+      on 2026-09-02 so that page stays free of quota metrics. Insights must show nothing of the kind
+      — §7's Insights row is the check for that.)
+- [ ] **(new 2026-09-02, SONNY-214) — the figure goes down when a run is spent.** Run one
+      screen-control task to completion, then **close Account and reopen it** — the figure is fetched
+      when the dialog appears, not on a timer. The number has dropped by what the session cost, and
+      still agrees with the curl.
+- [ ] **(new 2026-09-02, SONNY-214) — no figure rather than a wrong one.** With the gateway container
+      stopped, open Account. **The `Screen Control` line is absent entirely** — no zero, no
+      placeholder, no error sentence — while the rest of the dialog behaves exactly as SONNY-216's
+      rows describe. A failed read renders nothing rather than a number nobody served.
+- [ ] **(new 2026-09-02, SONNY-214) — one account's figure never reaches the next.** With Account
+      open and the figure showing, **sign out from inside that dialog and do not navigate anywhere**.
+      The `Screen Control` line must go at once, alongside the subscription line. Then **sign in as a
+      second account from that same screen**: no figure from the first account may appear at any
+      point, and once the dialog has read for the new one it shows *that* account's numbers. Check
+      the widget too — start a screen-control task as the second user and the in-task line must show
+      the second account's figure or none, never the first's. **This row is worded to keep you on the
+      screen on purpose**: the obvious version ("sign out, then open Account") cannot fail, because
+      opening the dialog is itself what fetches the figure, so it would read green over a live defect
+      (PR #188's F1).
 - [ ] **(new 2026-08-31, SONNY-216) — the access token rotates without taking the portal down.**
       Follow `server/README.md`'s three steps in order: create a **second** Organization Access Token
       in the Polar dashboard, redeploy the gateway with `BILLING_PROVIDER_ACCESS_TOKEN` set to it,

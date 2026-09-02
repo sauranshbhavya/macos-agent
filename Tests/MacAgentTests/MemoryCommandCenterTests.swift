@@ -552,7 +552,7 @@ struct MemoryCommandCenterTests {
         let source = try MacAgentSource.read("AgentViewModel.swift")
         let scheduledRun = try MacAgentSource.braceBlock(
             of: source,
-            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {"
+            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date, restoringOriginTo previousOrigin: TaskOrigin) async {"
         )
 
         #expect(scheduledRun.contains("outputLocationStore: outputLocationStoreForScheduledRun"))
@@ -922,7 +922,7 @@ struct MemoryCommandCenterTests {
         let source = try MacAgentSource.read("AgentViewModel.swift")
         let scheduledRun = try MacAgentSource.braceBlock(
             of: source,
-            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {"
+            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date, restoringOriginTo previousOrigin: TaskOrigin) async {"
         )
 
         #expect(scheduledRun.contains("recentArtifactStore: recentArtifactStoreForScheduledRun"))

@@ -1138,6 +1138,7 @@ final class AgentViewModel: ObservableObject {
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
         self.backendClient = backendClient
+        self.screenControlAllowanceService = ScreenControlAllowanceService(client: backendClient)
         self.makePlanner = makePlanner ?? OpenAIPlanner.throughSonnysBackend(client: backendClient)
         self.whitelist = whitelist
         // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
@@ -1544,6 +1545,106 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval ? 1 : 0
     }
 
+    // MARK: - Screen-control allowance (SONNY-214)
+
+    /// How many screen-control runs the gateway says this account has left this period, or `nil`
+    /// when no figure has been read.
+    ///
+    /// **Read, never derived here.** `ScreenControlAllowanceService` states the rule this property
+    /// obeys — the number is the server's and this side renders it — and SONNY-212 derives it from
+    /// row 12's metering at read time rather than from a ledger, so it is a forward-looking estimate
+    /// that re-prices when the founders change a weight. `server/src/credit/balance.ts` records that
+    /// trade in full, including why it is fine for a number a user reads and not for a refusal.
+    ///
+    /// **`nil` after a failed read, and that is the same call the service makes**: there is no
+    /// fallback figure, because zero locks a user out of something they have paid for and any
+    /// positive number promises runs the server never granted. A surface with no figure shows no
+    /// line at all — not a placeholder, not a stale number, and not a sentence about why.
+    @Published private(set) var screenControlAllowance: ScreenControlAllowance?
+
+    /// Built in `init` over the one backend client this process holds, the same client every other
+    /// authenticated read goes through. Not an initializer parameter of its own, because it carries
+    /// no state, no location and no configuration: threading a fourteenth argument through every
+    /// fixture would say nothing the one assignment in `init` does not, and a test that wants to
+    /// script the read scripts the client — which is the seam the service is one request wide over.
+    private let screenControlAllowanceService: ScreenControlAllowanceService
+
+    /// Ask the gateway for the allowance and publish it; a failure clears the figure.
+    ///
+    /// **Called by the two surfaces that show it and by nothing else** — Command Center's Insights
+    /// page when it appears, and the widget when a screen-control task goes in flight. Deliberately
+    /// not called from `performStart`: a run must never wait on a usage read, and a request issued
+    /// from inside the run path would also land in the middle of every scripted backend fixture that
+    /// counts what a session put on the wire.
+    func refreshScreenControlAllowance() async {
+        do {
+            screenControlAllowance = try await screenControlAllowanceService.fetch()
+        } catch {
+            // Swallowed on purpose, and this is the one place that decision lives. A usage line is
+            // ambient: the user did not press anything to get it, so a failure to read it is not an
+            // outcome they are owed a sentence about. `errorMessage` means the task failed and
+            // `localStorageNotice` means a file would not open; neither is true here.
+            screenControlAllowance = nil
+        }
+    }
+
+    /// Forget the figure, because the session it was read over is no longer the session on screen.
+    ///
+    /// **An account-scoped number must not outlive its account** (PR #188's F1). Nothing else
+    /// re-reads it when a session changes: the two surfaces ask when they appear, and neither
+    /// signing in nor signing out re-fires an `onAppear` — signing in is a sheet over Command Center
+    /// and signing out is a menu item, which is the same fact `sessionDidChange` exists for. Left
+    /// alone, a user who signed out went on reading their own figure on the page they were already
+    /// on, and the next user to sign in on that Mac read it too. `SignInView.signOut()` clears
+    /// `subscription` synchronously for exactly this reason (PR #183's F13); this is the same class
+    /// of datum, arriving later.
+    ///
+    /// **Clearing, and deliberately not re-reading.** A cleared figure renders no line at all, which
+    /// is the rule a failed read already follows here — so the surfaces are correct from the instant
+    /// the session changes, and the next one to appear asks for the new account's number.
+    func forgetScreenControlAllowance() {
+        screenControlAllowance = nil
+    }
+
+    /// Whether the task in flight — or the one waiting on an approval — is a screen-control run.
+    ///
+    /// **Every term is `@Published`, which is what makes this observable from a view.** The obvious
+    /// spelling reads `preparedRun`, which is not published and would leave a view showing the wrong
+    /// answer until something else happened to redraw it. `plan` is the same prepared plan, assigned
+    /// from it one line later in `performStart` and cleared at the top of every run.
+    var isScreenControlTaskInFlight: Bool {
+        // **A scheduled routine run is not the user's task, and `plan` does not describe it** (PR
+        // #188's F3). `performScheduledRun` sets `isRunning` for re-entrancy and deliberately leaves
+        // every property that reads as "your last task" alone — its own doc comment lists `plan`
+        // among them — so a routine firing after a screen-control run inherited that plan, and the
+        // two terms below answered `true` for the whole of it. `activeTaskOrigin` is the property
+        // that method names as the one keeping widget surfaces off a task the user never started,
+        // and this is a widget surface; it is now set beside `isRunning` at the scheduled door
+        // rather than a main-actor turn later, so the pair cannot disagree.
+        guard activeTaskOrigin != .scheduled else {
+            return false
+        }
+        guard isRunning || isAwaitingApproval else {
+            return false
+        }
+        return plan?.steps.contains { $0.operation == .visionSession } ?? false
+    }
+
+    /// The figure the widget shows beside a screen-control run, or `nil`.
+    ///
+    /// **The ticket's gate, stated as a property rather than as an expression inside the widget** —
+    /// the same reason `isVoiceControlDisabled` is one: a rule written inline in a view is enforced
+    /// by nothing but a reader noticing, and this rule is the whole of SONNY-214's second half.
+    /// Both halves are required, and each fails in the direction it should: an ordinary free task
+    /// shows nothing whatever the allowance says, and a screen-control run whose read failed shows
+    /// nothing rather than a number nobody served.
+    var screenControlRunsLeftForTaskInFlight: Int? {
+        guard isScreenControlTaskInFlight else {
+            return nil
+        }
+        return screenControlAllowance?.runsLeft
+    }
+
     /// Whether the floating widget currently has real content to show — one of row I's parked
     /// Safe-mode questions, a permission/clarification/failure state, a live screen-control session,
     /// or row 13's offer to carry on with an unfinished run (all of those regardless of which
@@ -1820,6 +1921,15 @@ final class AgentViewModel: ObservableObject {
         explicitWorkspaceBinding = workspaceBinding ?? (fromComposer ? pendingWorkspaceBinding : nil)
         pendingWorkspaceBinding = nil
         currentTask?.cancel()
+        // **Cleared here, synchronously, and not in `performStart` where the rest of the previous
+        // run's state is cleared** (PR #188's F3), for the reason `lastCommand` two blocks above is
+        // assigned here: `performStart` is the body of an unstructured `Task` and first runs a
+        // main-actor turn later, so anything it clears is still the *previous* run's for one render.
+        // `plan` is read beside `isRunning` — `isScreenControlTaskInFlight` pairs exactly those two
+        // — and in that window the pair described two different runs: a free task dispatched after a
+        // screen-control one answered the gate `true`, and the widget offered a runs-left figure
+        // beside a calculation. A published pair that is read together is assigned together.
+        plan = nil
         isRunning = true
         currentTask = Task {
             await performStart(
@@ -1865,7 +1975,8 @@ final class AgentViewModel: ObservableObject {
         outcomeWasNotified = false
         errorMessage = nil
         finalSummary = ""
-        plan = nil
+        // `plan` is cleared by `start()` rather than here, a main-actor turn earlier — see the
+        // comment at that assignment for why the pair it belongs to cannot be split across turns.
         suggestions = []
         clarificationQuestion = nil
         clarificationAnswer = ""
@@ -6780,12 +6891,26 @@ final class AgentViewModel: ObservableObject {
                 return
             }
             isRunning = true
+            // **Set here, beside `isRunning`, rather than inside `performScheduledRun`** (PR #188's
+            // F3). That method's own doc names `activeTaskOrigin` as one of the two properties it
+            // must set, because it is what keeps widget surfaces off a task the user never started
+            // — but it is the body of an unstructured `Task`, so it first ran a main-actor turn
+            // after `isRunning` had already said a task was under way. For that one render every
+            // surface gated on the origin read the *previous* one, and the widget's runs-left gate
+            // read a `plan` this method deliberately never touches. The two properties a scheduled
+            // run does change are now changed together.
+            let previousOrigin = activeTaskOrigin
+            activeTaskOrigin = .scheduled
             // Deliberately does not touch `lastCommand`. That property is the user's own last
             // submission: it feeds `hasRetryableCommand` and `retryLastCommand()`, so overwriting
             // it here would point the widget's Retry button at a routine the user never ran.
             // `runningCommandDisplayText` reads the scheduled label separately while this runs.
             currentTask = Task {
-                await performScheduledRun(next.routine, occurrence: occurrence)
+                await performScheduledRun(
+                    next.routine,
+                    occurrence: occurrence,
+                    restoringOriginTo: previousOrigin
+                )
             }
         }
     }
@@ -7023,9 +7148,7 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Everything this method has to say goes to `scheduledRunNotice`, task history, and the
     /// routine's own run history.
-    private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {
-        let previousOrigin = activeTaskOrigin
-        activeTaskOrigin = .scheduled
+    private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date, restoringOriginTo previousOrigin: TaskOrigin) async {
         // A scheduled run is a task, so it gets a `task_id` of its own (SONNY-130): the routine it
         // runs reaches the backend through the same executor a typed command does, and the row this
         // run writes has to be the row those requests are filed under.

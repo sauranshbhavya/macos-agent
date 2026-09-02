@@ -48,7 +48,10 @@ public struct ScreenControlAllowance: Sendable, Equatable {
 /// **A failure is a failure and never a number.** There is no fallback figure, because every
 /// candidate is a lie: zero locks a user out of a feature they have paid for, and any positive
 /// number promises runs the server never granted. The caller decides what to show when this throws,
-/// and today the only caller is a test — the surface is SONNY-214's.
+/// and SONNY-214 built that surface: `AgentViewModel.refreshScreenControlAllowance()` is the one
+/// caller in the app, it catches into `nil`, and both surfaces render no line at all on `nil` —
+/// no placeholder, no zero, and no sentence about why. (This said the only caller was a test, which
+/// SONNY-214 made false and PR #188's F8 caught.)
 public actor ScreenControlAllowanceService {
     private let client: SonnyBackendClient
 

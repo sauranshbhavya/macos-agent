@@ -240,6 +240,22 @@ struct FloatingWidgetView: View {
         .onChange(of: viewModel.scheduledRunNotice) { _, _ in
             scheduleAutoDismissIfNeeded()
         }
+        // The one place the allowance is read for the widget (SONNY-214). Asked when a
+        // screen-control task goes in flight; an ordinary task asks for nothing, which is the same
+        // rule the line's own gate follows one property up.
+        //
+        // **What this does not do, corrected here rather than left overstated** (PR #188's F7): the
+        // read is asynchronous and nothing clears the figure first, deliberately — clearing would
+        // blink the line off at exactly the moment the ticket wants it on screen. So from the moment
+        // the run goes in flight until the reply lands, the line shows the *previous* read: one run
+        // stale after a completed session, and for a whole client timeout on a slow network. The
+        // figure is an estimate either way (SONNY-212 derives it at read time), which is what makes
+        // that trade the right one and not merely the convenient one.
+        .onChange(of: viewModel.isScreenControlTaskInFlight) { _, isScreenControl in
+            if isScreenControl {
+                Task { await viewModel.refreshScreenControlAllowance() }
+            }
+        }
         .onChange(of: viewModel.widgetPresentationRequest) { _, _ in
             if isCompact {
                 expandFromCompact()
@@ -441,11 +457,30 @@ struct FloatingWidgetView: View {
     }
 
     private var styledPanel: some View {
-        panel
-            .padding(18)
-            .frame(width: 472, alignment: .leading)
-            .widgetGlassPanel()
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        VStack(alignment: .leading, spacing: 12) {
+            panel
+
+            // **The in-task usage indicator** (SONNY-214). Inside the panel's own glass rather than
+            // as a strip of its own, because it is a fact about the run the panel is already
+            // describing and not a notice about something else that happened.
+            //
+            // One insertion point for every panel state, gated by one property: the widget shows
+            // this while a *screen-control* task is in flight or waiting on its approval, and shows
+            // nothing at all for an ordinary free task — which is
+            // `AgentViewModel.screenControlRunsLeftForTaskInFlight`'s whole job, and where the rule
+            // is stated. A gate spelled out here instead would be a rule enforced by nothing but a
+            // reader noticing it.
+            if let runsLeft = viewModel.screenControlRunsLeftForTaskInFlight {
+                Text(ScreenControlUsagePresentation.inTaskLine(runsLeft: runsLeft))
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+            }
+        }
+        .padding(18)
+        .frame(width: 472, alignment: .leading)
+        .widgetGlassPanel()
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     /// The collapsed widget. Icon-only by design, so its words are `CompactCapsulePresentation`'s
