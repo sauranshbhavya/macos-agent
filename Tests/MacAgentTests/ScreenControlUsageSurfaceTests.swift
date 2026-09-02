@@ -369,6 +369,20 @@ struct ScreenControlUsageSurfaceTests {
         #expect(MacAgentSource.count(of: ".onAppear {", inText: insights) == 1)
         let appear = try MacAgentSource.braceBlock(of: insights, openedBy: ".onAppear {")
         #expect(MacAgentSource.count(of: "viewModel.refreshScreenControlAllowance()", inText: appear) == 1)
+        // **And asked unconditionally, which slicing to the handler still does not say** (PR #188's
+        // F5, and the first fix for it was not enough — the mutant that leaves the call where it is
+        // and wraps it in `if viewModel.isRunning { … }` survived a scan that had been narrowed from
+        // the file to this block, because the count is 1 either way). In the product that mutant is
+        // a row nobody ever sees: it would appear only for someone who opens Insights while a task
+        // happens to be running. The page asks for the figure whenever it appears, so there is
+        // nothing in this handler for the ask to be conditional on.
+        #expect(MacAgentSource.count(of: "if ", inText: appear) == 0)
+        #expect(MacAgentSource.count(of: "guard ", inText: appear) == 0)
+        // The control for those two zeros, per CLAUDE.md's make-the-search-find-something rule:
+        // both shapes are plentiful in this file, so the zeros are a property of the handler rather
+        // than of a scan that cannot see a conditional.
+        #expect(MacAgentSource.count(of: "if ", inText: source) > 0)
+        #expect(MacAgentSource.count(of: "guard ", inText: source) > 0)
 
         #expect(MacAgentSource.count(of: "refreshScreenControlAllowance", inText: source) == 1)
     }
