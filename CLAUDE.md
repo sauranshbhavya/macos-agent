@@ -61,9 +61,9 @@ there. **And it does not only refuse to start, which is all this sentence used t
 The guard is continuous: it re-checks after **every mutant** — the call sits inside the per-mutant
 loop, at `:1977` of
 `git grep -n 'require_clean_tree_after "' 653488e -- scripts/mutate`
-— and aborts the run rather than carrying an unexplained change into the next one, for the reason
-its own message gives: a mutant applied on top of somebody else's edit produces a verdict about
-neither. **It reads untracked files too** — the check it runs is
+— and aborts the run rather than carrying an unexplained change into the next mutant, which in its
+own message's words would "make every result after this one describe a tree nobody chose". **It
+reads untracked files too** — the check it runs is
 `git -c status.showUntrackedFiles=normal status --porcelain`
 rather than a bare `git status` — so a scratch note, a probe file or a log written inside the
 worktree is enough on its own. **So the rule for a session running a battery is that the worktree is
@@ -259,13 +259,14 @@ block, so the mutant matched 0 lines and the pre-flight aborted the whole run �
 exactly as documented, since a mutant that does not apply runs an unmutated suite and reports a
 clean pass. Land the same edit one line outside that block and W5 applies cleanly and reports a kill
 against a file it was never re-measured on, with nothing anywhere disagreeing. **And the pre-flight
-matches every *selected* mutant and only those** — its own comment says exactly that, at `:1832` of
+matches every *selected* mutant and only those** — its own comment carries the first half of that,
+at `:1832` of
 `git grep -n 'every selected mutant must match exactly once' 653488e -- scripts/mutate`,
-and the loop beneath it iterates `selected` rather than the plan — so it cannot reach a mutant a
-scope leaves out at all: a narrowed run cannot be refused on one it did not select, and the refusal
-can only ever fire on a mutant the run had already chosen to re-measure, which is never the one at
-risk. The guard is against a stale `from` block; nothing guards the scope, and on that branch the
-two coincided.
+and the loop beneath it carries the second, iterating `selected` rather than the plan — so it
+cannot reach a mutant a scope leaves out at all: a narrowed run cannot be refused on one it did not
+select, and the refusal can only ever fire on a mutant the run had already chosen to re-measure,
+which is never the one at risk. The guard is against a stale `from` block; nothing guards the
+scope, and on that branch the two coincided.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
@@ -413,7 +414,7 @@ terminal so it is answered once, at setup, rather than mid-build.
 
 - **Work is ticket-driven via Plane.so — `WORKFLOW.md` is the process source of truth.** One ticket = one independently verifiable outcome, claimed by moving it to In Progress via `scripts/plane`, implemented by a single Claude Code CLI session that owns it start to finish. Every ticket closes with a comment written for a session with zero conversation history: completion evidence, or — if left open — why, what was tried, and the gotchas. Parallel sessions follow WORKFLOW.md's disjointness and worktree rules; only one packaged `MacAgent.app` runs live at a time. (The v1 two-agent Codex/Claude rotation this replaces is preserved in the changelog's historical sections.)
 - Before merge, a *fresh* CLI session with no implementer context reviews the branch: reads the real diff in full, reruns the real test suite unless `WORKFLOW.md` step 7 exempts the diff, hand-traces any non-trivial logic (date math, state machines) rather than trusting a passing suite alone — hunting for problems, not validating. How deep that review goes, and how many rounds it gets, are step 7's to set.
-- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, scope a post-rebase battery re-run to the mutants whose evidence actually moved, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
+- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, scope a battery re-run — after a fix round as much as a rebase — to the mutants whose evidence actually moved, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
 - **Wireframe fidelity is the literal baseline for any page that has a wireframe, not a reference consulted only for whatever a given ticket happens to need.** Build/match the page's *entire* wireframe first — every element, not just the one thing a specific ticket is adding — then layer that ticket's own feature/data-model work on top of it. Never deflect from the wireframe's established design language while extending it. Pulling exact measurements for the one thing being built is not the same as confirming the whole page still matches once changes land — that gap is exactly how a real mismatch survived undetected across branch 8 and all of branch 9 (the Routines row's yellow badge is wired to step count, but the wireframe's own SVG layer is literally named `streak`) until caught by direct comparison against the raw SVG, not the derived design-reference doc. When a wireframe element is deliberately not built (out of scope, or an interaction model already rejected), that's a stated, reasoned exception recorded in the changelog — not a silent gap.
 - Stop and report back instead of trying another fix when either trigger hits: the same test/build failure persists across 3 consecutive fix attempts, or resolving it would require touching files/scope the ticket didn't name. Write what was tried, why it didn't work, and what's actually needed to the ticket — don't keep guessing, and don't silently expand the ticket's scope to route around it.
 - Commits and pushes to a ticket's branch are pre-authorized for the session implementing it — no per-commit approval needed. Opening a PR is fine. **Merging is a founder's, always** — either founder, depending on who is working, and never a session: never merge, and never rewrite pushed history. **One exception, already authorized rather than granted here:** the `git push --force-with-lease` a rebase requires, on the session's own ticket branch — never bare `--force`, and never any other branch, `main` included. `WORKFLOW.md`'s merge-one-branch-at-a-time rule states it in full. Commit titles reference the ticket identifier (e.g. `fix(core): SONNY-12 ...`).
