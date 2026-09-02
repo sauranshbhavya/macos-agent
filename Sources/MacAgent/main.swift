@@ -1,4 +1,5 @@
 import AppKit
+import MacAgentCore
 import SwiftUI
 
 let app = NSApplication.shared
@@ -40,6 +41,16 @@ accountModel.sessionDidChange = { [weak agentViewModel] in
     // on this Mac read the previous one's figure.
     agentViewModel?.forgetScreenControlAllowance()
 }
+// **The one screen-control billing gate, joined here for the same reason the line above is**
+// (SONNY-213). It needs the account model's `EntitlementService` — one per process, because that
+// actor holds the clock high-water anchor and the single-flight refresh guard — and the shared
+// backend client, which is what the allowance read authenticates with. This is the only file that
+// holds both objects. Without this line the view model keeps its `ClosedScreenControlGate` and
+// screen control refuses, which is the fail-closed direction a missing wiring should take.
+agentViewModel.screenControlGate = SonnyScreenControlGate(
+    entitlements: accountModel.entitlements,
+    allowance: ScreenControlAllowanceService(client: accountModel.backendClient)
+)
 let delegate = AppDelegate(
     viewModel: agentViewModel,
     accountModel: accountModel,

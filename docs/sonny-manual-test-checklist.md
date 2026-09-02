@@ -2365,6 +2365,67 @@ export CREDIT_PLANS='{"runCredits":100,"defaultPlan":"free","weights":{"perSessi
         pays the same as one sending small ones, so the weighting stops tracking real cost as closely.
         Decide which you want here rather than meeting it later.
 
+### Screen control stops when the allowance is gone (new 2026-08-31, SONNY-213)
+
+**What changed:** screen control now has its one billing gate. A session is refused before it starts
+when the account is out of screen-control runs **or** the cached entitlement cannot be confirmed,
+and a session that runs out mid-way finishes the step it is on and stops at the next step boundary
+with *"You've used your screen-control allowance — top up or wait."* **Nothing else is gated** —
+every other capability runs with no network and no entitlement exactly as before, and that is the
+direction most worth checking by hand.
+
+**The stock-build symptom, named so it is not reported as a defect.** A packaged build with no
+gateway to sign in against refuses every screen-control session at the door with **"Sign in to Sonny
+to use this."** That is the gate failing closed exactly as designed, and it is not a finding.
+
+*Which* sentence you get depends on how far the build gets, and all three are the same gate working
+— worth knowing so none of them is filed either (this paragraph named the wrong one until PR #190's
+F3, which is how a founder meeting the right one would have been handed a reason to file it):
+
+| what you see | what it means |
+|---|---|
+| "Sign in to Sonny to use this." | **The stock case.** No gateway is deployed, so there is no session to restore; the entitlement check refuses at its first guard, before the key set is ever read. |
+| "Connect once so Sonny can check your plan." | Signed in, but nothing cached yet — reachable once a container is running. |
+| "Sonny couldn't check your plan. Try again in a moment." | Something is cached that this build cannot verify — the empty shipped key set, reachable if you still hold a session from an earlier local-gateway run. |
+
+To test the allowed direction at all, the rows below need the
+SONNY-135 section's container setup **plus the debug key override** that section uses
+(`defaults write` of `SonnyEntitlementPublicKeys`, or `SONNY_ENTITLEMENT_PUBLIC_KEYS` for a
+terminal-launched debug build), plus SONNY-212's `CREDIT_PLANS` on the container.
+
+- [ ] **(SONNY-213) — the offline direction first, because it needs no setup and it is the one that
+      breaks Sonny if it is backwards.** With the Wi-Fi **off** and no container running — signed
+      out, no entitlement anywhere — run the everyday free things: a calculation in the widget, a
+      snippet expansion, "open my writing workspace", a routine. **Every one of them works
+      instantly.** Then ask for a screen-control task. **That one alone is refused, with a sentence
+      about signing in or checking your plan — never a raw error.** The finding is any free
+      capability hesitating, erroring, or mentioning plans/allowances/sign-in at all.
+- [ ] **(SONNY-213)** With the container up, the key override set and a signed-in session on a plan
+      with runs left: ask Sonny to control an app. **The session runs exactly as it did before this
+      branch** — no new prompt, no new sentence, nothing about credits.
+- [ ] **(SONNY-213)** Set `CREDIT_PLANS` so the account's tier includes **0 credits**
+      (`"monthlyCredits":0` on the account's plan), restart the container, and ask for a
+      screen-control session. **It is refused before anything happens** — no window activates, no
+      HUD appears, nothing is captured — with *"You've used your screen-control allowance — top up
+      or wait."* The finding is the app coming to the front, the HUD flashing, or a capture landing
+      in the metering log (`npm run usage`) for a session that was refused.
+- [ ] **(SONNY-213) — the mid-run halt.** Set the weights so a session exhausts partway — e.g.
+      `"monthlyCredits":100` with `"perIteration":40, "perSession":0, "perMegapixel":0, "runCredits":100`
+      — and start a screen-control task that needs several steps. **It performs its first steps
+      normally, then stops between steps** with the same allowance sentence, and the task history
+      row for the session says that is why it ended. **Never mid-click**: the finding is a session
+      ending with a half-done action (a menu left open by a click that never got its follow-up), or
+      an abrupt failure sentence instead of the allowance one.
+- [ ] **(SONNY-213)** After any of the refusals above, run the free things again (calculation,
+      snippet, workspace). **All still instant.** A refusal that leaks into the free capabilities is
+      the finding this ticket's acceptance criterion is written in capitals for.
+- [ ] **(SONNY-213)** Kill the container mid-session (simulating the gateway dropping out) during a
+      multi-step screen-control task. **The session does not stop at the next boundary with the
+      allowance sentence** — an unreachable allowance is not an exhausted one. (It will fail at the
+      next *vision call* with a backend-failure sentence, which is SONNY-131's behaviour and not
+      this ticket's; the finding here is only the allowance sentence appearing when nothing was
+      counted.)
+
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
 SONNY-296 re-checked the seven dated prototype-limitation findings in the spec's §4 and §4A.4

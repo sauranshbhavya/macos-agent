@@ -276,6 +276,20 @@ public struct VisionSessionEnvironment {
     /// Polled every iteration for the Accessibility grant. Injected so a test can revoke it
     /// mid-session without touching the real System Settings.
     public var permissionChecker: any ScreenCapturePermissionChecking
+    /// **The one billing gate** (SONNY-213): may screen control run at all, and may it take another
+    /// step.
+    ///
+    /// It lives here rather than on `CapabilityExecutionContext` and that placement is the whole of
+    /// how "every other capability keeps working" is enforced. This aggregate is reachable from the
+    /// vision path and from nowhere else, so no other adapter can consult a gate it cannot name —
+    /// §5.3.1's own code shape, "a check that is never made cannot fail closed", used in the other
+    /// direction. `ScreenControlGateReachTests` holds it as a population scan over every adapter.
+    ///
+    /// **Not Optional, and there is no default** — SONNY-350's rule for local stores applied to a
+    /// refusal. An `Optional` gate needs a reading for `nil`, and the only convenient one is
+    /// "allowed", which is a fail-open default arriving by silence in every fixture that says
+    /// nothing. `ClosedScreenControlGate` is what a build with no billing wiring passes, by name.
+    public var screenControlGate: any ScreenControlGating
     /// Where the action journal is written. `nil` in a build with no journal wiring; a session then
     /// runs and records nothing, which is honest rather than silently half-recorded.
     public var journalStore: VisionSessionJournalStore?
@@ -291,6 +305,7 @@ public struct VisionSessionEnvironment {
         limits: VisionSessionLimits = .default,
         attentionMonitor: any SessionAttentionMonitoring = AlwaysAttendedMonitor(),
         permissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
+        screenControlGate: any ScreenControlGating,
         journalStore: VisionSessionJournalStore? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         interaction: (any VisionSessionInteracting)?
@@ -302,6 +317,7 @@ public struct VisionSessionEnvironment {
         self.limits = limits
         self.attentionMonitor = attentionMonitor
         self.permissionChecker = permissionChecker
+        self.screenControlGate = screenControlGate
         self.journalStore = journalStore
         self.now = now
         self.interaction = interaction

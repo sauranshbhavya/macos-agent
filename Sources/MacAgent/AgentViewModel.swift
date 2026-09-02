@@ -5038,6 +5038,22 @@ final class AgentViewModel: ObservableObject {
     /// the developer's cursor. No test in this repo may construct `SystemScreenActionSynthesizer`.
     var visionSessionEnvironment: VisionSessionEnvironment?
 
+    /// **The one screen-control billing gate** (SONNY-213), installed by `main.swift`.
+    ///
+    /// Set from outside rather than built here, and that is the same wiring `sessionDidChange` gets
+    /// two lines away in `main.swift` and for the same reason: the gate needs the *shared*
+    /// `EntitlementService`, which `SonnyAccountModel` owns because that is where the one real
+    /// Keychain request is allowed to be made (`SignInSurfaceTests.onlyMainAsksForTheRealKeychain`
+    /// pins that population at exactly two files). A view model that built its own would be a second
+    /// service — a second clock anchor and a second single-flight refresh guard — and would need a
+    /// third file to ask for the real Keychain.
+    ///
+    /// **The default refuses, and the default is the point.** A fixture that says nothing gets a gate
+    /// that says no, so a test cannot silently acquire screen control by omission and a shipping
+    /// build whose wiring line was deleted refuses rather than runs. `ClosedScreenControlGate`
+    /// answers `allowanceUnknown`, which is the true sentence for a gate nobody asked anything.
+    var screenControlGate: any ScreenControlGating = ClosedScreenControlGate()
+
     /// Internal rather than `private` so the vision extension in another file can build the
     /// executor a delegated plan runs through — the *same* executor factory the ordinary path uses,
     /// which is what makes "a delegated command meets the gate a typed one would" true by
@@ -5083,7 +5099,18 @@ final class AgentViewModel: ObservableObject {
     /// **No longer Optional** (SONNY-131): the vision client holds no credential, so there is nothing
     /// left that can fail to construct. `makeVisionEnvironment`'s own doc comment carries the reason
     /// and what it means for `visionUnavailable`.
-    private func makeLiveVisionEnvironment(recordingPolicy: TaskRecordingPolicy) -> VisionSessionEnvironment {
+    /// **Internal rather than private so a test can execute it at all** (PR #190's F2).
+    ///
+    /// `visionSessionJournalStoreForThisRun`'s doc a few thousand lines up records the standing
+    /// problem: every vision test injects `visionSessionEnvironment` directly, so this function is
+    /// never the thing under test and a mutation inside it survives the whole suite. PR #67 solved
+    /// that once by lifting the journal decision *out* into a testable property. The gate has no
+    /// decision to lift — it is a stored property handed straight over — so the alternative was for
+    /// the one line carrying the product's only billing gate into a real session to stay held by
+    /// nothing, which is what it was: replacing `screenControlGate:` below with a closed gate passed
+    /// all 2722 tests. Widening this to internal is the smaller change and it closes the class rather
+    /// than one instance.
+    func makeLiveVisionEnvironment(recordingPolicy: TaskRecordingPolicy) -> VisionSessionEnvironment {
         let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
         let environment = Self.makeVisionEnvironment(
             interaction: self,
@@ -5094,6 +5121,13 @@ final class AgentViewModel: ObservableObject {
             backendClient: backendClient,
             taskContext: backendTaskContext(recordingPolicy: recordingPolicy),
             usageRecorder: taskUsageRecorder,
+            // **The one billing gate this process holds** (SONNY-213). It starts as
+            // `ClosedScreenControlGate` and `main.swift` replaces it with the live one, so a build
+            // that never wires it refuses screen control rather than allowing it. Read here at
+            // session-construction time rather than captured once, for the reason the monitor beside
+            // it is not: nothing swaps this at runtime today, and reading the current value keeps
+            // that true if anything ever does.
+            screenControlGate: screenControlGate,
             userPauseMonitor: monitor,
             // The seam row I already built: `VisionSessionEnvironment.journalStore` is Optional, and
             // a nil one runs the session normally and records nothing. So "Don't save this task"

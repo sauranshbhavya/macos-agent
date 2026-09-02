@@ -226,6 +226,29 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// its own bespoke teardown would be a second stop path, and the second stop path is always the
     /// one that turns out not to release the mouse button.
     case permissionRevoked
+    /// Screen control's billing gate refused this session at a step boundary (SONNY-213).
+    ///
+    /// **The mid-run graceful halt, on the one stop path rather than on a second one.** The ticket
+    /// asks for a session that runs out of allowance to "finish the current atomic step, then stop
+    /// cleanly at the next step boundary" — which is exactly what `end(with:)` does for every case
+    /// above, and §13.5's invariant is "control was lost, for any reason: one implementation,
+    /// distinct reason codes". `permissionRevoked`'s own note two cases up says why a bespoke
+    /// teardown would be wrong — "the second stop path is always the one that turns out not to
+    /// release the mouse button" — and an allowance is no better a reason to build one than a
+    /// revoked grant was.
+    ///
+    /// **It is a containment refusal on this enum's own terms.** The doc at the top of this type
+    /// says a containment refusal never re-prompts because each case is a fact a human answering a
+    /// question cannot change, and an exhausted allowance is that: there is no "allow anyway" to
+    /// offer, and the nearest neighbour here is `iterationCapReached`, which is the same sentence
+    /// about a different budget. It is not a *safety* boundary, and neither is
+    /// `appControlNotRemembered` — what this enum collects is every reason the loop stops.
+    ///
+    /// **Its reason code is the gate refusal's**, so the journal distinguishes an exhausted
+    /// allowance from an unconfirmed entitlement from an allowance the gateway would not answer.
+    /// Those are three different facts, and rolling them into one code would leave a reader months
+    /// later unable to tell a billing stop from an outage.
+    case screenControlUnavailable(ScreenControlGateRefusal)
 
     /// The sentence the run summary and the transcript carry. Honest about which boundary fired —
     /// "Sonny stopped because you locked your Mac" and "Sonny stopped because it ran out of steps"
@@ -285,6 +308,11 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .permissionRevoked:
             return "Sonny stopped because its permission to control your Mac was turned off. "
                 + "Turn Accessibility back on in the Permission Center to use screen control again."
+        case .screenControlUnavailable(let refusal):
+            // The gate's own sentence, unwrapped rather than re-derived — one string for the door
+            // and the boundary, which is the call `ScreenControlRefusal.userFacingReason` already
+            // makes for the terminal ban across `targetIneligible` and `VisionSessionError`.
+            return refusal.userFacingReason
         }
     }
 
@@ -309,6 +337,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .captureSendDeclined: return "capture_send_declined"
         case .approvalNotPresentable: return "approval_not_presentable"
         case .permissionRevoked: return "permission_revoked"
+        case .screenControlUnavailable(let refusal): return refusal.reasonCode
         }
     }
 }
