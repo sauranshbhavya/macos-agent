@@ -1073,6 +1073,13 @@ struct ProductShellTests {
             "visionSessionPause", "visionResumeContinuation",
             "visionUserPauseMonitor", "visionEmergencyStopHotKey", "visionEmergencyStopHotKeyFactory",
             "visionSessionJournalStore", "activeVisionSessionID",
+            // `screenControlGate` is row 13's billing gate (SONNY-213), and it sits in this group
+            // for `visionSessionEnvironment`'s reason rather than for the in-flight ones': it is
+            // infrastructure `main.swift` installs at launch, not task state. It holds no user data
+            // — a decision function over a shared entitlement service and a network read — so a wipe
+            // has nothing to find in it, and clearing it would leave the app refusing screen control
+            // until relaunch for somebody who had erased their history.
+            "screenControlGate",
 
             // 6. A test seam, not state — `nil` in the shipping app, and nothing in `Sources/`
             // assigns it. Same category as `visionSessionEnvironment` in group 5: it lets a test

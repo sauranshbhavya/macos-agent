@@ -84,6 +84,36 @@ public actor EntitlementService {
     /// unreadable store, a claim signed by a key this build does not hold. A check that could not be
     /// completed is not a check that passed.
     public func decision(for capability: EntitlementCapability) async -> EntitlementDecision {
+        await evaluate(capability: capability)
+    }
+
+    /// Does this Mac hold a claim it can confirm, right now, with no network — **without asking
+    /// which capability it names** (SONNY-213)?
+    ///
+    /// **Why a second public reader, and why it is not a widening.** SONNY-213's gate refuses screen
+    /// control when "the entitlement cache cannot confirm", and it must not decide *what* the claim
+    /// grants: no capability key exists under `Sources/` and row 18 (SONNY-23) owns them, which
+    /// `EntitlementSourceScanTests.theGatedCapabilitySetIsRowEighteensAndThisRepositoryNamesNoKey`
+    /// holds as a population scan. A gate that invented a key to pass to `decision(for:)` would be
+    /// taking row 18's decision inside row 13's ticket.
+    ///
+    /// This runs **the same path** as `decision(for:)` — the same session read, the same store read,
+    /// the same signature verification, the same clock defence, the same discard-and-refresh on a
+    /// foreign claim, the same background refresh when the claim is stale — and ends at
+    /// `EntitlementJudgement.confirm` instead of `judge`. It hands out no claim, no capability list
+    /// and no plan, so it cannot become a second way to ask whether a capability is granted;
+    /// `decision(for:)` remains the only thing that answers that.
+    public func claimConfirmation() async -> EntitlementDecision {
+        await evaluate(capability: nil)
+    }
+
+    /// The one body both readers share.
+    ///
+    /// **`nil` means "do not ask about a capability", and it is not a defaulted parameter.** A
+    /// default would let a future caller reach the unchecked answer by saying nothing, which is the
+    /// fail-open direction; the two doors above are named, and each one writes down which question
+    /// it is asking.
+    private func evaluate(capability: EntitlementCapability?) async -> EntitlementDecision {
         // **A session this Mac cannot read is answered as no session, deliberately.** `try?`
         // collapses two cases — nothing stored, and stored bytes this build cannot decode — and both
         // have the same recovery and the same honest answer: there is no session in hand. Reporting
@@ -133,6 +163,9 @@ public actor EntitlementService {
         // succeeds changes the *next* answer rather than this one.
         if EntitlementJudgement.shouldRefresh(claim: claim, now: instant) {
             startRefresh()
+        }
+        guard let capability else {
+            return EntitlementJudgement.confirm(claim: claim, session: session, now: instant)
         }
         return EntitlementJudgement.judge(
             claim: claim,

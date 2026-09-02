@@ -63,7 +63,17 @@ final class SonnyAccountModel: ObservableObject {
     /// `EntitlementService.decision(for:)` remains the one way that question is asked, and
     /// `currentSubscription()` deliberately returns no capability list, so this surface cannot
     /// become a second answer to it.
-    private let entitlements: EntitlementService
+    ///
+    /// **`let` rather than `private let`, for exactly the reason `backendClient` is exposed above,
+    /// and it is the same argument twice** (SONNY-213). This process must hold **one** entitlement
+    /// service: the actor carries the high-water clock anchor `effectiveNow` advances and persists,
+    /// and the single-flight refresh guard that makes N stale readers cause one fetch. A second
+    /// instance would be a second anchor — so a rollback closed by one would be open to the other —
+    /// and a second guard guarding half the callers. Screen control's gate needs to ask this
+    /// question, `main.swift` is the one file holding both objects, and handing it this instance is
+    /// how "one client, one service" stays true by construction rather than by two call sites
+    /// agreeing.
+    let entitlements: EntitlementService
 
     /// Called after this Mac's session changes — a sign-in that succeeded, or a sign-out that
     /// cleared it (SONNY-136, PR #153's F4).

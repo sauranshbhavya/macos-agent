@@ -16,7 +16,8 @@ struct ScreenControlAllowanceTests {
     static func body(
         plan: String = "test-plan-a",
         runsLeft: Int = 97,
-        runsIncluded: Int = 100
+        runsIncluded: Int = 100,
+        creditsRemaining: Double = 970
     ) -> Data {
         try! JSONSerialization.data(withJSONObject: [
             "plan": plan,
@@ -29,9 +30,12 @@ struct ScreenControlAllowanceTests {
             "period_end": "2026-09-01T00:00:00.000Z",
             "screen_control_runs_left": runsLeft,
             "screen_control_runs_included": runsIncluded,
-            // The derivation the gateway publishes beside the number. This client must ignore it,
-            // and a body carrying it is what the real server sends, so it is here.
-            "credits": ["allowance": 1000, "drawn": 30, "remaining": 970, "per_run": 10]
+            // The derivation the gateway publishes beside the number. **`remaining` is read now**
+            // (SONNY-213, PR #190's F1) — the step boundary asks whether the account has actually
+            // run out, which `runsLeft` cannot answer for a session already spending its own run.
+            // The other three stay unread. This comment said "this client must ignore it" until that
+            // finding.
+            "credits": ["allowance": 1000, "drawn": 30, "remaining": creditsRemaining, "per_run": 10]
         ])
     }
 
@@ -54,6 +58,10 @@ struct ScreenControlAllowanceTests {
 
         #expect(allowance.runsLeft == 97)
         #expect(allowance.runsIncluded == 100)
+        // **Read from `credits.remaining`, and 970 rather than 97 is the whole assertion**: the two
+        // figures are different numbers in the same body, so this fails if the remainder is ever
+        // derived from the run count instead of decoded.
+        #expect(allowance.creditsRemaining == 970)
         #expect(allowance.plan == "test-plan-a")
         #expect(allowance.periodStart == SonnyISO8601.parse("2026-08-01T00:00:00Z")!)
         #expect(allowance.periodEnd == SonnyISO8601.parse("2026-09-01T00:00:00Z")!)
@@ -67,6 +75,33 @@ struct ScreenControlAllowanceTests {
         #expect(sent.method == "GET")
         #expect(sent.authorization?.hasPrefix("Bearer ") == true)
         #expect(sent.idempotencyKey == nil)
+    }
+
+    /// **The state a session in flight is actually in: no whole run affordable, real credit left.**
+    ///
+    /// This is the reading SONNY-213's step boundary exists to tell apart from a genuine exhaustion,
+    /// and it is unreachable from `runsLeft` alone — `floor(remaining / runCredits)` is 0 for every
+    /// remainder below one run, so the run count says the same thing about "82% of a run left" and
+    /// "nothing left". A client that derived the remainder from the run count would read both as
+    /// zero and halt a session on the run the door had just granted it, which is exactly what PR
+    /// #190's F1 was.
+    ///
+    /// Asserted here rather than only at the gate because the gate's own tests use a stub reader:
+    /// nothing else in the suite decodes this field off a real body, and a mutant reading it off
+    /// `screen_control_runs_left` survived the whole suite until this test existed.
+    @Test
+    @MainActor
+    func theRemainderAndTheRunCountAreReadFromTheirOwnFields() async throws {
+        let fixture = SignedInBackendFixture(now: { Self.now })
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            Self.reply(Self.body(runsLeft: 0, runsIncluded: 10, creditsRemaining: 8.2))
+        }
+
+        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+
+        #expect(allowance.runsLeft == 0)
+        #expect(allowance.creditsRemaining == 8.2)
     }
 
     @Test

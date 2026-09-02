@@ -462,11 +462,23 @@ struct ScreenControlUsageSurfaceTests {
         ]
     )
 
-    static func allowance(runsLeft: Int, runsIncluded: Int = 20) -> ScreenControlAllowance {
+    /// **`creditsRemaining` defaults to agreeing with `runsLeft` rather than to zero** (SONNY-213).
+    ///
+    /// The gate reads this figure at a step boundary and `runsLeft` at a session's door, because the
+    /// two answer different questions; a fixture passing `0` here would describe an account with runs
+    /// on the surface and nothing behind them, which is a state the gateway cannot produce — it
+    /// derives `runsLeft` *from* this value. One credit per run is the simplest model that keeps them
+    /// consistent the way the server guarantees. A test that wants them apart says so explicitly.
+    static func allowance(
+        runsLeft: Int,
+        runsIncluded: Int = 20,
+        creditsRemaining: Double? = nil
+    ) -> ScreenControlAllowance {
         ScreenControlAllowance(
             plan: "test-plan-a",
             runsLeft: runsLeft,
             runsIncluded: runsIncluded,
+            creditsRemaining: creditsRemaining ?? Double(runsLeft),
             periodStart: Date(timeIntervalSince1970: 1_753_920_000),
             periodEnd: Date(timeIntervalSince1970: 1_756_598_400)
         )

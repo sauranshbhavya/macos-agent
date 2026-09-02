@@ -267,6 +267,66 @@ struct EntitlementServiceTests {
         #expect(await service.decision(for: Self.capability) == .refused(.noClaim))
     }
 
+    // MARK: - The confirmation door (SONNY-213)
+
+    /// `claimConfirmation()` runs the same actor path as `decision(for:)` — the session read, the
+    /// store read, the verification, the clock — and differs on exactly one answer: a current claim
+    /// that grants nothing confirms.
+    ///
+    /// **Driven through the actor and not only through `EntitlementJudgement.confirm`**, because the
+    /// pure function cannot hold the wiring: a mutant that short-circuited `evaluate(capability:
+    /// nil)` to `.entitled` before the store was ever read would leave every `confirm` test green
+    /// while the gate admitted sessions on a Mac with nothing cached at all.
+    @Test
+    @MainActor
+    func theConfirmationRunsTheWholePathAndDoesNotAskTheCapabilityQuestion() async throws {
+        let signer = Signer()
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        fixture.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        // A current, verifiable claim granting *nothing* — the shape a free user's claim can take,
+        // and the one case where confirmation and `decision(for:)` must answer differently.
+        let store = MemoryStore(StoredEntitlement(
+            compactClaim: signer.claim(capabilities: []),
+            observedServerTime: Self.issuedAt
+        ))
+        let service = EntitlementService(
+            client: fixture.client,
+            store: store,
+            keys: signer.keys
+        )
+
+        #expect(await service.claimConfirmation() == .entitled)
+        #expect(await service.decision(for: Self.capability) == .refused(.notEntitled))
+    }
+
+    @Test
+    @MainActor
+    func theConfirmationIsRefusedWithNothingCachedAndWithAnUnverifiableClaim() async throws {
+        // Nothing cached: the store really was read, so a short-circuit above it cannot pass this.
+        let fixture = SignedInBackendFixture(now: { Self.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        fixture.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        let empty = EntitlementService(
+            client: fixture.client,
+            store: MemoryStore(),
+            keys: Signer().keys
+        )
+        #expect(await empty.claimConfirmation() == .refused(.noClaim))
+
+        // A claim signed by a key this build does not hold: the verification really ran too.
+        let stranger = Signer(keyID: "not-held")
+        let unverifiable = EntitlementService(
+            client: fixture.client,
+            store: MemoryStore(StoredEntitlement(
+                compactClaim: stranger.claim(),
+                observedServerTime: Self.issuedAt
+            )),
+            keys: Signer().keys
+        )
+        #expect(await unverifiable.claimConfirmation() == .refused(.unreadableClaim))
+    }
+
     // MARK: - Every failure is a refusal
 
     @Test

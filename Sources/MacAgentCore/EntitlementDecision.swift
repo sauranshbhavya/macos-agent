@@ -56,6 +56,36 @@ public enum EntitlementJudgement {
         session: SonnyAccountIdentity,
         now: Date
     ) -> EntitlementDecision {
+        // **Every rule except the capability one, from the single place that holds them.** Spelling
+        // them out here as well as in `confirm` would be two copies of the clock defence, and the
+        // copy that drifted would be the one nothing was looking at.
+        let confirmation = confirm(claim: claim, session: session, now: now)
+        guard case .entitled = confirmation else { return confirmation }
+        guard claim.grants(capability) else { return .refused(.notEntitled) }
+        return .entitled
+    }
+
+    /// Everything ``judge(claim:capability:session:now:)`` asks **except which capability the claim
+    /// names** — does this Mac hold a current, verifiable claim about its own session (SONNY-213)?
+    ///
+    /// **It exists because row 18 has not decided what the keys are, and this ticket must not decide
+    /// for it.** SONNY-213 gates screen control on the entitlement cache being able to confirm, and
+    /// no capability key exists anywhere under `Sources/` —
+    /// `EntitlementSourceScanTests.theGatedCapabilitySetIsRowEighteensAndThisRepositoryNamesNoKey`
+    /// holds that as a population scan, and it holds it because row 18 (SONNY-23) owns which
+    /// capability gates which feature. A gate that invented a key to ask about would be taking that
+    /// decision in row 13.
+    ///
+    /// **So this is a narrowing and never a widening.** Every refusal `judge` can produce, this one
+    /// produces too, on the same values and in the same order — the session check first, then the
+    /// two clock edges. The only answer it cannot give is `.notEntitled`, which is precisely the
+    /// question it declines to ask. `judge` is written in terms of it, so the day row 18 mints a key
+    /// the gate becomes a `judge` call and every rule below it is already the one being applied.
+    public static func confirm(
+        claim: EntitlementClaim,
+        session: SonnyAccountIdentity,
+        now: Date
+    ) -> EntitlementDecision {
         // **Checked before anything about time**, because a claim about somebody else is not stale,
         // it is irrelevant — and reporting it as expired would send the user to a refresh that
         // changes nothing about the claim they are holding.
@@ -67,7 +97,6 @@ public enum EntitlementJudgement {
         guard now >= claim.honouredFrom else { return .refused(.clockUnusable) }
         // Past expiry, past grace, past tolerance.
         guard now <= claim.honouredUntil else { return .refused(.lapsed) }
-        guard claim.grants(capability) else { return .refused(.notEntitled) }
         return .entitled
     }
 
