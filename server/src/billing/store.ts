@@ -326,8 +326,10 @@ export async function hasLiveSubscription(
  * **A fourth shape does reach the app, and the sentence above does not cover it** (PR #189's review,
  * F3). The reachability argument leans on a missing row minting `plan: 'none'`, and that step holds
  * only for an account whose entitlement came from the provider. The operator `grant` in
- * `entitlements.ts` writes `plan` and `capabilities` onto **this same row** with `billing_provider`
- * and `billing_subscription_id` left NULL, and clears `revoked_at` — so an operator-granted account
+ * `entitlements.ts` writes `plan` and `capabilities` onto **this same row** and clears `revoked_at`,
+ * **touching neither billing column** — it is an upsert, so on the insert path they are NULL because
+ * nothing writes them and on the `ON CONFLICT DO UPDATE` path they are left exactly as they were,
+ * which is NULL for the row this shape is about. So an operator-granted account
  * mints a claim with a real plan, `SubscriptionReading.read` returns a snapshot, and `SignInView`
  * renders a live Manage button while this predicate answers `false`. Combine that grant with any of
  * the three shapes above — say a customer made in the provider's dashboard — and the user really can
