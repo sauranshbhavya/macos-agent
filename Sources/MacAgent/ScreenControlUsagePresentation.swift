@@ -1,7 +1,7 @@
 import Foundation
 import MacAgentCore
 
-/// The two sentences the product says about the screen-control allowance (SONNY-214).
+/// The words the product says about the screen-control allowance (SONNY-214).
 ///
 /// Pure and in one place, because no SwiftUI inspection harness exists here to pin what a view
 /// renders — the same reason `AgentActivityPresentation` beside it is a type rather than a pile of
@@ -14,17 +14,29 @@ import MacAgentCore
 enum ScreenControlUsagePresentation {
     /// What the widget shows while a screen-control task is in flight — "12 runs left".
     ///
-    /// No denominator here, unlike the Command Center line: the widget is 472pt of glass over the
+    /// No denominator here, unlike the Account line: the widget is 472pt of glass over the
     /// user's work while Sonny is about to move their cursor, and the only figure that matters at
     /// that moment is how many they have got left.
     static func inTaskLine(runsLeft: Int) -> String {
         "\(runsLeft) \(runsLeft == 1 ? "run" : "runs") left"
     }
 
-    /// What Command Center's stats area shows — "12 of 20 runs left this month".
+    /// What the Account section calls the figure it shows beside the plan.
+    ///
+    /// **Here rather than inline in the view, which is where it used to be** (PR #188's F12 named
+    /// the gap: this type's own doc claims to be the copy's one home, and a third literal sat in
+    /// `CommandCenterView` outside it). Widening the prohibition test to cover the product's copy as
+    /// a population is SONNY-399's, not this line's; what this does is make the claim above true.
+    ///
+    /// It is a label and not an explanation. Beside `Pro · Active` and a Manage-subscription button,
+    /// "12 of 20 runs left this month" on its own would not say runs *of what*.
+    static let label = "Screen Control"
+
+    /// What the Account section shows beside the plan — "12 of 20 runs left this month".
     ///
     /// The denominator is what makes this a *usage* line rather than a countdown: 12 of 20 says
-    /// eight were used, which is what the page is for. `runsIncluded` exists on
+    /// eight were used, which is what somebody looking at their plan is there to find out.
+    /// `runsIncluded` exists on
     /// `ScreenControlAllowance` for exactly this — its own doc comment calls it "the denominator of
     /// '3 of 20 left'".
     ///
