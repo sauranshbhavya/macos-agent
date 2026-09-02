@@ -951,7 +951,8 @@ struct WorkspaceDetailSheetTests {
             shortcutCatalog: SheetTestShortcutCatalog(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")
-            )
+            ),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
 
         // The presentation half.

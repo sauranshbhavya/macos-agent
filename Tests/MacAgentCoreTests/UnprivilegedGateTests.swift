@@ -134,7 +134,14 @@ struct UnprivilegedGateTests {
         // decrypted or decoded". Both are in `VisionSessionRunTests`:
         // `aFailedRemoveSaysTheWriteFailedAndNeverBorrowsTheLoadFailuresWords` and
         // `aFailedRemoveAllSaysWhichPressFailedAndNeverBorrowsTheLoadFailuresWords`.
-        #expect(lockedAndGated == 14, "expected fourteen gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Fifteen since SONNY-382, whose one gated test locks the watcher store's directory so the
+        // rewrite a Stop press needs fails while the record itself stays perfectly readable:
+        // `StandingWatcherStopTests.aStopThatCannotBeWrittenReportsOnTheChannelForAPressedControl`,
+        // which is the branch that decides whether a failed Stop reports on `errorMessage` — the
+        // channel for a control the user pressed — rather than on the storage notice, where it would
+        // leave the user believing the watcher had stopped.
+        #expect(lockedAndGated == 15, "expected fifteen gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """

@@ -2580,6 +2580,49 @@ struct RoutineRowPresentation: Equatable {
     }
 }
 
+/// One row of the Routines page's Watching list (SONNY-382).
+///
+/// **A value rather than a view's own arithmetic**, the shape `RoutineRowPresentation` already
+/// uses on this page: what the row says is then assertable without rendering anything, which for
+/// this row matters more than most — the second line is the only place a user is told a watcher
+/// ends on its own.
+struct StandingWatcherRowPresentation: Equatable {
+    /// What the user asked to be told about, in their own words. `StandingWatcher.subject`.
+    let subject: String
+
+    /// The host and the day this watcher stops by itself — "example.com · until 7 Sep".
+    ///
+    /// **The stop date is the ticket's "the expiry notice reads as a stop" requirement, met on the
+    /// row rather than in a sentence.** A watcher has two endings a user meets: this Stop control,
+    /// and the lifetime running out with its own notification. If the row said only what is being
+    /// watched, Stop would read as the only way out — so the row names when it ends anyway. That is
+    /// state, which a row is for, and not an explanation of what a watcher is or how often it
+    /// checks, which the founders' 2026-08-14 rule keeps out of the product.
+    ///
+    /// The host rather than the whole URL: a full URL is unreadable at 56pt and truncates in the
+    /// middle, and the subject above already says which page this is in the user's own words.
+    let detailText: String
+
+    init(
+        watcher: StandingWatcher,
+        limits: StandingWatcherLimits = .standard,
+        calendar: Calendar = .current,
+        locale: Locale = .current
+    ) {
+        subject = watcher.subject
+
+        let host = watcher.url.host ?? watcher.url.absoluteString
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = locale
+        // The same template idiom `RoutineStreak.nextRunText` uses, so the two lines on this page
+        // render dates the same way in every locale.
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        detailText = "\(host) · until \(formatter.string(from: watcher.expiresAt(limits: limits)))"
+    }
+}
+
 struct WorkspaceAppIconPresentation: Equatable {
     let appName: String
     let icon: NSImage?
@@ -2966,6 +3009,27 @@ private struct RoutinesView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
 
+            // **Watchers live here rather than in Memory** (founder decision, recorded on
+            // SONNY-236 and SONNY-109): Memory is what Sonny remembers, a live watcher is what
+            // Sonny is doing.
+            //
+            // **A card of its own rather than a group inside "All routines", and that is a stated
+            // deviation from `11-MainAppRoutines.svg` rather than an oversight.** The wireframe has
+            // one card and knows nothing about watchers, so something had to be decided: a watcher
+            // under a card headed "All routines" would be listed as a routine, which is the exact
+            // question the founders reserved for the SONNY-109 sitting ("whether a watcher reads as
+            // a routine"). A second card answers it in the way that is cheapest to change — the
+            // cadence grouping, the empty state and the row above are all untouched.
+            //
+            // **Rendered only when something is being watched.** An empty card would be a permanent
+            // explanation of a feature most sessions never use, which is the copy the 2026-08-14
+            // rule keeps out of the product; and when the store will not read at all,
+            // `refreshSavedItems()` empties this list and publishes the storage notice below, whose
+            // row already says any watchers in it have stopped (PR #184's F5).
+            if !viewModel.standingWatchers.isEmpty {
+                WatchingCollection(viewModel: viewModel)
+            }
+
             CommandCenterAttentionPanel(viewModel: viewModel)
 
             // Self-gates on `localStorageNotice`, deliberately outside the running check: a
@@ -2992,6 +3056,95 @@ private struct RoutinesView: View {
     // forward so the user finishes typing the routine name there.
     private func beginNewRoutine() {
         viewModel.composeCommand("Create a routine called ")
+    }
+}
+
+/// The Routines page's Watching card: what Sonny is waiting on, and the control that ends it.
+///
+/// **Its own view rather than more body inside `RoutinesView`** — that view's body was already at
+/// the length where an added branch is hard to read, and this one has a list, a header and a
+/// per-row action of its own.
+private struct WatchingCollection: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // No action title: there is no "New watcher" button, because Command Center has no
+            // composer — a watcher is started by asking, the same way a routine's own New button
+            // pre-fills the widget rather than creating anything here. Offering a button that only
+            // pre-fills a sentence would suggest this page can start one.
+            CollectionHeader(title: "Watching")
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            ForEach(Array(viewModel.standingWatchers.enumerated()), id: \.element.id) { index, watcher in
+                StandingWatcherRow(
+                    presentation: StandingWatcherRowPresentation(watcher: watcher),
+                    isLast: index == viewModel.standingWatchers.count - 1,
+                    stop: { viewModel.stopWatching(watcher) }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .background(CommandCenterPalette.collectionSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+}
+
+private struct StandingWatcherRow: View {
+    let presentation: StandingWatcherRowPresentation
+    let isLast: Bool
+    let stop: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
+                        .fill(CommandCenterPalette.routineIconBackground)
+                    // A glyph rather than the routine row's blank square, so the two rows on this
+                    // page are told apart at a glance without a second colour token.
+                    Image(systemName: "eye")
+                        .font(SonnyType.icon(13, weight: .medium))
+                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
+                }
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(presentation.subject)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(presentation.detailText)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                Button("Stop", action: stop)
+                    .buttonStyle(CommandCenterRowActionStyle())
+                    // **Named, not bare** — a list of identical "Stop" buttons is a list a screen
+                    // reader cannot tell apart, which is the property SONNY-378 records for the
+                    // Remove buttons on the approved-apps list.
+                    .accessibilityLabel("Stop watching \(presentation.subject)")
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
     }
 }
 

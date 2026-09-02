@@ -141,6 +141,7 @@ struct ClipboardHistoryTests {
             snippetStore: UnreachableLocalStores.snippets(),
             recentArtifactStore: UnreachableLocalStores.recentArtifacts(),
             shortcutRunHistoryStore: UnreachableLocalStores.shortcutRunHistory(),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             now: { now.addingTimeInterval(2) }
         )
         let runner = AgentRunner(planner: FailingPlanner(), executor: executor)

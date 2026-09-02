@@ -925,6 +925,10 @@ struct ProductShellTests {
         let reloadedByTheWipe: Set<String> = [
             "savedRoutines",              // refreshSavedItems()
             "savedWorkspaces",            // refreshSavedItems()
+            // SONNY-382. Loaded by the same `refreshSavedItems()` the two above are, from the file
+            // the wipe has just deleted — so the Routines page's Watching card comes back empty,
+            // which is the truth after a wipe: every watcher in that file is gone.
+            "standingWatchers",
             "savedSnippets",              // refreshMemoryEntries()
             "recentArtifacts",            // ditto
             "clipboardHistoryItems",      // ditto

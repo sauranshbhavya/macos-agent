@@ -379,7 +379,8 @@ struct RunUnitProgressTests {
             shortcutCatalog: NoShortcutsForProgressTests(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-history.json")
-            )
+            ),
+            resumableTaskStore: UnreachableLocalStores.resumableTasks(),
         )
     }
 }
@@ -429,9 +430,15 @@ struct ResumeRepeatSafetyTests {
     /// `destinations.count == MemoryCategory.allCases.count`, which is the second time it has
     /// survived a review in this area — hence naming the safe set rather than counting it.
     @Test
-    func theOperationsSonnyWillNotRepeatOnItsOwnAreTheFourItCannotSeeInside() {
+    func theOperationsSonnyWillNotRepeatOnItsOwnAreNamedInBothDirections() {
         let unsafe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .mustNotRepeatSilently })
-        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .unsupported])
+        // `.startWatching` is the fifth and is not one Sonny cannot see inside (SONNY-382): a repeat
+        // reads a public page and writes a local record, which by this classification's own bar is
+        // safe. It is here because a repeat also spends a second of five capped watcher slots on a
+        // duplicate and notifies twice about one change, days later. That is why this test's name no
+        // longer carries a count or the see-inside reason — `CLAUDE.md`'s rule about counts in test
+        // names, and a name that would now be wrong about *why* as well as how many.
+        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .startWatching, .unsupported])
 
         let safe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .safeToRepeat })
         #expect(safe == [

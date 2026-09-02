@@ -1230,7 +1230,8 @@ struct EditWorkspaceTests {
                 shortcutCatalog: FakeShortcutCatalog(names: []),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")
-                )
+                ),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         }
 
@@ -1412,7 +1413,8 @@ struct EditWorkspaceScopeOnlyDisclosureTests {
                 shortcutCatalog: FakeShortcutCatalog(names: []),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")
-                )
+                ),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         }
 

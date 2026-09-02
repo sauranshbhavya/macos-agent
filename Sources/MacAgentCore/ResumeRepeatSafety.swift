@@ -63,6 +63,17 @@ extension AgentOperation {
             // list for exactly that (`affectsOthersLabelWords`). What a repeated session clicks is
             // not knowable in advance, which is the same reason as the two above.
             return .mustNotRepeatSilently
+        case .startWatching:
+            // **The one `.mustNotRepeatSilently` here that is not about reaching someone else, and
+            // it is deliberate** (SONNY-382). Repeating it reads a public page and writes a local
+            // record — by the bar the three above use, that is `.safeToRepeat`. What it also does is
+            // occupy a second of `StandingWatcherLimits.maxActive`'s five slots with a duplicate the
+            // user cannot tell apart from the first, and then notify twice about one change, days
+            // later, when nobody is present to connect the second banner to a resume they approved.
+            // The founders' cap exists precisely to stop watchers accumulating unnoticed, so
+            // creating one on Sonny's own initiative is the thing that cap is about. A user who
+            // wants a second watcher asks for one.
+            return .mustNotRepeatSilently
         case .unsupported:
             // Fails closed. It cannot execute, so this is an answer to a question that never gets
             // asked — and the safe direction for an operation whose meaning is "Sonny does not know

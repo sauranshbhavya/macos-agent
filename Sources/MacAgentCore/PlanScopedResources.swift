@@ -164,6 +164,18 @@ public enum PlanScopedResources {
         case .openURL:
             return .knowable([domain(fromURL: step.targetURL)].compactMap { $0 })
 
+        case .startWatching:
+            // The page this watcher will fetch, now and on every later check (SONNY-382). Reported
+            // for `open_url`'s reason — a workspace boundary that excludes the host must escalate —
+            // and it is the *only* resource: a watcher writes one record inside Sonny's own store
+            // and, by the founders' notify-only decision, can never open, write or run anything, so
+            // there is nothing else for a scope to be about.
+            //
+            // **Knowable rather than opaque, and that is the difference from `vision_session`.**
+            // What a watcher will touch over its whole life is exactly this one URL, decided now and
+            // never re-decided; a vision session is opaque because its steps do not exist yet.
+            return .knowable([domain(fromURL: step.targetURL)].compactMap { $0 })
+
         case .playMedia:
             // The provider app *and* the provider host: `NativeMediaOpener` opens `music://` /
             // `spotify:` URIs through its own private prefix check, bypassing both `MacAppCatalog`

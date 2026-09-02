@@ -486,7 +486,8 @@ struct PrebuiltPlanDispatchTests {
                 shortcutCatalog: UnusedShortcutCatalog(),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-history.json")
-                )
+                ),
+                resumableTaskStore: UnreachableLocalStores.resumableTasks(),
             )
         }
 

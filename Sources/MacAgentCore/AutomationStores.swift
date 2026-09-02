@@ -126,6 +126,14 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         // a vision step through this door, whatever happens to the other two, and so no single
         // regression unbars unattended screen control.
         .visionSession,
+        // **A routine may not start a watcher** (SONNY-382). A scheduled routine runs with nobody
+        // present, so one carrying this step creates a watcher on every occurrence — five daily
+        // runs and the cap is spent, on records the user never asked for and cannot connect to
+        // anything they did. The founders' cap exists to stop exactly that accumulation, and the
+        // one door a watcher should arrive through is a user saying so. Nothing is lost: a watcher
+        // is already standing work, so wrapping one in a schedule buys nothing a second watcher
+        // would not.
+        .startWatching,
         .clarify,
         .unsupported
     ]
