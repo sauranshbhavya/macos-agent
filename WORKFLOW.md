@@ -209,7 +209,7 @@ has documented consequences:
 **A long lane is a coordination failure before it is a session's.** The five levers that keep
 lanes short are all the coordinator's, and they sit in three different steps because that is
 where each one bites: the concurrency cap and the rebase-timing rule above, step 5's scoped
-post-rebase battery re-runs, and step 7's right-sizing and its limit on what one round
+battery re-runs, and step 7's right-sizing and its limit on what one round
 carries. Step 5's ninety-minute stop is the one a session owns, and it is a backstop for when
 the five were got wrong rather than a substitute for them. (Founder
 instruction 2026-08-28, at the tail of the 2026-08-27/28 wave, after three lanes ran one to
@@ -306,10 +306,12 @@ something up.)
   protect and every test whose name claims a guarantee — not one mutant per changed file. A
   reviewer runs the shapes its own findings are about, plus any the implementer's plan
   missed, and reads the implementer's killers by name rather than re-running the whole plan.
-- **After a rebase, a mutant is carried only when four things hold; otherwise it is re-run.**
-  Its target file did not move in the merged range; its killing test's file did not move; the
-  killer does not scan a population the range changed; and the killer does not drive a helper
-  or fixture the range changed. If all four cannot be established cheaply, re-run it.
+- **After a rebase or a fix round, a mutant is carried only when four things hold; otherwise it
+  is re-run.** The range is whatever moved — the merged commits after a rebase, the round's own
+  edits after a fix round. Its target file did not move in that range; its killing test's file
+  did not move; the killer does not scan a population the range changed; and the killer does not
+  drive a helper or fixture the range changed. If all four cannot be established cheaply, re-run
+  it.
   **The fail-safe wording is the rule rather than decoration.** This was first written as file
   identity alone, and SONNY-137's lane computed both versions against a real merged range the
   same day: the sole killer of three mutants drove `HermeticBackendClient.swift`, which had
@@ -322,6 +324,18 @@ something up.)
   that is the rule working, not failing. (Trigger: three tail-end lanes of the 2026-08-27/28
   wave each re-ran a whole 17-to-19-mutant battery, 45 to 90 minutes under load, because
   *some* file in the merged range had changed.)
+  **The check is per mutant against these four, never per round against the diff — and they
+  govern any movement under a battery's evidence, a fix round as much as a rebase.** "What this
+  round changed" is the substitute a session reaches for, because it is visible from inside the
+  round and these four conditions are not: a round that edits a file *other* mutants target
+  leaves every one of those carrying a verdict measured before that file moved, and nothing in
+  the round's own diff says so. It happened twice on one branch, one round apart, the second
+  time inside the round that recorded the first, and that second one was a fix round rather
+  than a rebase. `CLAUDE.md`'s mutation section carries the measurement that settles it,
+  including the part that makes this hard to catch by instinct: the stale verdict
+  *understated* coverage, so mis-scoping does not fail in the reassuring direction reliably —
+  it produces an unmeasured number, wrong in whichever direction the tree moved. A carry you
+  have argued is worth less than a number you have measured. (SONNY-391.)
 - **Long runs go to a file in the background and are read once**, when the result is next
   needed. No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
   notifications, and twice in the 2026-08-27/28 wave reported results that had already been

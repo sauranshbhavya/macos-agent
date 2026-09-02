@@ -53,11 +53,29 @@ release does not pass it, so no single build can cover the test targets and rele
 the vanishing warning on a second incremental build, then shows the harness reporting it anyway.
 
 Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
-refuses to start while `git status --porcelain` prints anything: a hand-rolled battery reverts its
-mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
+refuses to **start** while `git status --porcelain` prints anything: a hand-rolled battery reverts
+its mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
 deletes the work instead of the mutation — five times so far, three of them producing false
 measurements, once in the reassuring direction where a bogus kill claimed coverage that was not
-there. It also refuses to run beside another battery in the same checkout, and builds into a
+there. **And it does not only refuse to start, which is all this sentence used to say** (SONNY-383).
+The guard is continuous: it re-checks after **every mutant** — the call sits inside the per-mutant
+loop, at `:1977` of
+`git grep -n 'require_clean_tree_after "' 653488e -- scripts/mutate`
+— and aborts the run rather than carrying an unexplained change into the next mutant, which in its
+own message's words would "make every result after this one describe a tree nobody chose". **It
+reads untracked files too** — the check it runs is
+`git -c status.showUntrackedFiles=normal status --porcelain`
+rather than a bare `git status` — so a scratch note, a probe file or a log written inside the
+worktree is enough on its own. **So the rule for a session running a battery is that the worktree is
+frozen for its duration**: no edits of any kind while one runs, documentation included, and whatever
+has to happen in parallel happens in the scratchpad directory outside the tree. SONNY-236's lane
+wrote its changelog entry and its manual-test rows during an eleven-mutant run and lost the baseline
+and W1 to the abort; nothing was left mutated and no `unlock` was needed, so the cost is machine
+time, and on a run of tens of minutes the baseline is most of the cost of starting again. **That
+lane was already careful in the right direction and still lost it.** It deliberately held its two
+doc *commits* until the battery finished, reasoning that moving `HEAD` under a run would force a
+tree-identity proof — correct, and not sufficient, because writing the files at all is what the
+guard reads. It also refuses to run beside another battery in the same checkout, and builds into a
 scratch directory of its own rather than the shared `.build/`, because a battery sharing a build
 directory reports a contaminated result its own output cannot be told apart from a clean one
 (SONNY-176); `scripts/mutate unlock` clears a lock a killed run left behind **and restores the mutant that run had applied when it died** (SONNY-347). That second half is new, and its absence was the quietest failure this tool has had: a run killed with `-9` runs no trap, so the mutated file stayed in the tree, `unlock` cleared the lock and printed "cleared a stale lock" over it, and the next battery refused with the dirty-tree guard's *commit or stash the paths above* — advice which, followed, commits a deliberate defect. Nothing else would have caught it either: a mutant that survives is by definition one no test catches, so the suite over that tree can be green. Each mutant is now recorded inside the lock directory with a byte copy of the file taken before it was patched; a battery started while such a record is present is refused **by name**, and `unlock` restores from the copy — or, when the file is neither that mutant nor that original, writes nothing, keeps both copies under `.git/mutate-abandoned-<timestamp>-<pid>/` and exits 1, and refuses outright, keeping everything, when the record names no file or the copy it would restore from is missing or empty. **A lock's owner is identified by pid *and* the start time recorded when it was taken — read `TZ=UTC`, because `ps -o lstart=` renders in the local zone and one process at one instant gives three different strings, so a battery spanning a DST change would read its own owner as stale mid-run and switch SONNY-184's mutual refusal off (cycle 2's C1) — and never by its command line** (PR #161, F1): the old reading accepted any pid whose `ps` line said `mutate`, which is fail-closed inside `lock_stale_reason` — it refuses a run — and fail-**open** everywhere else, and a live `tail -f` on that script was shown masking a real abandoned mutant, because `live` is answered before the record is ever read. Reordering the record check first does not fix that and is worth not trying: a live battery carries a record by construction, so every one of them would report as abandoned. **A lock written by a `scripts/mutate` older than that change is read as dead even while its battery runs** — those records carry no start time, and the alternative was keeping the hole. `scripts/warnings` will not refuse beside such a battery and `unlock` will restore the file underneath it, both measured; the window is one merge wide and `scripts/mutate --help` says what to do if you are in it. **And the tools that read the tree now read that state too** (SONNY-258): the `.claude/` stop hook, `scripts/warnings` and `scripts/package-app.sh` all consult `scripts/lib/battery-state.sh`. A *live* battery makes the hook skip the suite and say it skipped — in the message, to the user, and in `.git/battery-skips.log`, because a hook that silently does nothing trades a false red for a false green — while an *abandoned* mutant blocks the turn instead, which is what makes SONNY-347 observable rather than something a session has to think of checking. PR #109 is the case: a stop hook ran `swift test` mid-mutant and reported the suite red, which was entirely true and entirely meaningless about the branch. `server/scripts/deploy.sh` takes no guard and needs none: it already computes `BUILD_ID="${SHA}-dirty"` from `git status --porcelain` and prints `WORKING TREE IS DIRTY` to stderr, the suffix travels into both image tags, the `SONNY_BUILD_ID` build-arg and `/v1/health`, and a mutant is an uncommitted tracked change — so an image built mid-mutant is tagged, announced and self-reporting as dirty, and `staging`/`production` are stubs that exit 3 anyway. **The two tools also
@@ -203,6 +221,52 @@ settle" twin → **2** for the view-model backstops, and the server one → **1*
 `scripts/mutate-untrusted-failures` records 65 for the first of those, which was true
 when written; a new test using the same helper joins the population the day it lands and no count of
 it stays current, so re-run the command rather than quoting either number.
+
+**Scoping a re-run by what a round changed is not scoping it by whose evidence moved, and the wrong
+one is the one a session can see** (SONNY-391). `WORKFLOW.md` step 5 carries a mutant across a
+rebase or a fix round only when four things hold — its target file did not move, its killing test's
+file did not move, the killer does not scan a population the range changed, the killer does not
+drive a helper or fixture the range changed — and **the check is per mutant against those four,
+never per round against the diff**. The substitute is what a session reaches for because it is the
+one it can see: "what I just edited" is visible from inside the round and the four conditions are
+not, and it fails quietly, as a smaller re-run reporting the same clean result. A round that edits a
+file *other* mutants target leaves every one of them carrying a verdict measured before that file
+moved, and nothing in the round's own diff says so. **It happened twice on one branch, one round
+apart, the second time inside the round that recorded the first** — a 16-mutant battery reported as
+carried when the file holding two of its killers had moved, and then a round that edited a file six
+mutants target and re-ran the two it had itself just written, leaving four stale. Those are
+SONNY-236's figures, and they live in the changelog's
+`feature/a-watcher-waits-for-something-to-change` entry, which keeps the two heads they were
+stamped at as history: both are non-ancestral now, so they are timestamps on a branch and not
+numbers to re-stamp anywhere else.
+
+**What the wrong scope actually hid, measured rather than argued.** That branch's unscoped 21-mutant
+re-run at `c2c3dc3` — ancestral, `git merge-base --is-ancestor c2c3dc3 HEAD` exits 0 — came back
+with **W5 killed by six tests where its carried verdict said four**: the two tests that round's own
+fix had added joined it, once the mutant was re-anchored against the block that fix had edited. A
+scoped run would not have touched W5 at all, because W5 was not a mutant that round created, and its
+stale four would have sat in the entry looking exactly as clean as the true six. **Note the
+direction — the stale verdict *understated* coverage.** Mis-scoping is not reliably a failure in
+the reassuring direction; it produces an unmeasured number, and an unmeasured number is wrong in
+whichever direction the tree happened to move, so a reader watching only for inflated confidence
+will not look for this one. When the four conditions are uncertain for even one mutant, re-run the
+plan: **a carry you have argued is worth less than a number you have measured**, and nothing in a
+report tells the two apart by reading.
+
+**`scripts/mutate` is not a backstop for this, and the one time it looked like one was luck twice
+over.** The second instance surfaced only because that round's edit landed *inside* W5's `from`
+block, so the mutant matched 0 lines and the pre-flight aborted the whole run — the script working
+exactly as documented, since a mutant that does not apply runs an unmutated suite and reports a
+clean pass. Land the same edit one line outside that block and W5 applies cleanly and reports a kill
+against a file it was never re-measured on, with nothing anywhere disagreeing. **And the pre-flight
+matches every *selected* mutant and only those** — its own comment carries the first half of that,
+at `:1832` of
+`git grep -n 'every selected mutant must match exactly once' 653488e -- scripts/mutate`,
+and the loop beneath it carries the second, iterating `selected` rather than the plan — so it
+cannot reach a mutant a scope leaves out at all: a narrowed run cannot be refused on one it did not
+select, and the refusal can only ever fire on a mutant the run had already chosen to re-measure,
+which is never the one at risk. The guard is against a stale `from` block; nothing guards the
+scope, and on that branch the two coincided.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
@@ -350,7 +414,7 @@ terminal so it is answered once, at setup, rather than mid-build.
 
 - **Work is ticket-driven via Plane.so — `WORKFLOW.md` is the process source of truth.** One ticket = one independently verifiable outcome, claimed by moving it to In Progress via `scripts/plane`, implemented by a single Claude Code CLI session that owns it start to finish. Every ticket closes with a comment written for a session with zero conversation history: completion evidence, or — if left open — why, what was tried, and the gotchas. Parallel sessions follow WORKFLOW.md's disjointness and worktree rules; only one packaged `MacAgent.app` runs live at a time. (The v1 two-agent Codex/Claude rotation this replaces is preserved in the changelog's historical sections.)
 - Before merge, a *fresh* CLI session with no implementer context reviews the branch: reads the real diff in full, reruns the real test suite unless `WORKFLOW.md` step 7 exempts the diff, hand-traces any non-trivial logic (date math, state machines) rather than trusting a passing suite alone — hunting for problems, not validating. How deep that review goes, and how many rounds it gets, are step 7's to set.
-- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, scope a post-rebase battery re-run to the mutants whose evidence actually moved, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
+- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, scope a battery re-run — after a fix round as much as a rebase — to the mutants whose evidence actually moved, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
 - **Wireframe fidelity is the literal baseline for any page that has a wireframe, not a reference consulted only for whatever a given ticket happens to need.** Build/match the page's *entire* wireframe first — every element, not just the one thing a specific ticket is adding — then layer that ticket's own feature/data-model work on top of it. Never deflect from the wireframe's established design language while extending it. Pulling exact measurements for the one thing being built is not the same as confirming the whole page still matches once changes land — that gap is exactly how a real mismatch survived undetected across branch 8 and all of branch 9 (the Routines row's yellow badge is wired to step count, but the wireframe's own SVG layer is literally named `streak`) until caught by direct comparison against the raw SVG, not the derived design-reference doc. When a wireframe element is deliberately not built (out of scope, or an interaction model already rejected), that's a stated, reasoned exception recorded in the changelog — not a silent gap.
 - Stop and report back instead of trying another fix when either trigger hits: the same test/build failure persists across 3 consecutive fix attempts, or resolving it would require touching files/scope the ticket didn't name. Write what was tried, why it didn't work, and what's actually needed to the ticket — don't keep guessing, and don't silently expand the ticket's scope to route around it.
 - Commits and pushes to a ticket's branch are pre-authorized for the session implementing it — no per-commit approval needed. Opening a PR is fine. **Merging is a founder's, always** — either founder, depending on who is working, and never a session: never merge, and never rewrite pushed history. **One exception, already authorized rather than granted here:** the `git push --force-with-lease` a rebase requires, on the session's own ticket branch — never bare `--force`, and never any other branch, `main` included. `WORKFLOW.md`'s merge-one-branch-at-a-time rule states it in full. Commit titles reference the ticket identifier (e.g. `fix(core): SONNY-12 ...`).
