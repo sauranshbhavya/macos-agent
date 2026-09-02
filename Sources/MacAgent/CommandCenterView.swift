@@ -111,7 +111,14 @@ struct CommandCenterView: View {
             ProfileDialogView(isPresented: $isProfilePresented)
         }
         .sheet(isPresented: $isSignInPresented) {
-            SignInDialogView(model: accountModel, isPresented: $isSignInPresented)
+            SignInDialogView(
+                model: accountModel,
+                isPresented: $isSignInPresented,
+                // The allowance beside the plan (SONNY-214). This is Command Center's one door to
+                // the figure; Insights deliberately has none.
+                screenControlAllowance: viewModel.screenControlAllowance,
+                refreshScreenControlAllowance: { await viewModel.refreshScreenControlAllowance() }
+            )
         }
         // First run (SONNY-137). Presented here because Command Center is shown unconditionally on
         // every launch, so the sequence has a host without a window of its own — and because the two
@@ -1317,6 +1324,15 @@ private struct InsightsView: View {
 /// Literal wireframe layout (`14-MainAppInsights.svg`) originally had 4 equal-width stat cards;
 /// "Avg. cycle time" was dropped per direct instruction (2026-07-18) as not adding much value,
 /// leaving 3.
+///
+/// **No usage or quota figure belongs on this page, and that is a founder decision rather than an
+/// omission** (`docs/sonny-founder-design-decisions.md`, §Insights, 2026-07-24): a
+/// usage/quota-consumption metric here creates cancellation anxiety in heavy users and "am I getting
+/// my money's worth" doubt in light ones, and this page is meant to be encouraging. SONNY-214 built
+/// one here anyway, against that decision, and the ruling of 2026-09-02 moved it to the Account
+/// section beside the plan rather than overriding the decision. `InsightsCarriesNoUsageMetric` in
+/// `ScreenControlUsageSurfaceTests` is what now holds it, because until then the decision's only
+/// visible trace was a single manual-checklist row.
 private struct InsightsOverviewBento: View {
     let summary: TaskHistoryInsightsSummary
 
