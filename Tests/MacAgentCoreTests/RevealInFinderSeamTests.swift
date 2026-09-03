@@ -4,7 +4,7 @@ import Testing
 @testable import MacAgentCore
 
 /// **The `reveal_in_finder` capability reveals through an injected seam, and nothing in
-/// `MacAgentCore` can reach Finder any other way** (SONNY-395).
+/// `MacAgentCore` can reach Finder at all** (SONNY-395).
 ///
 /// `RevealInFinderCapabilityAdapter` used to call `NSWorkspace.shared.activateFileViewerSelecting`
 /// inline. That made it the only one of the 27 `*CapabilityAdapter.swift` files reaching the
@@ -129,17 +129,26 @@ struct RevealInFinderSeamTests {
         #expect(theirs.revealed.isEmpty, "a second registry's seam saw \(theirs.revealed)")
     }
 
-    /// **The sweep the behavioural tests cannot do: no file in `MacAgentCore` reaches Finder except
-    /// the one named closure.**
+    /// **The sweep the behavioural tests cannot do: no file in `MacAgentCore` reaches Finder at
+    /// all.**
     ///
     /// A rewrite that called `NSWorkspace.shared.activateFileViewerSelecting` *as well as* the seam
     /// passes every test above, because the recorder still fills. This is what fails instead.
     ///
-    /// It is anchored on `DefaultCapabilityAdapters.liveFinderReveal` rather than on a count alone,
-    /// because a count of one is satisfied by the wrong one of two sites — the shape CLAUDE.md
-    /// records as a shared-token scan standing in for a property of one of them.
+    /// **It asserts zero rather than one, and that is the stronger claim rather than a weaker one.**
+    /// The package ships no live revealer of its own — the only one in the repository is the
+    /// argument `AgentViewModel.atItsRealStoreLocations()` passes, in the app target, held by
+    /// `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal`. A count of
+    /// one here would also have been satisfied by the wrong one of two sites, which is the shape
+    /// CLAUDE.md records as a shared-token scan standing in for a property of one of them.
+    ///
+    /// **A zero is the one answer that looks like good news**, so the premise above it and
+    /// `theSweepReadsPastAComment` below are what make this one a measurement: the first fails if
+    /// the sweep enumerated the wrong directory, the second if it could not see past a comment —
+    /// and this file's own prose names both searched tokens repeatedly, so an unstripped sweep
+    /// would answer from its own documentation rather than from the tree.
     @Test
-    func onlyOneLineInTheCoreOpensAFinderWindow() throws {
+    func noLineInTheCoreOpensAFinderWindow() throws {
         let sources = try FileManager.default
             .contentsOfDirectory(at: Self.coreSourceDirectory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
@@ -155,11 +164,11 @@ struct RevealInFinderSeamTests {
         }
 
         #expect(
-            naming == ["DefaultCapabilityAdapters.swift": 1],
+            naming.isEmpty,
             """
-            the live Finder reveal is named at \(naming) rather than once in DefaultCapabilityAdapters.swift. \
-            A second site is a door around the injected seam, which is what opened four Finder windows \
-            per suite run before SONNY-395.
+            MacAgentCore reaches Finder at \(naming). Every reveal in this package goes through the \
+            seam on RevealInFinderCapabilityAdapter; a second door around it is what opened four \
+            Finder windows per suite run before SONNY-395.
             """
         )
 
