@@ -470,12 +470,21 @@ const schema = z.object({
    * `Sonny-Deprecation` and `Sonny-Deprecation-Info` (SONNY-204).
    *
    * "`minimum_supported_client` is a wall. `recommended_client` is a warning, and it exists so
-   * nobody ever hits the wall by surprise." Defaulted to `0.0.0` for the reason the minimum is: a
-   * warning nobody decided to give is a header on every response saying something nobody meant.
-   * Equal to the minimum means the band is empty and no client is ever warned, which is what an
-   * untold deployment should do.
+   * nobody ever hits the wall by surprise." Equal to the minimum means the band is empty and no
+   * client is ever warned.
+   *
+   * **Unset means "the same as the minimum", and it is optional rather than defaulted to `0.0.0`
+   * for a reason found by running the built server rather than by reasoning** — with a `0.0.0`
+   * default, setting `MINIMUM_SUPPORTED_CLIENT=2.0.0` and nothing else was **refused at startup**,
+   * because a recommended version below the minimum describes no client. That is the most ordinary
+   * configuration there is — arm the wall, no warning band yet — and the refusal's own message told
+   * the operator to "set them equal to arm the wall with no warning period", which is precisely what
+   * they should not have to type. The suite did not catch it because every armed fixture set both.
+   *
+   * The refusal it *should* make is untouched: an explicitly set `RECOMMENDED_CLIENT` below the
+   * minimum is still a named startup failure. Absent is an answer; wrong is not.
    */
-  RECOMMENDED_CLIENT: nonEmpty.default("0.0.0"),
+  RECOMMENDED_CLIENT: nonEmpty.optional(),
   /**
    * Where a user whose build is refused or deprecated is sent. §8.3's `upgrade_url`.
    *
@@ -542,8 +551,8 @@ export interface Config {
   readonly billingGraceDays: number;
   /** §8.3's bound, as configured. `requireClientVersionPolicy` is what parses and checks it. */
   readonly minimumSupportedClient: string;
-  /** §8.4's bound, as configured. */
-  readonly recommendedClient: string;
+  /** §8.4's bound, as configured. `undefined` means the minimum, not `0.0.0`. */
+  readonly recommendedClient: string | undefined;
   readonly upgradeUrl: string | undefined;
   readonly credentials: readonly ProviderCredentials[];
 }
@@ -849,7 +858,12 @@ export function requireClientVersionPolicy(config: Config): ClientVersionPolicy 
         `refuses nobody deliberately. See server/.env.example for the expected shape.`,
     );
   }
-  const recommended = parseMarketingVersion(config.recommendedClient);
+  // Absent means the minimum: a deployment that arms the wall and names no warning band gets an
+  // empty band, not a refusal. The schema's own docstring carries what that refusal cost.
+  const recommended =
+    config.recommendedClient === undefined
+      ? minimum
+      : parseMarketingVersion(config.recommendedClient);
   if (recommended === undefined) {
     throw new ConfigError(
       `RECOMMENDED_CLIENT is not a marketing version: expected one to three numeric components ` +

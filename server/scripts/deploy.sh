@@ -232,6 +232,26 @@ PASSTHROUGH_SETTINGS=(
   # was still there seventy-five seconds later.
   CONTENT_RETENTION_DAYS
   CONTENT_EXPIRY_SWEEP_SECONDS
+  # SONNY-204's three, on this array's own rule and for the reason the two above it record. They
+  # change what the gateway does with every request -- below MINIMUM_SUPPORTED_CLIENT it answers 410
+  # on every route, and below RECOMMENDED_CLIENT it adds two headers -- and none of the three is a
+  # secret: two are version numbers and the third is a public download page.
+  #
+  # **Without them here the version gate is unconfigurable on the only deploy target that exists.**
+  # Both bounds default to 0.0.0, which disarms the gate, so a container that can never be told a
+  # minimum is a container where this feature is permanently off -- which is exactly the shape
+  # CONTENT_RETENTION_DAYS' comment above records ("how a configurable window ends up being one
+  # value forever"), and the founder's manual rows for this feature are `curl` against a local
+  # container and cannot be run at all without them.
+  #
+  # **UPGRADE_URL is the one entry on this list with no default**, which is the credential array's
+  # rule rather than this one's. It sits here anyway, because what the other array's by-name absence
+  # report is for is "did my key get in", and this name is legitimately unset on every deployment
+  # today -- listing it as missing on every run would be noise around the lines that mean something.
+  # Its absence is not silent either way: startup refuses to arm either bound without it, by name.
+  MINIMUM_SUPPORTED_CLIENT
+  RECOMMENDED_CLIENT
+  UPGRADE_URL
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --
