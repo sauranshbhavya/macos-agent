@@ -7,12 +7,18 @@ import Testing
 /// `MacAgentCore` can reach Finder at all** (SONNY-395).
 ///
 /// `RevealInFinderCapabilityAdapter` used to call `NSWorkspace.shared.activateFileViewerSelecting`
-/// inline. That made it the only one of the 27 `*CapabilityAdapter.swift` files reaching the
-/// machine with no seam at all — measured rather than assumed:
+/// inline. That made it the only capability adapter reaching the machine with no seam at all —
+/// measured rather than assumed:
 /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
-/// 'Sources/MacAgentCore/*CapabilityAdapter.swift' | grep -vE ':[0-9]+: *//'` answers that one
-/// line and nothing else, against 27 files
+/// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'` answers
+/// that one line and nothing else, against 27 adapter files
 /// (`git ls-tree --name-only 619ba62 Sources/MacAgentCore/ | grep -c 'CapabilityAdapter.swift$'`).
+///
+/// **The file filter is a pipe rather than a pathspec on purpose** — a pathspec naming the adapter
+/// glob would put the two characters that open a block comment into this doc comment, and
+/// `MacAgentSource` strips block comments before it drops `//` lines, so everything below it would
+/// disappear from every scan that reads this file. `CLAUDE.md` records that happening from this
+/// exact glob before (SONNY-220).
 ///
 /// **What that cost, measured at `619ba62` with a probe on all six of the package's desktop
 /// doors.** One full flagged run recorded **4** reveals — `ProductShellTests`'
