@@ -316,8 +316,11 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// **Only a file this Mac has a key for heals**, which is two conditions rather than one and was
     /// one until PR #194's cycle-3 R1. An I/O failure propagates, because the file may be perfectly
     /// good. So does anything that arrives while there is **no usable key** — a locked Keychain, a
-    /// denied prompt, `.invalidKeyLength` — because that says nothing about the file and the key
-    /// comes back; `hasAUsableKey` is the question that separates those from a file that will not
+    /// denied prompt — because that says nothing about the file and the key comes back.
+    /// `.invalidKeyLength` propagates too, but through the guard's *first* clause rather than this
+    /// one: it is a `LocalStorageEncryptionError` that is not `.undecodableLocalData`, so the case
+    /// check turns it away and `hasAUsableKey` is never asked (PR #194 cycle-4's residuals).
+    /// `hasAUsableKey` is the question that separates those from a file that will not
     /// read under a key that works, and it is needed because `decode` wraps a Keychain failure into
     /// the same case a corrupt file produces.
     ///

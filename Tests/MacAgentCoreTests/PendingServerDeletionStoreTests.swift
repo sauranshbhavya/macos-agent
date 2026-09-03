@@ -191,9 +191,16 @@ struct PendingServerDeletionStoreTests {
     /// **A read failure that is not a decode failure must not heal.**
     ///
     /// The heal above is justified by the contents being unrecoverable; a file that is merely
-    /// unreadable *right now* — a busy disk, a permission change, a Keychain item a restore is about
-    /// to put back — may be perfectly good, and setting it aside would destroy live obligations over
-    /// a transient.
+    /// unreadable *right now* — a busy disk, a permission change, a Keychain that will not answer —
+    /// may be perfectly good, and setting it aside would destroy live obligations over a transient.
+    ///
+    /// **"A Keychain item a restore is about to put back" stood here and is the wrong example**
+    /// (PR #194 cycle-4). That phrase is this repository's own vocabulary for the *wrong-key* case —
+    /// `LocalDataQuarantine` uses it verbatim, for a user who "had their Keychain item replaced" and
+    /// whose key "a restore can reinstall" — and the wrong-key case **heals**, which
+    /// `aFileWrittenUnderADifferentKeyHealsRatherThanBlockingEveryFutureDelete` asserts seventy-odd
+    /// lines below. What must not heal is a Keychain that cannot be read *at all*, which is a
+    /// different failure and the one the third shape below drives.
     ///
     /// **Three shapes, because they take three different roads and each tests something else**
     /// (the first two found by this branch's own battery, the third by PR #194's cycle-3 R1). A file
