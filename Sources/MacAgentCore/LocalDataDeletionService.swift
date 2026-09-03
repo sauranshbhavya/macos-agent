@@ -354,12 +354,12 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     ///
     /// So the argument is not assembled any more. This is `realFileURL`'s pattern one level up —
     /// the reach stays in words, and there is nothing left at the call site to get wrong. A
-    /// fourteenth store joins it without anyone editing the factory, because
+    /// fifteenth store joins it without anyone editing the factory, because
     /// `theWipeReachesEveryLocalStore` pins `defaultStoreFileURLs()` against `LocalStore.allCases`
     /// by value.
     ///
     /// **This does not weaken the door that was closed.** `LocalDataDeletionService()` still does
-    /// not compile; a caller wanting the real thirteen has to write this member's name, and
+    /// not compile; a caller wanting the real fourteen has to write this member's name, and
     /// `noStoreVendorDefaultsAStoreParameter` still refuses a default on `fileURLs`.
     public static func acrossEveryLocalStore(fileManager: FileManager = .default) -> LocalDataDeletionService {
         LocalDataDeletionService(

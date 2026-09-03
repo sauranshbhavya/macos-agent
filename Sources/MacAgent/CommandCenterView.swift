@@ -4233,7 +4233,7 @@ struct MemoryRowPresentation: Equatable {
     /// It drives two things: what the row says, and whether Delete is live. Both matter, and the
     /// second is the one the ticket exists for — every door into a store loads before it acts, so a
     /// file that cannot be read cannot be cleared through the store, and this control is the only
-    /// recovery the product has short of wiping all thirteen stores from Settings.
+    /// recovery the product has short of wiping all fourteen stores from Settings.
     ///
     /// Not defaulted, deliberately: every construction site decides, so a new one cannot inherit
     /// "readable" by saying nothing.
@@ -4858,7 +4858,7 @@ enum MemoryDeletionCopy {
     static func outcome(for category: MemoryCategory, deletedFileCount: Int, keptFileCount: Int) -> String {
         guard keptFileCount > 0 else {
             // **A row that owns no file counts none** (SONNY-236). The file figure is the whole point
-            // of this sentence for twelve of the thirteen stores — a destructive press reporting a
+            // of this sentence for thirteen of the fourteen stores — a destructive press reporting a
             // concrete, checkable fact about the disk — and it is a falsehood for a row whose delete
             // rewrites a file it shares rather than removing one. Without this branch a successful
             // press on Unfinished tasks reported "0 files", which reads as a delete that did nothing.
@@ -6249,7 +6249,7 @@ private struct SettingsDataPage: View {
                         // uses** (SONNY-233). This literal named ten of the thirteen stores the
                         // wipe deleted at the time, having gone stale twice unnoticed as row E,
                         // row J and row 13's stores landed. `LocalDataDeletionCopy` builds it from
-                        // `LocalStore.allCases` through an exhaustive switch, so a fourteenth store
+                        // `LocalStore.allCases` through an exhaustive switch, so a fifteenth store
                         // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",

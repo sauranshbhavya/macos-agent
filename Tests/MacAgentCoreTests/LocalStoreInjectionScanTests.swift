@@ -43,7 +43,7 @@ import Testing
 ///   `everyStoresRealLocationIsUnderTheDevelopersApplicationSupport` below, which walks
 ///   `LocalStore.allCases` instead of listing thirteen constructions by hand.
 ///
-/// All six are subsumed because `fileURL` is now a required parameter of all thirteen store
+/// All six are subsumed because `fileURL` is now a required parameter of all fourteen store
 /// initializers and `RoutineStore()` does not compile. A scan that re-proves what will not build is
 /// not a second line of defence; it is a second thing to maintain that can only ever agree with the
 /// compiler, and it costs a reader the time to work out which of the two is actually load-bearing.
@@ -1094,7 +1094,7 @@ struct LocalStoreInjectionScanTests {
             // the narrow needle could not see — so they are disclosure rather than new reach.
             //
             // That `LocalStore.allCases`' file URLs and `defaultStoreFileURLs()` are one population,
-            // which is how a fourteenth store is refused until it is classified.
+            // which is how a fifteenth store is refused until it is classified.
             "MacAgentCoreTests/LocalStorageSecurityTests.swift",
             // The stored-property classifier, which reads each store's *filename* off its URL.
             "MacAgentTests/ProductShellTests.swift",

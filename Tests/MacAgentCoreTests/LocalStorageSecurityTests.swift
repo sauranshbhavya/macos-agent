@@ -433,17 +433,18 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Thirteen stores is the current whole population, since row 13's unfinished
-    /// runs.
+    /// wipe silently. Fourteen stores is the current whole population, since SONNY-333's queue of
+    /// deletions this Mac owes the gateway.
     ///
     /// **The count moved four times and no longer lives in this test's name** (SONNY-209). Row E's
     /// plan details landed first, at `ebd6c1d`, taking it to ten; row J's approved apps rebased on
     /// top of that and took it to eleven; row 13's output locations took it to twelve, and row 13's
-    /// unfinished runs (SONNY-210) to thirteen. Each of the first three moves renamed this test, and
+    /// unfinished runs (SONNY-210) to thirteen, and SONNY-333's pending server deletions to
+    /// fourteen. Each of the first three moves renamed this test, and
     /// each rename left the doc comments elsewhere that name it pointing at a symbol that no longer
     /// existed. So the name is count-free now and the number lives only in the assertion below,
-    /// where the suite is what complains — which is what let the fourth move cost nothing but two
-    /// numerals. A fourteenth store raises this number and the one in
+    /// where the suite is what complains — which is what let the fourth and fifth moves cost
+    /// nothing but two numerals apiece. A fifteenth store raises this number and the one in
     /// `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
     /// **What the shipping app's wipe actually reaches, as opposed to what the list contains**
     /// (PR #162 review N1a).
@@ -573,8 +574,8 @@ struct LocalStorageSecurityTests {
         // branch's own W4 mutant exposed for a duplicated name. It is not a hypothetical gap: the
         // reviewer's V1 changed `.visionSessionJournal`'s arm to "screen activity" and the whole
         // suite stayed green, while that exact phrase is the reason this branch rejected deriving
-        // the sentence from Memory rows instead. Fourteen literals against thirteen stores since
-        // SONNY-236, because `resumable-tasks.json` names two collections; it is otherwise the same
+        // the sentence from Memory rows instead. Fifteen literals against fourteen stores, because
+        // `resumable-tasks.json` names two collections (SONNY-236); it is otherwise the same
         // shape `theWipeReachesEveryLocalStore` uses for the thirteen file names, for the same reason:
         // this is a destructive action's disclosure, and a copy pass over it should have to say so.
         #expect(items == [
@@ -602,7 +603,7 @@ struct LocalStorageSecurityTests {
             "deletions Sonny hasn't finished"
         ])
 
-        // Structure, over the population rather than over the literals above — so a fourteenth store
+        // Structure, over the population rather than over the literals above — so a fifteenth store
         // fails here as well as in the table, and says which rule it broke.
         //
         // **That makes the table one more stop for a session adding a store**, alongside the file

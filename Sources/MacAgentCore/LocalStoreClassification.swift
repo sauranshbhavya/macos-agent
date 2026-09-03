@@ -264,7 +264,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// (row 13); common output locations was missing from the dialog alone.
     ///
     /// **So the sentence is derived rather than maintained.** This switch is exhaustive with no
-    /// `default`, the same guard `kind` and `memoryCategory` use, so a fourteenth store cannot reach
+    /// `default`, the same guard `kind` and `memoryCategory` use, so a fifteenth store cannot reach
     /// the tree without being named here — and `theWipeReachesEveryLocalStore` already pins that
     /// `allCases` and the wipe's own file list are the same population, which closes the chain from
     /// the words to the files.
@@ -340,7 +340,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// `LocalStoreRowDeletionScope`.
     ///
     /// Exhaustive with no `default`, the same guard `kind`, `memoryCategory` and `deletionCopyNames`
-    /// use: a fourteenth store cannot reach the tree without somebody deciding whether its row owns
+    /// use: a fifteenth store cannot reach the tree without somebody deciding whether its row owns
     /// its file. Answering that wrongly in the `.wholeFile` direction is how a row deletes a
     /// neighbour's data.
     public var rowDeletionScope: LocalStoreRowDeletionScope {

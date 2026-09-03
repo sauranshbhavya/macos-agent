@@ -109,18 +109,18 @@ struct TaskDeletionReachesTheServerTests {
 
     // MARK: - Ordering, and the two half-failures
 
-    /// **The queue write goes before the local deletes, and this is what pins it.**
+    /// **A local delete that throws withdraws the obligation** (PR #194 review, F1's symmetric half).
     ///
     /// The vision journal here holds bytes that will not decode, so the *first* local delete throws
-    /// and `deleteTask` returns early with an error. The id is queued anyway — which is only true if
-    /// the enqueue ran first. Move it below the local block and this test fails, because nothing
-    /// after the `catch`'s `return` runs.
+    /// and `deleteTask` returns early with an error. The row is still standing — every delete in
+    /// that block is atomic and the row's own is last — so an entry left queued for it would have
+    /// the next launch remove the server's copy of a task the user can still see, after being told
+    /// the delete had failed. Content taken on the strength of a press that visibly did not work.
     ///
-    /// The ordering matters because the two half-failures are not symmetric. This one leaves a task
-    /// the user can still see and delete again. The other — local records gone, nothing queued —
-    /// destroys the only remaining name for the server's copy, permanently and silently.
+    /// This was the shipped behaviour and the branch argued for it: *"the user presses again"*. They
+    /// may reasonably decide not to, and the deletion went anyway with nothing to cancel it.
     @Test
-    func aLocalDeleteThatFailsStillLeavesTheServerDeleteOwed() async throws {
+    func aLocalDeleteThatFailsWithdrawsTheServerDeleteToo() async throws {
         let fixture = try TaskDeletionFixture()
         defer { fixture.tearDown() }
         let record = try fixture.writeTaskRecord(id: "task-a", visionSessionID: "session-a")
@@ -131,36 +131,101 @@ struct TaskDeletionReachesTheServerTests {
 
         fixture.viewModel.deleteTask(record)
 
-        // The user is told the delete failed — it did, locally, which is the half they can act on.
+        // The user is told the delete failed — it did, and nothing was taken on either side.
         #expect(fixture.viewModel.errorMessage != nil)
-        // And the server's copy is still owed rather than orphaned.
-        #expect(try fixture.viewModel.pendingServerDeletionsForTests().map(\.taskID) == ["task-a"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        // The row survives, so pressing again is a real way out.
+        #expect(fixture.viewModel.taskHistoryRecords.map(\.id) == ["task-a"])
     }
 
-    /// **A failed queue write is a notice, never `errorMessage`.**
+    /// **A failed queue write aborts the whole delete, and this is PR #194's F1.**
     ///
-    /// `errorMessage` means "the thing you asked for did not happen", and the widget renders
-    /// `.failure` ahead of `.result` — so routing a bookkeeping failure there replaces the result of
-    /// a task that ran and succeeded. That is CLAUDE.md's channel rule, and the defect it names
-    /// arrived twice by other doors (PR #89's F4 and SONNY-201). It would also be untrue here: by
-    /// the time anything is on screen the row and its dependents are gone, which is what the user
-    /// pressed for.
+    /// The shipped code caught the enqueue throw, published a notice, and then fell through to the
+    /// local deletes — producing byte-for-byte the outcome `deleteTask`'s own doc calls permanent,
+    /// unrecoverable and silent: the id gone from the Mac, nothing queued, the server's copy
+    /// orphaned with no remaining name. A test pinned that behaviour by name, so it was a choice
+    /// arguing with its own justification rather than an oversight.
+    ///
+    /// **The row surviving is what makes the ordering real rather than decorative**, and it is what
+    /// kills the mutant that moves the enqueue below the local block: down there, an enqueue failure
+    /// arrives with the row already gone.
+    ///
+    /// `setError` rather than the storage-notice channel, because nothing was deleted — which is
+    /// `errorMessage`'s own meaning, and the same sentence the local-failure path reports.
     ///
     /// The queue is made unwritable by putting a *file* where its directory would be, so
     /// `createDirectory` fails and the store cannot write.
     @Test
-    func aQueueWriteThatFailsIsANoticeAndTheLocalDeleteStillHappens() async throws {
+    func aQueueWriteThatFailsAbortsTheDeleteAndLeavesEverythingWhereItWas() async throws {
         let fixture = try TaskDeletionFixture(queueInsideAFile: true)
         defer { fixture.tearDown() }
         let record = try fixture.writeTaskRecord(id: "task-a")
 
         fixture.viewModel.deleteTask(record)
 
-        #expect(fixture.viewModel.errorMessage == nil)
-        let notice = try #require(fixture.viewModel.localStorageNotice)
-        #expect(notice.contains("deleted from your account"))
-        // The local half still happened: this failure must not stop the button working.
+        #expect(fixture.viewModel.errorMessage != nil)
+        #expect(fixture.viewModel.localStorageNotice == nil)
+        // Nothing local was touched, so the user can press again and nothing is destroyed.
+        #expect(fixture.viewModel.taskHistoryRecords.map(\.id) == ["task-a"])
+        #expect(fixture.seen.all.isEmpty)
+    }
+
+    /// **Two presses in a row send two deletes, not four** (PR #194 review, F3).
+    ///
+    /// The chain — each pass awaiting the previous one — was the branch's only concurrency control
+    /// and nothing tested it: every existing test presses once, so removing the `await` passed the
+    /// whole suite. This is the shape that sees it. The gateway is blocked, so both presses land
+    /// before either pass can finish; with the chain, the first pass takes the queue as it then
+    /// stands and the second finds it empty, which is two requests. Without it both passes load the
+    /// same two entries and send each twice.
+    ///
+    /// Deterministic rather than a race: nothing between the two presses yields the main actor, so
+    /// both entries are queued before either task runs, and the gate holds every request until the
+    /// test opens it.
+    @Test
+    func twoPressesInARowSendOneDeleteEach() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        let first = try fixture.writeTaskRecord(id: "task-a")
+        let second = try fixture.writeTaskRecord(id: "task-b")
+        fixture.blockTheGateway()
+
+        fixture.viewModel.deleteTask(first)
+        fixture.viewModel.deleteTask(second)
+        fixture.releaseTheGateway(8)
+        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+
+        #expect(fixture.seen.all.count == 2)
+        #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks/task-a", "/v1/tasks/task-b"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
+    }
+
+    /// **A press landing while a pass is in flight keeps its own entry** (PR #194 review, F2).
+    ///
+    /// The other direction of the same hazard, and the damaging one. `enqueue` runs synchronously on
+    /// the main actor; the delivery pass is a nonisolated `async` method, so it has released the main
+    /// actor by the time it reaches `remove` — a press inside that window used to lose its entry
+    /// outright, which is an obligation destroyed rather than a delivery repeated. The store's
+    /// per-file lock is what closes it; `PendingServerDeletionStoreTests` drives the file directly,
+    /// and this drives the real button through the real view model.
+    @Test
+    func aPressWhileAPassIsInFlightStillGetsItsOwnDeleteSent() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        let first = try fixture.writeTaskRecord(id: "task-a")
+        let second = try fixture.writeTaskRecord(id: "task-b")
+        fixture.blockTheGateway()
+
+        fixture.viewModel.deleteTask(first)
+        // Let the first pass start and reach its request before the second press lands.
+        await Task.yield()
+        fixture.viewModel.deleteTask(second)
+        fixture.releaseTheGateway(8)
+        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+
+        #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks/task-a", "/v1/tasks/task-b"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
     }
 
     // MARK: - The store's place in the product
@@ -327,17 +392,24 @@ private struct TaskDeletionFixture {
                 keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
             )
         )
+        // Timestamps derived from the id, so two records in one test are an hour apart rather than
+        // sharing an instant — these files persist whole-second dates and `refreshTaskHistory`'s
+        // sort is not stable, so same-second twins come back in no defined order.
+        let offset = Double(abs(id.hashValue % 24) * 3600)
         let record = CompletedTaskRecord(
             id: id,
             command: "do the thing",
-            startedAt: Date(timeIntervalSince1970: 1_772_000_000),
-            completedAt: Date(timeIntervalSince1970: 1_772_000_060),
+            startedAt: Date(timeIntervalSince1970: 1_772_000_000 + offset),
+            completedAt: Date(timeIntervalSince1970: 1_772_000_060 + offset),
             outcomeStatus: .completed,
             visionSessionID: visionSessionID
         )
         _ = try store.record(record)
         viewModel.refreshTaskHistory()
-        return try #require(viewModel.taskHistoryRecords.first)
+        // **By id, never `first`.** The Tasks page hands `deleteTask` the row the user clicked;
+        // taking the head of the list gives a test with two rows whichever one the sort happened to
+        // put on top, which is how this helper silently handed the same record back twice.
+        return try #require(viewModel.taskHistoryRecords.first { $0.id == id })
     }
 
     func goOffline() { network.set(.failure(URLError(.notConnectedToInternet))) }
@@ -347,6 +419,12 @@ private struct TaskDeletionFixture {
     /// A gateway that never answers, so the delivery pass is provably still in flight while the
     /// assertions about the button run.
     func holdTheGateway() { network.set(.hang) }
+
+    /// A gateway that answers, but only once the test says so. Unlike `holdTheGateway()` this lets
+    /// the pass finish, which is what a test about *two* passes needs.
+    func blockTheGateway() { network.hold() }
+
+    func releaseTheGateway(_ requests: Int) { network.open(requests) }
 
     func tearDown() {
         if let host {
@@ -364,19 +442,42 @@ private final class NetworkState: @unchecked Sendable {
         body: Data(#"{"task_id":"t","deleted_at":"2026-08-30T00:00:00Z","requests_deleted":1}"#.utf8)
     )
 
+    /// What a request answers when the gate was held and nobody opened it. Distinguishable from
+    /// `ok`, so a test that mis-counts its `open()` calls fails on its own assertion instead of
+    /// hanging — the backstop shape `CLAUDE.md` allows, reachable only by a real failure.
+    static let gateNeverOpened = BackendStubURLProtocol.Outcome.failure(URLError(.timedOut))
+
     private let lock = NSLock()
     private var outcome = NetworkState.ok
+    private var gate: DispatchSemaphore?
 
     var answer: BackendStubURLProtocol.Outcome {
         lock.lock()
-        defer { lock.unlock() }
-        return outcome
+        let held = gate
+        let next = outcome
+        lock.unlock()
+        guard let held else { return next }
+        return held.wait(timeout: .now() + 30) == .success ? next : Self.gateNeverOpened
     }
 
     func set(_ next: BackendStubURLProtocol.Outcome) {
         lock.lock()
         outcome = next
         lock.unlock()
+    }
+
+    /// Every request from here on blocks until `open(_:)` lets it through.
+    func hold() {
+        lock.lock()
+        gate = DispatchSemaphore(value: 0)
+        lock.unlock()
+    }
+
+    func open(_ count: Int) {
+        lock.lock()
+        let held = gate
+        lock.unlock()
+        for _ in 0..<count { held?.signal() }
     }
 }
 
