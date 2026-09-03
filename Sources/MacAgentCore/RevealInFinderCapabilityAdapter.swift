@@ -7,8 +7,19 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// exists at exactly one place in the repository — the `finderRevealer:` argument
     /// `AgentViewModel.atItsRealStoreLocations()` passes, which
     /// `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal` holds.
-    /// `MacAgentCore` names no way to reach Finder at all, which is stronger than naming one and
-    /// is what `noLineInTheCoreOpensAFinderWindow` asserts.
+    /// No line under `Sources/MacAgentCore` names that call, which is what
+    /// `noLineInTheCoreNamesTheFinderRevealCall` asserts.
+    ///
+    /// **That is the narrow claim, and the wider one this used to make was false** (PR #193 review,
+    /// F3). It read "`MacAgentCore` names no way to reach Finder at all", and
+    /// `FinderContextService.swift:43` is `tell application id "com.apple.finder"` run through
+    /// `osascript` — which is precisely a way to reach Finder, sitting in this package the whole
+    /// time the sentence claimed otherwise. It is behind the `finderContextReader` seam on
+    /// `CapabilityExecutionContext`, so it was never a defect; the sentence was a negative
+    /// established from one token, which is `CLAUDE.md`'s *enumerate before you subtract* shape,
+    /// and a scan searching one literal can only ever support a claim about that literal.
+    /// `NSWorkspace.shared.open(folderURL)` opens a Finder window too and the core names it twice,
+    /// in `WorkspaceFileOpener` and `NativeMediaOpener` — both seamed, neither searched.
     ///
     /// The package deliberately ships no live revealer of its own to pass here. One would be a
     /// constant nothing in the package calls, and a caller reaching for it by name is the shape a
@@ -24,9 +35,16 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// it the only capability adapter reaching the machine directly:
     /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
     /// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'`
-    /// answers **1** at `619ba62` — the line at `:53` — and **0** at this branch's head. The
-    /// comment stage earns its place and its control fires: without it the same command answers 2,
-    /// the extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open`.
+    /// answers **1** at `619ba62` — the line at `:53` — and **0** at `3c0a481`.
+    ///
+    /// **The comment stage earns its place, and the control has to be read at the head you are
+    /// standing on** (PR #193 review, F5). Dropping that stage answers **2** at `619ba62`, the
+    /// extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open` — and
+    /// **5** at `3c0a481`, because four of the five are this very doc comment. The sentence used to
+    /// give the 2 with no head beside it, two clauses after naming two different heads, which is
+    /// `CLAUDE.md`'s ninth write-the-command defect exactly: a citation greping a population its
+    /// own file belongs to needs a comment stage *and* a control that fires, and the control here
+    /// goes up by the citations written since. It went up by four and the prose said one.
     ///
     /// **The file filter is a pipe rather than the pathspec you would reach for first**, and that
     /// is not style. A `pathspec` naming the adapter glob puts the two characters that open a
