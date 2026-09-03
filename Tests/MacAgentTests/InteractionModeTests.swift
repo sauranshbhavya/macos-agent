@@ -365,6 +365,9 @@ private func makeModeFixture() throws -> ModeFixture {
                 whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+            pendingServerDeletionStore: PendingServerDeletionStore(
+                fileURL: root.appendingPathComponent("pending-server-deletions.json")
+            ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),

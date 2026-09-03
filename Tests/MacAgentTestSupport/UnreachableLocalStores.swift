@@ -59,6 +59,10 @@ public enum UnreachableLocalStores {
     public static func shortcutRunHistory() -> ShortcutRunHistoryStore {
         ShortcutRunHistoryStore(fileURL: fileURL("shortcuts-run-history.json"))
     }
+
+    public static func pendingServerDeletions() -> PendingServerDeletionStore {
+        PendingServerDeletionStore(fileURL: fileURL("pending-server-deletions.json"))
+    }
 }
 
 /// A standing-watcher observer that reaches no network, for the fixtures that have never heard of

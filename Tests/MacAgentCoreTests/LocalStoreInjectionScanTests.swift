@@ -79,7 +79,7 @@ import Testing
 /// argument for moving the guarantee into the type system rather than sharpening the matcher again.
 ///
 /// **The population is `LocalStore.allCases`**, which already refuses a new store file without a
-/// case, so a fourteenth store cannot reach the tree without being mapped here — and being mapped
+/// case, so a fifteenth store cannot reach the tree without being mapped here — and being mapped
 /// here is what puts it on the initializer without a default.
 ///
 /// **This replaced `OutputLocationFixtureWiringScanTests`**, which checked the same two things for
@@ -97,7 +97,7 @@ import Testing
 struct LocalStoreInjectionScanTests {
     /// How each local store reaches an `AgentViewModel`.
     ///
-    /// A `switch` with no `default`, so a fourteenth `LocalStore` case does not compile until
+    /// A `switch` with no `default`, so a fifteenth `LocalStore` case does not compile until
     /// somebody answers this question for it — the same device `LocalStore.kind` and
     /// `LocalStore.memoryCategory` already use, and the reason a new store cannot slip past them.
     struct Injection {
@@ -149,6 +149,11 @@ struct LocalStoreInjectionScanTests {
             return Injection(parameterLabel: "outputLocationStore", typeName: "OutputLocationStore")
         case .resumableTasks:
             return Injection(parameterLabel: "resumableTaskStore", typeName: "ResumableTaskStore")
+        case .pendingServerDeletions:
+            return Injection(
+                parameterLabel: "pendingServerDeletionStore",
+                typeName: "PendingServerDeletionStore"
+            )
         }
     }
 
@@ -368,7 +373,7 @@ struct LocalStoreInjectionScanTests {
 
         // `LocalStore.fileURL()` resolves through each store's own `realFileURL`, so this is the
         // whole population by construction rather than by a list that can go one store stale.
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
         for store in LocalStore.allCases {
             let path = store.fileURL().path
             #expect(path.hasPrefix(applicationSupport + "/"), "\(path) is not under Application Support")

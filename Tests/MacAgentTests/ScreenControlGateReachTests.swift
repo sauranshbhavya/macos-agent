@@ -365,6 +365,7 @@ struct ScreenControlGateWiringTests {
             approvedAppStore: UnreachableLocalStores.approvedApps(),
             outputLocationStore: UnreachableLocalStores.outputLocations(),
             resumableTaskStore: UnreachableLocalStores.resumableTasks(),
+            pendingServerDeletionStore: UnreachableLocalStores.pendingServerDeletions(),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 store: UnreachableLocalStores.clipboardHistory(),

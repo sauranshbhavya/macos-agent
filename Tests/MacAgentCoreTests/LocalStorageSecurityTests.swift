@@ -471,7 +471,7 @@ struct LocalStorageSecurityTests {
     @Test
     func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 13)
+        #expect(urls.count == 14)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
@@ -504,7 +504,15 @@ struct LocalStorageSecurityTests {
             // task the user started and did not finish — its steps, the paths they name, the draft
             // text they carry. A wipe that left it behind would leave the plan of every abandoned
             // task on disk, which is the same failure as leaving the plans of the finished ones.
-            "resumable-tasks.json"
+            "resumable-tasks.json",
+            // Fourteen since SONNY-333: `pending-server-deletions.json` is the queue of task
+            // deletions this Mac still owes the gateway. It is the one file in this set that holds
+            // nothing the user gave Sonny — opaque ids and the moment Delete was pressed — and it is
+            // wiped with the rest for the reason the `approved-apps.json` note above gives, since a
+            // record of *what somebody deleted* surviving a privacy wipe is the same failure in a
+            // smaller coat. What that costs is on `PendingServerDeletionStore`: a wipe with
+            // deliveries outstanding abandons them.
+            "pending-server-deletions.json"
         ])
     }
 
@@ -530,7 +538,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
     }
 
     /// **The words Settings uses to describe the wipe name every store the wipe reaches**
@@ -586,7 +594,12 @@ struct LocalStorageSecurityTests {
             // The fourteenth phrase and the thirteenth store, because `resumable-tasks.json` holds
             // two collections (SONNY-236). `theWipesOwnSentenceNamesEveryCollectionInEveryStore`
             // below is what stops a third arriving without one.
-            "watchers"
+            "watchers",
+            // The fifteenth phrase and the fourteenth store (SONNY-333). Named even though the user
+            // gave Sonny nothing that lands in it, because the wipe takes it and the consequence —
+            // deletions already asked for never reaching the account — is the one thing about this
+            // press a person could not guess.
+            "deletions Sonny hasn't finished"
         ])
 
         // Structure, over the population rather than over the literals above — so a fourteenth store
@@ -694,8 +707,10 @@ struct LocalStorageSecurityTests {
         // question Sonny asked them, so withholding it would discard a consent decision and leave
         // Sonny asking the identical question on the next run with no way to say why.
         #expect(stores(.artifact) == [.routines, .workspaces, .snippets, .approvedApps])
-        // The one store the founder's own enumeration did not reach: no task writes it.
-        #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
+        // No task writes these. `clipboardHistorySettings` is the one the founder's own
+        // enumeration did not reach; `pendingServerDeletions` arrived later (SONNY-333) and is
+        // written by a *user pressing Delete* and by the delivery pass, never by a run.
+        #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings, .pendingServerDeletions])
 
         // Every kind is used, so none is a case nothing ever means.
         #expect(LocalStoreKind.allCases.allSatisfy { !stores($0).isEmpty })

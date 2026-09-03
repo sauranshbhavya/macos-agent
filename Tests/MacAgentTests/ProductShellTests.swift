@@ -970,6 +970,17 @@ struct ProductShellTests {
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
             "resumableTaskStore",
+            // The fourteenth store and the two things built from it (SONNY-333). All three are
+            // collaborators, and the store belongs in this group for the reason the twelve above it
+            // do — the wipe resets the *file*, through `localDataDeletionService`, not the handle.
+            //
+            // `pendingServerDeletionDelivery` sits with them rather than in the cleared group, and
+            // that is a decision rather than a default. It is a `Task` handle for a background
+            // delivery pass, so it holds no local data for a wipe to find; and cancelling or
+            // dropping it inside the wipe would be worse than useless, because the wipe has just
+            // deleted the queue file underneath it and the pass reads that file itself — a pass
+            // that survives the wipe finds an empty queue and does nothing, which is exactly right.
+            "pendingServerDeletionStore", "taskDeletionService", "pendingServerDeletionDelivery",
             "clipboardHistoryMonitor", "finderRevealer",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             // `plannerProviderRegistry` and `plannerSelection` stood here and were deleted with the
@@ -3927,6 +3938,9 @@ private func makeProductShellFixture(
         resumableTaskStore: ResumableTaskStore(
             fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
+        ),
+        pendingServerDeletionStore: PendingServerDeletionStore(
+            fileURL: root.appendingPathComponent("pending-server-deletions.json")
         ),
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(

@@ -658,6 +658,9 @@ private func makeWatcherFixture(wipesRealStoreFiles: Bool = false) throws -> Wat
         approvedAppStore: UnreachableLocalStores.approvedApps(),
         outputLocationStore: UnreachableLocalStores.outputLocations(),
         resumableTaskStore: store,
+        pendingServerDeletionStore: PendingServerDeletionStore(
+            fileURL: root.appendingPathComponent("pending-server-deletions.json")
+        ),
         standingWatcherObserver: observer,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             store: UnreachableLocalStores.clipboardHistory(),

@@ -38,7 +38,7 @@ struct LocalDataQuarantineTests {
 
         // The population, so a broken enumerator cannot pass this vacuously — and so the number
         // lives in exactly one assertion rather than in a test name that goes stale.
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
     }
 
     /// The same walk, one step further: the mechanism clears every one of them.
@@ -402,7 +402,7 @@ struct LocalDataQuarantineTests {
 
     /// One store, built at `root`, plus the read door a load failure surfaces through.
     ///
-    /// Exhaustive over `LocalStore` with no `default`, which is the point: a fourteenth store cannot
+    /// Exhaustive over `LocalStore` with no `default`, which is the point: a fifteenth store cannot
     /// be added without somebody deciding how this suite reads it, and the two walks above then
     /// cover it for free.
     private static func probe(_ store: LocalStore, at root: URL) -> (fileURL: URL, read: () throws -> Void) {
@@ -445,6 +445,9 @@ struct LocalDataQuarantineTests {
             return (store.fileURL, { _ = try store.loadAll() })
         case .resumableTasks:
             let store = ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json"), encryption: readerEncryption)
+            return (store.fileURL, { _ = try store.loadAll() })
+        case .pendingServerDeletions:
+            let store = PendingServerDeletionStore(fileURL: root.appendingPathComponent("pending-server-deletions.json"), encryption: readerEncryption)
             return (store.fileURL, { _ = try store.loadAll() })
         }
     }
