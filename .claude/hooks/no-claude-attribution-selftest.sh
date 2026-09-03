@@ -65,6 +65,12 @@ BARE_FOOTER="Generated with Claude Code"
 SESSION_ONLY="Claude-Session: internal-ref-4417"
 LINK_ONLY="See https://claude.com/claude-code for details"
 ADDRESS_ONLY="Signed-off-by: someone <noreply@anthropic.com>"
+# PR #195's review: the two line-start anchors and the gap inside the generated-with shape were
+# each deletable with all 43 cases green, so none of the three was pinned. Each of these carries
+# exactly the property one of them exists for.
+MIDLINE_CO="The harness adds a $CO Claude trailer at commit time, and prose lost."
+MIDLINE_SESSION="It also writes a Claude-Session: line, which is worse than the co-author one."
+BRACKETED_NO_LINK="Generated with [Claude Code]"
 
 new_fixture() {
   local install="${1:-install}"
@@ -221,6 +227,28 @@ msg 'docs(x): SONNY-1 record why prose was not enough\n\nThe harness supplies a 
 try_commit "$repo"
 assert "prose ABOUT the rule still commits — the class is a shape, not a word" 0 - "REFUSED"
 
+# THE ANCHOR PAIR (PR #195 review, F1). Both shapes are anchored at line start so that a sentence
+# ABOUT a trailer is not a trailer. Deleting either anchor left all 43 cases green while the guard
+# genuinely narrowed: with both stripped, sweeping this repository flags its own changelog entry,
+# which is the failure the whole design is against. These two fixtures are the discriminator, and
+# the wording is the kind an entry really contains.
+msg 'docs(x): SONNY-1 why prose was not enough\n\n%s\n' "$MIDLINE_CO"
+try_commit "$repo"
+assert "a co-author keyword MID-SENTENCE still commits — the anchor is what makes that true" \
+  0 - "REFUSED"
+
+msg 'docs(x): SONNY-1 the second shape, discussed\n\n%s\n' "$MIDLINE_SESSION"
+try_commit "$repo"
+assert "a session keyword MID-SENTENCE still commits — same anchor, second shape" 0 - "REFUSED"
+
+# THE GAP (PR #195 review, F2). `generated with.{0,5}claude` is what matches the bracketed markdown
+# form. Every other bracketed fixture also carries the product link and is answered by that shape
+# instead, so the documented without-link half was the one behaviour nothing exercised.
+msg 'feat(x): SONNY-1 the bracketed footer with no link\n\nBody.\n\n%s\n' "$BRACKETED_NO_LINK"
+try_commit "$repo"
+assert "the bracketed footer is refused with the link removed — the gap is what does that" \
+  1 "REFUSED" -
+
 msg 'feat(x): SONNY-1 the footer with no link\n\nBody.\n\n%s\n' "$BARE_FOOTER"
 try_commit "$repo"
 assert "the generated-with shape is pinned on its own, not by the claude-code link" 1 "REFUSED" -
@@ -352,6 +380,57 @@ assert "  ...and so is git's short spelling of it" 2 "no-verify" -
 run_cchook "$repo" 'git commit -m "docs(x): SONNY-1 clean" && echo -n done'
 assert "  CONTROL: an -n belonging to another command is not refused" 0 - "REFUSED"
 
+# ---------------------------------------------------------------------------------------------
+# PR #195's review, F3: four measured routes past this layer on the surfaces that have NO second
+# layer. Three are closed here and pinned below. The fourth is a deliberate deferral and is pinned
+# as one, so that nobody reads its absence as an oversight.
+# ---------------------------------------------------------------------------------------------
+printf 'Summary.\n\n%s\n' "$FOOTER" > "$repo/body.md"
+run_cchook "$repo" 'gh pr create --title t --body-file=body.md'
+assert "the --body-file=x EQUALS form is refused, not just the space form" 2 "body.md" -
+
+mkdir -p "$repo/server"
+printf 'Summary.\n\n%s\n' "$FOOTER" > "$repo/server/only-here.md"
+run_cchook "$repo" 'cd server && gh pr create --title t --body-file only-here.md'
+assert "a body file under a cd target is found, not only one at the repository root" \
+  2 "only-here.md" -
+
+run_cchook "$repo" "gh pr review --body \"$FOOTER\""
+assert "gh pr review is watched — step 7 has reviewers posting on the PR" 2 "REFUSED" -
+
+run_cchook "$repo" "gh  pr create --title t --body \"$FOOTER\""
+assert "two spaces between gh and pr do not walk past the gate" 2 "REFUSED" -
+
+# The deferral, pinned. `gh api` posts arbitrary JSON to any endpoint, so covering it means
+# recognising every payload shape GitHub accepts with no way to prove the set complete, and a guard
+# claiming a surface it cannot prove claims more than it holds (founder, 2026-09-03, SONNY-410).
+# This arm exists so the hole is a recorded decision rather than something a reader discovers.
+run_cchook "$repo" "gh api repos/o/r/issues/1/comments -f body=\"$FOOTER\""
+assert "DEFERRED BY DECISION: gh api is not watched, and that is deliberate (SONNY-410)" \
+  0 - "REFUSED"
+
+# PR #195's review, F4: three measured evasions of the --no-verify refusal, all silent.
+run_cchook "$repo" 'git commit -m "fix: a; b" --no-verify'
+assert "a semicolon inside the message does not end the flag scan" 2 "no-verify" -
+
+run_cchook "$repo" 'git commit -m "feat: A && B" --no-verify'
+assert "  ...nor do ampersands inside it" 2 "no-verify" -
+
+run_cchook "$repo" 'git commit -nm "docs(x): SONNY-1 clean"'
+assert "a bundled short flag carrying n is refused" 2 "no-verify" -
+
+run_cchook "$repo" 'git -c core.hooksPath=/dev/null commit -m "docs(x): SONNY-1 clean"'
+assert "-c core.hooksPath= is refused — it is --no-verify under another name" 2 "core.hooksPath" -
+
+run_cchook "$repo" 'git commit -m "docs(x): SONNY-1 clean" && echo -n done'
+assert "  CONTROL, restated after the widening: an -n belonging to another command is allowed" \
+  0 - "REFUSED"
+
+# PR #195's review, F8: the exemption compared strings, so a second spelling of the same path
+# missed the list and the command was REFUSED for quoting the rule it enforces.
+run_cchook "$repo" '. ./scripts/lib/no-attribution.sh && git commit -m "docs(x): SONNY-1 clean"'
+assert "./ before the class definition is still exempt — spellings are normalised" 0 - "REFUSED"
+
 # The install arms: this is the answer to "a committed git hook only survives a fresh worktree if
 # something sets core.hooksPath".
 repo="$(new_fixture no-install)"
@@ -373,6 +452,45 @@ run_cchook "$repo" 'git commit -m "docs(x): SONNY-1 clean"'
 assert "a missing class definition REFUSES a watched command" 2 "is missing from this checkout" -
 run_cchook "$repo" 'swift build'
 assert "  ...and still lets an unwatched one through" 0 - "REFUSED"
+
+# ---------------------------------------------------------------------------------------------
+# PR #195's review, F5: with jq broken, every field came back empty and the whole layer vanished —
+# exit 0, nothing on stderr, on a PR body carrying a footer. That is this file's own contract
+# inverted, and the clean-zero family inside a guard designed against it.
+# ---------------------------------------------------------------------------------------------
+echo "  -- the payload cannot be parsed"
+repo="$(new_fixture)"
+STUB="$WORK/stub"; mkdir -p "$STUB"
+printf '#!/bin/sh\nexit 1\n' > "$STUB/jq"; chmod +x "$STUB/jq"
+
+# python3 is the fallback, so breaking jq alone must change nothing at all.
+run_cchook_stubbed() {
+  local repo="$1" extra_path="$2"
+  CC_CMD="$3" CC_CWD="$repo" python3 -c '
+import json, os
+print(json.dumps({"tool_name": "Bash",
+                  "tool_input": {"command": os.environ["CC_CMD"]},
+                  "cwd": os.environ["CC_CWD"]}))
+' > "$WORK/payload.json"
+  env PATH="$extra_path:$PATH" CLAUDE_PROJECT_DIR="$repo" \
+    bash "$repo/.claude/hooks/no-claude-attribution.sh" \
+    < "$WORK/payload.json" > "$WORK/out" 2> "$WORK/err"
+  RUN_EXIT=$?
+  RUN_BOTH="$(cat "$WORK/out")
+$(cat "$WORK/err")"
+}
+
+run_cchook_stubbed "$repo" "$STUB" "gh pr create --title t --body \"$FOOTER\""
+assert "with jq broken, python3 parses and the refusal still happens" 2 "REFUSED" -
+
+# Now break both. The hook cannot tell what the command is, so it must not read as clean.
+printf '#!/bin/sh\nexit 1\n' > "$STUB/python3"; chmod +x "$STUB/python3"
+run_cchook_stubbed "$repo" "$STUB" "gh pr create --title t --body \"$FOOTER\""
+assert "with BOTH parsers broken, an attribution in the raw payload is still refused" \
+  2 "could not parse" -
+
+run_cchook_stubbed "$repo" "$STUB" 'git commit -m "docs(x): SONNY-1 perfectly clean"'
+assert "  ...and a clean one is allowed but SAYS it was not checked" 0 "NOT checked" -
 
 # ---------------------------------------------------------------------------------------------
 # The two layers together. Each was proved in isolation above; this is the only arm showing that

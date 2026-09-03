@@ -54,11 +54,39 @@ CLAUDE.md
 PATHS
 }
 
+# Normalise a repository-relative path so that two spellings of the same file compare equal.
+# Strips a leading `./`, collapses `//`, drops interior `/./`, and resolves `..` textually. Textual
+# rather than `realpath`, because the comparison is about which path was WRITTEN, and because the
+# file may not exist.
+no_attribution_normalise_path() {
+  printf '%s' "$1" | awk '{
+    p = $0
+    gsub(/\/+/, "/", p)
+    sub(/^\.\//, "", p)
+    gsub(/\/\.\//, "/", p)
+    n = split(p, part, "/")
+    out = ""; depth = 0
+    for (i = 1; i <= n; i++) {
+      if (part[i] == "" || part[i] == ".") continue
+      if (part[i] == "..") { if (depth > 0) { sub(/\/?[^\/]+$/, "", out); depth-- }; continue }
+      out = (out == "" ? part[i] : out "/" part[i]); depth++
+    }
+    print out
+  }'
+}
+
 # 0 when the repo-relative path is one of them.
+#
+# NORMALISED FIRST (PR #195 review, F8). This compared strings, so `./scripts/lib/no-attribution.sh`
+# missed the list while `scripts/lib/no-attribution.sh` matched it — and the miss REFUSES, because
+# the file it names is the class definition. That is the day-one false positive, the one that
+# refuses a command for quoting the rule it enforces, reachable through a second spelling of the
+# same path. `..` and a doubled slash had the same shape.
 no_attribution_is_self_referential() {
-  local want="$1" p
+  local want p
+  want="$(no_attribution_normalise_path "$1")"
   while IFS= read -r p; do
-    [ "$p" = "$want" ] && return 0
+    [ "$(no_attribution_normalise_path "$p")" = "$want" ] && return 0
   done < <(no_attribution_self_referential_paths)
   return 1
 }
