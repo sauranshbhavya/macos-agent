@@ -53,20 +53,29 @@ if tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" &&
   command_text="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
   payload_cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
 elif command -v python3 >/dev/null 2>&1; then
+  # BASE64, and the reason is a defect this fallback shipped with (PR #195 cycle-3, G1). It printed
+  # the three fields on three lines and read them back with `sed -n 1p/2p/3p` — and the command
+  # field CONTAINS NEWLINES, which is the ordinary case for a PR body. So `2p` took the command's
+  # first line only and `3p` took its second line as the cwd: with jq broken, a footer on line 2 of
+  # a body was allowed, exit 0, and silently, because `parsed=1` had been set and the "NOT checked"
+  # notice therefore never fired. The one property this whole fallback exists to establish was the
+  # one that case lost. Base64 has no newline inside a field, so a line selector is safe again.
   if fields="$(printf '%s' "$payload" | python3 -c '
-import json, sys
+import base64, json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
-print(d.get("tool_name") or "")
-print((d.get("tool_input") or {}).get("command") or "")
-print(d.get("cwd") or "")
+def enc(v):
+    return base64.b64encode((v or "").encode("utf-8")).decode("ascii")
+print(enc(d.get("tool_name")))
+print(enc((d.get("tool_input") or {}).get("command")))
+print(enc(d.get("cwd")))
 ' 2>/dev/null)"; then
     parsed=1
-    tool="$(printf '%s' "$fields" | sed -n '1p')"
-    command_text="$(printf '%s' "$fields" | sed -n '2p')"
-    payload_cwd="$(printf '%s' "$fields" | sed -n '3p')"
+    tool="$(printf '%s' "$fields" | sed -n '1p' | base64 -d 2>/dev/null)"
+    command_text="$(printf '%s' "$fields" | sed -n '2p' | base64 -d 2>/dev/null)"
+    payload_cwd="$(printf '%s' "$fields" | sed -n '3p' | base64 -d 2>/dev/null)"
   fi
 fi
 
@@ -123,8 +132,12 @@ root="${CLAUDE_PROJECT_DIR:-}"
 # genuinely carry its body in a heredoc and nothing downstream would catch that one. So: a heredoc
 # decides nothing about WHETHER to look, and everything about WHAT is looked at.
 #
-# The cheap `case` on the raw text comes first, so the common command — which mentions none of
-# these words anywhere — costs no extra process at all.
+# The cheap `case` comes first so that the common command — one mentioning none of these words
+# anywhere — never reaches the heredoc stripping or the file scan below. It is NOT free: two `tr`
+# processes run before it, on every Bash tool call in this repository, because the gate has to
+# tolerate repeated whitespace. This sentence used to claim the pre-filter "costs no extra process
+# at all", which was true when it was written and was made false by the fix two paragraphs down
+# (PR #195 cycle-3, G7). That cost has not been measured; a residual on SONNY-406 owes it.
 # ---------------------------------------------------------------------------------------------
 # Whitespace collapses HERE and not only at the real gate below. The first fix normalised the gate
 # and left this cheap pre-filter matching the literal `gh pr`, so `gh  pr create` with two spaces
@@ -240,8 +253,35 @@ scan_bases() {
       done
 }
 
+# scan_candidate <absolute path> <token as written>. Refuses and exits if the file carries the
+# class; returns quietly otherwise.
+scan_candidate() {
+  local path="$1" tok="$2" rel size fhits
+  [ -f "$path" ] && [ -r "$path" ] || return 0
+  # The files that DEFINE the class match it by construction. Scanning one refuses a command that
+  # merely sources or reads it, which is what happened on the first command run after this guard
+  # was committed. Exempt from being read AS A NAMED FILE and from nothing else — a commit whose
+  # message came from one is still read by .githooks/commit-msg.
+  #
+  # ONE check, on the path this RESOLVED to. There were two (PR #195 cycle-3, G6): a second on the
+  # token as written, which was a widening rather than a duplicate — it exempted by spelling rather
+  # than by file — and either could be deleted with all 60 cases green, so neither was pinned. That
+  # is the round's own "a component is pinned only by a fixture carrying that component and nothing
+  # else" rule, applied to the round's own fix.
+  rel="${path#"$root/"}"
+  no_attribution_is_self_referential "$rel" && return 0
+  # A commit message, a PR body and a ticket are all small. Anything large is not one of them.
+  size="$(wc -c < "$path" 2>/dev/null | tr -d ' ')"
+  [ -n "$size" ] && [ "$size" -le 262144 ] || return 0
+  fhits="$(no_attribution_scan_file "$path" 2>/dev/null)"
+  if [ -n "$fhits" ]; then
+    refuse "$(printf '%s\n' "$fhits" | sed "s|^|$tok:|")" "the file $tok"
+  fi
+  return 0
+}
+
 scan_named_files() {
-  local tok path rel base
+  local tok base
   # shellcheck disable=SC2086
   for tok in $command_words; do
     # strip one layer of surrounding quotes and any trailing shell punctuation
@@ -251,42 +291,33 @@ scan_named_files() {
     # `--body-file=x` is one token, and skipping every token starting with `-` skipped the
     # filename with it — a measured route past this layer (PR #195 review, F3). The value after
     # the first `=` is the candidate path.
+    # `--body-file=x` and `-Fx` are both one token, and skipping everything starting with `-`
+    # skipped the filename with it. The long form was closed in the fix round and the attached
+    # short form was the same route one spelling over (PR #195 cycle-3, G4); `-F` is the only
+    # file-valued short flag that matters here, and both `gh` and `git commit` spell it that way.
     case "$tok" in
       --*=*) tok="${tok#*=}" ;;
+      -F?*)  tok="${tok#-F}" ;;
     esac
     case "$tok" in
       -*|"") continue ;;
     esac
-    path=""
+    # EVERY base, not the first that resolves (PR #195 cycle-3, G2). Breaking at the first, with
+    # the repository root first in the list, meant that when the same relative name existed at both
+    # the hook opened the ROOT's copy while the command — running in the `cd` target — would read
+    # the other one. Measured: clean at the root, a footer under `server/`, allowed and silent.
+    # Ordering the `cd` targets first would fix that case and pick a different wrong file the next
+    # time; scanning all of them cannot.
     case "$tok" in
-      /*) [ -f "$tok" ] && [ -r "$tok" ] && path="$tok" ;;
+      /*) scan_candidate "$tok" "$tok" ;;
       *)  while IFS= read -r base; do
             [ -n "$base" ] || continue
-            if [ -f "$base/$tok" ] && [ -r "$base/$tok" ]; then path="$base/$tok"; break; fi
+            scan_candidate "$base/$tok" "$tok"
           done <<EOF
 $(scan_bases)
 EOF
           ;;
     esac
-    [ -n "$path" ] || continue
-    # The files that DEFINE the class match it by construction. Scanning one refuses a command
-    # that merely sources or reads it, which is what happened on the first command run after this
-    # guard was committed: `. scripts/lib/no-attribution.sh` beside a `git log` was refused for
-    # quoting the rule. They are exempt from being read AS A NAMED FILE and from nothing else —
-    # a commit whose message came from one is still read by .githooks/commit-msg.
-    rel="${path#"$root/"}"
-    if no_attribution_is_self_referential "$rel"; then continue; fi
-    if no_attribution_is_self_referential "$tok"; then continue; fi
-    # A commit message, a PR body and a ticket are all small. Anything large is not one of them,
-    # and scanning a build artefact a command happens to name is wasted work.
-    local size
-    size="$(wc -c < "$path" 2>/dev/null | tr -d ' ')"
-    [ -n "$size" ] && [ "$size" -le 262144 ] || continue
-    local fhits
-    fhits="$(no_attribution_scan_file "$path" 2>/dev/null)"
-    if [ -n "$fhits" ]; then
-      refuse "$(printf '%s\n' "$fhits" | sed "s|^|$tok:|")" "the file $tok"
-    fi
   done
 }
 scan_named_files

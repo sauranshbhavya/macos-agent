@@ -395,6 +395,19 @@ run_cchook "$repo" 'cd server && gh pr create --title t --body-file only-here.md
 assert "a body file under a cd target is found, not only one at the repository root" \
   2 "only-here.md" -
 
+# G2 (PR #195 cycle-3). The base list is scanned in full rather than stopping at the first hit.
+# With the root first and a break, a name existing at BOTH bases made the hook open the root's copy
+# while the command, running in the cd target, would read the other — allowed, exit 0, silent.
+printf 'A perfectly clean summary at the repository root.\n' > "$repo/collide.md"
+printf 'Summary.\n\n%s\n' "$FOOTER" > "$repo/server/collide.md"
+run_cchook "$repo" 'cd server && gh pr create --title t --body-file collide.md'
+assert "a name existing at BOTH bases is refused on the cd target's copy, not cleared by the root's" \
+  2 "collide.md" -
+
+# G4 (PR #195 cycle-3): the attached short-flag value, the same route one spelling over.
+run_cchook "$repo" 'gh pr create --title t -Fbody.md'
+assert "the attached -Fx form is refused, like --body-file=x before it" 2 "body.md" -
+
 run_cchook "$repo" "gh pr review --body \"$FOOTER\""
 assert "gh pr review is watched — step 7 has reviewers posting on the PR" 2 "REFUSED" -
 
@@ -491,6 +504,22 @@ assert "with BOTH parsers broken, an attribution in the raw payload is still ref
 
 run_cchook_stubbed "$repo" "$STUB" 'git commit -m "docs(x): SONNY-1 perfectly clean"'
 assert "  ...and a clean one is allowed but SAYS it was not checked" 0 "NOT checked" -
+
+# G1 (PR #195 cycle-3). Every arm above uses a SINGLE-LINE command, and the fallback read its three
+# fields with a line selector while the command field can itself contain newlines — so a footer on
+# line 2 or 3 of a PR body was allowed, exit 0, and silently, since `parsed=1` meant the
+# "NOT checked" notice never fired either. A multi-line command is the ordinary case for a body,
+# and it is the case nothing exercised.
+printf '#!/bin/sh\nexit 1\n' > "$STUB/jq"; chmod +x "$STUB/jq"
+rm -f "$STUB/python3"
+MULTILINE_BODY="gh pr create --title t --body \"Summary line one.
+
+$FOOTER\""
+run_cchook_stubbed "$repo" "$STUB" "$MULTILINE_BODY"
+assert "with jq broken, a MULTI-LINE body is still read past its first line" 2 "REFUSED" -
+
+run_cchook "$repo" "$MULTILINE_BODY"
+assert "  CONTROL: the same multi-line body with jq working" 2 "REFUSED" -
 
 # ---------------------------------------------------------------------------------------------
 # The two layers together. Each was proved in isolation above; this is the only arm showing that
