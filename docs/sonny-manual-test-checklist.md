@@ -3063,6 +3063,41 @@ that one.)*
       the two happened and the exact words, because whether a planner ever produces this shape is the
       one thing no test can answer.
 
+
+### SONNY-406 — the attribution refusal (no app build needed; these are terminal checks)
+
+These are the only rows on this checklist that a founder runs in a terminal rather than in the
+packaged app, and there is a reason they cannot be automated away: the selftest proves the two
+hooks refuse what they are handed, and nothing it can do proves that Claude Code actually *invokes*
+the PreToolUse hook. That is `.claude/settings.json`'s wiring plus the harness's own behaviour, and
+a founder watching one commit be refused is the only evidence of it there is.
+
+- [ ] **The git-level refusal fires in a real checkout** (SONNY-406). In any worktree, run
+      `scripts/no-attribution selftest` — expect exit 0 and every line `ok`. Then make a throwaway
+      commit whose message ends with a co-author line naming Claude (any address). Git must refuse
+      it, print `commit-msg: REFUSED`, and **make no commit** — check `git log -1` is unchanged.
+      Then commit the same change with an ordinary message and confirm it succeeds. The second half
+      matters as much as the first: a guard that refuses everything looks identical to a working one
+      on the first check alone.
+- [ ] **The session-level refusal fires inside Claude Code** (SONNY-406). This is the row nothing
+      else can cover. In a Claude Code session in this repository, ask it to make a commit with a
+      co-author trailer naming Claude. The tool call must be **blocked before it runs**, with
+      `REFUSED:` and the rule's wording, rather than the commit happening and git catching it
+      afterwards. If it is git that refuses rather than the session, the PreToolUse wiring in
+      `.claude/settings.json` is not live — report that, because the selftest cannot see it.
+- [ ] **`core.hooksPath` is installed rather than remembered** (SONNY-406). In a **fresh** worktree
+      (`git worktree add`), run `git config --get core.hooksPath` — it may print nothing. Let a
+      Claude Code session make any ordinary commit there, then run it again: it must print
+      `.githooks`. This is the answer to "a committed hook only works if something sets that
+      config"; if it stays empty, the git layer is not armed in new worktrees and the whole guard is
+      one layer thinner than it reads.
+- [ ] **An ordinary commit is not slowed or blocked** (SONNY-406). Make three or four normal commits
+      across a session and confirm none is refused and nothing new appears in the output. The class
+      is a set of attribution shapes, not the word "Claude" — a commit message that *discusses*
+      CLAUDE.md, Claude Code sessions, or this very rule must commit without complaint. If an
+      ordinary commit is ever refused, say so immediately: a guard that cries wolf is one that gets
+      switched off, which is how this rule failed the first time.
+
 ## 8. How to report back
 
 For each real finding, give me:
