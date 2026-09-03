@@ -56,7 +56,9 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 /// the user pressed a control about unfinished tasks. Recorded on SONNY-236 as a founder call rather
 /// than decided here, since it is the same shape decision A ruled on for the readable path.
 public enum LocalStoreRowDeletionScope: Equatable, Sendable {
-    /// The row owns the whole file, so the press unlinks it. Twelve of the thirteen.
+    /// The row owns the whole file, so the press unlinks it. Every store but one — and two of
+    /// them, the clipboard switch's own settings file and the pending-deletion queue, answer this
+    /// while having no Memory row to press at all.
     case wholeFile
     /// The row owns one collection inside a file it shares, so the press rewrites the file without
     /// that collection and leaves the rest of it alone.
@@ -76,7 +78,8 @@ public enum LocalStoreRowDeletionScope: Equatable, Sendable {
 ///   `approved-apps.json` are the tenth and eleventh, and both arrived exactly that way: the suite
 ///   failed until each was classified here. Row 13's `output-locations.json` is the twelfth and
 ///   `resumable-tasks.json` the thirteenth (SONNY-209 and SONNY-210), and both arrived the same
-///   way. The fourteenth will too.
+///   way. `pending-server-deletions.json` is the fourteenth (SONNY-333), and it arrived the same
+///   way again. The fifteenth will too.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -94,6 +97,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case approvedApps
     case outputLocations
     case resumableTasks
+    case pendingServerDeletions
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -186,6 +190,19 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // raise "you were partway through X, continue?" for a task the user explicitly asked it
             // not to remember, which is the switch failing out loud rather than quietly.
             return .trace
+        case .pendingServerDeletions:
+            // Task deletions this Mac still owes the server (SONNY-333). `.notWrittenByTasks`, and
+            // this is the case's own definition rather than a judgment call: a *user pressing
+            // Delete* is what writes here, and the delivery pass is what clears it. No run of any
+            // kind touches this file, so there is no trace to withhold and no output to keep.
+            //
+            // The consequence is the one that matters, and it is the right way round. A task run
+            // with "Don't save this task" on writes no history row, so it can never be deleted from
+            // the Tasks page and can never enqueue — the switch reaches this store by making it
+            // unreachable, not by suppressing a write. And a `.trace` classification would be a
+            // live defect rather than a tidier reading: it would let a suppressed run stop a
+            // deletion the user asked for from reaching the server.
+            return .notWrittenByTasks
         }
     }
 
@@ -220,6 +237,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return OutputLocationStore.realFileURL(fileManager: fileManager)
         case .resumableTasks:
             return ResumableTaskStore.realFileURL(fileManager: fileManager)
+        case .pendingServerDeletions:
+            return PendingServerDeletionStore.realFileURL(fileManager: fileManager)
         }
     }
 
@@ -302,6 +321,18 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // in that file reaches this sentence by existing; `theWipesOwnSentenceNamesEveryCollectionInEveryStore`
             // is what fails if one arrives without a name.
             return ResumableTaskFileCollection.allCases.map(\.wipeCopyName)
+        case .pendingServerDeletions:
+            // **Named, even though it is the one store here that holds nothing the user gave
+            // Sonny** (SONNY-333). Returning no phrase was the alternative and it is the wrong one:
+            // this file is the only reason a task the user deleted while offline ever stops being
+            // held on the server, and the wipe takes it — so a person reading the sentence before
+            // an irreversible press is being told the one consequence of it they could not possibly
+            // guess. That is what this sentence is for.
+            //
+            // The words describe the effect rather than the mechanism, in the register
+            // "what past tasks planned" already sets for a store whose file name means nothing to
+            // anybody.
+            return ["deletions Sonny hasn't finished"]
         }
     }
 
@@ -325,7 +356,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
              .taskHistory,
              .taskPlanDetails,
              .approvedApps,
-             .outputLocations:
+             .outputLocations,
+             .pendingServerDeletions:
             return .wholeFile
         case .resumableTasks:
             // The one store whose file holds a second collection: `ResumableTaskFile` carries

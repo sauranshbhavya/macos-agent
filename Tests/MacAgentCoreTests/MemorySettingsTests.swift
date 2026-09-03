@@ -20,9 +20,16 @@ struct MemorySettingsTests {
     /// explicitly, so an exclusion has to be a decision recorded in a test rather than a shrug.
     @Test
     func everyLocalStoreIsPlacedUnderExactlyOneMemoryCategoryOrDeliberatelyExcluded() {
-        // The only store the Memory section does not show, and the reason is on the case: this file
-        // *is* the clipboard switch, so listing it would offer to delete a preference.
-        let deliberatelyExcluded: Set<LocalStore> = [.clipboardHistorySettings]
+        // The two stores the Memory section does not show, each for a reason recorded on its own
+        // case. `clipboardHistorySettings` *is* the clipboard switch, so listing it would offer to
+        // delete a preference. `pendingServerDeletions` is not a memory at all — it holds task
+        // deletions this Mac still owes the gateway (SONNY-333) — and a row's Delete would cancel a
+        // deletion the user had already asked for, leaving their content on the server while the
+        // button that removed it reported success.
+        let deliberatelyExcluded: Set<LocalStore> = [
+            .clipboardHistorySettings,
+            .pendingServerDeletions
+        ]
 
         let placed = Set(LocalStore.allCases.filter { $0.memoryCategory != nil })
         #expect(placed.union(deliberatelyExcluded) == Set(LocalStore.allCases))

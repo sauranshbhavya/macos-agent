@@ -398,7 +398,15 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // they name, the draft text they carry — for a task the user started and did not
             // finish, which is as much of their content as any row in task history and is left
             // behind by a wipe that forgot it.
-            ResumableTaskStore.realFileURL(fileManager: fileManager)
+            ResumableTaskStore.realFileURL(fileManager: fileManager),
+            // The deliveries this Mac still owes the gateway (SONNY-333). It is the one file in
+            // this list that holds nothing the user gave Sonny — opaque task ids and the moment
+            // Delete was pressed — and it is here anyway, because "delete my local data" is a
+            // promise about the whole directory rather than about the parts a reader thinks of
+            // first, and a file this wipe skipped would be a residual record of what the user
+            // deleted surviving the wipe. What that costs is written on
+            // `PendingServerDeletionStore`: a wipe with deliveries outstanding abandons them.
+            PendingServerDeletionStore.realFileURL(fileManager: fileManager)
         ]
     }
 

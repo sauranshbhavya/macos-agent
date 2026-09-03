@@ -2784,6 +2784,9 @@ private func makeFixture() throws -> ResumableFixture {
             whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: resumableTaskStore,
+            pendingServerDeletionStore: PendingServerDeletionStore(
+                fileURL: root.appendingPathComponent("pending-server-deletions.json")
+            ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),

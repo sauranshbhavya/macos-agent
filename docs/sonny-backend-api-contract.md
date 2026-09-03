@@ -743,11 +743,17 @@ Delete means deleted everywhere — the local record and the backend's retained 
   `sonny.training_snapshot_member` copied from it in one transaction, and records which snapshots
   lost rows in `sonny.content_deletion`. This contract fixes that the path exists and is reachable
   from the app rather than being an internal admin operation — which it is, as an ordinary
-  authenticated route on the same gate as every other. **What is not built is the app's own call to
-  it**: `AgentViewModel.deleteTask` still deletes only the Mac's copy, because SONNY-134 was
-  recorded as server-only for parallel-lane disjointness (`docs/sonny-row-12-plan.md` §8.2). Until
-  that is wired, "delete means deleted everywhere" is true of the endpoint and not yet of the
-  button.
+  authenticated route on the same gate as every other. **The app calls it since SONNY-333**
+  (2026-09-03), so "delete means deleted everywhere" is now true of the button as well as of the
+  endpoint. It is called from a queue rather than from the press: `AgentViewModel.deleteTask` writes
+  the task id to `pending-server-deletions.json` *before* it deletes the three local records, then
+  fires a delivery pass that does not block the button, and `AppDelegate` sweeps whatever is left at
+  the next launch. That ordering is the founders' decision of 2026-08-30 — delete locally at once,
+  queue the server delete, retry it — and the queue is what makes a delete performed offline or
+  signed out still reach here. **Three other deletions in the app still stop at the Mac** and are
+  SONNY-404's: the whole local-data wipe, the Memory Task-history row's Delete, and "Delete what
+  Sonny did on screen", which cannot use this route at all because this route takes a task's whole
+  content and that button names one part of it.
 - **A task with nothing stored returns success, not 404**, with `requests_deleted: 0`. An incognito
   run, or a task that ran before the user signed in, has no server-side content — and a delete that
   is already true must not surface as an error the user has to interpret.
