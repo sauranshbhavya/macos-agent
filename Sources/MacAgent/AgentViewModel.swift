@@ -832,7 +832,7 @@ final class AgentViewModel: ObservableObject {
         /// `canDelete` collapsed to `count > 0`, so an empty task history beside an unreadable
         /// `shortcuts-run-history.json` reproduced the founder's original dead end exactly, inside
         /// the branch whose whole outcome is that an unreadable memory is clearable. The row and its
-        /// Delete now both read `unreadableStores`, which is probed over all thirteen.
+        /// Delete now both read `unreadableStores`, which is probed over all fourteen.
         ///
         /// **What this comment used to say, and why it was wrong twice over.** It said "Neither is
         /// loaded by this view model at all", which is false: `deleteTask` and `deleteScreenRecord`
@@ -3568,7 +3568,16 @@ final class AgentViewModel: ObservableObject {
     /// `throw` the ordering is decorative, because a throw has somewhere to put the correction.
     ///
     /// **So the two throws are handled rather than ordered around**, and together they make this
-    /// method all-or-nothing on the Mac:
+    /// method all-or-nothing **between the Mac and the server** — the obligation and the local
+    /// records move together, or neither does. **Not all-or-nothing among the three local deletes,
+    /// which are three files written in sequence with no transaction** (PR #194 cycle-3, R3, and the
+    /// distinction matters because the last version of this comment claiming a property the code did
+    /// not have is what F1 was): a throw at the plan-detail delete after the screen record has gone
+    /// leaves a task whose *What Sonny did on screen* section is missing and whose row is still
+    /// there. That residue is recoverable — both per-entry deletes are no-ops for an id that is
+    /// already absent, so a second press finishes the job — and a dangling `visionSessionID` is a
+    /// designed state that row I already ships. The bullets below are exact; this sentence is the
+    /// one that used to overreach:
     ///
     /// - *the enqueue throws* → **abort**. Nothing local has been touched yet, so this returns with
     ///   the row intact and says the delete did not happen. The user can press again, and the queue
@@ -4259,7 +4268,9 @@ final class AgentViewModel: ObservableObject {
                 // on this refresh, because a set named `unreadableStores` that quietly excluded a
                 // store would be a worse thing to leave behind than the read. The store heals an
                 // undecodable file itself now, so the answer this returns is also true for longer
-                // than it used to be.
+                // than it used to be — **and this read can therefore move a file**, which is worth
+                // knowing about a method named for a question (PR #194 cycle-3's residuals). It is
+                // the same heal any other door would perform and it happens once.
                 _ = try pendingServerDeletionStore.loadAll()
             }
             return true

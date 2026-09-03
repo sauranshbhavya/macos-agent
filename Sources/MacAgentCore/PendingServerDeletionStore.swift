@@ -114,7 +114,12 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// Serialises this file's load-modify-write cycles. See `lock(forFileAt:)`.
     private let lock: NSLock
 
-    /// Runs between a load and the write that follows it, inside the critical section.
+    /// Runs inside the critical section — after the load, and before the write where there is one.
+    ///
+    /// (There is no write in `loadAll`, so "between a load and its write" was not true of all three
+    /// doors; PR #194 cycle-3's residuals. Harmless for the assertion, which only asks whether the
+    /// lock is held, and corrected because a comment that is true of two of three call sites is how
+    /// a reader concludes the third is different on purpose.)
     ///
     /// **A test-only seam, and it exists because the property it proves cannot be raced for**
     /// (PR #194's fix round). Mutual exclusion is an interleaving property, and the obvious test —
@@ -308,11 +313,16 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// rather than assuming otherwise, and it is the honest one: the count is a number the user can
     /// act on, where a banner about an outbox would not be.
     ///
-    /// **Only an undecodable file heals.** An I/O failure — a busy disk, a permission change —
-    /// propagates, because the file may be perfectly good and setting it aside would destroy
-    /// obligations over a transient. `LocalStorageEncryptionError.invalidKeyLength` propagates for
-    /// the same reason one step further out: that is the *key* being wrong, not the file, and every
-    /// store on this Mac would be failing at once.
+    /// **Only a file this Mac has a key for heals**, which is two conditions rather than one and was
+    /// one until PR #194's cycle-3 R1. An I/O failure propagates, because the file may be perfectly
+    /// good. So does anything that arrives while there is **no usable key** — a locked Keychain, a
+    /// denied prompt, `.invalidKeyLength` — because that says nothing about the file and the key
+    /// comes back; `hasAUsableKey` is the question that separates those from a file that will not
+    /// read under a key that works, and it is needed because `decode` wraps a Keychain failure into
+    /// the same case a corrupt file produces.
+    ///
+    /// **A wrong but valid-length key does heal**, deliberately; `hasAUsableKey` carries that
+    /// decision and what it costs.
     ///
     /// A quarantine that itself fails re-throws the original decode error rather than its own, so
     /// the caller is told the thing that actually happened first.
@@ -328,12 +338,60 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
                 from: data,
                 decoder: .pendingServerDeletionISO8601
             )
-        } catch let error as LocalStorageEncryptionError {
-            guard case .undecodableLocalData = error else { throw error }
-            _ = try LocalDataQuarantine(fileManager: fileManager).moveAside(fileURL)
+        } catch let decodeFailure as LocalStorageEncryptionError {
+            guard case .undecodableLocalData = decodeFailure, hasAUsableKey else { throw decodeFailure }
+            do {
+                _ = try LocalDataQuarantine(fileManager: fileManager).moveAside(fileURL)
+            } catch {
+                // **The original decode error, not the move's** (PR #194 cycle-3, R2). The doc above
+                // has always said so and a bare `try` said otherwise: a failed `moveItem` reached
+                // `deleteTask`, which renders `error.localizedDescription`, so the user was told the
+                // file could not be moved instead of that it could not be read. The move failure is
+                // the second thing that went wrong, and the caller is owed the first.
+                throw decodeFailure
+            }
             return [:]
         }
         return decoded.migratingLegacyPlaintext(store: "pending server deletions", write: write)
+    }
+
+    /// Whether this store can encrypt right now — in other words, whether it has a key at all.
+    ///
+    /// **The heal's precondition, and it is here because `decode` cannot tell the two apart**
+    /// (PR #194 cycle-3, R1). `LocalStorageEncryption.decode` wraps every non-`LocalStorageEncryptionError`
+    /// thrown inside its own `do` into `.undecodableLocalData`, and `key()` is called *inside* that
+    /// block — so a Keychain that will not answer (`KeychainSecretStoreError.unexpectedStatus`, from
+    /// a locked keychain or a denied prompt) arrives at the guard wearing the same case a corrupt
+    /// file does. The reviewer measured the consequence against the real store: a file written
+    /// seconds earlier with a good key, holding one owed deletion, was moved aside on a key-manager
+    /// throw, `loadAll()` answered zero and did not throw, and nothing anywhere reported it. **The
+    /// file was fine and the obligation was gone** — over a transient, which is the one thing three
+    /// separate records promised could not happen.
+    ///
+    /// `encode` is the question that separates them, because **it does not wrap**: it calls `key()`
+    /// outside any `catch`, so a key failure propagates raw and a success proves a usable key
+    /// exists. An empty dictionary, so the answer costs one small `AES.GCM.seal` and touches no
+    /// file.
+    ///
+    /// **A wrong but valid-length key still heals, and that is a decision rather than an oversight.**
+    /// `encode` succeeds under any 32-byte key, so a file this Mac cannot open because it was
+    /// written under a *different* key reaches the heal and is set aside. That is right for this
+    /// store on its own argument — the alternative is every future Delete failing to record an
+    /// obligation for as long as the key stays wrong, which is the systemic failure the heal exists
+    /// to end — and it is the behaviour `LocalDataQuarantineTests.theOnlySelfHealingStoreIsTheOutbox`
+    /// already pins, since that suite writes under one 32-byte key and reads under another. What is
+    /// lost is real: those obligations are unrecoverable in practice even though the bytes are kept,
+    /// because nothing ever reads a quarantined sibling. The three records that said a bad key
+    /// propagates were wrong and say this instead.
+    ///
+    /// **What it cannot separate**, stated rather than left: a key that is wrong from bytes that are
+    /// corrupt. Both answer "usable key, unreadable file", and both heal. Telling them apart needs
+    /// `LocalStorageEncryption` to raise a distinct case for a key-acquisition failure — correct at
+    /// the root, since that type's own comment already claims key-material failures are "deliberately
+    /// *not* wrapped", which is true only of `.invalidKeyLength` — and that changes a type all
+    /// fourteen stores decode through, which is not this ticket's to move.
+    private var hasAUsableKey: Bool {
+        ((try? encryption.encode([String: PendingServerDeletion]())) != nil)
     }
 
     /// Keeps the `maxItems` newest entries. See `maxItems` for why it is the oldest that go.

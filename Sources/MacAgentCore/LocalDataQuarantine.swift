@@ -60,7 +60,7 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 ///
 /// **One mechanism rather than one per store**, which is SONNY-239's fourth question answered: this
 /// operates on a store's file URL and knows nothing about what is in it, so no store type changes
-/// and all thirteen inherit it. A store that cannot be decoded cannot be read, rewritten *or*
+/// and all fourteen inherit it. A store that cannot be decoded cannot be read, rewritten *or*
 /// cleared through its own doors — every one of them loads first — so a recovery built inside a
 /// store would be a recovery that cannot run.
 ///

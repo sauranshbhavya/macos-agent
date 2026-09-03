@@ -195,14 +195,23 @@ struct PendingServerDeletionStoreTests {
     /// to put back — may be perfectly good, and setting it aside would destroy live obligations over
     /// a transient.
     ///
-    /// **Two shapes, because they take different roads and only one of them tests the guard**
-    /// (found by this branch's own battery, which watched the widened-heal mutant survive). A file
+    /// **Three shapes, because they take three different roads and each tests something else**
+    /// (the first two found by this branch's own battery, the third by PR #194's cycle-3 R1). A file
     /// that is a *directory* fails in `Data(contentsOf:)`, so it never reaches the
     /// `LocalStorageEncryptionError` catch at all and says nothing about what that catch does. A
-    /// **short encryption key** is the shape that does: `key()` throws `.invalidKeyLength` from
-    /// inside `decode`, which is a `LocalStorageEncryptionError` that is not `.undecodableLocalData`
-    /// — exactly the case the `guard` exists to let through — and it is also the real-world one,
-    /// since a bad key is every store on the Mac failing at once rather than one corrupt file.
+    /// **short encryption key** does reach it: `key()` throws `.invalidKeyLength`, which is a
+    /// `LocalStorageEncryptionError` that is not `.undecodableLocalData`, so the first half of the
+    /// guard turns it away.
+    ///
+    /// **The third is the one this test was named for and did not have.** A key manager that
+    /// *throws* — a locked Keychain, a denied prompt, `KeychainSecretStoreError.unexpectedStatus` —
+    /// is not a `LocalStorageEncryptionError` at all, so `decode` wraps it into
+    /// `.undecodableLocalData` and it walks straight past a guard that only reads the case. The
+    /// reviewer measured the consequence: a file written seconds earlier with a good key, holding
+    /// one owed deletion, moved aside, `loadAll()` answering zero without throwing, and nothing
+    /// reporting it. **The file was fine and the obligation was gone**, over a transient — which is
+    /// exactly what this test's own doc had been promising could not happen while covering the two
+    /// cases that are not it.
     @Test
     func aReadFailureThatIsNotADecodeFailurePropagates() throws {
         let root = try makeRoot()
@@ -235,6 +244,76 @@ struct PendingServerDeletionStoreTests {
         // The file is left exactly where it was, so the key that can open it still can.
         #expect(LocalDataQuarantine().quarantinedSiblings(of: good.fileURL).isEmpty)
         #expect(try good.loadAll().map(\.taskID) == ["task-a"])
+
+        // 3. No key at all — the case that walked past the guard, over a file that is provably fine.
+        let unreachableKey = PendingServerDeletionStore(
+            fileURL: good.fileURL,
+            fileManager: .default,
+            encryption: LocalStorageEncryption(keyManager: ThrowingKeyManager()),
+            insideTheCriticalSection: nil
+        )
+        #expect(throws: (any Error).self) { _ = try unreachableKey.loadAll() }
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: good.fileURL).isEmpty)
+        // And the obligation is still owed, read back through the key that works.
+        #expect(try good.loadAll().map(\.taskID) == ["task-a"])
+    }
+
+    /// **A wrong but valid-length key heals, and that is written down as a decision.**
+    ///
+    /// The counterpart to the arm above, and the pair is the whole of the rule: `hasAUsableKey`
+    /// answers "can this store encrypt", not "is this the right key", so a file written under a
+    /// *different* 32-byte key reaches the heal. Right for this store on its own argument — the
+    /// alternative is every future Delete failing to record an obligation for as long as the key
+    /// stays wrong — and what it costs is real, since a quarantined sibling is never read again.
+    ///
+    /// Asserted here rather than left to `LocalDataQuarantineTests`, which pins the same behaviour
+    /// as a side effect of writing under one key and reading under another. Three records used to
+    /// say the opposite of this.
+    @Test
+    func aFileWrittenUnderADifferentKeyHealsRatherThanBlockingEveryFutureDelete() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("pending-server-deletions.json")
+        let written = PendingServerDeletionStore(
+            fileURL: fileURL,
+            fileManager: .default,
+            encryption: LocalStorageEncryption(keyManager: FixedKeyManager(byte: 0x42)),
+            insideTheCriticalSection: nil
+        )
+        try written.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+
+        let otherKey = PendingServerDeletionStore(
+            fileURL: fileURL,
+            fileManager: .default,
+            encryption: LocalStorageEncryption(keyManager: FixedKeyManager(byte: 0x99)),
+            insideTheCriticalSection: nil
+        )
+
+        #expect(try otherKey.loadAll().isEmpty)
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fileURL).count == 1)
+        // Service is restored: the next Delete records its obligation instead of failing forever.
+        try otherKey.enqueue(taskID: "task-b", deletedAt: Self.epoch)
+        #expect(try otherKey.loadAll().map(\.taskID) == ["task-b"])
+    }
+
+    /// **A quarantine that fails re-throws the decode error, not its own** (PR #194 cycle-3, R2).
+    ///
+    /// A bare `try` on `moveAside` sent `moveItem`'s error to `deleteTask`, which renders
+    /// `error.localizedDescription` — so the user was told the file could not be moved rather than
+    /// that it could not be read. The move failure is the second thing that went wrong.
+    @Test
+    func aQuarantineThatFailsReportsTheDecodeFailureRatherThanItsOwn() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PendingServerDeletionStore(
+            fileURL: root.appendingPathComponent("pending-server-deletions.json"),
+            fileManager: MoveRefusingFileManager(),
+            encryption: .shared,
+            insideTheCriticalSection: nil
+        )
+        try Data("not this store's bytes".utf8).write(to: store.fileURL, options: .atomic)
+
+        #expect(throws: LocalStorageEncryptionError.self) { _ = try store.loadAll() }
     }
 
     /// **The cap's tie-break has to agree with the delivery order's** (PR #194 review, F4).
@@ -409,5 +488,33 @@ private final class LockObservation: @unchecked Sendable {
 private struct ShortKeyManager: LocalStorageKeyManaging {
     func keyData() throws -> Data {
         Data(repeating: 0x5A, count: 16)
+    }
+}
+
+/// A key manager that cannot answer at all — a locked Keychain, a denied prompt. Its error is not a
+/// `LocalStorageEncryptionError`, which is exactly what `decode` wraps into `.undecodableLocalData`.
+private struct ThrowingKeyManager: LocalStorageKeyManaging {
+    struct Unavailable: Error {}
+
+    func keyData() throws -> Data {
+        throw Unavailable()
+    }
+}
+
+/// A valid key of a chosen byte, for the two-different-keys case.
+private struct FixedKeyManager: LocalStorageKeyManaging {
+    let byte: UInt8
+
+    func keyData() throws -> Data {
+        Data(repeating: byte, count: 32)
+    }
+}
+
+/// Refuses to move anything, so the quarantine inside the heal fails.
+private final class MoveRefusingFileManager: FileManager, @unchecked Sendable {
+    struct Refused: Error {}
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        throw Refused()
     }
 }
