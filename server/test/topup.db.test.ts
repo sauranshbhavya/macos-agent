@@ -120,9 +120,13 @@ describeDb("the bound on how many charges a period can carry", () => {
       const refused = both.filter(
         (one) => one.status === "fulfilled" && one.value === undefined,
       );
-      // Both settled — neither threw — and they did not both claim.
+      // Both settled — neither threw — and **exactly one of them claimed** (PR #196's F7a). The
+      // assertion that stood here was `claimed.length <= 2`, which is vacuous over two promises and
+      // let the test's own name — "exactly one wins" — go unheld. The reviewer measured this
+      // deterministic over 40 races at this schema, so the exact number is the right assertion.
       expect(claimed.length + refused.length).toBe(2);
-      expect(claimed.length).toBeLessThanOrEqual(2);
+      expect(claimed).toHaveLength(1);
+      expect(refused).toHaveLength(1);
 
       const { rows } = await client.query<{ attempt_no: number }>(
         "SELECT attempt_no FROM sonny.credit_topup WHERE account_id = $1 ORDER BY attempt_no",
