@@ -60,6 +60,24 @@ public enum SonnyBackendTimeouts {
     /// states distinguishable where it genuinely matters is SONNY-136's, and a dated comment on that
     /// ticket says this route currently collapses three into one.
     public static let screenAnalyze: TimeInterval = 120
+    /// The budget for buying more screen-control runs — **forty seconds** (SONNY-215).
+    ///
+    /// **Longer than `auth` because the gateway makes two sequential provider calls behind it**, not
+    /// because a database read got slower. An off-session charge is a draft order and then a
+    /// finalize, each with a twelve-second budget of the gateway's own
+    /// (`server/src/billing/polar.ts`'s `TOPUP_CHARGE_TIMEOUT_MS`), so twenty-four seconds of
+    /// provider time can elapse inside one request that `auth`'s twenty would cut off first — and
+    /// cutting it off first is the failure that matters: the Mac would report a generic unreachable
+    /// backend about a gateway that was in the middle of charging the user's card.
+    ///
+    /// **The relation is pinned by a test on each side** rather than by this comment, following
+    /// `PORTAL_SESSION_TIMEOUT_MS`'s precedent: a cross-half number living in prose on one side is a
+    /// number the next session moves without noticing the other.
+    ///
+    /// **What the margin does not buy is a retry**, and this is the one route where that is a
+    /// property rather than an oversight: `purchaseTopUp` passes `isRetrySafe: false`, so a slow
+    /// charge is never sent twice by this client. A retry here is a second pack.
+    public static let topUp: TimeInterval = 40
 }
 
 /// One request, described in the terms the contract's rules are written in.
