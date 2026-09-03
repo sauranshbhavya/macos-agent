@@ -7,6 +7,7 @@ import {
   type Config,
 } from "../src/config.js";
 import { entitlementSigningKeyFrom, mintEntitlementClaim } from "../src/entitlement/claim.js";
+import { errorBody } from "../src/errors.js";
 import {
   bandFor,
   compareVersions,
@@ -511,6 +512,28 @@ describe("a deployment that has said nothing about versions", () => {
 });
 
 describe("the error envelope's new field", () => {
+  it("is absent from the object errorBody returns, not merely from the JSON it becomes", () => {
+    // Asserted on the value rather than through a response, because a response cannot see it:
+    // `JSON.stringify` drops an undefined value, so the HTTP-level assertion below passes whether
+    // the key is written unconditionally or not. SONNY-204's battery proved that — the mutant that
+    // writes it unconditionally survived a suite that had only the response-level test.
+    const plain = errorBody("resource.not_found", "No such route.", "req-1");
+    expect("upgrade_url" in plain.error).toBe(false);
+    expect(Object.keys(plain.error).sort()).toEqual([
+      "code",
+      "message",
+      "request_id",
+      "retry_after_seconds",
+      "retryable",
+    ]);
+
+    const refused = errorBody("version.unsupported", "Too old.", "req-2", {
+      upgradeUrl: "https://sonny.test/download",
+    });
+    expect("upgrade_url" in refused.error).toBe(true);
+    expect(refused.error.upgrade_url).toBe("https://sonny.test/download");
+  });
+
   it("is absent from every error that is not version.unsupported", async () => {
     // §2.1 lets a client ignore fields it does not know, so adding one to a single code is additive
     // (§8.1). What would not be additive is a null on every other error, and this is the assertion
