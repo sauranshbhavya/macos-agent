@@ -66,6 +66,7 @@ describe("the catalogue is configuration, never code (SONNY-212's acceptance cri
           catalogue,
           planKey: plan.key,
           draw: drawOf({}),
+          toppedUpCredits: 0,
           now: new Date("2026-08-15T12:00:00Z"),
         });
         expect(balance.plan).toBe(plan.key);
@@ -163,6 +164,7 @@ describe("the catalogue is configuration, never code (SONNY-212's acceptance cri
       catalogue,
       planKey: `plan-${randomUUID()}`,
       draw: drawOf({}),
+      toppedUpCredits: 0,
       now: new Date("2026-08-15T12:00:00Z"),
     });
     expect(balance.plan).toBe(catalogue.defaultPlan);
@@ -196,12 +198,14 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: catalogue(),
       planKey: undefined,
       draw: drawOf({ sessions: 1, iterations: 2, pixels: 1_000_000 }),
+      toppedUpCredits: 0,
       now,
     });
     const heavy = creditBalance({
       catalogue: catalogue(),
       planKey: undefined,
       draw: drawOf({ sessions: 1, iterations: 12, pixels: 24_000_000 }),
+      toppedUpCredits: 0,
       now,
     });
     expect(light.credits.drawn).toBe(40);
@@ -221,6 +225,7 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: catalogue(),
       planKey: undefined,
       draw: drawOf({ sessions: 40, iterations: 400, pixels: 0 }),
+      toppedUpCredits: 0,
       now,
     });
     expect(balance.credits.drawn).toBe(2800);
@@ -249,6 +254,7 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue,
       planKey: undefined,
       draw: drawOf({ sessions: 1, iterations: 3 }),
+      toppedUpCredits: 0,
       now,
     });
     expect(balance.credits.drawn).toBe(0.4);
@@ -273,6 +279,7 @@ describe("runs left, derived from what row 12 measured", () => {
         catalogue: fractional,
         planKey: undefined,
         draw: drawOf({ sessions: 1, iterations: 4, pixels }),
+        toppedUpCredits: 0,
         now,
       });
       const { allowance, drawn, remaining } = balance.credits;
@@ -300,9 +307,16 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: catalogueOf({ runCredits: 0.1, monthlyCredits: [0.5], weights }),
       planKey: undefined,
       draw: drawOf({ sessions: 1, iterations: 1 }),
+      toppedUpCredits: 0,
       now: at,
     });
-    expect(one.credits).toEqual({ allowance: 0.5, drawn: 0.2, remaining: 0.3, perRun: 0.1 });
+    expect(one.credits).toEqual({
+      allowance: 0.5,
+      drawn: 0.2,
+      remaining: 0.3,
+      perRun: 0.1,
+      toppedUp: 0,
+    });
     expect(one.runsLeft).toBe(3);
 
     // **The row worth looking at twice: nothing has been drawn at all.** 7 / 0.07 is
@@ -312,16 +326,29 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: catalogueOf({ runCredits: 0.07, monthlyCredits: [7], weights }),
       planKey: undefined,
       draw: drawOf({}),
+      toppedUpCredits: 0,
       now: at,
     });
-    expect(untouched.credits).toEqual({ allowance: 7, drawn: 0, remaining: 7, perRun: 0.07 });
+    expect(untouched.credits).toEqual({
+      allowance: 7,
+      drawn: 0,
+      remaining: 7,
+      perRun: 0.07,
+      toppedUp: 0,
+    });
     expect(untouched.runsLeft).toBe(100);
     expect(untouched.runsIncluded).toBe(100);
 
     // And rounding the quotient must not round a real remainder UP into a run nobody has: 2.5 and a
     // genuine 2.999999 both floor to 2, so this corrects float noise and nothing else.
     const half = catalogueOf({ runCredits: 0.2, monthlyCredits: [0.5], weights });
-    expect(creditBalance({ catalogue: half, planKey: undefined, draw: drawOf({}), now: at }).runsLeft)
+    expect(creditBalance({
+      catalogue: half,
+      planKey: undefined,
+      draw: drawOf({}),
+      toppedUpCredits: 0,
+      now: at,
+    }).runsLeft)
       .toBe(2);
 
     // **The other half of that sentence, which nothing held until PR #182's cycle 3** (its R2). A
@@ -344,6 +371,7 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: genuineRemainder,
       planKey: undefined,
       draw: drawOf({}),
+      toppedUpCredits: 0,
       now: at,
     });
     expect(untouchedRemainder.credits.remaining).toBe(2.999999);
@@ -356,6 +384,7 @@ describe("runs left, derived from what row 12 measured", () => {
       catalogue: catalogue(),
       planKey: undefined,
       draw: drawOf({}),
+      toppedUpCredits: 0,
       now: new Date("2026-12-31T23:59:59Z"),
     });
     expect(balance.periodStart.toISOString()).toBe("2026-12-01T00:00:00.000Z");
@@ -653,7 +682,13 @@ describe("GET /v1/account/credits", () => {
     expect(body.plan).toBe("test-plan-a");
     expect(body.period_start).toBe("2026-08-01T00:00:00.000Z");
     expect(body.period_end).toBe("2026-09-01T00:00:00.000Z");
-    expect(body.credits).toEqual({ allowance: 1000, drawn: 30, remaining: 970, per_run: 10 });
+    expect(body.credits).toEqual({
+      allowance: 1000,
+      drawn: 30,
+      remaining: 970,
+      per_run: 10,
+      topped_up: 0,
+    });
 
     // One clock read for the whole response: the instant judging the grace window is the instant
     // whose period is counted.

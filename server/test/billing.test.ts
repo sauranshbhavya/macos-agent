@@ -98,7 +98,11 @@ const signedInConnection: WithConnection = async (work) => {
  * would have become.
  */
 function recordingStore(
-  answers: { readonly live?: boolean; readonly record?: boolean } = {},
+  answers: {
+    readonly live?: boolean;
+    readonly record?: boolean;
+    readonly customer?: string | undefined;
+  } = {},
 ): BillingStore & { readonly calls: BillingApplyInput[] } {
   const calls: BillingApplyInput[] = [];
   return {
@@ -112,6 +116,11 @@ function recordingStore(
     // The portal guard's, which is a different question: an *ended* subscription answers `false`
     // above and `true` here. `billing.db.test.ts` proves that divergence against the real column.
     hasSubscriptionRecord: async () => answers.record ?? false,
+    // The top-up's, which is a third question again (SONNY-215): not whether a subscription is live
+    // or was ever recorded, but whether there is a customer at the provider to charge. `undefined`
+    // by default for `record`'s reason — a suite that could charge by omission would prove nothing
+    // about the refusals.
+    billingCustomerFor: async () => answers.customer,
   };
 }
 
