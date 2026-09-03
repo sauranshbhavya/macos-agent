@@ -2,7 +2,12 @@ import pg from "pg";
 import { describe, expect } from "vitest";
 import { creditBalance } from "../src/credit/balance.js";
 import { postgresCreditStore } from "../src/credit/store.js";
-import { claimTopUpAttempt, settleTopUpAttempt } from "../src/credit/topup.js";
+import {
+  claimTopUpAttempt,
+  readOutstandingTopUp,
+  recordTopUpOrder,
+  settleTopUpAttempt,
+} from "../src/credit/topup.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
   afterAllUnderHangBackstop,
@@ -195,6 +200,8 @@ describeDb("the bound on how many charges a period can carry", () => {
       outcome: "granted",
       credits: 500,
       providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
       settledAt: AT,
     });
 
@@ -204,9 +211,134 @@ describeDb("the bound on how many charges a period can carry", () => {
         outcome: "granted",
         credits: 500,
         providerOrderId: "order-1",
+        chargedAmount: undefined,
+        chargedCurrency: undefined,
         settledAt: AT,
       }),
     ).rejects.toThrow(/credit_topup_provider_order_idx/);
+  });
+});
+
+describeDb("an order this gateway made and did not resolve (PR #196's F1)", () => {
+  let client: pg.Client;
+
+  beforeAllUnderHangBackstop(async () => {
+    client = new pg.Client({ connectionString: url });
+    await client.connect();
+    await rebuildSchema(client);
+  });
+  afterAllUnderHangBackstop(async () => {
+    await client.end();
+  });
+  beforeEachUnderHangBackstop(async () => {
+    await client.query("TRUNCATE sonny.credit_topup");
+  });
+
+  const claim = async (periodStart?: Date) => {
+    const attempt = await claimTopUpAttempt(
+      client,
+      periodStart === undefined ? claimOf({ maxPerPeriod: 10 }) : claimOf({ maxPerPeriod: 10, periodStart }),
+    );
+    if (attempt === undefined) throw new Error("the fixture's claim was refused");
+    return attempt.topUpId;
+  };
+  const outstanding = () => readOutstandingTopUp(client, { accountId: ACCOUNT, periodStart: PERIOD });
+
+  itUnderHangBackstop("is not outstanding until an order id is on it", async () => {
+    // **The distinction the whole recovery rests on.** A claimed row with no order id is a process
+    // that died *before* the charge and cost nobody anything; there is nothing at the provider to
+    // ask about, so resolving it would create an order rather than find one.
+    await claim();
+
+    expect(await outstanding()).toBeUndefined();
+  });
+
+  itUnderHangBackstop("is outstanding the moment the order id is recorded, before any charge", async () => {
+    const topUpId = await claim();
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-1" });
+
+    expect(await outstanding()).toEqual({ topUpId, orderId: "order-1" });
+  });
+
+  itUnderHangBackstop("stays outstanding while its answer could not be read", async () => {
+    // `unconfirmed` is the steady-state unresolved marker: the charge was attempted and nothing
+    // could be read back, so the account's next attempt asks the provider rather than buying.
+    const topUpId = await claim();
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-2" });
+    await settleTopUpAttempt(client, {
+      topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-2",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    expect(await outstanding()).toEqual({ topUpId, orderId: "order-2" });
+  });
+
+  itUnderHangBackstop("stops being outstanding once something says what happened to the money", async () => {
+    // The two closed outcomes, both directions. A granted row is resolved and a declined one is
+    // refused — resolving either again would charge a second time or refuse a paid order.
+    for (const outcome of ["granted", "declined"] as const) {
+      await client.query("TRUNCATE sonny.credit_topup");
+      const topUpId = await claim();
+      await recordTopUpOrder(client, { topUpId, providerOrderId: `order-${outcome}` });
+      await settleTopUpAttempt(client, {
+        topUpId,
+        outcome,
+        credits: outcome === "granted" ? 500 : 0,
+        providerOrderId: `order-${outcome}`,
+        chargedAmount: outcome === "granted" ? 500 : undefined,
+        chargedCurrency: outcome === "granted" ? "usd" : undefined,
+        settledAt: AT,
+      });
+
+      expect(await outstanding()).toBeUndefined();
+    }
+  });
+
+  itUnderHangBackstop("never replaces an order id that is already there", async () => {
+    // The id names the object a resolution is about, so overwriting one would lose it. The guard is
+    // in the statement's own `WHERE`, and this is what says so.
+    const topUpId = await claim();
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-first" });
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-second" });
+
+    expect(await outstanding()).toEqual({ topUpId, orderId: "order-first" });
+  });
+
+  itUnderHangBackstop("does not reach across a period boundary", async () => {
+    const topUpId = await claim(new Date("2026-07-01T00:00:00Z"));
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-july" });
+
+    expect(await outstanding()).toBeUndefined();
+  });
+
+  itUnderHangBackstop("refuses to record a charge on a row that granted nothing", async () => {
+    // 0019's `credit_topup_only_a_grant_was_charged` (SONNY-215's F6). A declined row carrying an
+    // amount would put a payment that never happened on the surface that shows a user what they were
+    // last charged.
+    const topUpId = await claim();
+    await expect(
+      client.query(
+        "UPDATE sonny.credit_topup SET outcome = 'declined', charged_amount = 500, charged_currency = 'usd' WHERE topup_id = $1",
+        [topUpId],
+      ),
+    ).rejects.toThrow(/credit_topup_only_a_grant_was_charged/);
+  });
+
+  itUnderHangBackstop("refuses an amount with no currency, and a currency with no amount", async () => {
+    const topUpId = await claim();
+    for (const set of ["charged_amount = 500", "charged_currency = 'usd'"]) {
+      await expect(
+        client.query(
+          `UPDATE sonny.credit_topup SET outcome = 'granted', credits = 500, ${set} WHERE topup_id = $1`,
+          [topUpId],
+        ),
+      ).rejects.toThrow(/credit_topup_charge_is_whole/);
+    }
   });
 });
 
@@ -239,6 +371,8 @@ describeDb("what a granted top-up does to the number a user reads", () => {
       outcome: "granted",
       credits,
       providerOrderId: `order-${Math.random().toString(36).slice(2)}`,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
       settledAt: AT,
     });
   };
@@ -275,6 +409,8 @@ describeDb("what a granted top-up does to the number a user reads", () => {
       outcome: "declined",
       credits: 0,
       providerOrderId: undefined,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
       settledAt: AT,
     });
 

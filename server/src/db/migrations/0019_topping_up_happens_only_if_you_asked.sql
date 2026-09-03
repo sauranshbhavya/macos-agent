@@ -59,6 +59,16 @@
 -- give: an account's deletion is a state rather than a `DELETE`, and a cascade would remove the
 -- record of money that moved, which is the last thing that should go.
 --
+-- **Neither table is reached by `DELETE /v1/account`, and the two omissions are different**
+-- (PR #196's F11). For `credit_topup` that is the sentence above: a record of money that moved
+-- outlives the account it moved for, exactly as `sonny.entitlement` and `sonny.billing_event`
+-- already do. For `auto_topup_consent` it is **not** argued by that reasoning and is worth stating:
+-- the row is a preference rather than a financial record, and it is left in place because it is
+-- keyed on an account id no reissued account can carry -- 0002 makes deletion a state, so the id is
+-- never handed out again and the row can authorise nothing. A closed account's consent is unreadable
+-- by construction rather than by deletion. If that ever stops being true, this is the table to
+-- revisit first.
+--
 -- ## `entitlement.billing_customer_id` — the one thing an off-session charge needs and this
 -- gateway did not have
 --
@@ -91,9 +101,13 @@ CREATE TABLE sonny.credit_topup (
   topup_id     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id   uuid        NOT NULL,
 
-  -- Which provider was asked, and its own id for the order once there is one. The order id is
-  -- written as soon as the draft exists, before anything is charged, so an attempt whose answer is
-  -- lost still names the object an operator has to look at.
+  -- Which provider was asked, and its own id for the order once there is one.
+  --
+  -- **The id is written as soon as the draft exists and before anything is charged** (PR #196's F1),
+  -- by `recordTopUpOrder`, which is a separate statement from the settle for exactly that reason. So
+  -- a row carrying an order id names an object at the provider whatever its outcome says, and a row
+  -- carrying none never reached the charge at all. That distinction is what lets the account's next
+  -- attempt resolve an order rather than buy a second pack -- see `outcome` below.
   provider     text        NOT NULL,
   provider_order_id text,
 
@@ -106,15 +120,27 @@ CREATE TABLE sonny.credit_topup (
   -- per-period bound exact under concurrency rather than approximately right.
   attempt_no   int         NOT NULL,
 
-  --   attempted      -- the slot was claimed and no answer was ever recorded. A crash, and it keeps
-  --                     its slot on purpose so a failing charge path cannot loop.
-  --   granted        -- the provider charged the customer. `credits` is what it bought.
-  --   declined       -- the provider answered and did not charge: card declined, no payment method
-  --                     on file, or an authentication challenge an off-session charge cannot answer.
-  --   provider_error -- the provider could not be reached, timed out, or refused this gateway.
+  -- **Three of these are closed and two are RESOLVABLE, and that split is the whole recovery**
+  -- (PR #196's F1). A row is resolvable when it carries an order id and reads `attempted` or
+  -- `unconfirmed`: an object exists at the provider and only the provider knows what became of it.
+  -- `attemptTopUp` resolves one before it claims anything, so an account with an outstanding order
+  -- buys nothing else until that order is settled -- which is what stops a charge whose record was
+  -- lost being paid for twice.
+  --
+  --   attempted      -- the slot was claimed and no answer was ever recorded. With NO order id that
+  --                     is a crash before the charge and costs nobody anything; WITH one it is a
+  --                     crash after it, and the next attempt asks the provider rather than buying.
+  --                     Either way it keeps its slot, so a failing charge path cannot loop.
   --   unconfirmed    -- the charge was attempted and its answer could not be read. **Money may have
-  --                     moved.** Nothing is granted for one of these, and resolving it is manual:
-  --                     the order id names what to look at.
+  --                     moved.** Nothing is granted for one of these; it is resolvable, so the
+  --                     account's next attempt asks the provider what happened to that order.
+  --   granted        -- CLOSED. The provider charged the customer. `credits` is what it bought and
+  --                     `charged_amount` is what it cost.
+  --   declined       -- CLOSED. The provider answered and did not charge: card declined, no payment
+  --                     method on file, or an authentication challenge an off-session charge cannot
+  --                     answer.
+  --   provider_error -- CLOSED, and the one outcome that never carries an order id: the order could
+  --                     not be created at all, so there is nothing at the provider to ask about.
   outcome      text        NOT NULL,
 
   -- What this top-up bought. Zero for every outcome but `granted`, which the CHECK below enforces
@@ -131,6 +157,14 @@ CREATE TABLE sonny.credit_topup (
   runs_left_at_trigger         int              NOT NULL,
   credits_remaining_at_trigger double precision NOT NULL,
 
+  -- What the provider actually took, in the currency's smallest unit, and in which currency
+  -- (SONNY-215's F6). **Recorded rather than derived**, because it is what the product shows a user
+  -- as the record of a charge and the price a deployment configured can drift from the provider's
+  -- product without either side noticing. The provider's own figure is preferred and the configured
+  -- price is the fallback; `credit/topup.ts` says so at the one place that chooses.
+  charged_amount   bigint,
+  charged_currency text,
+
   attempted_at timestamptz NOT NULL DEFAULT now(),
   settled_at   timestamptz,
 
@@ -141,7 +175,16 @@ CREATE TABLE sonny.credit_topup (
   CONSTRAINT credit_topup_granted_is_exactly_the_credited
     CHECK ((outcome = 'granted') = (credits > 0)),
   CONSTRAINT credit_topup_credits_not_negative CHECK (credits >= 0),
-  CONSTRAINT credit_topup_attempt_no_positive CHECK (attempt_no >= 1)
+  CONSTRAINT credit_topup_attempt_no_positive CHECK (attempt_no >= 1),
+  -- An amount without the currency it is in names no sum of money. Both or neither.
+  CONSTRAINT credit_topup_charge_is_whole
+    CHECK ((charged_amount IS NULL) = (charged_currency IS NULL)),
+  CONSTRAINT credit_topup_charge_not_negative
+    CHECK (charged_amount IS NULL OR charged_amount >= 0),
+  -- Only a grant took money, so only a grant records an amount. A declined row carrying one would
+  -- put a charge on the surface that shows a user what they were last charged.
+  CONSTRAINT credit_topup_only_a_grant_was_charged
+    CHECK (charged_amount IS NULL OR outcome = 'granted')
 );
 
 COMMENT ON TABLE sonny.credit_topup IS
@@ -154,8 +197,8 @@ COMMENT ON TABLE sonny.credit_topup IS
 CREATE UNIQUE INDEX credit_topup_attempt_idx
   ON sonny.credit_topup (account_id, period_start, attempt_no);
 
--- A provider order is charged once. The draft's id is recorded before the charge, so a replayed
--- settle cannot mint a second grant for one order.
+-- A provider order is charged once. The draft's id really is recorded before the charge -- see
+-- `provider_order_id` above -- so a replayed settle cannot mint a second grant for one order.
 CREATE UNIQUE INDEX credit_topup_provider_order_idx
   ON sonny.credit_topup (provider, provider_order_id)
   WHERE provider_order_id IS NOT NULL;

@@ -5,6 +5,7 @@ import type {
   SubscriptionState,
   TopUpCharge,
   TopUpChargeRequest,
+  TopUpOrder,
   VerifiedDelivery,
   WebhookReading,
 } from "./provider.js";
@@ -504,66 +505,44 @@ export const TOPUP_CHARGE_TIMEOUT_MS = 12_000;
 const PAID = "paid";
 
 /**
- * Charge a customer's saved payment method for one top-up pack (SONNY-215).
+ * Create the order a top-up will be charged against — and charge nothing (SONNY-215).
  *
  * ## Two calls, and only the second one moves money
  *
- * Polar's off-session charge is a draft-then-finalize pair, which is the shape this function is
- * built around rather than an implementation detail of it. `POST /v1/orders/` creates an order in
+ * Polar's off-session charge is a draft-then-finalize pair. `POST /v1/orders/` creates an order in
  * `draft` with no invoice number and **charges nothing**; `POST /v1/orders/{id}/finalize`
- * synchronously attempts the charge against the customer's default payment method, and on success
- * the order becomes `paid`. So a process that dies between the two leaves an unpaid draft at the
- * provider and has cost the user nothing, which is why the record this gateway writes claims its
- * slot before either call and is settled after both.
+ * synchronously attempts the charge, and on success the order becomes `paid`. This is the first
+ * half, and it is its own method on the seam so that the caller has a moment in which the order's id
+ * exists and nothing has been charged — the moment PR #196's F1 found there was no way to reach.
  *
- * ## The classification, and the one axis it is organised on
- *
- * Every answer is sorted by **whether money may have moved**, not by whether the request succeeded.
- * That is why a `412` — the order is no longer a draft — is `unconfirmed` rather than `rejected`
- * even though it is a plain 4xx: an order stops being a draft by being paid, so a 412 is one of the
- * few statuses that positively suggests a charge. And it is why every throw out of `finalize` is
- * `unconfirmed` while a throw out of the draft call is not: an aborted request may still be
- * executing at the provider, and the draft call has nothing to execute.
- *
- * **That over-reports, deliberately.** A DNS failure on the finalize call moved no money and is
- * still recorded as `unconfirmed`, because `fetch` does not tell a caller whether its bytes reached
- * the far side. Over-reporting costs an operator a look at an order that turns out not to exist;
- * under-reporting costs a charge nobody ever investigates. The error's own name is carried in the
- * reason so the look is cheap.
+ * **So a process that dies here has cost the user nothing**: an unpaid draft at the provider is not
+ * a charge, and nothing here needs recovering.
  *
  * ## Confirmed against the live account by a manual row rather than asserted here
  *
  * `looksLikeAMissingCustomer` above carries the same warning for the portal call and it applies
  * twice over here: **nobody on this project has run an order against real Polar**, no top-up product
- * exists at the provider yet because no price has been decided (`CREDIT_PLANS` carries no numbers at
- * all), and the statuses below are read from Polar's published documentation rather than from a
- * response anybody has seen. What that buys is that every unexpected answer fails in the direction
- * that grants nothing, and the manual rows this branch adds are what will replace the documentation
- * with an observation.
+ * exists at the provider yet because no price has been decided, and the statuses below are read from
+ * Polar's published documentation rather than from a response anybody has seen. What that buys is
+ * that every unexpected answer fails in the direction that grants nothing, and the manual rows this
+ * branch adds are what will replace the documentation with an observation.
  */
-async function polarTopUpCharge(
+async function polarCreateTopUpOrder(
   config: PolarProviderConfig,
   request: TopUpChargeRequest,
-): Promise<TopUpCharge> {
+): Promise<TopUpOrder> {
   const call = config.fetchImplementation ?? fetch;
-  const base = config.apiBaseUrl ?? POLAR_API_BASE_URL;
-  const headers = {
-    // The credential. Never logged: every `reason` below is built from a status or an error name,
-    // and none of them interpolates a header.
-    authorization: `Bearer ${config.accessToken}`,
-    "content-type": "application/json",
-  };
-
   let draft: Response;
   try {
-    draft = await call(new URL(ORDERS_PATH, base), {
+    draft = await call(new URL(ORDERS_PATH, config.apiBaseUrl ?? POLAR_API_BASE_URL), {
       method: "POST",
-      headers,
+      headers: polarHeaders(config),
       body: JSON.stringify({ customer_id: request.customerId, product_id: request.productId }),
       signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
     });
   } catch (error) {
-    // **Not `unconfirmed`.** A draft charges nothing, so however this call ended, no money moved.
+    // **However this ended, no money moved.** A draft charges nothing, so there is no unconfirmed
+    // case on this half of the pair at all.
     const name = error instanceof Error ? error.name : "";
     if (name === "TimeoutError") {
       return { kind: "timedOut", reason: `no answer within ${TOPUP_CHARGE_TIMEOUT_MS}ms` };
@@ -592,12 +571,47 @@ async function polarTopUpCharge(
   if (orderId === undefined) {
     return { kind: "rejected", reason: "provider created an order naming no id" };
   }
+  return { kind: "created", orderId };
+}
+
+/**
+ * Charge an order this gateway already created (SONNY-215).
+ *
+ * ## The classification, and the one axis it is organised on
+ *
+ * Every answer is sorted by **whether money may have moved**, not by whether the request succeeded.
+ * That is why every throw out of this call is `unconfirmed` while a throw out of the draft call is
+ * not: an aborted request may still be executing at the provider, and a draft has nothing to
+ * execute. **That over-reports, deliberately.** A DNS failure here moved no money and is still
+ * recorded as `unconfirmed`, because `fetch` does not tell a caller whether its bytes reached the
+ * far side. Over-reporting costs an operator — or, now, the account's own next attempt — one extra
+ * look at an order that turns out not to be paid; under-reporting costs a charge nobody investigates.
+ *
+ * ## Calling this again on an order whose answer was lost is safe, and that is the recovery
+ *
+ * PR #196's F1: a grant lost between the charge and the record used to leave a paid order nothing
+ * would ever find, and the account's next attempt bought a second pack. The caller now writes the
+ * order id down before calling this, and resolves that order rather than creating another — which
+ * only works if a second call on a paid order answers `charged` instead of charging again.
+ *
+ * **It does, and the mechanism is Polar's own `412`.** Finalizing an order that is no longer a draft
+ * is refused with `412` and charges nothing; this reads the order back at that point and answers
+ * `charged` when it says `paid`. So the second call is a *question* rather than a second charge, and
+ * an order in any other non-draft state stays `unconfirmed` — which keeps it resolvable rather than
+ * closing it wrongly.
+ */
+async function polarFinalizeTopUpOrder(
+  config: PolarProviderConfig,
+  orderId: string,
+): Promise<TopUpCharge> {
+  const call = config.fetchImplementation ?? fetch;
+  const base = config.apiBaseUrl ?? POLAR_API_BASE_URL;
 
   let finalized: Response;
   try {
     finalized = await call(new URL(FINALIZE_PATH(orderId), base), {
       method: "POST",
-      headers,
+      headers: polarHeaders(config),
       // The documented body is an empty object. `payment_method_id` is the one optional field and is
       // deliberately not sent: choosing which of a customer's cards to charge is not a decision this
       // gateway has any basis for, and the customer's own default is what they set at the provider.
@@ -606,7 +620,7 @@ async function polarTopUpCharge(
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : "request failed";
-    return { kind: "unconfirmed", reason: `finalize did not answer: ${name}`, orderId };
+    return { kind: "unconfirmed", reason: `finalize did not answer: ${name}` };
   }
   switch (true) {
     case finalized.ok:
@@ -615,32 +629,88 @@ async function polarTopUpCharge(
     // answer. The provider answered and did not charge.
     case finalized.status === 402:
       return { kind: "declined", reason: "provider answered 402" };
-    // The order stopped being a draft, which is what being paid looks like. Not a refusal.
+    // **The order stopped being a draft, which is what being paid looks like — so ask.** This is the
+    // recovery path and the reason a second call is a question rather than a charge.
     case finalized.status === 412:
-      return { kind: "unconfirmed", reason: "order was no longer a draft", orderId };
+      return await polarReadPaidOrder(config, orderId);
     case finalized.status === 429:
       return { kind: "unavailable", reason: "provider answered 429" };
     case finalized.status >= 500:
       // Unlike the draft call's 5xx: a charge that failed inside the provider may have failed after
       // taking the money.
-      return { kind: "unconfirmed", reason: `provider answered ${finalized.status}`, orderId };
+      return { kind: "unconfirmed", reason: `provider answered ${finalized.status}` };
     default:
       // 403 is the documented one here — the feature is disabled, or the organisation cannot accept
       // payments — and both are an operator's to fix.
       return { kind: "rejected", reason: `provider answered ${finalized.status}` };
   }
-  const status = readOrderField(await readJson(finalized), "status");
+  return chargedFrom(await readJson(finalized), orderId, "finalize");
+}
+
+/**
+ * Read an order back and say whether the provider considers it paid.
+ *
+ * Reached only from a `412`, which is the one status that positively means the order is no longer a
+ * draft. Everything that is not a readable `paid` stays `unconfirmed`, which leaves the order
+ * resolvable by the next attempt rather than closing it on a guess.
+ */
+async function polarReadPaidOrder(
+  config: PolarProviderConfig,
+  orderId: string,
+): Promise<TopUpCharge> {
+  const call = config.fetchImplementation ?? fetch;
+  let read: Response;
+  try {
+    read = await call(new URL(`${ORDERS_PATH}${encodeURIComponent(orderId)}`, config.apiBaseUrl ?? POLAR_API_BASE_URL), {
+      method: "GET",
+      headers: polarHeaders(config),
+      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "request failed";
+    return { kind: "unconfirmed", reason: `order was no longer a draft and did not read back: ${name}` };
+  }
+  if (!read.ok) {
+    return { kind: "unconfirmed", reason: `order was no longer a draft and read back ${read.status}` };
+  }
+  return chargedFrom(await readJson(read), orderId, "the order");
+}
+
+/**
+ * An order body → `charged`, or `unconfirmed` naming what it said instead.
+ *
+ * **One reading for both callers**, so the finalize answer and the read-back answer cannot come to
+ * disagree about what `paid` is. `where` names which call produced the body, because "finalize
+ * answered 200 and the order is not paid" and "the order we read back is not paid" send an operator
+ * to two different places.
+ */
+function chargedFrom(
+  order: Record<string, unknown> | undefined,
+  orderId: string,
+  where: string,
+): TopUpCharge {
+  const status = readOrderField(order, "status");
   if (status !== PAID) {
-    // **A 200 that does not say `paid` is not a success.** The documented transition on a successful
+    // **Anything that is not `paid` is not a success.** The documented transition on a successful
     // charge is to `paid`, so anything else is an answer this gateway cannot interpret, and
     // interpreting it generously is how credit gets granted for a charge that never happened.
-    return {
-      kind: "unconfirmed",
-      reason: `finalize answered 200 with status ${JSON.stringify(status ?? null)}`,
-      orderId,
-    };
+    return { kind: "unconfirmed", reason: `${where} said status ${JSON.stringify(status ?? null)}` };
   }
-  return { kind: "charged", orderId };
+  // **What the provider says it took, when it says so** (SONNY-215, PR #196's F6). The field name is
+  // read two ways for `accountIdFrom`'s reason — the payload has carried it as both across API
+  // versions — and both being absent is not a failure: the caller falls back to the price the
+  // deployment configured, which is what the product had shown before the charge anyway.
+  const amount = readOrderNumber(order, "total_amount") ?? readOrderNumber(order, "amount");
+  const currency = readOrderField(order, "currency");
+  return { kind: "charged", orderId, amount, currency };
+}
+
+/** The two headers every call above sends. The credential is here and in no `reason`. */
+function polarHeaders(config: PolarProviderConfig): Record<string, string> {
+  return {
+    authorization: `Bearer ${config.accessToken}`,
+    "content-type": "application/json",
+  };
 }
 
 /** A JSON object body, or `undefined` — the same tolerance `polarPortalSession` applies. */
@@ -664,6 +734,21 @@ function readOrderField(
   return order === undefined ? undefined : readString(order, key);
 }
 
+/**
+ * One number field off an order body.
+ *
+ * **A finite number and nothing else.** A provider that sent a string, a `null` or a `NaN` is a
+ * provider whose amount this gateway cannot record, and the caller's fallback — the configured price
+ * — is a better answer than a figure nobody can add up.
+ */
+function readOrderNumber(
+  order: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = order === undefined ? undefined : order[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 export function polarProvider(config: PolarProviderConfig): BillingProvider {
   return {
     name: POLAR,
@@ -681,6 +766,7 @@ export function polarProvider(config: PolarProviderConfig): BillingProvider {
       return url.toString();
     },
     portalUrlFor: (accountId) => polarPortalSession(config, accountId),
-    chargeTopUp: (request) => polarTopUpCharge(config, request),
+    createTopUpOrder: (request) => polarCreateTopUpOrder(config, request),
+    finalizeTopUpOrder: (orderId) => polarFinalizeTopUpOrder(config, orderId),
   };
 }

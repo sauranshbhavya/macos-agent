@@ -82,7 +82,14 @@ export const TEST_CREDIT_PLANS = JSON.stringify({
  */
 export const TEST_CREDIT_PLANS_WITH_TOP_UP = JSON.stringify({
   ...(JSON.parse(TEST_CREDIT_PLANS) as Record<string, unknown>),
-  topUp: { credits: 500, productId: "test-product-topup", maxPerPeriod: 3 },
+  topUp: {
+    credits: 500,
+    productId: "test-product-topup",
+    maxPerPeriod: 3,
+    // A fixture price, not a plan's — `TEST_CREDIT_PLANS`' own comment carries that distinction, and
+    // SONNY-215's F6 put a price on the wire without putting one in this repository's source.
+    price: { amount: 500, currency: "usd" },
+  },
 });
 
 /**
@@ -107,6 +114,8 @@ export function fakeCreditStore(facts: {
    * notice a route that stopped checking.
    */
   autoTopUpOptedInAt?: Date | null;
+  /** What this account was last charged, or nothing — the default (SONNY-215's F6). */
+  lastTopUp?: { amount: number; currency: string; at: Date };
 }): {
   factsFor: (accountId: string, now: Date) => Promise<CreditFacts>;
   setAutoTopUp: (accountId: string, enabled: boolean, now: Date) => Promise<Date | null>;
@@ -142,6 +151,7 @@ export function fakeCreditStore(facts: {
         toppedUpCredits: facts.toppedUpCredits ?? 0,
         topUpAttemptsThisPeriod: facts.topUpAttemptsThisPeriod ?? 0,
         autoTopUpOptedInAt: optedInAt,
+        lastTopUp: facts.lastTopUp,
       });
     },
     setAutoTopUp: (accountId, enabled, now) => {

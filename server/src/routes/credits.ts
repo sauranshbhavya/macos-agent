@@ -138,7 +138,37 @@ function creditsBody(
       opted_in: facts.autoTopUpOptedInAt !== null,
       /** How many attempts this period has left. `0` once the bound is spent. */
       attempts_left: attemptsLeft(catalogue, facts),
+      /**
+       * **What one pack costs, so the switch that authorises the charge can say it** (SONNY-215's
+       * F6, founder decision option B). `null` when this deployment sells none, because a price for
+       * a thing that cannot be bought is a number with nothing behind it.
+       *
+       * The *configured* price, which is the only one available before a purchase has happened. The
+       * record below is the provider's own figure, and the two can disagree if a deployment lets
+       * them — `credit/catalogue.ts` carries what bounds that.
+       */
+      price:
+        topUpConfigured && catalogue.topUp !== undefined
+          ? { amount: catalogue.topUp.price.amount, currency: catalogue.topUp.price.currency }
+          : null,
     },
+    /**
+     * **What this account was last charged for a top-up, and when** (SONNY-215's F6). `null` for an
+     * account that has never been charged, which is every account by default.
+     *
+     * Outside `auto_top_up` because it is not the setting: it is a record of something that
+     * happened, and it stays true after the setting is turned off. Outside `credits` for the mirror
+     * of that reason — every figure in there is a credit in this period's pool, and this is money in
+     * a currency, at an instant that may be months old.
+     */
+    last_top_up:
+      facts.lastTopUp === undefined
+        ? null
+        : {
+            amount: facts.lastTopUp.amount,
+            currency: facts.lastTopUp.currency,
+            at: facts.lastTopUp.at.toISOString(),
+          },
   };
 }
 

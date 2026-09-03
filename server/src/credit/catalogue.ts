@@ -121,10 +121,31 @@ const weightsSchema = z.object({
  * whose only meaning is how much credit it grants, and splitting the two across two variables would
  * let a deployment sell a pack whose size nothing agrees on.
  *
- * **No price and no currency.** The product's own price at the provider is the price, and putting a
- * dollar amount here would be this repository naming one — which is the line `catalogue.ts` has held
- * since it was written.
+ * **A price is here now, and the line this file has always held is unmoved** (SONNY-215's F6,
+ * founder decision option B). What that line forbids is *this repository* naming an amount, and it
+ * still names none: `price` has no default, no example value in any source file, and startup refuses
+ * a catalogue without it. What changed is that the product **shows** the price on the switch that
+ * authorises the charge — a price is what a purchase always carries — so the number has to reach the
+ * client, and configuration is the only place it can come from.
+ *
+ * **It is the deployment's job to keep this in step with the provider's product**, and nothing here
+ * can check it: this gateway never reads the product, so a `price` that disagrees with what the card
+ * is charged would show one number and take another. Two things bound that. The *record* the product
+ * shows after a charge is the provider's own figure whenever the provider gives one — see
+ * `credit/topup.ts` — so only the pre-purchase label can be wrong; and SONNY-215's manual rows check
+ * the two against each other on the first real order.
  */
+const priceSchema = z.object({
+  /**
+   * **In the currency's smallest unit**, as every payment provider counts money — 500 for $5.00.
+   * An integer, because a fractional cent is not a price anybody can be charged.
+   */
+  amount: z.number().int().nonnegative(),
+  /** ISO 4217, lowercase, as the provider writes it. Three letters, checked so a typo is a startup
+   * failure rather than a currency symbol the app cannot format. */
+  currency: z.string().trim().toLowerCase().regex(/^[a-z]{3}$/),
+});
+
 const topUpSchema = z.object({
   /**
    * Credits one top-up grants. **Strictly positive**: a pack worth nothing is a charge that buys
@@ -143,6 +164,8 @@ const topUpSchema = z.object({
    * declines is a reason to stop rather than a reason to keep going for free.
    */
   maxPerPeriod: z.number().int().min(1),
+  /** What one pack costs, as the switch that authorises it says out loud. See `priceSchema`. */
+  price: priceSchema,
 });
 
 /** One tier. An opaque key and what a month of it includes. */
@@ -222,6 +245,28 @@ export function parseCreditCatalogue(raw: string): CreditCatalogue {
     throw new CreditCatalogueError(`CREDIT_PLANS is not a valid credit catalogue: ${detail}`);
   }
   const catalogue = parsed.data;
+
+  /**
+   * **A pack that cannot buy a single run is refused at startup** (PR #196's F4).
+   *
+   * `credits` and `runCredits` are two independent numbers in one document, and a pack smaller than
+   * one run is a legal-looking configuration whose every purchase is a charge that cannot help: the
+   * gate triggers on being unable to afford a run, buys, is still unable to afford one, and refuses
+   * — after the card was charged, once per session start up to `maxPerPeriod`. The refusal is
+   * correct in the product (`aPurchaseThatDoesNotClearTheDebtStillRefuses` holds it); what was
+   * missing was anything stopping the charge that provably could not help.
+   *
+   * Refused here rather than defended against at the charge, for this file's standing reason: an
+   * unsafe configuration should be a deployment that will not start, named, rather than a behaviour
+   * a user pays to discover.
+   */
+  if (catalogue.topUp !== undefined && catalogue.topUp.credits < catalogue.runCredits) {
+    throw new CreditCatalogueError(
+      `CREDIT_PLANS gives topUp ${catalogue.topUp.credits} credits and prices one run at ` +
+        `${catalogue.runCredits}, so a top-up could not buy a single run. Every purchase would be ` +
+        "a charge that leaves the account exactly as unable to run as it was.",
+    );
+  }
 
   const seen = new Set<string>();
   for (const plan of catalogue.plans) {

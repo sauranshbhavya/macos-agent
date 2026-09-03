@@ -145,6 +145,14 @@ export interface TopUpChargeRequest {
   readonly productId: string;
 }
 
+/** What an order the provider says it charged actually took. */
+export interface TopUpChargedAmount {
+  /** In the currency's smallest unit, as every payment provider counts money. */
+  readonly amount: number;
+  /** ISO 4217, lowercase, as the provider writes it. */
+  readonly currency: string;
+}
+
 /**
  * What happened when this gateway tried to charge a saved payment method (SONNY-215).
  *
@@ -160,19 +168,21 @@ export interface TopUpChargeRequest {
  * an operator can see, which is a recoverable state. That asymmetry is the whole of the choice and
  * it is argued at `chargeTopUp` in `billing/polar.ts`.
  */
-export type TopUpCharge =
-  /** The provider charged the customer. `orderId` is its own id for the paid order. */
-  | { readonly kind: "charged"; readonly orderId: string }
-  /**
-   * The provider answered and did **not** charge: the card was declined, there is no payment method
-   * on file, or the charge needs an authentication challenge that an off-session attempt cannot
-   * answer.
-   *
-   * **Not retryable and not a fault.** Sending the same request again produces the same decline, and
-   * the thing that fixes it is the user changing their payment method — which is what the hosted
-   * portal is for.
-   */
-  | { readonly kind: "declined"; readonly reason: string }
+/**
+ * What happened when this gateway asked the provider to **create** an order (SONNY-215, PR #196's
+ * F1).
+ *
+ * **Nothing in this type moved any money**, and that is the whole reason it is a separate type from
+ * ``TopUpCharge`` below rather than a shared one. An off-session charge is a draft-then-finalize
+ * pair at the provider: the draft charges nothing, and the finalize is the only step that can. That
+ * used to be a fact about `polar.ts`'s internals and it is now a property of the seam, because the
+ * one thing this gateway has to do between the two steps — write the order's id down, so a later
+ * attempt can find it instead of buying another — cannot happen at all while both steps sit inside
+ * one call.
+ */
+export type TopUpOrder =
+  /** An order exists at the provider, in draft, and has been charged nothing. */
+  | { readonly kind: "created"; readonly orderId: string }
   /** The provider has no such customer. The account cannot be charged and never could be. */
   | { readonly kind: "noCustomer" }
   /** The provider could not be reached, answered `5xx`, or throttled this gateway. Worth retrying. */
@@ -184,15 +194,64 @@ export type TopUpCharge =
    * does not recognise, a request shape it does not accept. An operator's to fix; a retry fails
    * identically.
    */
+  | { readonly kind: "rejected"; readonly reason: string };
+
+/**
+ * What happened when this gateway asked the provider to **charge** an order it had already created
+ * (SONNY-215).
+ *
+ * **`PortalLink`'s shape and its reasoning, applied to the one call in this repository that moves
+ * money.** A result type rather than a thrown error, because several of these are ordinary expected
+ * answers rather than faults, and each has a different status and a different client behaviour.
+ *
+ * **Only `charged` grants credit, and every other case grants none.** That is the fail-closed
+ * direction for a *grant*, and it is deliberately not the fail-closed direction for the *user*:
+ * `unconfirmed` is the case where money may have moved and nothing is credited for it. What stops
+ * that being a lost charge is that the order id is on the row before this call is made, so the
+ * account's next attempt resolves *this* order rather than creating a second one — see
+ * `credit/topup.ts`.
+ */
+export type TopUpCharge =
+  /**
+   * The provider charged the customer.
+   *
+   * `amount` and `currency` are what the provider says it took, when it says so — the authoritative
+   * figure for the record the product shows, as against the price a deployment configured. Both are
+   * `undefined` when the answer named neither, and `credit/topup.ts` falls back to the configured
+   * price with that stated.
+   */
+  | {
+      readonly kind: "charged";
+      readonly orderId: string;
+      readonly amount: number | undefined;
+      readonly currency: string | undefined;
+    }
+  /**
+   * The provider answered and did **not** charge: the card was declined, there is no payment method
+   * on file, or the charge needs an authentication challenge that an off-session attempt cannot
+   * answer.
+   *
+   * **Not retryable and not a fault.** Sending the same request again produces the same decline, and
+   * the thing that fixes it is the user changing their payment method — which is what the hosted
+   * portal is for.
+   */
+  | { readonly kind: "declined"; readonly reason: string }
+  /** The provider could not be reached, or throttled this gateway. Worth retrying, and no charge. */
+  | { readonly kind: "unavailable"; readonly reason: string }
+  /**
+   * The provider answered and refused this *gateway*. An operator's to fix; a retry fails
+   * identically.
+   */
   | { readonly kind: "rejected"; readonly reason: string }
   /**
    * The charge was attempted and its answer could not be read. **Money may have moved.**
    *
    * Distinct from every case above because it is the only one where doing nothing is not obviously
-   * safe. `orderId` is carried whenever the draft got as far as existing, so the row this produces
-   * names the object an operator has to look at.
+   * safe. The order id is the caller's already — it was written down before this call — so this case
+   * carries no id of its own and the caller's next attempt resolves that order rather than buying a
+   * second one.
    */
-  | { readonly kind: "unconfirmed"; readonly reason: string; readonly orderId: string | undefined };
+  | { readonly kind: "unconfirmed"; readonly reason: string };
 
 /** A delivery whose signature has already been checked, as the adapter receives it. */
 export interface VerifiedDelivery {
@@ -235,11 +294,26 @@ export interface BillingProvider {
    */
   readonly portalUrlFor: (accountId: string) => Promise<PortalLink>;
   /**
-   * Charge this customer's saved payment method for one top-up pack (SONNY-215).
+   * Create the order a top-up will be charged against, and charge **nothing** (SONNY-215).
+   *
+   * **Two methods and not one, which is PR #196's F1.** The caller writes the returned id down
+   * before it calls `finalizeTopUpOrder`, so an account whose grant is lost between the charge and
+   * the record still names an object at the provider — and its next attempt resolves that order
+   * instead of buying a second pack. While both steps sat inside one call there was no moment at
+   * which the id existed and the charge had not happened, so no amount of care at the call site
+   * could have closed the window.
+   */
+  readonly createTopUpOrder: (request: TopUpChargeRequest) => Promise<TopUpOrder>;
+  /**
+   * Charge an order this gateway already created.
    *
    * **The only method on this seam that moves money**, and the only one whose failure cases a caller
    * must not collapse: `TopUpCharge` distinguishes a decline from an outage from an answer that
    * could not be read, because what the gateway records and what the user is told differ for each.
+   *
+   * **Safe to call again on an order whose answer was lost**, which is what makes the recovery
+   * above work: an order that is already paid answers `charged` rather than being charged twice.
+   * `billing/polar.ts` carries how that is established.
    */
-  readonly chargeTopUp: (request: TopUpChargeRequest) => Promise<TopUpCharge>;
+  readonly finalizeTopUpOrder: (orderId: string) => Promise<TopUpCharge>;
 }
