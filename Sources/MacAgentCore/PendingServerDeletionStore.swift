@@ -114,15 +114,55 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// Serialises this file's load-modify-write cycles. See `lock(forFileAt:)`.
     private let lock: NSLock
 
+    /// Runs between a load and the write that follows it, inside the critical section.
+    ///
+    /// **A test-only seam, and it exists because the property it proves cannot be raced for**
+    /// (PR #194's fix round). Mutual exclusion is an interleaving property, and the obvious test —
+    /// hammer the file from several threads and assert nothing is lost — turned out to *pass* with
+    /// the lock removed whenever the machine was busy: it detects the mutant under a `--filter` and
+    /// misses it inside a full-suite run, which is the worst possible shape, since the run that
+    /// misses it is the one this repository gates on. Measured that way, by a battery: the mutant
+    /// dropping this lock from `enqueue` survived 2800 tests.
+    ///
+    /// So the assertion is not about outcomes at all. From inside this closure a test asks the
+    /// *file's* lock whether it is held — `NSLock` is not recursive, so `try()` answers `false` on
+    /// the thread that already owns it — which is deterministic, needs no threads, and fails for a
+    /// door that takes no lock or takes a lock of its own.
+    ///
+    /// `internal`, so it is invisible to the app target, and defaulted to `nil`, so no shipping path
+    /// can set it.
+    let insideTheCriticalSection: (@Sendable () -> Void)?
+
     public init(
         fileURL: URL,
         fileManager: FileManager = .default,
         encryption: LocalStorageEncryption = .shared
     ) {
+        self.init(
+            fileURL: fileURL,
+            fileManager: fileManager,
+            encryption: encryption,
+            insideTheCriticalSection: nil
+        )
+    }
+
+    init(
+        fileURL: URL,
+        fileManager: FileManager,
+        encryption: LocalStorageEncryption,
+        insideTheCriticalSection: (@Sendable () -> Void)?
+    ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
+        self.insideTheCriticalSection = insideTheCriticalSection
         self.lock = Self.lock(forFileAt: fileURL)
+    }
+
+    /// The lock this file's load-modify-write cycles are serialised by, for the tests that prove
+    /// each door takes it. Internal for the reason `insideTheCriticalSection` is.
+    static func lockForTests(forFileAt fileURL: URL) -> NSLock {
+        lock(forFileAt: fileURL)
     }
 
     /// **One lock per file, process-wide** (PR #194 review, F2).
@@ -203,6 +243,7 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var entries = try loadKeyed()
+        insideTheCriticalSection?()
         // `deletedAt` is left as the first press wrote it when an entry is already here. The field
         // orders the queue and decides what the cap drops, and re-stamping it would move a delivery
         // that has been owed for a week to the back of the queue and to the front of the survivors.
@@ -221,6 +262,7 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     public func loadAll() throws -> [PendingServerDeletion] {
         lock.lock()
         defer { lock.unlock() }
+        insideTheCriticalSection?()
         return Array(try loadKeyed().values).sorted { left, right in
             if left.deletedAt != right.deletedAt {
                 return left.deletedAt < right.deletedAt
@@ -237,6 +279,7 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var entries = try loadKeyed()
+        insideTheCriticalSection?()
         guard entries.removeValue(forKey: taskID) != nil else {
             return
         }

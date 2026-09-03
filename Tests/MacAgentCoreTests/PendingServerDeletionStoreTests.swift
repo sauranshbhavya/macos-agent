@@ -188,21 +188,53 @@ struct PendingServerDeletionStoreTests {
         #expect(try store.loadAll().map(\.taskID) == ["task-b"])
     }
 
-    /// **A `bytea`-shaped read failure is not a decode failure and must not heal.**
+    /// **A read failure that is not a decode failure must not heal.**
     ///
     /// The heal above is justified by the contents being unrecoverable; a file that is merely
-    /// unreadable *right now* — a busy disk, a permission change — may be perfectly good, and
-    /// setting it aside would destroy live obligations over a transient. Driven through a store
-    /// whose file is a directory, which is the cheapest read failure that is not a decode failure.
+    /// unreadable *right now* — a busy disk, a permission change, a Keychain item a restore is about
+    /// to put back — may be perfectly good, and setting it aside would destroy live obligations over
+    /// a transient.
+    ///
+    /// **Two shapes, because they take different roads and only one of them tests the guard**
+    /// (found by this branch's own battery, which watched the widened-heal mutant survive). A file
+    /// that is a *directory* fails in `Data(contentsOf:)`, so it never reaches the
+    /// `LocalStorageEncryptionError` catch at all and says nothing about what that catch does. A
+    /// **short encryption key** is the shape that does: `key()` throws `.invalidKeyLength` from
+    /// inside `decode`, which is a `LocalStorageEncryptionError` that is not `.undecodableLocalData`
+    /// — exactly the case the `guard` exists to let through — and it is also the real-world one,
+    /// since a bad key is every store on the Mac failing at once rather than one corrupt file.
     @Test
     func aReadFailureThatIsNotADecodeFailurePropagates() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = makeStore(at: root)
-        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
 
-        #expect(throws: (any Error).self) { _ = try store.loadAll() }
-        #expect(LocalDataQuarantine().quarantinedSiblings(of: store.fileURL).isEmpty)
+        // 1. Not reachable through the decode path at all.
+        let directoryStore = makeStore(at: root)
+        try FileManager.default.createDirectory(
+            at: directoryStore.fileURL,
+            withIntermediateDirectories: true
+        )
+        #expect(throws: (any Error).self) { _ = try directoryStore.loadAll() }
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: directoryStore.fileURL).isEmpty)
+
+        // 2. The one that exercises the guard: a real `SONNYENC1` file this store cannot key.
+        let keyed = root.appendingPathComponent("keyed")
+        try FileManager.default.createDirectory(at: keyed, withIntermediateDirectories: true)
+        let good = PendingServerDeletionStore(
+            fileURL: keyed.appendingPathComponent("pending-server-deletions.json")
+        )
+        try good.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+
+        let badKey = PendingServerDeletionStore(
+            fileURL: good.fileURL,
+            fileManager: .default,
+            encryption: LocalStorageEncryption(keyManager: ShortKeyManager()),
+            insideTheCriticalSection: nil
+        )
+        #expect(throws: LocalStorageEncryptionError.self) { _ = try badKey.loadAll() }
+        // The file is left exactly where it was, so the key that can open it still can.
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: good.fileURL).isEmpty)
+        #expect(try good.loadAll().map(\.taskID) == ["task-a"])
     }
 
     /// **The cap's tie-break has to agree with the delivery order's** (PR #194 review, F4).
@@ -238,7 +270,8 @@ struct PendingServerDeletionStoreTests {
         #expect(queued.map(\.taskID).contains("tie-b"))
     }
 
-    /// **The load-modify-write cycles are serialised, per file** (PR #194 review, F2).
+    /// **Every door holds the file's lock while it is between its load and its write**
+    /// (PR #194 review, F2; this shape from the fix round's own battery).
     ///
     /// The store has two writers that do not share an executor — `deleteTask`'s synchronous
     /// `enqueue` on the main actor, and the delivery pass's `remove` off it — so an unguarded
@@ -246,58 +279,135 @@ struct PendingServerDeletionStoreTests {
     /// permanently. The reviewer measured 24 obligations destroyed in 60 deliberately overlapped
     /// runs against 0 in 60 serialised.
     ///
-    /// **Two independently constructed stores over one path**, which is what makes this a test of
-    /// the *file's* guarantee rather than of one instance's: an instance-held lock passes every
-    /// other assertion here and fails this one.
+    /// **This does not race for that, and the first version of this test did.** Hammering the file
+    /// from several threads and asserting nothing is lost detects the missing lock under a
+    /// `--filter` and **misses it inside a full-suite run** — measured, by a battery: the mutant
+    /// removing the lock from `enqueue` survived all 2800 tests, and the mutant giving each store
+    /// its own lock survived too. A test that only finds a defect when the machine is idle reads as
+    /// coverage and is not, and the run it fails to protect is the one this repository gates on.
     ///
-    /// **Not a wall-clock bet.** Nothing here sleeps or races a threshold; the assertion is that no
-    /// update is lost, which is deterministic with the lock and overwhelmingly not without it — a
-    /// hundred unguarded concurrent read-modify-write cycles over one file do not all survive.
+    /// **So the assertion is about the lock rather than about outcomes.** `NSLock` is not recursive,
+    /// so `try()` answers `false` on a thread that already owns it: from inside the critical section
+    /// the *file's* lock must be unavailable, and outside any operation it must be free. No threads,
+    /// no timing, and it fails for a door that takes no lock **and** for a door that takes a lock of
+    /// its own rather than the file's.
+    ///
+    /// **What it does not prove**, stated rather than implied: that the locking is *correct* under
+    /// real interleaving. It proves each door is inside the one lock that all of them share, which
+    /// is what the defect was; it cannot prove the absence of a deadlock or of a window somewhere
+    /// this seam does not sit.
     @Test
-    func concurrentWritesThroughTwoStoresOverOneFileLoseNothing() throws {
+    func everyDoorHoldsTheFilesLockWhileItIsBetweenLoadAndWrite() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let writer = makeStore(at: root)
-        let other = makeStore(at: root)
-        let count = 100
+        let fileURL = root.appendingPathComponent("pending-server-deletions.json")
+        let fileLock = PendingServerDeletionStore.lockForTests(forFileAt: fileURL)
 
-        DispatchQueue.concurrentPerform(iterations: count) { index in
-            let store = index.isMultiple(of: 2) ? writer : other
-            try? store.enqueue(
-                taskID: "task-\(String(format: "%03d", index))",
-                deletedAt: Self.epoch.addingTimeInterval(Double(index))
-            )
-        }
+        // The control, and it fires: outside any operation the lock is free, so a `false` below is
+        // the door holding it rather than `try()` always answering no.
+        #expect(fileLock.try())
+        fileLock.unlock()
 
-        #expect(try makeStore(at: root).loadAll().count == count)
-    }
-
-    /// The same property in the direction that actually destroys an obligation: a press interleaved
-    /// with the delivery pass's `remove`.
-    @Test
-    func anEnqueueInterleavedWithARemoveSurvivesIt() throws {
-        let root = try makeRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let pressing = makeStore(at: root)
-        let delivering = makeStore(at: root)
-        let rounds = 50
-
-        for round in 0..<rounds {
-            let delivered = "delivered-\(round)"
-            let pressed = "pressed-\(round)"
-            try pressing.enqueue(taskID: delivered, deletedAt: Self.epoch)
-
-            DispatchQueue.concurrentPerform(iterations: 2) { which in
-                if which == 0 {
-                    try? delivering.remove(taskID: delivered)
-                } else {
-                    try? pressing.enqueue(taskID: pressed, deletedAt: Self.epoch.addingTimeInterval(1))
+        for door in ["enqueue", "loadAll", "remove"] {
+            let heldDuring = LockObservation()
+            let store = PendingServerDeletionStore(
+                fileURL: fileURL,
+                fileManager: .default,
+                encryption: .shared,
+                insideTheCriticalSection: {
+                    // `try()` from the thread that owns a non-recursive lock answers false.
+                    if fileLock.try() {
+                        fileLock.unlock()
+                        heldDuring.record(false)
+                    } else {
+                        heldDuring.record(true)
+                    }
                 }
+            )
+
+            switch door {
+            case "enqueue":
+                try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+            case "loadAll":
+                _ = try store.loadAll()
+            default:
+                try store.remove(taskID: "task-a")
             }
 
-            let queued = try pressing.loadAll().map(\.taskID)
-            #expect(queued == [pressed], "round \(round) lost or resurrected an entry: \(queued)")
-            try pressing.remove(taskID: pressed)
+            #expect(heldDuring.observed == true, "\(door) ran its critical section without the file's lock")
         }
+
+        // And free again afterwards, so no door leaks it.
+        #expect(fileLock.try())
+        fileLock.unlock()
+    }
+
+    /// **Two stores over one path share one lock**, which is the difference between closing the
+    /// property and closing the reachable half of it (PR #194 review, F2).
+    ///
+    /// An instance-held lock covers the shipping app, where one store value is constructed in
+    /// `atItsRealStoreLocations()` and copied into the service — a copied struct shares the same
+    /// `NSLock` reference. It covers nothing about two stores constructed independently over one
+    /// file, which is a shape tests take and nothing forbids, and which the doc on the store claims
+    /// to handle.
+    @Test
+    func storesOverOnePathShareOneLockAndStoresOverDifferentPathsDoNot() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("pending-server-deletions.json")
+        let observed = LockObservation()
+
+        let holder = PendingServerDeletionStore(fileURL: fileURL)
+        let other = PendingServerDeletionStore(
+            fileURL: root.appendingPathComponent("./pending-server-deletions.json"),
+            fileManager: .default,
+            encryption: .shared,
+            insideTheCriticalSection: {
+                // Asked of the lock the *first* store was built with. Same file, so it must be the
+                // same object, so it must be unavailable while this second store is inside its own
+                // critical section.
+                let free = PendingServerDeletionStore.lockForTests(forFileAt: fileURL).try()
+                if free { PendingServerDeletionStore.lockForTests(forFileAt: fileURL).unlock() }
+                observed.record(!free)
+            }
+        )
+        _ = holder
+
+        try other.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+
+        #expect(observed.observed == true, "two stores over one path did not share a lock")
+        // The other direction, so this cannot pass by every store sharing one global lock.
+        #expect(
+            PendingServerDeletionStore.lockForTests(forFileAt: fileURL)
+                !== PendingServerDeletionStore.lockForTests(
+                    forFileAt: root.appendingPathComponent("something-else.json")
+                )
+        )
+    }
+}
+
+/// What a critical-section seam saw, readable after the operation returns.
+private final class LockObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool?
+
+    var observed: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func record(_ held: Bool) {
+        lock.lock()
+        value = held
+        lock.unlock()
+    }
+}
+
+/// A key manager whose material is the wrong length, so `LocalStorageEncryption.key()` throws
+/// `.invalidKeyLength` — a `LocalStorageEncryptionError` that is not `.undecodableLocalData`.
+private struct ShortKeyManager: LocalStorageKeyManaging {
+    func keyData() throws -> Data {
+        Data(repeating: 0x5A, count: 16)
     }
 }
