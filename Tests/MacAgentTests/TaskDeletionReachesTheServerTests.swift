@@ -134,8 +134,9 @@ struct TaskDeletionReachesTheServerTests {
         // The user is told the delete failed — it did, and nothing was taken on either side.
         #expect(fixture.viewModel.errorMessage != nil)
         #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
-        // The row survives, so pressing again is a real way out.
-        #expect(fixture.viewModel.taskHistoryRecords.map(\.id) == ["task-a"])
+        // The row survives, so pressing again is a real way out — off the file, for the reason the
+        // abort test above gives.
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
     }
 
     /// **A failed queue write aborts the whole delete, and this is PR #194's F1.**
@@ -166,6 +167,13 @@ struct TaskDeletionReachesTheServerTests {
         #expect(fixture.viewModel.errorMessage != nil)
         #expect(fixture.viewModel.localStorageNotice == nil)
         // Nothing local was touched, so the user can press again and nothing is destroyed.
+        //
+        // **Read off the file, not off `taskHistoryRecords`.** This path returns before
+        // `refreshTaskHistory()`, so the published list still holds what it held a moment ago — and
+        // the mutant that moves the enqueue below the local deletes leaves that list looking exactly
+        // like this while the row is gone from disk. It survived a whole battery on the published
+        // assertion alone.
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
         #expect(fixture.viewModel.taskHistoryRecords.map(\.id) == ["task-a"])
         #expect(fixture.seen.all.isEmpty)
     }
@@ -410,6 +418,22 @@ private struct TaskDeletionFixture {
         // taking the head of the list gives a test with two rows whichever one the sort happened to
         // put on top, which is how this helper silently handed the same record back twice.
         return try #require(viewModel.taskHistoryRecords.first { $0.id == id })
+    }
+
+    /// Task history as the *file* holds it, not as the view model last published it.
+    ///
+    /// **The distinction is what let a mutant through** (this branch's own battery). A path that
+    /// returns before `refreshTaskHistory()` leaves `taskHistoryRecords` holding whatever it held
+    /// before, so an assertion on the published list is satisfied by a row that has just been
+    /// deleted from disk — which is exactly the mutant that moves the enqueue below the local
+    /// deletes.
+    func taskHistoryOnDisk() throws -> [String] {
+        try TaskHistoryStore(
+            fileURL: root.appendingPathComponent("task-history.json"),
+            encryption: LocalStorageEncryption(
+                keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
+            )
+        ).loadAll().compactMap(\.id)
     }
 
     func goOffline() { network.set(.failure(URLError(.notConnectedToInternet))) }
