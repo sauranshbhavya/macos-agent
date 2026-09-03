@@ -148,6 +148,34 @@ describe("the version policy this deployment was configured with", () => {
     );
   });
 
+  it("arms the wall alone when no warning band was named, rather than refusing", () => {
+    // Found by running the built server, not by reasoning: with RECOMMENDED_CLIENT defaulted to
+    // 0.0.0 rather than optional, `MINIMUM_SUPPORTED_CLIENT=2.0.0` and nothing else exited 78 —
+    // the most ordinary configuration there is, refused, by a message telling the operator to set
+    // the two equal by hand. Every armed fixture in this file set both, which is why the suite was
+    // silent about it.
+    const policy = requireClientVersionPolicy(
+      armed({ minimumSupportedClient: "2.0.0", recommendedClient: undefined }),
+    );
+    expect(policy.armed).toBe(true);
+    expect(policy.minimumText).toBe("2.0.0");
+    expect(policy.recommendedText).toBe("2.0.0");
+    // An empty band: at the minimum is served and unwarned, below it is refused.
+    expect(bandFor("2.0.0", policy)).toBe("current");
+    expect(bandFor("1.9.9", policy)).toBe("unsupported");
+  });
+
+  it("warns without a wall when only the recommended version is named", () => {
+    // The mirror, and §8.4's own precondition for ever raising the minimum: a deprecation period
+    // runs before the wall exists.
+    const policy = requireClientVersionPolicy(
+      armed({ minimumSupportedClient: "0.0.0", recommendedClient: "3.0.0" }),
+    );
+    expect(policy.armed).toBe(true);
+    expect(bandFor("0.0+0", policy)).toBe("deprecated");
+    expect(bandFor("3.0.0", policy)).toBe("current");
+  });
+
   it("refuses a recommended version below the minimum, which describes no client", () => {
     expect(() =>
       requireClientVersionPolicy(
