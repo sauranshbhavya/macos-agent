@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Sweep this repository for Claude attributions on the surfaces no hook can watch (SONNY-406).
+#
+#   scripts/no-attribution history   every commit message reachable from --all
+#   scripts/no-attribution tree      every tracked file in the working tree
+#   scripts/no-attribution prs       every merged pull request's body, via gh
+#   scripts/no-attribution all       all three
+#   scripts/no-attribution selftest  prove the sweep finds what it claims to
+#
+# Exit 0 when a surface is clean, 2 when something was found, 1 when a surface could NOT be
+# measured — which is never reported as clean. A sweep that quietly examined nothing prints the
+# same reassuring nothing as a sweep that examined everything and found nothing, and this
+# repository has been caught by that shape four times (`CLAUDE.md`, Claims and evidence, the
+# clean-zero family).
+#
+# THE TWO HOOKS ARE THE REFUSAL; THIS IS THE AUDIT. `.githooks/commit-msg` and
+# `.claude/hooks/no-claude-attribution.sh` stop a new one arriving. Neither can see what is already
+# in the history, already in a file, or already in a pull request body on GitHub — and the PR body
+# is the surface nothing in the repository can reach at all.
+#
+# THE ONE EXCLUSION, and why it needs a control. `tree` cannot scan the files that DEFINE the class
+# without matching them: `scripts/lib/no-attribution.sh` holds the patterns, the selftest builds
+# every shape out of parts, and `CLAUDE.md` line 422 states the rule using the words it forbids.
+# Those are excluded by path. That is exactly the shape `CLAUDE.md` warns about — a citation that
+# matches its own text — so `--no-exclusions` runs the same sweep without the stage, and the
+# difference between the two numbers is the control. If dropping the stage does not raise the
+# count, the stage is not what is doing the excluding and the clean answer is worthless.
+set -u
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not in a git repository" >&2; exit 1; }
+lib="scripts/lib/no-attribution.sh"
+[ -r "$lib" ] || { echo "no-attribution: cannot read $lib — nothing was checked" >&2; exit 1; }
+# shellcheck source=lib/no-attribution.sh
+. "$lib"
+
+# Files whose job is to state or define the forbidden class. Nothing else belongs here, and each
+# line is the reason it is present.
+# The list lives in scripts/lib/no-attribution.sh, so this sweep and the PreToolUse hook's file
+# scan cannot drift apart about which files define the class. `selftest` below fails on an entry
+# that matches nothing.
+is_excluded() { no_attribution_is_self_referential "$1"; }
+
+sweep_history() {
+  local found=0 total=0 sha
+  echo "== history: every commit message reachable from --all"
+  while read -r sha; do
+    total=$((total + 1))
+    if git log -1 --format='%B' "$sha" | grep -qEi -- "$(no_attribution_pattern)"; then
+      found=$((found + 1))
+      printf '  %s  %s\n' "$(git rev-parse --short "$sha")" "$(git log -1 --format='%s' "$sha")"
+      git log -1 --format='%B' "$sha" | grep -nEi -- "$(no_attribution_pattern)" | sed 's/^/      /'
+    fi
+  done < <(git rev-list --all)
+  printf '  %d of %d commit message(s) carry an attribution\n' "$found" "$total"
+  [ "$total" -gt 0 ] || { echo "  MEASURED NOTHING — no commits reachable" >&2; return 1; }
+  [ "$found" -eq 0 ] || return 2
+  return 0
+}
+
+sweep_tree() {
+  local exclusions="${1:-with-exclusions}" found=0 total=0 skipped=0 f
+  echo "== tree: every tracked file ($exclusions)"
+  while IFS= read -r -d '' f; do
+    if [ "$exclusions" = "with-exclusions" ] && is_excluded "$f"; then
+      skipped=$((skipped + 1)); continue
+    fi
+    total=$((total + 1))
+    grep -Iq . "$f" 2>/dev/null || continue      # skip binaries
+    local hits
+    hits="$(grep -nEi -- "$(no_attribution_pattern)" "$f" 2>/dev/null)"
+    if [ -n "$hits" ]; then
+      found=$((found + 1))
+      printf '  %s\n' "$f"
+      printf '%s\n' "$hits" | sed 's/^/      /'
+    fi
+  done < <(git ls-files -z)
+  printf '  %d of %d tracked file(s) carry an attribution (%d excluded by path)\n' \
+    "$found" "$total" "$skipped"
+  [ "$total" -gt 0 ] || { echo "  MEASURED NOTHING — no tracked files" >&2; return 1; }
+  TREE_FOUND="$found"
+  [ "$found" -eq 0 ] || return 2
+  return 0
+}
+
+sweep_prs() {
+  echo "== pull requests: every body, via gh"
+  command -v gh >/dev/null 2>&1 || {
+    echo "  NOT MEASURED — gh is not installed. This surface is unchecked." >&2; return 1; }
+  gh auth status >/dev/null 2>&1 || {
+    echo "  NOT MEASURED — gh is not authenticated. This surface is unchecked." >&2; return 1; }
+  local json found=0 total=0
+  json="$(gh pr list --state all --limit 500 --json number,title,body 2>/dev/null)" || {
+    echo "  NOT MEASURED — gh pr list failed. This surface is unchecked." >&2; return 1; }
+  local tmp; tmp="$(mktemp)"
+  printf '%s' "$json" > "$tmp"
+  local n
+  n="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$tmp")"
+  total="$n"
+  local i
+  for ((i = 0; i < n; i++)); do
+    local num body
+    num="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[int(sys.argv[2])]["number"])' "$tmp" "$i")"
+    body="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[int(sys.argv[2])].get("body") or "")' "$tmp" "$i")"
+    local hits
+    hits="$(printf '%s\n' "$body" | grep -nEi -- "$(no_attribution_pattern)" || true)"
+    if [ -n "$hits" ]; then
+      found=$((found + 1))
+      printf '  PR #%s\n' "$num"
+      printf '%s\n' "$hits" | sed 's/^/      /'
+    fi
+  done
+  rm -f "$tmp"
+  printf '  %d of %d pull request bod(ies) carry an attribution\n' "$found" "$total"
+  [ "$total" -gt 0 ] || { echo "  MEASURED NOTHING — gh returned no pull requests" >&2; return 1; }
+  [ "$found" -eq 0 ] || return 2
+  return 0
+}
+
+# The control the exclusion list needs: the same tree sweep without the stage must find MORE.
+# A stage that changes no number is not excluding anything, and the clean answer above would be
+# resting on a filter that does nothing.
+sweep_selftest() {
+  local with without
+  sweep_tree with-exclusions >/dev/null 2>&1 || true; with="${TREE_FOUND:-unset}"
+  sweep_tree no-exclusions   >/dev/null 2>&1 || true; without="${TREE_FOUND:-unset}"
+  echo "== selftest"
+  printf '  tree with exclusions:    %s file(s)\n' "$with"
+  printf '  tree without exclusions: %s file(s)\n' "$without"
+  local fails=0
+  if [ "$without" -gt "$with" ] 2>/dev/null; then
+    echo "  ok    dropping the exclusion stage raises the count — the stage is what excludes"
+  else
+    echo "  FAIL  dropping the exclusion stage changed nothing; the stage excludes nothing and"
+    echo "        a clean 'tree' answer proves nothing"
+    fails=$((fails + 1))
+  fi
+  # An exclusion that matches nothing excludes nothing, and is a place a real attribution could
+  # sit unseen. Checked against the tracked tree, because an untracked file is not in the
+  # population `tree` sweeps in the first place.
+  local e tracked_missing=0
+  while IFS= read -r e; do
+    if ! git ls-files --error-unmatch "$e" >/dev/null 2>&1; then
+      printf '  ..    %s is not tracked yet; not checked for staleness\n' "$e"
+      tracked_missing=$((tracked_missing + 1))
+      continue
+    fi
+    if grep -qEi -- "$(no_attribution_pattern)" "$e" 2>/dev/null; then
+      printf '  ok    %s is excluded and really does match\n' "$e"
+    else
+      printf '  FAIL  %s is excluded but matches nothing — a stale exclusion is a hole\n' "$e"
+      fails=$((fails + 1))
+    fi
+  done < <(no_attribution_self_referential_paths)
+
+  # And the pattern must be able to find something at all: a sweep that cannot produce a hit has
+  # not been tested and its zero is not a measurement.
+  local probe; probe="$(mktemp)"
+  printf 'body\n\n%s Claude Opus 5 <noreply@anthropic.com>\n' "Co-Authored-By:" > "$probe"
+  if no_attribution_scan_file "$probe" >/dev/null; then
+    echo "  FAIL  the pattern found nothing in a file that plainly carries a trailer"
+    fails=$((fails + 1))
+  else
+    echo "  ok    positive control: the pattern does find a planted trailer"
+  fi
+  printf 'an ordinary sentence about CLAUDE.md and a Claude Code CLI session\n' > "$probe"
+  if no_attribution_scan_file "$probe" >/dev/null; then
+    echo "  ok    negative control: ordinary prose naming Claude is not an attribution"
+  else
+    echo "  FAIL  ordinary prose naming Claude was flagged; the class is too wide to survive"
+    fails=$((fails + 1))
+  fi
+  rm -f "$probe"
+  [ "$fails" -eq 0 ]
+}
+
+TREE_FOUND=0
+rc=0
+case "${1:-all}" in
+  history)  sweep_history || rc=$? ;;
+  tree)     if [ "${2:-}" = "--no-exclusions" ]; then sweep_tree no-exclusions || rc=$?
+            else sweep_tree with-exclusions || rc=$?; fi ;;
+  prs)      sweep_prs || rc=$? ;;
+  selftest) sweep_selftest || rc=$? ;;
+  all)      rc=0
+            sweep_history        ; rc_h=$?
+            sweep_tree with-exclusions ; rc_t=$?
+            sweep_prs            ; rc_p=$?
+            # 1 (a surface nobody could measure) outranks 2 (a surface with a finding), because an
+            # unmeasured surface is the one that reassures wrongly.
+            for one in "$rc_h" "$rc_t" "$rc_p"; do
+              [ "$one" = 1 ] && rc=1
+            done
+            if [ "$rc" != 1 ]; then
+              for one in "$rc_h" "$rc_t" "$rc_p"; do [ "$one" = 2 ] && rc=2; done
+            fi ;;
+  -h|--help|help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ; exit 0 ;;
+  *) echo "unknown command: $1 (try --help)" >&2; exit 1 ;;
+esac
+# 1 means a surface could not be measured; 2 means something was found. Never collapse the two.
+if [ "$rc" -eq 1 ]; then exit 1; fi
+if [ "$rc" -ne 0 ]; then exit 2; fi
+exit 0
