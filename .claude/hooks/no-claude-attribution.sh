@@ -72,10 +72,18 @@ print(enc(d.get("tool_name")))
 print(enc((d.get("tool_input") or {}).get("command")))
 print(enc(d.get("cwd")))
 ' 2>/dev/null)"; then
-    parsed=1
     tool="$(printf '%s' "$fields" | sed -n '1p' | base64 -d 2>/dev/null)"
     command_text="$(printf '%s' "$fields" | sed -n '2p' | base64 -d 2>/dev/null)"
     payload_cwd="$(printf '%s' "$fields" | sed -n '3p' | base64 -d 2>/dev/null)"
+    # `parsed=1` AFTER the decodes and only on a non-empty result, which is the whole of the fix
+    # for PR #195's scoped round, H1. `base64` is a THIRD tool this path needs, and setting the
+    # flag before the decodes put it on the far side of the safety net: with `jq` and `base64` both
+    # unusable, `tool` came out empty, the `Bash` check below exited 0, and the raw-payload scan
+    # never ran because `parsed` was already 1 — allowed, exit 0, nothing on stderr. Isolated one
+    # tool at a time, `base64` alone and `jq` alone and `jq`+`python3` were each refused; only that
+    # one pair was silent. This matches the `jq` branch above, which has always required a non-empty
+    # `tool` before claiming the payload was parsed.
+    [ -n "$tool" ] && parsed=1
   fi
 fi
 
