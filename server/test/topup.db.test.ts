@@ -8,6 +8,7 @@ import {
   recordTopUpOrder,
   settleTopUpAttempt,
 } from "../src/credit/topup.js";
+import { readLastTopUpCharge } from "../src/credit/store.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
   afterAllUnderHangBackstop,
@@ -371,8 +372,9 @@ describeDb("what a granted top-up does to the number a user reads", () => {
       outcome: "granted",
       credits,
       providerOrderId: `order-${Math.random().toString(36).slice(2)}`,
-      chargedAmount: undefined,
-      chargedCurrency: undefined,
+      // A real grant records what it cost, which is what the last-charge surface reads.
+      chargedAmount: 500,
+      chargedCurrency: "usd",
       settledAt: AT,
     });
   };
@@ -419,6 +421,71 @@ describeDb("what a granted top-up does to the number a user reads", () => {
     // And it still consumed its attempt, which is 0019's decision: a run of declines is a reason to
     // stop trying, not a reason to keep going for free.
     expect(facts.topUpAttemptsThisPeriod).toBe(1);
+  });
+
+  itUnderHangBackstop("reports the last charge, and never an attempt that took no money", async () => {
+    // **The gap the round's battery found (S20).** Dropping the query's `outcome = 'granted'` filter
+    // survived, because every existing case had one row: a declined attempt carries no amount, so a
+    // single-row fixture answers the same either way. What separates them is a *later* attempt that
+    // failed — under the mutant the newest row wins, carries no amount, and the surface that tells a
+    // user what they were last charged shows **nothing at all** for an account that really was
+    // charged.
+    await grant(500);
+    const later = await claimTopUpAttempt(client, claimOf());
+    await settleTopUpAttempt(client, {
+      topUpId: later!.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: "order-declined",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+    // The decline is genuinely newer, which is what makes this discriminate.
+    await client.query(
+      "UPDATE sonny.credit_topup SET attempted_at = $2 WHERE topup_id = $1",
+      [later!.topUpId, new Date("2026-08-20T00:00:00Z")],
+    );
+
+    const charge = await readLastTopUpCharge(client, ACCOUNT);
+    expect(charge?.amount).toBe(500);
+    expect(charge?.currency).toBe("usd");
+  });
+
+  itUnderHangBackstop("reports nothing for an account that has only ever been declined", async () => {
+    const only = await claimTopUpAttempt(client, claimOf());
+    await settleTopUpAttempt(client, {
+      topUpId: only!.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: "order-only",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    expect(await readLastTopUpCharge(client, ACCOUNT)).toBeUndefined();
+  });
+
+  itUnderHangBackstop("reports the newest charge when there is more than one", async () => {
+    await grant(500);
+    await client.query("UPDATE sonny.credit_topup SET attempted_at = $1", [
+      new Date("2026-08-02T00:00:00Z"),
+    ]);
+    const second = await claimTopUpAttempt(client, claimOf());
+    await settleTopUpAttempt(client, {
+      topUpId: second!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-newer",
+      chargedAmount: 700,
+      chargedCurrency: "eur",
+      settledAt: AT,
+    });
+
+    const charge = await readLastTopUpCharge(client, ACCOUNT);
+    expect(charge?.amount).toBe(700);
+    expect(charge?.currency).toBe("eur");
   });
 
   itUnderHangBackstop("does not carry a previous period's top-up forward", async () => {
