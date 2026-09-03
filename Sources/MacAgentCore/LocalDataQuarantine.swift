@@ -51,7 +51,7 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 /// process writing them, and equally true of a user who restored from a backup, migrated Macs, or
 /// had their Keychain item replaced. SONNY-253's recorded architecture has a device-bound data key
 /// that a restore can reinstall, so a file that will not open today can open tomorrow. Three of the
-/// thirteen stores hold things a person made by hand and cannot recreate — `routines.json`,
+/// fourteen stores hold things a person made by hand and cannot recreate — `routines.json`,
 /// `workspaces.json` and `snippets.json`, which are three of the four `LocalStoreKind` classifies
 /// `.artifact` — and destroying those on the signal "I cannot open this right now" would delete work
 /// they could have got back. (`approved-apps.json` is the fourth `.artifact` and is deliberately not

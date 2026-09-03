@@ -85,16 +85,34 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// entirely offline or signed out, with no session in between. It is also small enough that the
     /// file stays a few tens of kilobytes.
     ///
-    /// **The oldest go first when it is full**, which is not the arbitrary half of the choice. An
-    /// entry's content is on the server's own 30-day clock, so the oldest entry is the one whose
-    /// content is likeliest to have expired without anybody deleting it — the least is lost by
-    /// dropping it. Dropping the newest would discard the deletion the user just asked for while
-    /// keeping ones from weeks ago.
+    /// **The oldest go first when it is full, and the reason first written here was half false**
+    /// (PR #194 review, F5). It argued that the oldest entry's content is likeliest to have expired
+    /// on the server's own 30-day clock, so the least is lost by dropping it. That is true of the
+    /// *live* content and false of the half this endpoint exists to reach: `expireSnapshots` selects
+    /// `WHERE expires_at IS NOT NULL`, and `snapshot.ts` records that `expiresAt` is `undefined` on
+    /// every snapshot the builder makes because no founder has set a lifecycle — so
+    /// training-snapshot members never age out, and **an entry the cap drops leaves a snapshot copy
+    /// indefinitely**. This file's own account of what the whole wipe costs says exactly that, two
+    /// screens away, and the two paragraphs had never met.
+    ///
+    /// **Restated honestly, the choice still stands and is now a choice between two losses.** Every
+    /// entry the cap drops is an obligation abandoned, whichever end it is taken from; nothing about
+    /// age makes one safe. What age does decide is which is *likelier* to be already partly
+    /// satisfied — the oldest has had the most chances to expire on the live-content clock, so
+    /// dropping it loses the snapshot half alone where dropping the newest loses both halves of a
+    /// deletion somebody pressed for seconds ago. That is a weaker argument than the one it
+    /// replaces and it is the true one.
+    ///
+    /// **The eviction is silent, and that is recorded rather than fixed here.** Nothing counts it,
+    /// notices it or reports it. It belongs on the same SONNY-109 list as the founders' "never
+    /// tells anyone" half, and it is on it.
     public static let maxItems = 200
 
     public let fileURL: URL
     private let fileManager: FileManager
     private let encryption: LocalStorageEncryption
+    /// Serialises this file's load-modify-write cycles. See `lock(forFileAt:)`.
+    private let lock: NSLock
 
     public init(
         fileURL: URL,
@@ -104,7 +122,58 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         self.fileURL = fileURL
         self.fileManager = fileManager
         self.encryption = encryption
+        self.lock = Self.lock(forFileAt: fileURL)
     }
+
+    /// **One lock per file, process-wide** (PR #194 review, F2).
+    ///
+    /// Every public method here is a read-modify-write — `loadKeyed()`, mutate, `write()` — and this
+    /// store has two writers that do not share an executor. `AgentViewModel.deleteTask` calls
+    /// `enqueue` **synchronously on the main actor**; `SonnyTaskDeletionService.deliverPendingDeletions()`
+    /// is a nonisolated `async` method, so a `Task { @MainActor in await service… }` releases the
+    /// main actor for the whole pass, `remove` included. A press landing inside a pass's `remove`
+    /// window therefore loses its own entry outright — the obligation is destroyed, silently and
+    /// permanently, which is the same outcome as never queueing it.
+    ///
+    /// **This was measured rather than reasoned about.** The reviewer drove the real store with the
+    /// two operations deliberately overlapped: **60 runs, 24 obligations destroyed, 36 deliveries
+    /// resurrected, 0 clean**, against **60 of 60 clean** with the same two operations serialised.
+    /// The window is `remove()`'s own duration — 0.47 ms over a one-entry queue and 2.07 ms at the
+    /// cap — and it opens the instant a DELETE's response lands, which is exactly when somebody
+    /// working down a list of tasks is pressing again.
+    ///
+    /// **Keyed on the path rather than held per instance, which is the difference between closing
+    /// the property and closing the reachable half of it.** An instance lock would cover the
+    /// shipping app, where one store value is constructed in `atItsRealStoreLocations()` and copied
+    /// into the service — a copied struct shares the same `NSLock` reference. It would not cover two
+    /// stores independently constructed over one path, which is a shape tests take and which nothing
+    /// forbids. Keying on the standardised path costs a dictionary lookup once per store and makes
+    /// the guarantee unconditional, so the doc above can be read as written.
+    ///
+    /// **Not an `actor`, and not `@MainActor` on the pass.** An actor would make `enqueue`
+    /// asynchronous, and `enqueue` has to run *before* `deleteTask`'s local deletes, synchronously,
+    /// which is the ordering the whole feature turns on. Annotating the pass `@MainActor` would work
+    /// today and rests on every store call inside it happening to be synchronous — a guarantee that
+    /// lives at the call site rather than in the type that needs it, and one the next `await` breaks
+    /// silently.
+    private static func lock(forFileAt fileURL: URL) -> NSLock {
+        let key = fileURL.standardizedFileURL.path
+        locksGuard.lock()
+        defer { locksGuard.unlock() }
+        if let existing = locksByPath[key] {
+            return existing
+        }
+        let created = NSLock()
+        locksByPath[key] = created
+        return created
+    }
+
+    private static let locksGuard = NSLock()
+    /// Never pruned. One `NSLock` per distinct store path, and the shipping app has exactly one;
+    /// a test process accumulates one per temp directory it invents, which is a few bytes each and
+    /// dies with the process. Pruning would need to know that no store value still holds a path,
+    /// which is what a lock is for in the first place.
+    nonisolated(unsafe) private static var locksByPath: [String: NSLock] = [:]
 
     /// Where the shipping app keeps this store.
     ///
@@ -130,18 +199,17 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     ///
     /// Keyed on the task id, so pressing Delete twice on a row whose local delete failed the first
     /// time leaves one entry rather than two.
-    @discardableResult
-    public func enqueue(taskID: String, deletedAt: Date = Date()) throws -> PendingServerDeletion {
-        let entry = PendingServerDeletion(taskID: taskID, deletedAt: deletedAt)
+    public func enqueue(taskID: String, deletedAt: Date = Date()) throws {
+        lock.lock()
+        defer { lock.unlock() }
         var entries = try loadKeyed()
         // `deletedAt` is left as the first press wrote it when an entry is already here. The field
         // orders the queue and decides what the cap drops, and re-stamping it would move a delivery
         // that has been owed for a week to the back of the queue and to the front of the survivors.
         if entries[taskID] == nil {
-            entries[taskID] = entry
+            entries[taskID] = PendingServerDeletion(taskID: taskID, deletedAt: deletedAt)
         }
         try write(capped(entries))
-        return entries[taskID] ?? entry
     }
 
     /// Everything still owed, **oldest first** — the order it is delivered in, so a delivery that
@@ -151,7 +219,9 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// same `deletedAt`, because these files persist dates with whole-second `.iso8601` like every
     /// other store here.
     public func loadAll() throws -> [PendingServerDeletion] {
-        Array(try loadKeyed().values).sorted { left, right in
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(try loadKeyed().values).sorted { left, right in
             if left.deletedAt != right.deletedAt {
                 return left.deletedAt < right.deletedAt
             }
@@ -164,6 +234,8 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// A task id that is not queued is a no-op rather than an error, matching every other
     /// per-entry delete in this codebase.
     public func remove(taskID: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
         var entries = try loadKeyed()
         guard entries.removeValue(forKey: taskID) != nil else {
             return
@@ -171,20 +243,67 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         try write(entries)
     }
 
+    /// **A file that will not decode is set aside and the queue starts again, and this store is the
+    /// one place in the app where that is the right answer** (PR #194 review, F1).
+    ///
+    /// Every other store propagates a decode failure, because the bytes are the user's — a routine,
+    /// a workspace, a task's own history — and a later key migration may hand them back. Nothing
+    /// here is recoverable in that sense: the file holds opaque ids of tasks that are *already gone
+    /// locally*, so an unreadable queue's contents cannot be reconstructed by anything, ever.
+    ///
+    /// **What propagating it instead would cost is the whole feature, not one press.** `enqueue`
+    /// loads before it writes, so an undecodable file makes *every subsequent* Delete fail to queue
+    /// — and with `memoryCategory` `nil` there is no Memory row to clear it from, and no
+    /// `LocalStorageLoadFailureSource` case to raise the banner. The only way out would be Settings'
+    /// whole wipe or deleting the file by hand, which is the dead end `CLAUDE.md`'s poisoned-store
+    /// note records, reached again through a new door. Healing turns a permanent systemic failure
+    /// into a one-time loss of whatever was outstanding.
+    ///
+    /// **Set aside rather than unlinked**, through the same `LocalDataQuarantine` the Memory rows
+    /// use, so the bytes survive under `<name>.unreadable-<stamp>` and Settings' Data page counts
+    /// them and can remove them. That is also the only surface this failure has — worth knowing
+    /// rather than assuming otherwise, and it is the honest one: the count is a number the user can
+    /// act on, where a banner about an outbox would not be.
+    ///
+    /// **Only an undecodable file heals.** An I/O failure — a busy disk, a permission change —
+    /// propagates, because the file may be perfectly good and setting it aside would destroy
+    /// obligations over a transient. `LocalStorageEncryptionError.invalidKeyLength` propagates for
+    /// the same reason one step further out: that is the *key* being wrong, not the file, and every
+    /// store on this Mac would be failing at once.
+    ///
+    /// A quarantine that itself fails re-throws the original decode error rather than its own, so
+    /// the caller is told the thing that actually happened first.
     private func loadKeyed() throws -> [String: PendingServerDeletion] {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return [:]
         }
         let data = try Data(contentsOf: fileURL)
-        let decoded = try encryption.decode(
-            [String: PendingServerDeletion].self,
-            from: data,
-            decoder: .pendingServerDeletionISO8601
-        )
+        let decoded: LocalStorageDecoded<[String: PendingServerDeletion]>
+        do {
+            decoded = try encryption.decode(
+                [String: PendingServerDeletion].self,
+                from: data,
+                decoder: .pendingServerDeletionISO8601
+            )
+        } catch let error as LocalStorageEncryptionError {
+            guard case .undecodableLocalData = error else { throw error }
+            _ = try LocalDataQuarantine(fileManager: fileManager).moveAside(fileURL)
+            return [:]
+        }
         return decoded.migratingLegacyPlaintext(store: "pending server deletions", write: write)
     }
 
     /// Keeps the `maxItems` newest entries. See `maxItems` for why it is the oldest that go.
+    ///
+    /// **The tie-break runs the opposite way from `loadAll`'s and has to** (PR #194 review, F4). This
+    /// sorts newest-first and keeps a prefix; `loadAll` sorts oldest-first, breaking ties on
+    /// ascending id. Reversing only the date left the id half pointing the same way, so inside a
+    /// tie group straddling the cut the entries kept were the ones that come *first* in delivery
+    /// order — with `X(t0,"a")`, `Y(t0,"b")`, `Z(t1)` and a cap of two, the oldest by the documented
+    /// order is `X` and the dropped entry was `Y`. **These files persist whole-second `.iso8601`
+    /// dates**, so a same-second group is what a burst of deletes produces and this was the
+    /// reachable form rather than a curiosity; the test that covered the cap used timestamps a
+    /// minute apart and could not see it.
     private func capped(
         _ entries: [String: PendingServerDeletion]
     ) -> [String: PendingServerDeletion] {
@@ -196,7 +315,7 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
                 if left.value.deletedAt != right.value.deletedAt {
                     return left.value.deletedAt > right.value.deletedAt
                 }
-                return left.key < right.key
+                return left.key > right.key
             }
             .prefix(Self.maxItems)
         return Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) })

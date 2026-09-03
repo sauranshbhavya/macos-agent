@@ -1082,8 +1082,11 @@ it feels confusing in practice, not just whether it's "technically correct."
       the wipe. Both now read one sentence built from the store list itself, and the four that had
       gone missing are in it: **what past tasks planned**, **allowed apps**, **unfinished tasks**
       and (in the dialog) **common output locations**. Check that the page and the dialog say the
-      same thing, and **say whether the sentence is too long to read** — it is thirteen items now,
-      and the alternative considered and rejected was pointing at the Memory page instead, which
+      same thing, and **say whether the sentence is too long to read** — it is **fifteen** items now
+      (corrected 2026-09-03, PR #194's F8: it said thirteen, which was already one behind when this
+      row was written and two behind once SONNY-333 added *deletions Sonny hasn't finished*, and the
+      whole row is a judgement about length so the number is load-bearing to it), and the
+      alternative considered and rejected was pointing at the Memory page instead, which
       would have stopped the sentence naming *records of what Sonny did on screen*
 - [ ] **(new 2026-08-28, SONNY-233)** Then press it, as the row above says — confirm the wipe still
       does what it always did, and that nothing in the new wording promises something the press does

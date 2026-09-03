@@ -157,21 +157,147 @@ struct PendingServerDeletionStoreTests {
         #expect(try store.loadAll().map(\.taskID) == ["task-a"])
     }
 
-    /// An unreadable file is a load failure and not silently an empty queue.
+    /// **An undecodable file is set aside and the queue starts again** (PR #194 review, F1).
     ///
-    /// The delivery pass answers "nothing owed" for it deliberately — there is nothing it could
-    /// deliver and no channel to report on — but that is the *caller's* decision, and this pins that
-    /// the store itself still tells the truth. `AgentViewModel.refreshStoreReadability()` reads this
-    /// same door, so a store that swallowed the failure would report a damaged file as readable and
-    /// the whole wipe would then unlink it instead of setting it aside.
+    /// The store's own doc carries the reasoning; what this pins is the pair of consequences.
+    /// Propagating the failure instead would make `enqueue` — which loads before it writes — fail
+    /// for *every* future Delete, with no Memory row and no load-failure banner to clear it from,
+    /// so one corrupt file would orphan every server copy from then on. Setting it aside keeps the
+    /// bytes under a quarantined sibling, which Settings' Data page counts and can remove, and is
+    /// the only surface this failure has — **the readability probe is not one**, because
+    /// `unreadableStores` is consumed through `MemoryCategory.stores` and this store is in no
+    /// category (PR #194 review, F6).
     @Test
-    func anUnreadableFileThrowsRatherThanReadingAsEmpty() throws {
+    func anUndecodableFileIsSetAsideAndTheQueueStartsFresh() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(at: root)
+        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+
+        try Data("not this store's bytes".utf8).write(to: store.fileURL, options: .atomic)
+
+        // The read heals rather than throwing, and reports the empty queue that is now the truth.
+        #expect(try store.loadAll().isEmpty)
+        // The bytes are kept beside it rather than destroyed.
+        let setAside = LocalDataQuarantine().quarantinedSiblings(of: store.fileURL)
+        #expect(setAside.count == 1)
+        #expect(try Data(contentsOf: try #require(setAside.first)) == Data("not this store's bytes".utf8))
+        // And the queue works again immediately — which is the point, since the alternative was
+        // every future Delete failing to record its obligation.
+        try store.enqueue(taskID: "task-b", deletedAt: Self.epoch)
+        #expect(try store.loadAll().map(\.taskID) == ["task-b"])
+    }
+
+    /// **A `bytea`-shaped read failure is not a decode failure and must not heal.**
+    ///
+    /// The heal above is justified by the contents being unrecoverable; a file that is merely
+    /// unreadable *right now* — a busy disk, a permission change — may be perfectly good, and
+    /// setting it aside would destroy live obligations over a transient. Driven through a store
+    /// whose file is a directory, which is the cheapest read failure that is not a decode failure.
+    @Test
+    func aReadFailureThatIsNotADecodeFailurePropagates() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(at: root)
+        try FileManager.default.createDirectory(at: store.fileURL, withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) { _ = try store.loadAll() }
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: store.fileURL).isEmpty)
+    }
+
+    /// **The cap's tie-break has to agree with the delivery order's** (PR #194 review, F4).
+    ///
+    /// `loadAll` orders oldest-first with ties on ascending id; `capped` sorts newest-first, so its
+    /// tie-break has to run the *other* way or the entries it keeps inside a tie group are the ones
+    /// that come first in delivery order. With whole-second `.iso8601` dates a tie group is what a
+    /// burst of deletes produces, so this is the reachable shape rather than a curiosity — and the
+    /// cap test above cannot see it, because its timestamps are a minute apart.
+    ///
+    /// Three entries at a cap of two, two of them sharing an instant: the oldest by the documented
+    /// order is `t0/a`, so that is the one that must go.
+    @Test
+    func theCapDropsTheOldestEvenWhenTwoEntriesShareASecond() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try Data("not this store's bytes".utf8).write(to: store.fileURL, options: .atomic)
+        for index in 0..<(PendingServerDeletionStore.maxItems - 1) {
+            try store.enqueue(
+                taskID: "filler-\(String(format: "%04d", index))",
+                deletedAt: Self.epoch.addingTimeInterval(60)
+            )
+        }
+        // Two at one instant, older than every filler above, and one newer than all of them.
+        try store.enqueue(taskID: "tie-a", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "tie-b", deletedAt: Self.epoch)
 
-        #expect(throws: (any Error).self) { _ = try store.loadAll() }
+        let queued = try store.loadAll()
+        #expect(queued.count == PendingServerDeletionStore.maxItems)
+        // `tie-a` is first in delivery order, so it is the oldest, so it is the one the cap takes.
+        #expect(!queued.map(\.taskID).contains("tie-a"))
+        #expect(queued.map(\.taskID).contains("tie-b"))
+    }
+
+    /// **The load-modify-write cycles are serialised, per file** (PR #194 review, F2).
+    ///
+    /// The store has two writers that do not share an executor — `deleteTask`'s synchronous
+    /// `enqueue` on the main actor, and the delivery pass's `remove` off it — so an unguarded
+    /// read-modify-write loses whichever update lands inside the other's window, silently and
+    /// permanently. The reviewer measured 24 obligations destroyed in 60 deliberately overlapped
+    /// runs against 0 in 60 serialised.
+    ///
+    /// **Two independently constructed stores over one path**, which is what makes this a test of
+    /// the *file's* guarantee rather than of one instance's: an instance-held lock passes every
+    /// other assertion here and fails this one.
+    ///
+    /// **Not a wall-clock bet.** Nothing here sleeps or races a threshold; the assertion is that no
+    /// update is lost, which is deterministic with the lock and overwhelmingly not without it — a
+    /// hundred unguarded concurrent read-modify-write cycles over one file do not all survive.
+    @Test
+    func concurrentWritesThroughTwoStoresOverOneFileLoseNothing() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = makeStore(at: root)
+        let other = makeStore(at: root)
+        let count = 100
+
+        DispatchQueue.concurrentPerform(iterations: count) { index in
+            let store = index.isMultiple(of: 2) ? writer : other
+            try? store.enqueue(
+                taskID: "task-\(String(format: "%03d", index))",
+                deletedAt: Self.epoch.addingTimeInterval(Double(index))
+            )
+        }
+
+        #expect(try makeStore(at: root).loadAll().count == count)
+    }
+
+    /// The same property in the direction that actually destroys an obligation: a press interleaved
+    /// with the delivery pass's `remove`.
+    @Test
+    func anEnqueueInterleavedWithARemoveSurvivesIt() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pressing = makeStore(at: root)
+        let delivering = makeStore(at: root)
+        let rounds = 50
+
+        for round in 0..<rounds {
+            let delivered = "delivered-\(round)"
+            let pressed = "pressed-\(round)"
+            try pressing.enqueue(taskID: delivered, deletedAt: Self.epoch)
+
+            DispatchQueue.concurrentPerform(iterations: 2) { which in
+                if which == 0 {
+                    try? delivering.remove(taskID: delivered)
+                } else {
+                    try? pressing.enqueue(taskID: pressed, deletedAt: Self.epoch.addingTimeInterval(1))
+                }
+            }
+
+            let queued = try pressing.loadAll().map(\.taskID)
+            #expect(queued == [pressed], "round \(round) lost or resurrected an entry: \(queued)")
+            try pressing.remove(taskID: pressed)
+        }
     }
 }

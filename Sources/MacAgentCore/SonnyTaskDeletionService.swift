@@ -67,6 +67,20 @@ public struct SonnyTaskDeletionService: Sendable {
         try store.enqueue(taskID: id, deletedAt: deletedAt)
     }
 
+    /// Withdraws an obligation recorded a moment ago, because the local delete it was recorded for
+    /// did not happen (PR #194 review, F1's symmetric half).
+    ///
+    /// **The pair to `recordDeletedTask`, and the reason `deleteTask` can now be all-or-nothing.**
+    /// The enqueue runs first so that a crash between the two steps errs towards deleting; a local
+    /// delete that *throws* is different from a crash, because there is somewhere to put the
+    /// correction. Without this, an entry written for a delete that then failed would have the next
+    /// launch's sweep remove the server's copy of a task still sitting in the user's history, after
+    /// they were told the delete had not happened — content taken on the strength of a press that
+    /// visibly did not work.
+    public func withdrawDeletedTask(id: String) throws {
+        try store.remove(taskID: id)
+    }
+
     /// What is still owed, oldest first. Read by tests and by nothing in the product — the queue has
     /// no surface, deliberately, and `PendingServerDeletionStore` says why.
     public func pendingDeletions() throws -> [PendingServerDeletion] {

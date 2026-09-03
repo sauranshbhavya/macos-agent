@@ -14,7 +14,7 @@ struct MemorySettingsTests {
     // MARK: - The mapping
 
     /// **The exhaustiveness guard, in the direction the compiler cannot check.** `memoryCategory`'s
-    /// switch has no `default`, so a fourteenth `LocalStore` fails to compile until someone answers for
+    /// switch has no `default`, so a fifteenth `LocalStore` fails to compile until someone answers for
     /// it — but "answers" includes answering `nil`, and a store excluded by accident is invisible in
     /// the surface built to show the user everything Sonny remembers. This asserts the union
     /// explicitly, so an exclusion has to be a decision recorded in a test rather than a shrug.

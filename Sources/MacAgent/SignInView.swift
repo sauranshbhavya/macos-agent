@@ -5,7 +5,7 @@ import SwiftUI
 /// Sign-in state for the whole app, held once and observed by Command Center.
 ///
 /// **Its own object rather than another field on `AgentViewModel`.** The view model owns the run
-/// loop and thirteen local stores; an account session shares none of that, and adding it there
+/// loop and fourteen local stores; an account session shares none of that, and adding it there
 /// would put one more required parameter on an initializer that already has no defaults at all,
 /// and would land in every one of its fixtures — which exist only because SONNY-240 removed every
 /// default from it.

@@ -609,7 +609,8 @@ struct BackendOutageTests {
                 encryption: encryption
             ),
             pendingServerDeletionStore: PendingServerDeletionStore(
-                fileURL: root.appendingPathComponent("pending-server-deletions.json")
+                fileURL: root.appendingPathComponent("pending-server-deletions.json"),
+                encryption: encryption
             ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
