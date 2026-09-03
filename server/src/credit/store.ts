@@ -143,6 +143,14 @@ export function creditPlanKeyFor(record: EntitlementRecord, now: Date): string |
  * The filter is written on the outcome because that is the fact being asked about — a later row
  * shape that granted zero credits deliberately would still be a grant, and would still be excluded
  * by a `credits > 0` filter without anybody noticing.
+ *
+ * **Dropping this clause is an equivalent mutant today, and that is worth writing down rather than
+ * discovering twice** (SONNY-215's first battery, S6 — it survived). The CHECK makes every
+ * non-granted row carry exactly zero credits, so `sum(credits)` over the whole period and over the
+ * granted rows alone are the same number, and no test can tell the two queries apart. The clause is
+ * kept because it names the fact rather than a proxy for it; what holds the *sum* is the period
+ * filter beside it and the CHECK itself, both proved in `topup.db.test.ts` — the second in both
+ * directions, because a CHECK nothing exercises is a comment.
  */
 export async function readToppedUpCredits(
   client: pg.Client,
