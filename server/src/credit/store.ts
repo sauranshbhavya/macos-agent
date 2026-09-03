@@ -186,6 +186,43 @@ export async function readTopUpAttempts(
 }
 
 /**
+ * What this account was last charged for a top-up, and when (SONNY-215's F6).
+ *
+ * **The most recent *granted* row and nothing else.** A declined attempt took no money, and a row
+ * still being resolved has not been shown to have taken any — so neither is a charge, and putting
+ * either on the surface that tells a user what they were last charged would be showing them a
+ * payment that did not happen.
+ *
+ * `attempted_at` rather than `settled_at` is the instant, because it is when the user's session
+ * asked — the moment they would recognise — and because a charge resolved a day later by a retry is
+ * still the charge that happened when it happened.
+ */
+export async function readLastTopUpCharge(
+  client: pg.Client,
+  accountId: string,
+): Promise<{ amount: number; currency: string; at: Date } | undefined> {
+  const { rows } = await client.query<{
+    charged_amount: string | number | null;
+    charged_currency: string | null;
+    attempted_at: Date;
+  }>(
+    `SELECT charged_amount, charged_currency, attempted_at
+       FROM sonny.credit_topup
+      WHERE account_id = $1 AND outcome = 'granted' AND charged_amount IS NOT NULL
+      ORDER BY attempted_at DESC
+      LIMIT 1`,
+    [accountId],
+  );
+  const row = rows[0];
+  if (row === undefined || row.charged_currency === null) return undefined;
+  return {
+    amount: count(row.charged_amount),
+    currency: row.charged_currency,
+    at: row.attempted_at,
+  };
+}
+
+/**
  * When this account opted in to automatic top-ups, or `null` for every way of not having.
  *
  * **One predicate over three states**, which is 0019's decision: no row at all (never asked), a row
@@ -220,6 +257,12 @@ export interface CreditFacts {
    * `null` here cannot produce a recordable row at all.
    */
   readonly autoTopUpOptedInAt: Date | null;
+  /**
+   * What this account was last charged for a top-up, or `undefined` if it never has been
+   * (SONNY-215's F6). **Not scoped to the period**, unlike every other figure here: a record of a
+   * payment does not stop being true when the month turns over.
+   */
+  readonly lastTopUp: { readonly amount: number; readonly currency: string; readonly at: Date } | undefined;
 }
 
 /**
@@ -271,12 +314,14 @@ export function postgresCreditStore(withConnection: WithConnection): CreditStore
           periodStart: since,
         });
         const autoTopUpOptedInAt = await readAutoTopUpConsent(client, accountId);
+        const lastTopUp = await readLastTopUpCharge(client, accountId);
         return {
           planKey: creditPlanKeyFor(record, now),
           draw,
           toppedUpCredits,
           topUpAttemptsThisPeriod,
           autoTopUpOptedInAt,
+          lastTopUp,
         };
       }),
     setAutoTopUp: (accountId, enabled, now) =>

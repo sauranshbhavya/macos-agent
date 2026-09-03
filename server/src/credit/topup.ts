@@ -1,6 +1,6 @@
 import type pg from "pg";
 import type { WithConnection } from "../db/connection.js";
-import type { BillingProvider } from "../billing/provider.js";
+import type { BillingProvider, TopUpOrder } from "../billing/provider.js";
 import type { CreditTopUpPack } from "./catalogue.js";
 import type { CreditBalance } from "./balance.js";
 
@@ -83,6 +83,18 @@ export interface TopUpAttempt {
 }
 
 /**
+ * An order this gateway created at the provider and has not resolved (PR #196's F1).
+ *
+ * **Both fields, and the id is why this type exists.** A row without an order id is one that never
+ * reached the provider's charge and needs no resolving; a row with one names an object whose state
+ * only the provider knows.
+ */
+export interface OutstandingTopUp {
+  readonly topUpId: string;
+  readonly orderId: string;
+}
+
+/**
  * The write half, as the request path uses it.
  *
  * A seam of the same shape and for the same reason as `CreditStore` and `BillingStore`: the flagged
@@ -108,12 +120,41 @@ export interface TopUpAttemptStore {
     readonly creditsRemainingAtTrigger: number;
     readonly maxPerPeriod: number;
   }) => Promise<TopUpAttempt | undefined>;
-  /** Record how the attempt ended, and what it bought. */
+  /**
+   * Write the provider's order id onto a claimed row — **before anything charges it** (PR #196's F1).
+   *
+   * Its own method rather than a field on `settle`, because the two happen at different moments and
+   * the whole point is the gap between them: this runs while the order is a draft that has cost
+   * nobody anything, and `settle` runs after the only call that can take money.
+   */
+  readonly recordOrder: (input: {
+    readonly topUpId: string;
+    readonly providerOrderId: string;
+  }) => Promise<void>;
+  /**
+   * The one order this account has outstanding for this period, if any (PR #196's F1).
+   *
+   * **A row is outstanding when it names an order and has not been closed** — `attempted`, which is
+   * a process that died between the record and the answer, or `unconfirmed`, which is an answer this
+   * gateway could not read. Both mean the same thing operationally: an object exists at the provider
+   * and only the provider knows what happened to it.
+   *
+   * `granted`, `declined` and `provider_error` are closed: the first two say what happened to the
+   * money and the third says no order was ever created.
+   */
+  readonly outstanding: (input: {
+    readonly accountId: string;
+    readonly periodStart: Date;
+  }) => Promise<OutstandingTopUp | undefined>;
+  /** Record how the attempt ended, what it bought, and what it cost. */
   readonly settle: (input: {
     readonly topUpId: string;
     readonly outcome: TopUpAttemptOutcome;
     readonly credits: number;
     readonly providerOrderId: string | undefined;
+    /** What the provider took, in the currency's smallest unit. Only ever set on a grant. */
+    readonly chargedAmount: number | undefined;
+    readonly chargedCurrency: string | undefined;
     readonly settledAt: Date;
   }) => Promise<void>;
 }
@@ -139,16 +180,126 @@ export interface TopUpInput {
   readonly now: Date;
 }
 
-/** Provider answer → what the row records. Success is the only arm that grants anything. */
-function outcomeFor(kind: Exclude<string, "charged">): TopUpAttemptOutcome {
+/**
+ * A create failure → what the row records. **None of these left an order behind**, so every one is
+ * terminal and none carries an id.
+ *
+ * `noCustomer` records as `provider_error` and that is an imprecision rather than a mistake
+ * (PR #196's F9): a customer the provider does not have is not an outage, and 0019's outcome set has
+ * no better arm for it today. Adding one is a migration and a vocabulary change for a state the
+ * route already refuses precisely; it is named here so the table's reader knows the two are merged.
+ */
+function outcomeForFailedOrder(kind: Exclude<TopUpOrder["kind"], "created">): TopUpAttemptOutcome {
   switch (kind) {
-    case "declined":
-      return "declined";
-    case "unconfirmed":
-      return "unconfirmed";
-    default:
+    case "noCustomer":
+    case "unavailable":
+    case "timedOut":
+    case "rejected":
       return "provider_error";
   }
+}
+
+/** A create failure → what the caller is told. */
+function refusalForFailedOrder(kind: Exclude<TopUpOrder["kind"], "created">): TopUpRefusal {
+  switch (kind) {
+    case "noCustomer":
+      return "no_customer";
+    case "unavailable":
+      return "unavailable";
+    case "timedOut":
+      return "timed_out";
+    case "rejected":
+      return "rejected";
+  }
+}
+
+/**
+ * Charge an order this gateway has already written down, and record what happened.
+ *
+ * **One function for both the fresh order and the resolution of an outstanding one**, because they
+ * are the same act: the order exists, its id is on the row, and the only question left is what the
+ * provider says about it. A second copy of this for the recovery path is how the two would come to
+ * settle the same answer differently.
+ *
+ * **A non-terminal answer settles `unconfirmed` and keeps the order id**, which is what leaves the
+ * row resolvable. Only `charged` and `declined` close a row, because they are the only two answers
+ * that say what happened to the money.
+ */
+async function chargeAndSettle(
+  deps: TopUpDeps,
+  input: TopUpInput,
+  pack: CreditTopUpPack,
+  attempt: { readonly topUpId: string; readonly orderId: string },
+): Promise<TopUpResult> {
+  /**
+   * **Every settle after a charge is guarded, and a failed one is `unconfirmed` rather than a throw**
+   * (PR #196's F1's cheap half).
+   *
+   * The row keeps the order id it was given before the charge, so it stays resolvable and the
+   * account's next attempt finds it. What the guard adds is what the *caller* is told: a throw here
+   * became a `500 server.error`, and `idempotency/hook.ts`'s `RELEASE_ON_CODES` releases that claim
+   * — so even a same-key repeat re-ran the whole route. `topup.unconfirmed` is stored instead, and
+   * it is marked not retryable for the same reason.
+   *
+   * A failure is swallowed rather than logged here because this module holds no logger; the route
+   * logs every refusal it returns, and `unconfirmed` is the one it names for an operator.
+   */
+  const settleOrReportUnconfirmed = async (
+    row: Parameters<TopUpAttemptStore["settle"]>[0],
+    onSettled: TopUpResult,
+  ): Promise<TopUpResult> => {
+    try {
+      await deps.attempts.settle(row);
+    } catch {
+      return { kind: "refused", refusal: "unconfirmed" };
+    }
+    return onSettled;
+  };
+
+  const charge = await deps.provider.finalizeTopUpOrder(attempt.orderId);
+  if (charge.kind === "charged") {
+    return await settleOrReportUnconfirmed({
+      topUpId: attempt.topUpId,
+      outcome: "granted",
+      credits: pack.credits,
+      providerOrderId: attempt.orderId,
+      // **What the provider says it took, and the configured price only when it says nothing.** The
+      // record the product shows is about money that moved, so the provider's own figure wins over
+      // a number a deployment wrote down — the two can disagree, and only one of them was charged.
+      chargedAmount: charge.amount ?? pack.price.amount,
+      chargedCurrency: charge.currency ?? pack.price.currency,
+      settledAt: input.now,
+    }, { kind: "granted", credits: pack.credits });
+  }
+  if (charge.kind === "declined") {
+    return await settleOrReportUnconfirmed({
+      topUpId: attempt.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: attempt.orderId,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: input.now,
+    }, { kind: "refused", refusal: "declined" });
+  }
+  // **Everything else keeps the row resolvable**, including a `429` that certainly charged nothing.
+  // Over-recording costs the account's next attempt one question to the provider; under-recording
+  // costs a charge nobody ever finds, which is the defect this whole shape exists to close.
+  const refusal: TopUpRefusal =
+    charge.kind === "unavailable"
+      ? "unavailable"
+      : charge.kind === "rejected"
+        ? "rejected"
+        : "unconfirmed";
+  return await settleOrReportUnconfirmed({
+    topUpId: attempt.topUpId,
+    outcome: "unconfirmed",
+    credits: 0,
+    providerOrderId: attempt.orderId,
+    chargedAmount: undefined,
+    chargedCurrency: undefined,
+    settledAt: input.now,
+  }, { kind: "refused", refusal });
 }
 
 /**
@@ -157,6 +308,10 @@ function outcomeFor(kind: Exclude<string, "charged">): TopUpAttemptOutcome {
  * The refusals are ordered by what each one costs to establish and by what it protects, and the
  * order is load-bearing rather than incidental — see this file's header for the consent check in
  * particular. Nothing below the consent check can run for an account that has not opted in.
+ *
+ * **Resolving comes before buying, and that ordering is PR #196's F1.** An order this gateway
+ * created and never resolved may already be paid; asking about it is what stops the account's next
+ * attempt buying a second pack for a charge it has already made.
  */
 export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<TopUpResult> {
   // **First, and before anything else is read.** The whole of this ticket's hard requirement.
@@ -172,6 +327,24 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
   const customerId = await deps.billingCustomerFor(deps.provider.name, input.accountId);
   if (customerId === undefined) return { kind: "refused", refusal: "no_customer" };
 
+  /**
+   * **An order this gateway made and never resolved, if there is one** (PR #196's F1).
+   *
+   * It consumes no new slot and creates no new order: this attempt *is* the resolution of that one.
+   * A paid order answers `charged` and the account is granted what it already paid for; an order
+   * still in draft is finalized, which is the ordinary charge arriving late; anything else keeps the
+   * row resolvable and refuses. **Until it resolves, this account buys nothing else** — which is the
+   * point rather than a side effect, because buying beside an order of unknown state is exactly the
+   * double charge this ordering exists to prevent.
+   */
+  const outstanding = await deps.attempts.outstanding({
+    accountId: input.accountId,
+    periodStart: input.balance.periodStart,
+  });
+  if (outstanding !== undefined) {
+    return await chargeAndSettle(deps, input, pack, outstanding);
+  }
+
   const attempt = await deps.attempts.claim({
     accountId: input.accountId,
     provider: deps.provider.name,
@@ -183,40 +356,33 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
   });
   if (attempt === undefined) return { kind: "refused", refusal: "limit_reached" };
 
-  const charge = await deps.provider.chargeTopUp({ customerId, productId: pack.productId });
-  if (charge.kind === "charged") {
+  const order = await deps.provider.createTopUpOrder({ customerId, productId: pack.productId });
+  if (order.kind !== "created") {
+    // Nothing exists at the provider, so this row is closed rather than left resolvable — there is
+    // no object for a later attempt to ask about.
     await deps.attempts.settle({
       topUpId: attempt.topUpId,
-      outcome: "granted",
-      credits: pack.credits,
-      providerOrderId: charge.orderId,
+      outcome: outcomeForFailedOrder(order.kind),
+      credits: 0,
+      providerOrderId: undefined,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
       settledAt: input.now,
     });
-    return { kind: "granted", credits: pack.credits };
+    return { kind: "refused", refusal: refusalForFailedOrder(order.kind) };
   }
-  await deps.attempts.settle({
+
+  // **The order id goes down before anything can charge, and before anything else can throw.** This
+  // one line is the whole of PR #196's F1: with it, every state this account can be left in names an
+  // object at the provider and the resolve above finds it. Without it — and there was no way to
+  // write it while the two provider calls sat inside one seam method — a grant lost after the charge
+  // left a row 0019 documents as the harmless case and a user who had paid for nothing.
+  await deps.attempts.recordOrder({ topUpId: attempt.topUpId, providerOrderId: order.orderId });
+
+  return await chargeAndSettle(deps, input, pack, {
     topUpId: attempt.topUpId,
-    outcome: outcomeFor(charge.kind),
-    credits: 0,
-    // Only the unconfirmed arm carries one, and it is the arm where it matters most: an operator
-    // resolving a charge whose answer was lost needs the order to look at.
-    providerOrderId: charge.kind === "unconfirmed" ? charge.orderId : undefined,
-    settledAt: input.now,
+    orderId: order.orderId,
   });
-  switch (charge.kind) {
-    case "declined":
-      return { kind: "refused", refusal: "declined" };
-    case "noCustomer":
-      return { kind: "refused", refusal: "no_customer" };
-    case "timedOut":
-      return { kind: "refused", refusal: "timed_out" };
-    case "unavailable":
-      return { kind: "refused", refusal: "unavailable" };
-    case "rejected":
-      return { kind: "refused", refusal: "rejected" };
-    case "unconfirmed":
-      return { kind: "refused", refusal: "unconfirmed" };
-  }
 }
 
 /** Postgres' unique-violation code. A concurrent claim losing the race on `attempt_no`. */
@@ -261,13 +427,63 @@ export async function claimTopUpAttempt(
   }
 }
 
+/**
+ * Write the order id onto a claimed row (PR #196's F1).
+ *
+ * **`provider_order_id IS NULL` in the `WHERE`, so this can only ever fill an empty column.** An
+ * order id is written once and never replaced: overwriting one would be losing the object a
+ * resolution is about, which is the whole thing this column exists to keep.
+ */
+export async function recordTopUpOrder(
+  client: pg.Client,
+  input: Parameters<TopUpAttemptStore["recordOrder"]>[0],
+): Promise<void> {
+  await client.query(
+    `UPDATE sonny.credit_topup
+        SET provider_order_id = $2
+      WHERE topup_id = $1 AND provider_order_id IS NULL`,
+    [input.topUpId, input.providerOrderId],
+  );
+}
+
+/**
+ * The one unresolved order this account has for this period (PR #196's F1).
+ *
+ * **Oldest first, so a resolution takes the earliest unresolved order** rather than whichever the
+ * planner happened to return. In practice there is at most one — `attemptTopUp` resolves before it
+ * claims, so a second cannot be created while a first is outstanding — and the ordering is what
+ * makes that true of the past as well as of the future, for rows a run of this code before the fix
+ * could have left behind.
+ */
+export async function readOutstandingTopUp(
+  client: pg.Client,
+  input: Parameters<TopUpAttemptStore["outstanding"]>[0],
+): Promise<OutstandingTopUp | undefined> {
+  const { rows } = await client.query<{ topup_id: string; provider_order_id: string }>(
+    `SELECT topup_id, provider_order_id
+       FROM sonny.credit_topup
+      WHERE account_id = $1
+        AND period_start = $2
+        AND provider_order_id IS NOT NULL
+        AND outcome IN ('attempted', 'unconfirmed')
+      ORDER BY attempt_no
+      LIMIT 1`,
+    [input.accountId, input.periodStart],
+  );
+  const row = rows[0];
+  return row === undefined
+    ? undefined
+    : { topUpId: row.topup_id, orderId: row.provider_order_id };
+}
+
 export async function settleTopUpAttempt(
   client: pg.Client,
   input: Parameters<TopUpAttemptStore["settle"]>[0],
 ): Promise<void> {
   await client.query(
     `UPDATE sonny.credit_topup
-        SET outcome = $2, credits = $3, provider_order_id = $4, settled_at = $5
+        SET outcome = $2, credits = $3, provider_order_id = coalesce($4, provider_order_id),
+            charged_amount = $6, charged_currency = $7, settled_at = $5
       WHERE topup_id = $1`,
     [
       input.topUpId,
@@ -275,6 +491,8 @@ export async function settleTopUpAttempt(
       input.credits,
       input.providerOrderId ?? null,
       input.settledAt,
+      input.chargedAmount ?? null,
+      input.chargedCurrency ?? null,
     ],
   );
 }
@@ -282,6 +500,8 @@ export async function settleTopUpAttempt(
 export function postgresTopUpAttemptStore(withConnection: WithConnection): TopUpAttemptStore {
   return {
     claim: (input) => withConnection((client) => claimTopUpAttempt(client, input)),
+    recordOrder: (input) => withConnection((client) => recordTopUpOrder(client, input)),
+    outstanding: (input) => withConnection((client) => readOutstandingTopUp(client, input)),
     settle: (input) => withConnection((client) => settleTopUpAttempt(client, input)),
   };
 }
