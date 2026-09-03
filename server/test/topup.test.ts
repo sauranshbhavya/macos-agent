@@ -892,6 +892,24 @@ describe("the provider adapter's off-session charge", () => {
     });
   });
 
+  it("refuses a 200 that says nothing at all, which is not the same shape as a wrong status", async () => {
+    // **The gap the first battery found (S9), and it is the more dangerous half of the same
+    // check.** The test above sends a status this gateway does not recognise; these send *no*
+    // status — a body with the field missing, and a body that is not JSON. Both leave `status`
+    // undefined, and a mutant that let `undefined` through was killed by nothing: an unreadable
+    // answer would have granted a pack, which is the one direction `TopUpCharge`'s whole
+    // classification exists to refuse. `null` in the reason rather than a quoted word is what says
+    // which of the two cases it was.
+    for (const body of [json(200, { id: "order-6" }), new Response("not json", { status: 200 })]) {
+      const scripted = scriptedFetch(json(201, { id: "order-6", status: "draft" }), body);
+      expect(await polar(scripted.call).chargeTopUp(CHARGE)).toEqual({
+        kind: "unconfirmed",
+        reason: "finalize answered 200 with status null",
+        orderId: "order-6",
+      });
+    }
+  });
+
   it("rejects a draft that answers 200 naming no order, because there is nothing to finalize", async () => {
     const scripted = scriptedFetch(json(201, { status: "draft" }));
     expect(await polar(scripted.call).chargeTopUp(CHARGE)).toEqual({
