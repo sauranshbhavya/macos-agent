@@ -890,7 +890,7 @@ struct LocalStoreInjectionScanTests {
     /// it — so a scan is the only instrument left, which is the same answer
     /// `onlyMainAsksForTheRealStoreLocations` reaches for the same reason.
     ///
-    /// **The same gap covers the thirteen store constructions beside it and is not closed here.**
+    /// **The same gap covers the fourteen store constructions beside it and is not closed here.**
     /// `routineStore: RoutineStore()` could become a temp store with the whole suite green, for
     /// exactly this reason. Generalising this check to every argument of that one call is available
     /// and belongs to whoever owns that suite; recording the gap is better than quietly benefiting

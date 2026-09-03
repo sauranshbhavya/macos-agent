@@ -70,7 +70,10 @@ public struct SonnyTaskDeletionService: Sendable {
     /// Withdraws an obligation recorded a moment ago, because the local delete it was recorded for
     /// did not happen (PR #194 review, F1's symmetric half).
     ///
-    /// **The pair to `recordDeletedTask`, and the reason `deleteTask` can now be all-or-nothing.**
+    /// **The pair to `recordDeletedTask`, and the reason `deleteTask` can now move the obligation
+    /// and the local records together or not at all.** (Not "all-or-nothing" flatly: the three local
+    /// deletes are three files in sequence with no transaction, and `deleteTask`'s own comment says
+    /// what that leaves — PR #194 cycle-3, R3.)
     /// The enqueue runs first so that a crash between the two steps errs towards deleting; a local
     /// delete that *throws* is different from a crash, because there is somewhere to put the
     /// correction. Without this, an entry written for a delete that then failed would have the next

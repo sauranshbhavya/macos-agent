@@ -403,7 +403,13 @@ private struct TaskDeletionFixture {
         // Timestamps derived from the id, so two records in one test are an hour apart rather than
         // sharing an instant — these files persist whole-second dates and `refreshTaskHistory`'s
         // sort is not stable, so same-second twins come back in no defined order.
-        let offset = Double(abs(id.hashValue % 24) * 3600)
+        //
+        // **A byte sum rather than `hashValue`** (PR #194 cycle-3's residuals). Swift seeds String
+        // hashing per process, so the offset differed between runs and two ids collided about one
+        // run in twenty-four — benign here, since nothing asserts on order, and exactly the kind of
+        // per-process-random value that later makes one run look different for no reason a reader
+        // can see.
+        let offset = Double((id.utf8.reduce(0) { ($0 + Int($1)) % 24 }) * 3600)
         let record = CompletedTaskRecord(
             id: id,
             command: "do the thing",

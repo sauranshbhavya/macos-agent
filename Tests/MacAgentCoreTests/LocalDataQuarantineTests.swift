@@ -24,7 +24,7 @@ import Testing
 /// **The failure is reproduced the way the founder's Mac produced it**, not with random bytes: each
 /// file is written as a valid `SONNYENC1` blob under one key and read back under another. That is
 /// what SONNY-240's fixtures did to `output-locations.json` and `resumable-tasks.json`, and it is
-/// also what a Keychain item replaced by a restore or a migration would do to all thirteen at once.
+/// also what a Keychain item replaced by a restore or a migration would do to all fourteen at once.
 /// Bytes that merely fail to parse would exercise the JSON half of `decode` and say nothing about
 /// the decrypt half, which is the half that actually happened.
 @Suite(.serialized)

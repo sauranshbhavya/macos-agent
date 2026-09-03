@@ -576,7 +576,7 @@ struct LocalStorageSecurityTests {
         // suite stayed green, while that exact phrase is the reason this branch rejected deriving
         // the sentence from Memory rows instead. Fifteen literals against fourteen stores, because
         // `resumable-tasks.json` names two collections (SONNY-236); it is otherwise the same
-        // shape `theWipeReachesEveryLocalStore` uses for the thirteen file names, for the same reason:
+        // shape `theWipeReachesEveryLocalStore` uses for the fourteen file names, for the same reason:
         // this is a destructive action's disclosure, and a copy pass over it should have to say so.
         #expect(items == [
             "records of what Sonny did on screen",
