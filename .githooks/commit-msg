@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Refuse a commit whose message carries a Claude attribution (SONNY-406).
+#
+# Installed by pointing git at this directory:  git config core.hooksPath .githooks
+# `.claude/hooks/no-claude-attribution.sh` does that for you the first time a session in this
+# repository runs `git commit`, so a fresh clone or a fresh worktree needs no setup step. A
+# relative hooksPath resolves per worktree, so one config in the clone covers every lane and each
+# lane runs its own branch's copy of this file (measured on git 2.50.1: a worktree added after the
+# config was set ran the hook from its own checkout).
+#
+# WHY THIS LAYER. This is the only barrier that reads the message git is actually about to commit.
+# `-m`, `-F`, a heredoc, the editor, `--amend` — every route lands here, so a hole in one of them
+# is not a hole in this. The Claude Code hook beside it reads a command line, which is a strictly
+# smaller thing to see; it exists for what git cannot refuse (a PR body, ticket content) and to
+# make sure this file is installed at all.
+#
+# WHAT IT CANNOT SEE, stated rather than left to be discovered: `git commit --no-verify` skips
+# every commit-msg hook, this one included. Nothing at the git layer can close that — which is
+# why the Claude Code hook refuses `--no-verify` on a commit outright.
+set -u
+
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lib="$hook_dir/../scripts/lib/no-attribution.sh"
+
+if [ ! -r "$lib" ]; then
+  # Fail closed, and say which of the two states this is. A guard that cannot find its own
+  # definition of the class has not checked anything, and "nothing was checked" must never leave
+  # the same trace as "nothing was found".
+  printf 'commit-msg: REFUSING — scripts/lib/no-attribution.sh is missing from this checkout.\n' >&2
+  printf 'Nothing has been checked. This is a broken checkout, not a clean message.\n' >&2
+  printf 'Looked for: %s\n' "$lib" >&2
+  exit 1
+fi
+
+# shellcheck source=../scripts/lib/no-attribution.sh
+. "$lib"
+
+msg_file="${1:?commit-msg: no message file given}"
+
+hits="$(no_attribution_scan_file "$msg_file")"
+rc=$?
+
+if [ "$rc" -eq 2 ]; then
+  printf 'commit-msg: REFUSING — could not read the commit message file %s.\n' "$msg_file" >&2
+  printf 'Nothing has been checked.\n' >&2
+  exit 1
+fi
+
+if [ "$rc" -eq 1 ]; then
+  {
+    printf 'commit-msg: REFUSED. This commit message carries a Claude attribution.\n\n'
+    printf '%s\n' "$hits" | sed 's/^/    /'
+    printf '\n'
+    no_attribution_explain
+    printf '\nDo NOT reach for --no-verify: it skips this hook, and the hook that watches this\n'
+    printf 'session refuses that flag on a commit for exactly that reason.\n'
+  } >&2
+  exit 1
+fi
+
+exit 0

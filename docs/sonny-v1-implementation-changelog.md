@@ -170,6 +170,63 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/no-attribution-in-the-history
+Status: in progress
+Date: 2026-09-03
+Tickets: SONNY-406 — a mechanical refusal for Claude attributions on all three surfaces the rule names, with a selftest that proves it refuses. SONNY-407 — removing the ten already in the history, and repointing what the rewrite orphans; that half is a founder-run force-push and is recorded separately when it lands.
+Reviewed by: fresh session, per `WORKFLOW.md` step 7 — pending at the time this entry was written.
+
+**The finding is not that a rule was broken; it is that a rule was the only thing there.** `CLAUDE.md` has forbidden Claude attribution in plain, total terms since `527d5390`, and on 2026-09-03 eight commits carrying a co-author trailer *and* a `claude.ai` session URL reached `main` in one pull request. The lane that wrote them had followed dozens of rules from that same file with unusual care in the same branch, and three of the four lanes in that wave got it right — so the rule is neither unfindable nor generally ignored. What is specific to this one is that the harness supplies the opposite instruction **at the moment of the commit**, as a system-level default, and prose in a file read at session start was the only thing arguing back. That is the whole reason this branch builds a mechanism rather than sharpening the wording.
+
+Spec sections covered: none — this is repository tooling and process records.
+
+Files changed:
+- `scripts/lib/no-attribution.sh` (new — the single definition of the class, six shapes, sourced by every barrier)
+- `.githooks/commit-msg` (new — refuses the message git is about to commit, whatever route supplied it)
+- `.claude/hooks/no-claude-attribution.sh` (new — PreToolUse on Bash: the two surfaces git cannot see, plus `--no-verify`, plus installing `core.hooksPath`)
+- `.claude/hooks/no-claude-attribution-selftest.sh` (new — 41 cases over both hooks)
+- `scripts/no-attribution` (new — the after-the-fact audit of history, tree and PR bodies, with its own `selftest`)
+- `.claude/settings.json` (the PreToolUse wiring), `CLAUDE.md` (the rule bullet now names the mechanism), `docs/sonny-manual-test-checklist.md` (four rows)
+
+Tests: `.claude/hooks/no-claude-attribution-selftest.sh` -> exit 0, **41 cases, 0 failures**. `scripts/no-attribution selftest` -> exit 0. **No Swift or server command is owed**: the diff touches neither `Sources/`, `Tests/` nor `server/` — `git diff --name-only <base>..<head> -- Sources Tests server Package.swift` prints nothing — which is `WORKFLOW.md` step 7's docs-and-tooling case. Figures re-measured at the head that merges.
+
+**Mutation battery: 14 mutants, 14 killed, 0 survived, 0 unapplied.** The plan mutates the properties the guard claims rather than the lines that changed. Six delete one shape each from the class definition; eight break a behaviour — the commit hook always allowing, the commit hook failing *open* when its class definition is missing, the heredoc stripping removed, the `--no-verify` refusal removed, a foreign `core.hooksPath` silently overwritten, the command text not scanned, named files not scanned, `core.hooksPath` never installed. **Two of the six shape mutants survived the first run and both were real holes in the selftest, not in the guard**: every trailer fixture also carried the Anthropic no-reply address, so deleting the co-author shape changed nothing observable, and the footer fixture carried the product link the footer wraps, so deleting the generated-with shape changed nothing either. (Both shapes are named here by description rather than spelled, because this entry sits in the population `scripts/no-attribution tree` sweeps and a spelled one would put the audited text inside the audit — the same self-match `CLAUDE.md` records as the ninth defect of the write-the-command rule. Caught by running the sweep over this entry.) Each shape now has a fixture carrying **that shape and nothing else**, which is what made the second run kill all fourteen. A shape answered for by a neighbouring shape is a class that has silently narrowed, and the only thing that finds it is mutating each shape alone.
+
+Behavior added:
+- A commit message carrying any of six attribution shapes is refused by git, on every route into a commit message — `-m`, `-F`, a heredoc, the editor, `--amend`.
+- A tool call that would put one into a PR body or a Plane ticket is refused before it runs, including when the text is in a file the command names rather than on the command line.
+- `git commit --no-verify` is refused outright, because it switches the git layer off.
+- `core.hooksPath` is set to `.githooks` at the first commit of any session that has not got it, so a fresh clone or worktree needs no remembered setup step.
+- `scripts/no-attribution` audits the three surfaces after the fact, including PR bodies via `gh` — the one surface nothing in the repository can otherwise reach.
+
+Behavior preserved (required, no blanket claims):
+- Ordinary commits are untouched: 1583 of the 1593 commit messages on `main` pass the class unflagged, and the ten that do not are exactly the ten this branch's sibling ticket removes. That is the negative control for the whole design.
+- Prose *about* the rule still commits. Pinned by name in the selftest, and it is the property the guard lives or dies by — a guard firing on the word "Claude" would refuse most of this repository's own commit messages.
+- A human co-author trailer still commits; the class is Claude and Anthropic, not co-authorship.
+- The existing Stop hook is unchanged and still wired; the new hook is a separate `PreToolUse` entry beside it.
+
+Architectural decisions / pitfalls discovered:
+- **Two layers, and neither is the other's spare.** The git hook is the only thing that reads the message git will actually commit, so it is the real barrier for commits and it cannot see a PR body at all. The PreToolUse hook reads a command line, which is strictly less, so it is *not* the commit barrier — it exists for the surfaces git has no opinion about, for `--no-verify`, and to install the other layer. Writing them as one would have meant picking which half to lose.
+- **The guard's first live action was to refuse the command writing its own selftest, and that is the failure mode to design against.** The watched-command test matched the whole command text, so a `cat > selftest <<'EOF'` whose heredoc body quoted every forbidden shape read as a commit carrying an attribution. A guard that refuses `cat`, `printf`, and every document discussing the rule is one somebody switches off within the week — which is exactly how the original rule failed. The fix is a distinction worth keeping: **a heredoc body decides nothing about whether to look, and everything about what is looked at.** Stripping heredocs before deciding fixes the false positive; still scanning them afterwards keeps a `gh pr create --body "$(cat <<EOF …)"` covered, and the selftest holds both directions as a pair because deleting either one alone passes the other's arm.
+- **A `printf … | try_commit` put the function in a subshell and its `$?` never reached the caller** — `CLAUDE.md`'s no-pipe-before-`$?` rule, reproduced inside the very harness written to enforce that file. It surfaced as `RUN_EXIT: unbound variable` rather than as a wrong number, which is the lucky direction; the same shape one step quieter is a selftest reporting somebody else's exit code.
+- **An exclusion that matches nothing is a hole, not insurance.** `scripts/no-attribution tree` cannot scan the files that *define* the class without matching them, so four are excluded by path. Two more were in the first draft and matched nothing at all; they were removed rather than kept, and `selftest` now fails on a stale exclusion and separately proves that dropping the whole stage *raises* the count. Without that control, a clean `tree` answer rests on a filter that might be excluding nothing.
+- **`scripts/no-attribution` separates "found something" (exit 2) from "could not measure" (exit 1), and the first draft collapsed them** — a bare `[ "$found" -eq 0 ]` returns 1 on a finding, so a real finding reported itself as an unmeasurable surface. `all` reports 1 ahead of 2 deliberately: an unmeasured surface is the one that reassures wrongly.
+
+Known limitations / deferred scope:
+- **The selftest cannot prove Claude Code invokes the PreToolUse hook.** It proves both hooks refuse and allow what they are handed; the wiring in `.claude/settings.json` and the harness's behaviour are outside it, and a green run with the wiring deleted would still be green. That is a founder manual row, and it is why one exists.
+- The ticket-content barrier catches `scripts/plane create|comment|update` and the file each names. A ticket edited through Plane's web UI passes no command line and is not covered by any hook; `scripts/no-attribution` has no Plane arm either, and the sweep below was run by hand.
+- Two tests in the classifier family remain unwritten by design: nothing sweeps *closed* PR review comments, and nothing watches commit messages on branches that never open a PR until they merge.
+
+Open questions: whether the cofounder holds a clone of this repository, which decides whether anything has to be reset rather than pulled after SONNY-407's force-push. Raised for the founder; not this branch's to answer.
+
+**The sweep the ticket asked for, all four surfaces, measured at `f3d444a`.**
+- Commit messages: **10 of 1605** reachable from `--all` (`scripts/no-attribution history`, exit 2). Eight from PR #192 carrying both a co-author trailer and a `Claude-Session:` line; two from 2026-07-12 carrying a co-author trailer alone. SONNY-407 removes them.
+- Tracked files: **0 of 592**, with 4 excluded by path and the control above showing the exclusion is what excludes (`scripts/no-attribution tree`, exit 0).
+- Pull-request bodies: **1 of 194** — PR #192, carrying the generated-with footer and a `claude.ai` session URL (`scripts/no-attribution prs`, exit 2). This is the surface nothing in the repository can see, and editing it is an outward-facing action, so it is **reported rather than fixed here**.
+- Plane ticket descriptions: **1 of 402** — SONNY-27, which is the ticket that *codified* the rule and quotes the forbidden wording while stating it. A self-reference of the same kind as `CLAUDE.md`'s own line, not a violation. Swept by hand against the same six shapes, since `scripts/no-attribution` has no Plane arm.
+
+Next branch: per the roadmap; this one is process tooling and takes no roadmap slot.
+
 ### Branch: feature/a-client-too-old-is-told-so
 Status: complete
 Date: 2026-09-03
