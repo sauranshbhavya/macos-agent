@@ -193,7 +193,7 @@ struct ScreenControlGateTests {
     func anAccountThatDidNotAskIsNeverCharged(moment: ScreenControlGateMoment) async {
         // Offered by the deployment and with purchases left — so the *only* thing standing between
         // this account and a charge is that it did not ask for one.
-        let notOptedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: false, attemptsLeft: 3)
+        let notOptedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: false, attemptsLeft: 3, price: TEST_PACK_PRICE)
         let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
         let (subject, _) = gate(
             entitlement: .entitled,
@@ -213,8 +213,8 @@ struct ScreenControlGateTests {
     /// it. All three are refused by the gateway independently; what these hold is that the client
     /// does not even ask.
     @Test(arguments: [
-        ScreenControlAutoTopUp(isOffered: false, isOptedIn: true, attemptsLeft: 3),
-        ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 0)
+        ScreenControlAutoTopUp(isOffered: false, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE),
+        ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 0, price: TEST_PACK_PRICE)
     ])
     func aPurchaseIsNotAskedForWhenThereIsNothingToBuy(setting: ScreenControlAutoTopUp) async {
         let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
@@ -236,7 +236,7 @@ struct ScreenControlGateTests {
     /// purchase hands back.
     @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
     func anOptedInAccountThatRanOutBuysMoreAndCarriesOn(moment: ScreenControlGateMoment) async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
         let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
         let (subject, _) = gate(
             entitlement: .entitled,
@@ -256,7 +256,7 @@ struct ScreenControlGateTests {
     /// the same refusal, with the same sentence and the same reason code.
     @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
     func aPurchaseThatFailsLeavesTheHaltExactlyAsItWas(moment: ScreenControlGateMoment) async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
         let purchaser = StubTopUpPurchasing(.failure)
         let (subject, _) = gate(
             entitlement: .entitled,
@@ -274,7 +274,7 @@ struct ScreenControlGateTests {
     /// of having bought something.
     @Test
     func aPurchaseThatDoesNotClearTheDebtStillRefuses() async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
         // A pack that granted nothing measurable — the shape a mis-configured pack of zero credits
         // would produce, and the one where "a purchase happened" and "the account can run" come
         // apart.
@@ -300,7 +300,7 @@ struct ScreenControlGateTests {
     /// #190's F1 was.
     @Test
     func theMomentsOwnQuestionIsWhatIsReAskedAfterAPurchase() async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
         func subject() -> (SonnyScreenControlGate, StubTopUpPurchasing) {
             let purchaser = StubTopUpPurchasing(.granted(runsLeft: 0, creditsRemaining: 0.82))
             let (gate, _) = gate(
@@ -328,7 +328,7 @@ struct ScreenControlGateTests {
     /// — it recomputes the balance and answers `not_needed` — and this is the client half.
     @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
     func anAccountWithRunsInHandBuysNothing(moment: ScreenControlGateMoment) async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
         let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
         let (subject, _) = gate(
             entitlement: .entitled,
@@ -348,7 +348,7 @@ struct ScreenControlGateTests {
     /// somebody would be spending money to answer a question nobody asked.
     @Test
     func neitherAnUnreadableAllowanceNorAnUnconfirmedClaimBuysAnything() async {
-        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3)
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
 
         let onFailedRead = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
         let (readFailed, _) = gate(

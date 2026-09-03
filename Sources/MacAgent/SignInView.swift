@@ -622,6 +622,7 @@ struct SignInDialogView: View {
             subscriptionRow
             screenControlUsageRow
             screenControlAutoTopUpRow
+            screenControlLastTopUpRow
         }
         .padding(.top, 12)
     }
@@ -648,8 +649,12 @@ struct SignInDialogView: View {
         if let allowance = screenControlAllowance,
            let control = screenControlAutoTopUp,
            allowance.autoTopUp.isOffered {
+            // **The price is on the control itself** (SONNY-215's F6, founder decision option B). A
+            // switch that authorises a standing charge names the amount; nothing beside it explains
+            // why, which is the line the no-explanatory-copy rule draws and the founder held.
+            let label = ScreenControlUsagePresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
             SettingsAdaptiveControlRow {
-                Text(ScreenControlUsagePresentation.autoTopUpLabel)
+                Text(label)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -671,7 +676,7 @@ struct SignInDialogView: View {
                     )
                 )
                 .disabled(control.isBusy)
-                .accessibilityLabel(ScreenControlUsagePresentation.autoTopUpLabel)
+                .accessibilityLabel(label)
             }
 
             // **Rendered here rather than in `messages`**, for the reason the portal's failure line
@@ -683,6 +688,35 @@ struct SignInDialogView: View {
                     .foregroundStyle(SonnyTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// What this account was last charged for a top-up (SONNY-215's F6, founder decision option B).
+    ///
+    /// **A record, not a setting**, which is why it is its own row below the switch rather than a
+    /// second line inside it: it stays true after the switch is turned off, and it is about money
+    /// rather than about runs.
+    ///
+    /// **Rendered whenever there is a charge to show, including when the setting is off and even
+    /// when this deployment stopped offering top-ups.** A user who was charged is owed the record
+    /// whatever the switch says now — hiding it behind `isOffered`, as the switch above is, would
+    /// make a receipt disappear because a configuration changed.
+    @ViewBuilder
+    private var screenControlLastTopUpRow: some View {
+        if let charge = screenControlAllowance?.lastTopUp,
+           let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+            SettingsAdaptiveControlRow {
+                Text(ScreenControlUsagePresentation.lastTopUpLabel)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } trailing: {
+                Text(line)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
             }
         }
     }
