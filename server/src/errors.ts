@@ -54,10 +54,20 @@ export function errorBody(
       retryable: options.retryable ?? false,
       retry_after_seconds: options.retryAfterSeconds ?? null,
       request_id: requestId,
-      // Spread rather than `upgrade_url: options.upgradeUrl`, so the key is absent instead of
-      // present-and-undefined. `JSON.stringify` drops an undefined value either way; `app.inject`'s
-      // `.json()` and a deep-equality assertion do not, and a test that says "the envelope has
-      // exactly these five fields" should be able to be true.
+      // Spread rather than `upgrade_url: options.upgradeUrl`, so the key is absent from the object
+      // instead of present and undefined.
+      //
+      // **Not for the wire**, and the first version of this comment claimed it was: `JSON.stringify`
+      // drops an undefined value, and `app.inject`'s `.json()` parses what was stringified, so an
+      // HTTP-level assertion cannot tell the two apart. SONNY-204's mutation battery is what said
+      // so — the mutant that writes the key unconditionally SURVIVED a suite whose test asserts the
+      // exact key set of a 404 body, because at that level there was nothing to see.
+      //
+      // What it is for is the object this function returns, which is a value before it is a
+      // response. `exactOptionalPropertyTypes` is on, so `upgrade_url?: string` does not accept
+      // `string | undefined` and the direct assignment is a type error rather than a style
+      // preference — which is why the surviving mutant would not have passed `npm run typecheck`.
+      // The suite holds it too now, at the level it exists: `errorBody` is asserted directly.
       ...(options.upgradeUrl === undefined ? {} : { upgrade_url: options.upgradeUrl }),
     },
   };
