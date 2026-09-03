@@ -309,7 +309,7 @@ struct ScreenControlAllowanceTests {
         // to a value twice reaches the same state, which is what §9.1 asks a key for on the requests
         // where it does not.
         #expect(sent.idempotencyKey == nil)
-        let body = try #require(sent.body)
+        let body = sent.body
         let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(decoded?["enabled"] as? Bool == true)
     }
