@@ -35,23 +35,10 @@ lib="scripts/lib/no-attribution.sh"
 
 # Files whose job is to state or define the forbidden class. Nothing else belongs here, and each
 # line is the reason it is present.
-# Every entry must actually match, or it is not excluding anything and is a hole where a real
-# attribution could sit unseen. `selftest` fails on a stale one. The first draft carried two that
-# matched nothing — `.githooks/commit-msg` and `.claude/hooks/no-claude-attribution.sh`, whose doc
-# comments describe the shapes rather than spelling them — and they were removed rather than kept
-# as insurance.
-EXCLUDED=(
-  "scripts/lib/no-attribution.sh"                        # holds the patterns themselves
-  "scripts/no-attribution"                               # this file, which names them in prose
-  ".claude/hooks/no-claude-attribution-selftest.sh"      # assembles every shape as a fixture
-  "CLAUDE.md"                                            # line 422 states the rule in its own words
-)
-
-is_excluded() {
-  local f="$1" e
-  for e in "${EXCLUDED[@]}"; do [ "$f" = "$e" ] && return 0; done
-  return 1
-}
+# The list lives in scripts/lib/no-attribution.sh, so this sweep and the PreToolUse hook's file
+# scan cannot drift apart about which files define the class. `selftest` below fails on an entry
+# that matches nothing.
+is_excluded() { no_attribution_is_self_referential "$1"; }
 
 sweep_history() {
   local found=0 total=0 sha
@@ -151,7 +138,7 @@ sweep_selftest() {
   # sit unseen. Checked against the tracked tree, because an untracked file is not in the
   # population `tree` sweeps in the first place.
   local e tracked_missing=0
-  for e in "${EXCLUDED[@]}"; do
+  while IFS= read -r e; do
     if ! git ls-files --error-unmatch "$e" >/dev/null 2>&1; then
       printf '  ..    %s is not tracked yet; not checked for staleness\n' "$e"
       tracked_missing=$((tracked_missing + 1))
@@ -163,7 +150,7 @@ sweep_selftest() {
       printf '  FAIL  %s is excluded but matches nothing — a stale exclusion is a hole\n' "$e"
       fails=$((fails + 1))
     fi
-  done
+  done < <(no_attribution_self_referential_paths)
 
   # And the pattern must be able to find something at all: a sweep that cannot produce a hit has
   # not been tested and its zero is not a measurement.

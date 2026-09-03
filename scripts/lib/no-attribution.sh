@@ -36,6 +36,33 @@
 # sessions as the only kind of agent it has — and a guard that fires on those is a guard somebody
 # switches off within the day. The class is a set of attribution SHAPES, not a word.
 
+# THE FILES THAT DEFINE THE CLASS MATCH IT, and every consumer needs the same answer about them.
+# `scripts/no-attribution tree` cannot sweep them without flagging itself, and the PreToolUse
+# hook's file scan cannot read them without refusing a command that merely sources this library —
+# which it did, on the first command run after the guard was committed. One list, here, so the two
+# cannot drift apart; `scripts/no-attribution selftest` fails on an entry that matches nothing,
+# because an exclusion that excludes nothing is a hole rather than insurance.
+#
+# A path here is exempt from being SCANNED AS A NAMED FILE. It is not exempt from the commit-msg
+# hook, which reads the message git is committing whatever file that message came from.
+no_attribution_self_referential_paths() {
+  cat <<'PATHS'
+scripts/lib/no-attribution.sh
+scripts/no-attribution
+.claude/hooks/no-claude-attribution-selftest.sh
+CLAUDE.md
+PATHS
+}
+
+# 0 when the repo-relative path is one of them.
+no_attribution_is_self_referential() {
+  local want="$1" p
+  while IFS= read -r p; do
+    [ "$p" = "$want" ] && return 0
+  done < <(no_attribution_self_referential_paths)
+  return 1
+}
+
 # 1 and 2 are anchored at line start (leading whitespace tolerated, since a trailer may be indented
 # inside a quoted body). 3 through 6 match anywhere on a line.
 no_attribution_pattern() {
