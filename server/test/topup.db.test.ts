@@ -431,6 +431,15 @@ describeDb("what a granted top-up does to the number a user reads", () => {
     // user what they were last charged shows **nothing at all** for an account that really was
     // charged.
     await grant(500);
+    // **The grant is back-dated and the decline keeps `now()`, so the decline really is newer.**
+    // The first version of this test back-dated the *decline* instead, which put it in the past and
+    // left the query answering the same either way — the mutant survived a second battery because
+    // of it. `CLAUDE.md`'s rule about moving a stored date a measurable distance, in the direction
+    // the assertion needs, applies to the row you are *not* asserting on as much as to the one you
+    // are.
+    await client.query("UPDATE sonny.credit_topup SET attempted_at = $1", [
+      new Date("2026-08-02T00:00:00Z"),
+    ]);
     const later = await claimTopUpAttempt(client, claimOf());
     await settleTopUpAttempt(client, {
       topUpId: later!.topUpId,
@@ -441,11 +450,14 @@ describeDb("what a granted top-up does to the number a user reads", () => {
       chargedCurrency: undefined,
       settledAt: AT,
     });
-    // The decline is genuinely newer, which is what makes this discriminate.
-    await client.query(
-      "UPDATE sonny.credit_topup SET attempted_at = $2 WHERE topup_id = $1",
-      [later!.topUpId, new Date("2026-08-20T00:00:00Z")],
+    // Proved rather than assumed: the row this test is about is the older of the two.
+    const { rows } = await client.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM sonny.credit_topup a
+        WHERE a.topup_id = $1
+          AND a.attempted_at > (SELECT b.attempted_at FROM sonny.credit_topup b WHERE b.outcome = 'granted')`,
+      [later!.topUpId],
     );
+    expect(rows[0]!.n).toBe("1");
 
     const charge = await readLastTopUpCharge(client, ACCOUNT);
     expect(charge?.amount).toBe(500);
