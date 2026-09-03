@@ -18,8 +18,22 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// `CapabilityExecutionContext`, so it was never a defect; the sentence was a negative
     /// established from one token, which is `CLAUDE.md`'s *enumerate before you subtract* shape,
     /// and a scan searching one literal can only ever support a claim about that literal.
-    /// `NSWorkspace.shared.open(folderURL)` opens a Finder window too and the core names it twice,
-    /// in `WorkspaceFileOpener` and `NativeMediaOpener` — both seamed, neither searched.
+    /// `NSWorkspace.shared.open(folderURL)` opens a Finder window too, and the core names that
+    /// single-argument overload **three** times — `WorkspaceFileOpener`, `NativeMediaOpener` and
+    /// `WorkspaceBrowserOpener`'s default `openURL` — all seamed, none searched
+    /// (`git grep -nE 'NSWorkspace\.shared\.open\([^,)]*\)' HEAD -- Sources/MacAgentCore |
+    /// grep -vE ':[0-9]+: *//'` → 3 at `70ba8af` and 3 with this correction in the tree, since the
+    /// correction adds only comment lines; the stage is load-bearing and its control fires, because
+    /// without it the answer is 4 at both heads and the extra line is this sentence).
+    /// `WorkspaceBrowserOpener`'s other call is `open(_:withApplicationAt:configuration:)`, a
+    /// different overload that opens with a named application, and is fairly excluded.
+    ///
+    /// **This said "twice" until PR #193's cycle-3 re-check (N1), and it was a wrong number rather
+    /// than a loose one.** The third site is named eight lines away in this branch's own changelog
+    /// census, so the population was already fully enumerated in the same document. It was written
+    /// inside the correction of a finding about a quantified claim — `CLAUDE.md`'s "attention is at
+    /// its lowest, because the writer has just proved to themselves that they are the careful one"
+    /// — and it is the third time that position has produced one.
     ///
     /// The package deliberately ships no live revealer of its own to pass here. One would be a
     /// constant nothing in the package calls, and a caller reaching for it by name is the shape a

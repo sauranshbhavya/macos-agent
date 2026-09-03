@@ -151,9 +151,14 @@ struct RevealInFinderSeamTests {
     /// not a defect; the sentence was a negative claim established from one token, which is
     /// `CLAUDE.md`'s *enumerate before you subtract* shape. Other doors this sweep does not search:
     /// `NSWorkspace.selectFile(_:inFileViewerRootedAtPath:)`, a `Process` running `open -R`, and
-    /// `NSWorkspace.shared.open(folderURL)` — which the core names twice today, at
-    /// `AppWebsiteActionDescriptors.swift` (`WorkspaceFileOpener`) and `MediaPlaybackService.swift`,
-    /// both behind injected seams.
+    /// `NSWorkspace.shared.open(folderURL)` — whose single-argument overload the core names **three**
+    /// times today, in `AppWebsiteActionDescriptors.swift` (`WorkspaceFileOpener`),
+    /// `MediaPlaybackService.swift` (`NativeMediaOpener`) and `WorkspaceBrowserOpener.swift`'s
+    /// default `openURL`, all behind injected seams. (`git grep -nE
+    /// 'NSWorkspace\.shared\.open\([^,)]*\)' HEAD -- Sources/MacAgentCore | grep -vE
+    /// ':[0-9]+: *//'` → 3 at `70ba8af`, and 4 without the comment stage — the extra being the
+    /// adapter's own prose, which is why the stage is there. This said "twice" until PR #193's
+    /// cycle-3 re-check, N1.)
     ///
     /// **The enumeration is recursive, and that is not a precaution** (F1). `Package.swift` gives
     /// this target `path: "Sources/MacAgentCore"`, which SwiftPM compiles recursively, so a file at
