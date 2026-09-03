@@ -30,14 +30,83 @@ set -u
 
 payload="$(cat)"
 
-tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
-[ "$tool" = "Bash" ] || exit 0
+# ---------------------------------------------------------------------------------------------
+# Reading the payload, and what happens when that cannot be done (PR #195 review, F5).
+#
+# The first version read all three fields through `jq` and treated an empty answer as "not my
+# business". So with `jq` missing or broken, EVERY field came back empty, the hook exited 0, and
+# the whole layer vanished — measured: a `gh pr create` carrying a footer was allowed, exit 0, with
+# nothing on stderr. That is this file's own contract inverted; the header promises that a watched
+# command it could not check is a refusal, and the branch that promise lives in was unreachable in
+# exactly the case it was written for. It is also the clean-zero family from CLAUDE.md, inside a
+# guard whose entire design is organised against it.
+#
+# So: `jq`, then `python3`, and if neither can parse it, the raw payload is scanned as text. A
+# match refuses — the class is there whatever the shape around it — and a clean raw scan allows the
+# call but says on stderr that nothing was parsed, because taking every Bash call down over a
+# broken `jq` is worse than the hole it closes. What must never happen is silence, and that is the
+# part with a selftest arm.
+# ---------------------------------------------------------------------------------------------
+parsed=0
+if tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" && [ -n "$tool" ]; then
+  parsed=1
+  command_text="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+  payload_cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+elif command -v python3 >/dev/null 2>&1; then
+  if fields="$(printf '%s' "$payload" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(d.get("tool_name") or "")
+print((d.get("tool_input") or {}).get("command") or "")
+print(d.get("cwd") or "")
+' 2>/dev/null)"; then
+    parsed=1
+    tool="$(printf '%s' "$fields" | sed -n '1p')"
+    command_text="$(printf '%s' "$fields" | sed -n '2p')"
+    payload_cwd="$(printf '%s' "$fields" | sed -n '3p')"
+  fi
+fi
 
-command_text="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+if [ "$parsed" -eq 0 ]; then
+  raw_root="${CLAUDE_PROJECT_DIR:-}"
+  raw_lib="$raw_root/scripts/lib/no-attribution.sh"
+  if [ -n "$raw_root" ] && [ -r "$raw_lib" ]; then
+    # shellcheck source=../../scripts/lib/no-attribution.sh
+    . "$raw_lib"
+    if printf '%s' "$payload" | grep -qEi -- "$(no_attribution_pattern)"; then
+      {
+        printf 'REFUSED: this hook could not parse its own payload, and the raw payload carries a
+'
+        printf 'Claude attribution.
+
+'
+        no_attribution_explain
+        printf '
+Neither jq nor python3 could read the payload, so which command this is could not
+'
+        printf 'be determined. It is refused rather than allowed, because "not checked" must never
+'
+        printf 'read as "clean".
+'
+      } >&2
+      exit 2
+    fi
+  fi
+  printf 'no-attribution: could not parse the PreToolUse payload (jq and python3 both failed).
+' >&2
+  printf 'This command was NOT checked for a Claude attribution. Nothing here says it is clean.
+' >&2
+  exit 0
+fi
+
+[ "$tool" = "Bash" ] || exit 0
 [ -n "$command_text" ] || exit 0
 
 root="${CLAUDE_PROJECT_DIR:-}"
-[ -n "$root" ] || root="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+[ -n "$root" ] || root="$payload_cwd"
 [ -n "$root" ] && [ -d "$root" ] || exit 0
 
 # ---------------------------------------------------------------------------------------------
@@ -57,7 +126,12 @@ root="${CLAUDE_PROJECT_DIR:-}"
 # The cheap `case` on the raw text comes first, so the common command — which mentions none of
 # these words anywhere — costs no extra process at all.
 # ---------------------------------------------------------------------------------------------
-case "$command_text" in
+# Whitespace collapses HERE and not only at the real gate below. The first fix normalised the gate
+# and left this cheap pre-filter matching the literal `gh pr`, so `gh  pr create` with two spaces
+# still exited 0 one step earlier than the thing that had just been fixed — the same defect, moved.
+# Found by re-running the review's own probe against the fix rather than by reading it.
+command_squeezed="$(printf '%s' "$command_text" | tr '\n\t' '  ' | tr -s ' ')"
+case "$command_squeezed" in
   *commit*|*"gh pr"*|*"gh issue"*|*"gh release"*|*plane*) : ;;
   *) exit 0 ;;
 esac
@@ -84,17 +158,28 @@ command_words="$(printf '%s\n' "$command_text" | awk '
   { print }
 ')"
 
+# Runs of whitespace collapse before the gate is matched: the gate is a literal substring test, so
+# `gh  pr create` with two spaces walked straight past it (PR #195 review, F3).
+command_gate="$(printf '%s' "$command_words" | tr '\n\t' '  ' | tr -s ' ')"
+
 is_commit=0
 is_watched=0
-case "$command_words" in
+case "$command_gate" in
   *"git commit"*|*"git "*" commit"*) is_commit=1; is_watched=1 ;;
 esac
-case "$command_words" in
-  *"gh pr create"*|*"gh pr edit"*|*"gh pr comment"*|*"gh issue create"*|*"gh issue comment"*|*"gh release create"*)
+case "$command_gate" in
+  *"gh pr create"*|*"gh pr edit"*|*"gh pr comment"*|*"gh pr review"*|*"gh issue create"*|*"gh issue comment"*|*"gh release create"*)
     is_watched=1 ;;
   *"plane create"*|*"plane comment"*|*"plane update"*)
     is_watched=1 ;;
 esac
+# KNOWN LIMITATION, and it is a decision rather than an oversight (founder, 2026-09-03, recorded on
+# SONNY-410). `gh api` is NOT watched, in any form. It posts arbitrary JSON to any endpoint, so
+# covering it means recognising every payload shape GitHub accepts, with no way to prove the set is
+# complete — and a guard that claims a surface it cannot prove claims more than it holds, which is
+# the failure this whole ticket exists to stop. `gh api repos/o/r/issues/1/comments -f body=…` is a
+# measured route past this layer. `scripts/no-attribution prs` is the honest cover: it reads every
+# PR body after the fact, whatever wrote it.
 [ "$is_watched" -eq 1 ] || exit 0
 
 lib="$root/scripts/lib/no-attribution.sh"
@@ -137,23 +222,53 @@ fi
 # tool's flags, every token that resolves to a readable regular file gets scanned. A wrong guess
 # costs one grep of a file that was going to be read anyway; a missed flag costs the whole point.
 # ---------------------------------------------------------------------------------------------
+# The directories a relative token may be resolved against: the repository root, plus any `cd`
+# target in the command. `cd server && gh pr create --body-file body.md` names a file that exists
+# only under `server/`, and resolving against the root alone made it invisible (PR #195 review, F3).
+scan_bases() {
+  local d
+  printf '%s\n' "$root"
+  printf '%s' "$command_words" \
+    | grep -oE '(^|[;&|][[:space:]]*)cd[[:space:]]+[^;&|[:space:]]+' 2>/dev/null \
+    | sed -E 's/.*cd[[:space:]]+//' \
+    | while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        case "$d" in
+          /*) printf '%s\n' "$d" ;;
+          *)  printf '%s\n' "$root/$d" ;;
+        esac
+      done
+}
+
 scan_named_files() {
-  local tok path rel
+  local tok path rel base
   # shellcheck disable=SC2086
   for tok in $command_words; do
     # strip one layer of surrounding quotes and any trailing shell punctuation
     tok="${tok%\"}"; tok="${tok#\"}"
     tok="${tok%\'}"; tok="${tok#\'}"
     tok="${tok%;}"; tok="${tok%)}"
+    # `--body-file=x` is one token, and skipping every token starting with `-` skipped the
+    # filename with it — a measured route past this layer (PR #195 review, F3). The value after
+    # the first `=` is the candidate path.
+    case "$tok" in
+      --*=*) tok="${tok#*=}" ;;
+    esac
     case "$tok" in
       -*|"") continue ;;
     esac
-    path="$tok"
-    case "$path" in
-      /*) : ;;
-      *)  path="$root/$tok" ;;
+    path=""
+    case "$tok" in
+      /*) [ -f "$tok" ] && [ -r "$tok" ] && path="$tok" ;;
+      *)  while IFS= read -r base; do
+            [ -n "$base" ] || continue
+            if [ -f "$base/$tok" ] && [ -r "$base/$tok" ]; then path="$base/$tok"; break; fi
+          done <<EOF
+$(scan_bases)
+EOF
+          ;;
     esac
-    [ -f "$path" ] && [ -r "$path" ] || continue
+    [ -n "$path" ] || continue
     # The files that DEFINE the class match it by construction. Scanning one refuses a command
     # that merely sources or reads it, which is what happened on the first command run after this
     # guard was committed: `. scripts/lib/no-attribution.sh` beside a `git log` was refused for
@@ -161,6 +276,7 @@ scan_named_files() {
     # a commit whose message came from one is still read by .githooks/commit-msg.
     rel="${path#"$root/"}"
     if no_attribution_is_self_referential "$rel"; then continue; fi
+    if no_attribution_is_self_referential "$tok"; then continue; fi
     # A commit message, a PR body and a ticket are all small. Anything large is not one of them,
     # and scanning a build artefact a command happens to name is wasted work.
     local size
@@ -180,16 +296,40 @@ scan_named_files
 # ---------------------------------------------------------------------------------------------
 [ "$is_commit" -eq 1 ] || exit 0
 
-# Confined to the `git commit ...` segment rather than matched over the whole command, so that a
-# `git commit -m x && echo -n done` is not refused for the `-n` belonging to echo. `-n` is git's
-# own short spelling of --no-verify, so both are refused.
-if printf '%s' "$command_words" \
-     | grep -qE 'git([[:space:]]+-[^[:space:]]+|[[:space:]]+[^-][^[:space:]]*)*[[:space:]]+commit[^&|;]*([[:space:]]--no-verify|[[:space:]]-n)([[:space:]]|$)'; then
+# ---------------------------------------------------------------------------------------------
+# Three routes past this refusal were measured in PR #195's review (F4), and all three are closed
+# here. Each was silent — exit 0, no output.
+#
+#   1. QUOTED STRINGS ARE REMOVED FIRST. The scan confines itself with `[^&|;]*` so that an `-n`
+#      belonging to a later `echo` is not refused — right intent, and it meant a SUBJECT LINE
+#      containing a semicolon or an ampersand ended the scan before the flag. `git commit -m
+#      "fix: a; b" --no-verify` was allowed. Deleting quoted spans first means punctuation inside
+#      a message cannot terminate anything, and the operator guard still does its real job.
+#   2. BUNDLED SHORT FLAGS. `git commit -nm "docs: clean"` was allowed, and it works — measured in
+#      a scratch repository against a hook that always fails: the hook was skipped and the commit
+#      made. The old pattern wanted `-n` followed by whitespace. Any single-dash cluster
+#      containing an `n` is git's `--no-verify`, so that is what is matched.
+#   3. `-c core.hooksPath=…`. `git -c core.hooksPath=/dev/null commit -m …` skips the hook and
+#      makes the commit, and the install arm below cannot see it, because `-c` is per-command and
+#      `git config --get` still reports `.githooks`. The INSTALL arm cannot see it; this refusal
+#      can, because the override is written on the command line where it is plainly readable.
+# ---------------------------------------------------------------------------------------------
+command_flags="$(printf '%s' "$command_words" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g')"
+
+no_verify_reason=""
+if printf '%s' "$command_flags" \
+     | grep -qE 'git([[:space:]]+-[^[:space:]]+|[[:space:]]+[^-][^[:space:]]*)*[[:space:]]+commit[^&|;]*([[:space:]]--no-verify([[:space:]]|$)|[[:space:]]-[A-Za-z]*n[A-Za-z]*([[:space:]]|$))'; then
+  no_verify_reason="--no-verify (or its short spelling, bundled or not)"
+elif printf '%s' "$command_flags" | grep -qE '[[:space:]]-c[[:space:]]+core\.hooksPath='; then
+  no_verify_reason="-c core.hooksPath=, which is --no-verify under another name"
+fi
+
+if [ -n "$no_verify_reason" ]; then
     {
-      printf 'REFUSED: --no-verify on a commit.\n\n'
-      printf 'That flag skips .githooks/commit-msg, which is the only barrier that reads the\n'
-      printf 'message git is actually about to commit. Skipping it is how an attribution reaches\n'
-      printf '`main` even with this hook installed, so it is refused rather than warned about.\n\n'
+      printf 'REFUSED: %s on a commit.\n\n' "$no_verify_reason"
+      printf 'That skips .githooks/commit-msg, which is the only barrier that reads the message\n'
+      printf 'git is actually about to commit. Skipping it is how an attribution reaches `main`\n'
+      printf 'even with this hook installed, so it is refused rather than warned about.\n\n'
       printf 'If a hook is genuinely wrong about your commit, that is a finding to report — not a\n'
       printf 'flag to add.\n'
     } >&2
