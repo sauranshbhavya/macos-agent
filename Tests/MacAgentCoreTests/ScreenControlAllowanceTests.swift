@@ -381,6 +381,64 @@ struct ScreenControlAllowanceTests {
 
     @Test
     @MainActor
+    func aPurchaseIsSentOnceEvenWhenTheAnswerIsOneTheClientWouldOtherwiseRetry() async throws {
+        // **The gap the first battery found (W9), and what it ships is a double charge.**
+        // `isRetrySafe` is not visible on a recorded request, so the assertions beside it — path,
+        // method, key, empty body — all passed with the flag flipped. What sees it is the *number of
+        // requests* against an answer the client would retry if it were allowed to:
+        // `provider.unavailable` is retryable and `maximumAttempts` is 3, so a retry-safe purchase
+        // sends three and buys up to three packs for one halt. The idempotency key bounds that at
+        // the gateway; this is the half that stops the Mac asking at all.
+        let fixture = SignedInBackendFixture(now: { Self.now })
+        defer { fixture.unregister() }
+        let seen = RecordedBackendRequests()
+        fixture.register { request in
+            seen.append(request)
+            return .reply(
+                statusCode: 502,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: [
+                    "error": [
+                        "code": "provider.unavailable",
+                        "message": "The payment provider could not be reached.",
+                        "retryable": true
+                    ]
+                ])
+            )
+        }
+
+        await #expect(throws: SonnyBackendError.self) {
+            _ = try await ScreenControlAllowanceService(client: fixture.client).purchaseTopUp()
+        }
+
+        #expect(seen.all.count == 1)
+        // **The control, so the one above is not a zero from a client that never retries anything.**
+        // The same answer on the ordinary read — which *is* retry-safe — is sent three times.
+        let readFixture = SignedInBackendFixture(now: { Self.now })
+        defer { readFixture.unregister() }
+        let reads = RecordedBackendRequests()
+        readFixture.register { request in
+            reads.append(request)
+            return .reply(
+                statusCode: 502,
+                headers: ["Content-Type": "application/json"],
+                body: try! JSONSerialization.data(withJSONObject: [
+                    "error": [
+                        "code": "provider.unavailable",
+                        "message": "The payment provider could not be reached.",
+                        "retryable": true
+                    ]
+                ])
+            )
+        }
+        await #expect(throws: SonnyBackendError.self) {
+            _ = try await ScreenControlAllowanceService(client: readFixture.client).fetch()
+        }
+        #expect(reads.all.count > 1)
+    }
+
+    @Test
+    @MainActor
     func twoPurchasesCarryTwoKeysRatherThanReusingOne() async throws {
         // **A key per attempt, not a key per client.** One reused key would make the second purchase
         // replay the first's stored response — which is right for a retry of one attempt and wrong

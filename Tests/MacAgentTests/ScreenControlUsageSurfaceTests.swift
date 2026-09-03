@@ -393,6 +393,57 @@ struct ScreenControlUsageSurfaceTests {
         #expect(MacAgentSource.count(of: "refreshScreenControlAllowance: nil", inText: firstRun) == 1)
     }
 
+    /// **The view model keeps what the gateway answered, not what was asked for** (SONNY-215).
+    ///
+    /// The gap the first battery found (W12): a mutant that made the write and then discarded its
+    /// answer passed the whole suite, and what it ships is a switch that never moves — the user
+    /// presses, the request lands, and the row they are looking at goes on reading the old value
+    /// until something else refreshes it. Asserting the request was *made* cannot see that; what
+    /// sees it is the published figure afterwards.
+    @Test
+    func pressingTheSwitchPublishesTheSettingTheGatewayAnsweredWith() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20, autoTopUp: (true, false, 3))
+        await fixture.viewModel.refreshScreenControlAllowance()
+        #expect(try #require(fixture.viewModel.screenControlAllowance).autoTopUp.isOptedIn == false)
+
+        // The gateway now says yes. **A different `runsLeft` too**, so the assertion below cannot be
+        // satisfied by the reading that was already in hand.
+        fixture.serveCredits(runsLeft: 11, runsIncluded: 20, autoTopUp: (true, true, 2))
+        await fixture.viewModel.setScreenControlAutoTopUp(true)
+
+        let after = try #require(fixture.viewModel.screenControlAllowance)
+        #expect(after.autoTopUp.isOptedIn)
+        #expect(after.autoTopUp.attemptsLeft == 2)
+        #expect(after.runsLeft == 11)
+        #expect(fixture.viewModel.screenControlAutoTopUpFailure == nil)
+        #expect(fixture.viewModel.isSettingScreenControlAutoTopUp == false)
+    }
+
+    /// A write that fails says so, **and leaves the figure the user is looking at in place**.
+    ///
+    /// Deliberately not what a failed *read* does — that clears the figure, because `nil` means "no
+    /// line" and an ambient number nobody asked for is not worth a sentence. This is a control the
+    /// user pressed: taking the row off screen instead of telling them it did not change would be
+    /// answering a failed write by hiding the thing that failed.
+    @Test
+    func aSettingThatWouldNotSaveKeepsTheRowAndNamesTheFailure() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20, autoTopUp: (true, false, 3))
+        await fixture.viewModel.refreshScreenControlAllowance()
+
+        fixture.backend.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        await fixture.viewModel.setScreenControlAutoTopUp(true)
+
+        #expect(fixture.viewModel.screenControlAutoTopUpFailure == .temporarilyUnavailable)
+        // The row survives, still showing what the server last said — which is still "off".
+        let after = try #require(fixture.viewModel.screenControlAllowance)
+        #expect(after.runsLeft == 12)
+        #expect(after.autoTopUp.isOptedIn == false)
+    }
+
     /// The auto-top-up control sits under the usage row, is System A, and is absent when this
     /// deployment sells nothing (SONNY-215).
     ///
@@ -644,19 +695,37 @@ private struct UsageFixture {
 
     /// The gateway's own body shape, field for field — `ScreenControlAllowanceTests` in the core
     /// target carries the same one, and contract §5.4 is where it comes from.
-    func serveCredits(runsLeft: Int, runsIncluded: Int) {
+    func serveCredits(
+        runsLeft: Int,
+        runsIncluded: Int,
+        /// SONNY-215's block, or nothing. **Nothing is the default** so every test written before it
+        /// existed still describes a body without it — which is also the shape a gateway too old to
+        /// send one produces, and the shape whose safe reading is "off".
+        autoTopUp: (offered: Bool, optedIn: Bool, attemptsLeft: Int)? = nil
+    ) {
+        var body: [String: Any] = [
+            "plan": "test-plan-a",
+            "period_start": "2026-08-01T00:00:00.000Z",
+            "period_end": "2026-09-01T00:00:00.000Z",
+            "screen_control_runs_left": runsLeft,
+            "screen_control_runs_included": runsIncluded,
+            "credits": ["allowance": 200, "drawn": 80, "remaining": 120, "per_run": 10, "topped_up": 0]
+        ]
+        if let autoTopUp {
+            body["auto_top_up"] = [
+                "offered": autoTopUp.offered,
+                "opted_in": autoTopUp.optedIn,
+                "attempts_left": autoTopUp.attemptsLeft
+            ]
+        }
+        // Serialised here rather than in the handler, because a `[String: Any]` is not `Sendable`
+        // and the handler is: the bytes cross the boundary, not the dictionary.
+        let encoded = try! JSONSerialization.data(withJSONObject: body)
         backend.register { _ in
             .reply(
                 statusCode: 200,
                 headers: ["Content-Type": "application/json"],
-                body: try! JSONSerialization.data(withJSONObject: [
-                    "plan": "test-plan-a",
-                    "period_start": "2026-08-01T00:00:00.000Z",
-                    "period_end": "2026-09-01T00:00:00.000Z",
-                    "screen_control_runs_left": runsLeft,
-                    "screen_control_runs_included": runsIncluded,
-                    "credits": ["allowance": 200, "drawn": 80, "remaining": 120, "per_run": 10]
-                ])
+                body: encoded
             )
         }
     }
