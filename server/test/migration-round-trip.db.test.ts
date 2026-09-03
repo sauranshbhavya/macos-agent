@@ -130,6 +130,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // a step here**, and the failure it produces when one is forgotten is legible: the assertion
       // says the head was some other file. 0018 is SONNY-211's and is rolled back only to get past
       // it; nothing below is about it.
+      expect(await down(client)).toBe("0019_topping_up_happens_only_if_you_asked");
       expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
       expect(await down(client)).toBe("0016_a_drain_discharges_the_obligation_it_claimed");
@@ -149,6 +150,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0016_a_drain_discharges_the_obligation_it_claimed",
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
         "0018_a_subscription_reaches_the_entitlement",
+        "0019_topping_up_happens_only_if_you_asked",
       ]);
       // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
       // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
@@ -201,6 +203,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
       // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
       // from the INSERT below.
+      expect(await down(client)).toBe("0019_topping_up_happens_only_if_you_asked");
       expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
       const at = (hhmm: string) => new Date(`2026-08-30T${hhmm}:00.000Z`);
@@ -215,6 +218,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       expect(await up(client)).toEqual([
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
         "0018_a_subscription_reaches_the_entitlement",
+        "0019_topping_up_happens_only_if_you_asked",
       ]);
 
       // All three carry the sentinel, so `issue_seq` separates none of them and only the second key

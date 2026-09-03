@@ -106,6 +106,45 @@ const weightsSchema = z.object({
   perMegapixel: z.number().nonnegative(),
 });
 
+/**
+ * What one automatic top-up buys, and how many a period may carry (SONNY-215).
+ *
+ * **Optional, and its absence is what "this deployment does not offer top-ups" means.** There is no
+ * default here for `weightsSchema`'s reason and one of its own: an invented pack size would be an
+ * allowance this repository decided, and an invented `productId` would name a product at the
+ * provider that does not exist. So a deployment that has not configured a pack cannot charge
+ * anybody — the route refuses, the app does not render the control, and that is the second
+ * structural fail-closed beside the consent itself.
+ *
+ * **The credits and the product id are one fact and live together for that reason.** `BILLING_PLANS`
+ * maps a *subscription* product onto a plan key and a capability list; this is a one-time product
+ * whose only meaning is how much credit it grants, and splitting the two across two variables would
+ * let a deployment sell a pack whose size nothing agrees on.
+ *
+ * **No price and no currency.** The product's own price at the provider is the price, and putting a
+ * dollar amount here would be this repository naming one — which is the line `catalogue.ts` has held
+ * since it was written.
+ */
+const topUpSchema = z.object({
+  /**
+   * Credits one top-up grants. **Strictly positive**: a pack worth nothing is a charge that buys
+   * nothing, and `credit_topup`'s own CHECK refuses to record one.
+   */
+  credits: z.number().positive(),
+  /**
+   * The provider's id for the one-time product a top-up buys. Opaque here, exactly as a plan key is.
+   */
+  productId: z.string().trim().min(1),
+  /**
+   * How many top-up **attempts** one account may make in one period. At least one.
+   *
+   * Attempts rather than grants, which is 0019's decision and is recorded there: a declined card
+   * costs the user nothing and costs the founders their standing with the provider, so a run of
+   * declines is a reason to stop rather than a reason to keep going for free.
+   */
+  maxPerPeriod: z.number().int().min(1),
+});
+
 /** One tier. An opaque key and what a month of it includes. */
 const planSchema = z.object({
   /**
@@ -141,10 +180,13 @@ const catalogueSchema = z.object({
   weights: weightsSchema,
   /** Every tier, in the order a deployment listed them. At least one; no upper bound. */
   plans: z.array(planSchema).min(1),
+  /** What an automatic top-up buys, or nothing — see `topUpSchema` (SONNY-215). */
+  topUp: topUpSchema.optional(),
 });
 
 export type CreditWeights = z.infer<typeof weightsSchema>;
 export type CreditPlan = z.infer<typeof planSchema>;
+export type CreditTopUpPack = z.infer<typeof topUpSchema>;
 export type CreditCatalogue = z.infer<typeof catalogueSchema>;
 
 /** A catalogue that could not be read, named for the operator who has to fix it. */

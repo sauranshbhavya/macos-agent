@@ -133,10 +133,85 @@ export function creditPlanKeyFor(record: EntitlementRecord, now: Date): string |
   return record.plan;
 }
 
-/** What the route needs: a plan key and a draw, for one account, at one instant. */
+/**
+ * What this period's granted top-ups added, in credits (SONNY-215).
+ *
+ * **`outcome = 'granted'` and nothing else.** The table holds one row per *attempt*, so a declined
+ * card and a crashed charge path both leave rows behind; only a row the provider actually charged
+ * grants anything, and 0019's `credit_topup_granted_is_exactly_the_credited` CHECK is what makes
+ * `credits > 0` and `outcome = 'granted'` the same set rather than two conditions that could drift.
+ * The filter is written on the outcome because that is the fact being asked about — a later row
+ * shape that granted zero credits deliberately would still be a grant, and would still be excluded
+ * by a `credits > 0` filter without anybody noticing.
+ */
+export async function readToppedUpCredits(
+  client: pg.Client,
+  input: { readonly accountId: string; readonly periodStart: Date },
+): Promise<number> {
+  const { rows } = await client.query<{ credits: string | number | null }>(
+    `SELECT coalesce(sum(credits), 0) AS credits
+       FROM sonny.credit_topup
+      WHERE account_id = $1 AND period_start = $2 AND outcome = 'granted'`,
+    [input.accountId, input.periodStart],
+  );
+  return count(rows[0]?.credits);
+}
+
+/**
+ * How many top-up attempts this account has made in this period (SONNY-215).
+ *
+ * **Every row, whatever its outcome** — which is the same count 0019's `attempt_no` is derived from,
+ * and it has to be, or the number the app shows would disagree with the bound the claim enforces. A
+ * declined card consumes an attempt; see 0019 for why the bound counts attempts rather than grants.
+ */
+export async function readTopUpAttempts(
+  client: pg.Client,
+  input: { readonly accountId: string; readonly periodStart: Date },
+): Promise<number> {
+  const { rows } = await client.query<{ attempts: string | number }>(
+    `SELECT count(*) AS attempts
+       FROM sonny.credit_topup
+      WHERE account_id = $1 AND period_start = $2`,
+    [input.accountId, input.periodStart],
+  );
+  return count(rows[0]?.attempts);
+}
+
+/**
+ * When this account opted in to automatic top-ups, or `null` for every way of not having.
+ *
+ * **One predicate over three states**, which is 0019's decision: no row at all (never asked), a row
+ * whose `opted_in_at` is NULL (opted out), and — the only remaining case — a row that names an
+ * instant. The first two are the same answer here, so nothing downstream can treat "has a row" as
+ * consent.
+ */
+export async function readAutoTopUpConsent(
+  client: pg.Client,
+  accountId: string,
+): Promise<Date | null> {
+  const { rows } = await client.query<{ opted_in_at: Date | null }>(
+    `SELECT opted_in_at FROM sonny.auto_topup_consent WHERE account_id = $1`,
+    [accountId],
+  );
+  return rows[0]?.opted_in_at ?? null;
+}
+
+/** What the route needs: a plan key, a draw, what top-ups added, and whether any may be charged. */
 export interface CreditFacts {
   readonly planKey: string | undefined;
   readonly draw: ScreenControlDraw;
+  /** Credits this period's granted top-ups added. `0` for an account that has bought none. */
+  readonly toppedUpCredits: number;
+  /** How many top-up attempts this period has already carried, granted or not. */
+  readonly topUpAttemptsThisPeriod: number;
+  /**
+   * When this account opted in to automatic top-ups, or `null` (SONNY-215).
+   *
+   * **Carried as the instant rather than as a boolean**, because it is what a charge records as its
+   * own authorisation: `credit_topup.consented_at` is NOT NULL, so a charge copies this value and a
+   * `null` here cannot produce a recordable row at all.
+   */
+  readonly autoTopUpOptedInAt: Date | null;
 }
 
 /**
@@ -151,22 +226,66 @@ export interface CreditFacts {
  */
 export interface CreditStore {
   readonly factsFor: (accountId: string, now: Date) => Promise<CreditFacts>;
+  /**
+   * Turn automatic top-ups on or off for one account, and answer what the setting now is
+   * (SONNY-215).
+   *
+   * **Off writes NULL and keeps the row** rather than deleting it, so `updated_at` still answers
+   * "when did they turn it off". **On does not refresh an instant that is already set**: a user who
+   * presses the control twice has consented once, and the instant a charge cites should be the one
+   * they actually agreed at rather than the last time they looked at the setting.
+   */
+  readonly setAutoTopUp: (
+    accountId: string,
+    enabled: boolean,
+    now: Date,
+  ) => Promise<Date | null>;
 }
 
 export function postgresCreditStore(withConnection: WithConnection): CreditStore {
   return {
     factsFor: (accountId, now) =>
       withConnection(async (client) => {
-        // **One clock read decides both halves**, the same call `routes/entitlements.ts` makes: the
+        // **One clock read decides every half**, the same call `routes/entitlements.ts` makes: the
         // instant that judges whether a grace window has closed is the instant whose period is
-        // counted, so a response cannot report a paid allowance against a free period or the reverse.
+        // counted and whose period's top-ups are summed, so a response cannot report a paid
+        // allowance against a free period, or last period's top-up against this period's draw.
         const record = await readEntitlement(client, accountId);
+        const since = periodStart(now);
         const draw = await readScreenControlDraw(client, {
           accountId,
-          since: periodStart(now),
+          since,
           until: periodEnd(now),
         });
-        return { planKey: creditPlanKeyFor(record, now), draw };
+        const toppedUpCredits = await readToppedUpCredits(client, { accountId, periodStart: since });
+        const topUpAttemptsThisPeriod = await readTopUpAttempts(client, {
+          accountId,
+          periodStart: since,
+        });
+        const autoTopUpOptedInAt = await readAutoTopUpConsent(client, accountId);
+        return {
+          planKey: creditPlanKeyFor(record, now),
+          draw,
+          toppedUpCredits,
+          topUpAttemptsThisPeriod,
+          autoTopUpOptedInAt,
+        };
+      }),
+    setAutoTopUp: (accountId, enabled, now) =>
+      withConnection(async (client) => {
+        const { rows } = await client.query<{ opted_in_at: Date | null }>(
+          `INSERT INTO sonny.auto_topup_consent (account_id, opted_in_at, updated_at)
+                VALUES ($1, $2, $3)
+           ON CONFLICT (account_id) DO UPDATE
+                  SET opted_in_at = CASE
+                        WHEN $2::timestamptz IS NULL THEN NULL
+                        ELSE COALESCE(sonny.auto_topup_consent.opted_in_at, $2::timestamptz)
+                      END,
+                      updated_at = $3
+             RETURNING opted_in_at`,
+          [accountId, enabled ? now : null, now],
+        );
+        return rows[0]?.opted_in_at ?? null;
       }),
   };
 }

@@ -3,6 +3,8 @@ import type {
   PortalLink,
   SubscriptionEvent,
   SubscriptionState,
+  TopUpCharge,
+  TopUpChargeRequest,
   VerifiedDelivery,
   WebhookReading,
 } from "./provider.js";
@@ -126,6 +128,26 @@ function accountIdFrom(data: Record<string, unknown>): string | undefined {
 }
 
 /**
+ * Polar's own id for the customer, as the embedded customer object carries it (SONNY-215).
+ *
+ * **`customer.id` and never `customer_external_id`.** They are two different identifiers for one
+ * person: the external one is the account id this gateway sent to checkout and the one
+ * `accountIdFrom` above reads, and the `id` is Polar's own — which is what an off-session order is
+ * addressed to. Reading the wrong one produces a 404 at charge time on an account that is perfectly
+ * well provisioned.
+ *
+ * `customer_id` flattened onto the subscription is read as well, for `accountIdFrom`'s reason: the
+ * payload has carried it in both places across API versions, and reading both costs one line.
+ */
+function customerIdFrom(data: Record<string, unknown>): string | undefined {
+  const customer = readObject(data, "customer");
+  return (
+    (customer === undefined ? undefined : readString(customer, "id")) ??
+    readString(data, "customer_id")
+  );
+}
+
+/**
  * The provider's plan key: the product this subscription is for.
  *
  * The **product** and not the price, because a price change on one product is not a plan change and
@@ -192,6 +214,7 @@ export function readPolarDelivery(delivery: VerifiedDelivery): WebhookReading {
     state,
     subscriptionId,
     accountId: accountIdFrom(data),
+    customerId: customerIdFrom(data),
     planKey,
   };
   return { kind: "event", event };
@@ -446,6 +469,193 @@ async function polarPortalSession(
   return { kind: "link", url, expiresAt };
 }
 
+/** The path that creates a draft order, and the one that charges it. */
+const ORDERS_PATH = "/v1/orders/";
+const FINALIZE_PATH = (orderId: string) => `/v1/orders/${encodeURIComponent(orderId)}/finalize`;
+
+/**
+ * How long this gateway waits for **each** of the two calls a top-up makes: **twelve seconds**
+ * (SONNY-215).
+ *
+ * `PORTAL_SESSION_TIMEOUT_MS`'s three surviving reasons apply unchanged, and the number differs from
+ * its eight for one reason that is specific to this call: **there are two of them, and the Mac's own
+ * budget has to clear both.** A draft creation and a finalize run in sequence, so the ceiling this
+ * gateway can spend is the client's budget minus its own overhead, divided by two.
+ * `SonnyBackendTimeouts.topUp` on the Mac is 40 s against 24 s of provider budget here, and
+ * `the top-up budget clears both of its calls inside the Mac's own` is what pins the relation rather
+ * than this comment — following `PORTAL_SESSION_TIMEOUT_MS`'s own precedent, where a mutant raising
+ * the number survived the whole suite until a test held it.
+ *
+ * **Why twelve rather than eight.** A card authorisation is a real payment network round trip and is
+ * slower than minting a session token; eight seconds is comfortably above a healthy one of those and
+ * is not obviously above a healthy charge. Twelve keeps the doubled budget inside the client's.
+ */
+export const TOPUP_CHARGE_TIMEOUT_MS = 12_000;
+
+/** The order status Polar reports for an order it actually charged. */
+const PAID = "paid";
+
+/**
+ * Charge a customer's saved payment method for one top-up pack (SONNY-215).
+ *
+ * ## Two calls, and only the second one moves money
+ *
+ * Polar's off-session charge is a draft-then-finalize pair, which is the shape this function is
+ * built around rather than an implementation detail of it. `POST /v1/orders/` creates an order in
+ * `draft` with no invoice number and **charges nothing**; `POST /v1/orders/{id}/finalize`
+ * synchronously attempts the charge against the customer's default payment method, and on success
+ * the order becomes `paid`. So a process that dies between the two leaves an unpaid draft at the
+ * provider and has cost the user nothing, which is why the record this gateway writes claims its
+ * slot before either call and is settled after both.
+ *
+ * ## The classification, and the one axis it is organised on
+ *
+ * Every answer is sorted by **whether money may have moved**, not by whether the request succeeded.
+ * That is why a `412` — the order is no longer a draft — is `unconfirmed` rather than `rejected`
+ * even though it is a plain 4xx: an order stops being a draft by being paid, so a 412 is one of the
+ * few statuses that positively suggests a charge. And it is why every throw out of `finalize` is
+ * `unconfirmed` while a throw out of the draft call is not: an aborted request may still be
+ * executing at the provider, and the draft call has nothing to execute.
+ *
+ * **That over-reports, deliberately.** A DNS failure on the finalize call moved no money and is
+ * still recorded as `unconfirmed`, because `fetch` does not tell a caller whether its bytes reached
+ * the far side. Over-reporting costs an operator a look at an order that turns out not to exist;
+ * under-reporting costs a charge nobody ever investigates. The error's own name is carried in the
+ * reason so the look is cheap.
+ *
+ * ## Confirmed against the live account by a manual row rather than asserted here
+ *
+ * `looksLikeAMissingCustomer` above carries the same warning for the portal call and it applies
+ * twice over here: **nobody on this project has run an order against real Polar**, no top-up product
+ * exists at the provider yet because no price has been decided (`CREDIT_PLANS` carries no numbers at
+ * all), and the statuses below are read from Polar's published documentation rather than from a
+ * response anybody has seen. What that buys is that every unexpected answer fails in the direction
+ * that grants nothing, and the manual rows this branch adds are what will replace the documentation
+ * with an observation.
+ */
+async function polarTopUpCharge(
+  config: PolarProviderConfig,
+  request: TopUpChargeRequest,
+): Promise<TopUpCharge> {
+  const call = config.fetchImplementation ?? fetch;
+  const base = config.apiBaseUrl ?? POLAR_API_BASE_URL;
+  const headers = {
+    // The credential. Never logged: every `reason` below is built from a status or an error name,
+    // and none of them interpolates a header.
+    authorization: `Bearer ${config.accessToken}`,
+    "content-type": "application/json",
+  };
+
+  let draft: Response;
+  try {
+    draft = await call(new URL(ORDERS_PATH, base), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ customer_id: request.customerId, product_id: request.productId }),
+      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // **Not `unconfirmed`.** A draft charges nothing, so however this call ended, no money moved.
+    const name = error instanceof Error ? error.name : "";
+    if (name === "TimeoutError") {
+      return { kind: "timedOut", reason: `no answer within ${TOPUP_CHARGE_TIMEOUT_MS}ms` };
+    }
+    return { kind: "unavailable", reason: name === "" ? "request failed" : name };
+  }
+  // The portal's own reading of a 404, for its reason: a wrong origin or a dropped path prefix is
+  // answered by something that is not the provider, and only the provider's own JSON envelope means
+  // "no such customer". Everything else falls to `rejected`, which reports a fault loudly.
+  if (draft.status === 404 && looksLikeAMissingCustomer(await peek(draft))) {
+    return { kind: "noCustomer" };
+  }
+  if (draft.status === 429 || draft.status >= 500) {
+    return { kind: "unavailable", reason: `provider answered ${draft.status}` };
+  }
+  if (!draft.ok) {
+    // **A 422 lands here, and it is the answer this gateway is least sure about.** Polar requires a
+    // complete billing address and a saved payment method before an order can be created, and a
+    // customer missing either is a state the *user* can fix rather than a fault — but it is
+    // indistinguishable from an unrecognised product id without reading a body nobody has seen.
+    // `rejected` is the safe direction: it reports loudly to an operator instead of telling a user
+    // their card was declined when the deployment is misconfigured.
+    return { kind: "rejected", reason: `provider answered ${draft.status}` };
+  }
+  const orderId = readOrderField(await readJson(draft), "id");
+  if (orderId === undefined) {
+    return { kind: "rejected", reason: "provider created an order naming no id" };
+  }
+
+  let finalized: Response;
+  try {
+    finalized = await call(new URL(FINALIZE_PATH(orderId), base), {
+      method: "POST",
+      headers,
+      // The documented body is an empty object. `payment_method_id` is the one optional field and is
+      // deliberately not sent: choosing which of a customer's cards to charge is not a decision this
+      // gateway has any basis for, and the customer's own default is what they set at the provider.
+      body: "{}",
+      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "request failed";
+    return { kind: "unconfirmed", reason: `finalize did not answer: ${name}`, orderId };
+  }
+  switch (true) {
+    case finalized.ok:
+      break;
+    // Card declined, no payment method on file, or an authentication challenge this charge cannot
+    // answer. The provider answered and did not charge.
+    case finalized.status === 402:
+      return { kind: "declined", reason: "provider answered 402" };
+    // The order stopped being a draft, which is what being paid looks like. Not a refusal.
+    case finalized.status === 412:
+      return { kind: "unconfirmed", reason: "order was no longer a draft", orderId };
+    case finalized.status === 429:
+      return { kind: "unavailable", reason: "provider answered 429" };
+    case finalized.status >= 500:
+      // Unlike the draft call's 5xx: a charge that failed inside the provider may have failed after
+      // taking the money.
+      return { kind: "unconfirmed", reason: `provider answered ${finalized.status}`, orderId };
+    default:
+      // 403 is the documented one here — the feature is disabled, or the organisation cannot accept
+      // payments — and both are an operator's to fix.
+      return { kind: "rejected", reason: `provider answered ${finalized.status}` };
+  }
+  const status = readOrderField(await readJson(finalized), "status");
+  if (status !== PAID) {
+    // **A 200 that does not say `paid` is not a success.** The documented transition on a successful
+    // charge is to `paid`, so anything else is an answer this gateway cannot interpret, and
+    // interpreting it generously is how credit gets granted for a charge that never happened.
+    return {
+      kind: "unconfirmed",
+      reason: `finalize answered 200 with status ${JSON.stringify(status ?? null)}`,
+      orderId,
+    };
+  }
+  return { kind: "charged", orderId };
+}
+
+/** A JSON object body, or `undefined` — the same tolerance `polarPortalSession` applies. */
+async function readJson(response: Response): Promise<Record<string, unknown> | undefined> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return undefined;
+  }
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : undefined;
+}
+
+/** One string field off an order body, through this file's own `readString` rule. */
+function readOrderField(
+  order: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  return order === undefined ? undefined : readString(order, key);
+}
+
 export function polarProvider(config: PolarProviderConfig): BillingProvider {
   return {
     name: POLAR,
@@ -463,5 +673,6 @@ export function polarProvider(config: PolarProviderConfig): BillingProvider {
       return url.toString();
     },
     portalUrlFor: (accountId) => polarPortalSession(config, accountId),
+    chargeTopUp: (request) => polarTopUpCharge(config, request),
   };
 }

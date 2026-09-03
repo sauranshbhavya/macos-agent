@@ -71,6 +71,9 @@ describeDb("a subscription reaches the entitlement", () => {
       occurredAt: NOW,
       subscriptionId: SUBSCRIPTION,
       accountId: account,
+      // SONNY-215: the provider's own customer id, which an off-session top-up charge is addressed
+      // to. `undefined` here so every existing case still describes a delivery that names none.
+      customerId: undefined,
       planKey: PRODUCT,
       ...overrides,
     },

@@ -14,6 +14,7 @@ import { registerEntitlement } from "./entitlement/hook.js";
 import { postgresEntitlementStore, type EntitlementStore } from "./entitlement/store.js";
 import { registerEntitlementRoutes } from "./routes/entitlements.js";
 import { postgresCreditStore, type CreditStore } from "./credit/store.js";
+import { postgresTopUpAttemptStore, type TopUpAttemptStore } from "./credit/topup.js";
 import { registerCreditRoutes } from "./routes/credits.js";
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
@@ -36,6 +37,7 @@ import { visionProviderFrom } from "./model/vision.js";
 import { registerScreenRoutes } from "./routes/screen.js";
 import { billingDepsFrom } from "./billing/deps.js";
 import { postgresBillingStore, type BillingStore } from "./billing/store.js";
+import type { BillingProvider } from "./billing/provider.js";
 import { registerBillingRoutes } from "./routes/billing.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
@@ -146,6 +148,27 @@ export interface AppOverrides {
    * anything about: that events on the other four routes change the answer by nothing at all.
    */
   readonly creditStore?: CreditStore;
+  /**
+   * **`topUpAttemptStore` exists for the seventh time and the seventh identical reason**
+   * (SONNY-215). The bound on how many charges a period may carry is one `INSERT … HAVING`, so
+   * without a seam the refusals this ticket is about — an account that never opted in, one that is
+   * not low, one whose period is spent, one with nothing at the provider to charge — would be
+   * verified only under `npm run test:db`, and the flagged run would be silent about the one route
+   * in this repository that moves money.
+   *
+   * `topup.db.test.ts` proves the parts a fake cannot: that the claim really is atomic under two
+   * concurrent attempts, and that a granted row raises the allowance the next read reports.
+   */
+  readonly topUpAttemptStore?: TopUpAttemptStore;
+  /**
+   * The provider the **top-up** charge goes to (SONNY-215).
+   *
+   * Its own override rather than one that swaps the provider for every billing route, because what
+   * a top-up test needs is a `chargeTopUp` it can script, and swapping the whole provider would also
+   * replace the webhook's signing key and the checkout link — turning a suite about a charge into
+   * one that has quietly restated `billing.test.ts`'s fixtures.
+   */
+  readonly topUpProvider?: BillingProvider;
 }
 
 export function buildApp(
@@ -583,6 +606,31 @@ export function buildApp(
       registerCreditRoutes(app, {
         store: creditStore,
         catalogue: requireCreditCatalogue(config),
+        /**
+         * The charge's own wiring, present only where this deployment can actually charge somebody
+         * (SONNY-215).
+         *
+         * **Both halves are required and neither implies the other.** The provider and the customer
+         * lookup come from the billing block above, which is mounted on `BILLING_PROVIDER`; the pack
+         * comes from `CREDIT_PLANS`, which is required wherever *any* authenticated route is
+         * mounted. So a gateway with a payment provider and no configured pack, and a gateway with a
+         * pack and no provider, are both deployments that cannot top anybody up — and each of them
+         * is a plausible half-finished configuration rather than a hypothetical.
+         *
+         * **The routes are registered either way** and the charge refuses with
+         * `topup.not_permitted`. That is the model routes' argument applied to a route the app
+         * really does call: a `404` says "no such route", which the client reads as a version
+         * problem, and this is a deployment that simply sells nothing.
+         */
+        topUp:
+          billing && billingStore
+            ? {
+                provider: overrides.topUpProvider ?? billing.provider,
+                billingCustomerFor: billingStore.billingCustomerFor,
+                attempts:
+                  overrides.topUpAttemptStore ?? postgresTopUpAttemptStore(auth.withConnection),
+              }
+            : undefined,
         now: auth.now,
       });
     }

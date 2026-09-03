@@ -108,6 +108,10 @@ describe("which routes the gate challenges", () => {
       "GET /v1/account/entitlements",
       "HEAD /v1/account/credits",
       "HEAD /v1/account/entitlements",
+      // SONNY-215's charge, arriving the same way and challenged for the sharpest reason on this
+      // list: it **spends the user's money**. An unauthenticated caller reaching it would be buying
+      // a stranger a top-up. Its consent route sorts to the bottom, being the one `PUT` here.
+      "POST /v1/account/credits/top-up",
       "POST /v1/auth/signout",
       // SONNY-130's four. They appear here by *not* being listed in `PUBLIC_ROUTES`, which is the
       // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
@@ -118,6 +122,10 @@ describe("which routes the gate challenges", () => {
       "POST /v1/screen/analyze",
       "POST /v1/search",
       "POST /v1/transcriptions",
+      // SONNY-215's consent. Challenged because it is the switch that stands between a user and a
+      // charge, and a caller who could set it without signing in would be turning it on for
+      // somebody else.
+      "PUT /v1/account/credits/auto-top-up",
     ]);
     await app.close();
   });

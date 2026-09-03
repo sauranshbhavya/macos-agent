@@ -86,6 +86,17 @@ export const UNMETERED_POST_ROUTES: ReadonlySet<string> = new Set([
   "POST /v1/auth/email/verify",
   "POST /v1/auth/refresh",
   "POST /v1/auth/signout",
+  /**
+   * SONNY-215's top-up, and the one entry here that costs real money while metering nothing.
+   *
+   * **The two are different currencies and merging them is what SONNY-212 and SONNY-213 each
+   * declined.** §11's event records what a call cost this gateway in *provider* tokens, and this
+   * route opens no provider call of that kind — what it opens is a charge at the payment provider,
+   * whose record is `sonny.credit_topup` and whose amount is the user's rather than the founders'.
+   * Metering it would put a payment into the table the credit balance is derived from, so a top-up
+   * would draw down the allowance it just bought.
+   */
+  "POST /v1/account/credits/top-up",
 ]);
 
 export function meteredRouteFor(method: string, routeUrl: string): MeteredRoute | undefined {

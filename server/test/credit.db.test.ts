@@ -355,7 +355,13 @@ describeDb("what draws on the credit pool", () => {
 
     // 10 per session + 5 x 4 iterations + 1 x 4 megapixels = 34 credits of 1000, so 966 remain and
     // one run is 50 of them.
-    const balance = creditBalance({ catalogue, planKey: facts.planKey, draw: facts.draw, now: at });
+    const balance = creditBalance({
+      catalogue,
+      planKey: facts.planKey,
+      draw: facts.draw,
+      toppedUpCredits: facts.toppedUpCredits,
+      now: at,
+    });
     expect(balance.credits.drawn).toBe(34);
     expect(balance.runsLeft).toBe(19);
     expect(balance.runsIncluded).toBe(20);
@@ -369,7 +375,13 @@ describeDb("what draws on the credit pool", () => {
     const revoked = await store.factsFor(ACCOUNT, at);
     expect(revoked.planKey).toBeUndefined();
     expect(
-      creditBalance({ catalogue, planKey: revoked.planKey, draw: revoked.draw, now: at }).runsLeft,
+      creditBalance({
+        catalogue,
+        planKey: revoked.planKey,
+        draw: revoked.draw,
+        toppedUpCredits: revoked.toppedUpCredits,
+        now: at,
+      }).runsLeft,
     ).toBe(1);
   });
 });

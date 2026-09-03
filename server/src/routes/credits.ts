@@ -1,16 +1,20 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { callerOf } from "../auth/gate.js";
-import { creditBalance } from "../credit/balance.js";
+import { errorBody } from "../errors.js";
+import { creditBalance, type CreditBalance } from "../credit/balance.js";
 import type { CreditCatalogue } from "../credit/catalogue.js";
-import type { CreditStore } from "../credit/store.js";
+import type { CreditFacts, CreditStore } from "../credit/store.js";
+import { attemptTopUp, type TopUpDeps, type TopUpRefusal } from "../credit/topup.js";
 
 /**
- * `GET /v1/account/credits` — **the one number a user tracks**, served (SONNY-212).
+ * `GET /v1/account/credits` — **the one number a user tracks**, served (SONNY-212) — and the two
+ * routes that let a user buy more of it when it runs out (SONNY-215).
  *
  * SONNY-17 fixed the user-facing unit: "screen-control runs left this month". This is where the Mac
  * reads it. `ScreenControlAllowanceService` on the client is the reader;
  * rendering it is SONNY-214's and refusing on it is SONNY-213's, and neither of those decisions is
- * taken here — this route reports and never refuses.
+ * taken here — the `GET` reports and never refuses.
  *
  * ## Why this is not on the entitlement claim
  *
@@ -31,51 +35,283 @@ import type { CreditStore } from "../credit/store.js";
  * serve — the same call `routes/entitlements.ts` makes, and for the sharper version of the same
  * reason: charging a user for asking how much they have left would make the question spend the
  * answer. It is authenticated, so it is absent from `PUBLIC_ROUTES` and rate limited with every
- * other authenticated route.
+ * other authenticated route. **That is true of the top-up routes below as well, and for the top-up
+ * itself it is worth saying out loud: the charge is at the payment provider and against a plan's
+ * allowance, and it does not touch §9's spend cap at all** — SONNY-212 declined to weight the cap
+ * and SONNY-213 kept the two apart, because the cap is an operator's anti-abuse ceiling and the
+ * allowance is a plan's purchase.
+ *
+ * ## The two top-up routes, and why they are two (SONNY-215)
+ *
+ * `PUT /v1/account/credits/auto-top-up` records **consent** and charges nothing.
+ * `POST /v1/account/credits/top-up` **charges**, and refuses first of all on the absence of that
+ * consent. Two paths rather than two methods on one, because a mistyped path must not be able to
+ * reach the other one — and the setting is the thing whose whole job is to stand between a user and
+ * a charge.
+ *
+ * **The charge route carries §9's idempotency guarantees like every other `POST`**, and it is the
+ * one route where they are about money: `idempotency/hook.ts` claims the key before this handler
+ * runs, so a retry of one attempt replays the stored answer rather than buying a second pack. The
+ * Mac mints a fresh key per attempt and marks the request not retry-safe, which is
+ * `verifyEmailCode`'s pairing and for its reason — a call that spends something the user cannot get
+ * back should be made once.
  */
 export interface CreditRouteDeps {
   readonly store: CreditStore;
   readonly catalogue: CreditCatalogue;
+  /**
+   * Everything the charge needs, or `undefined` on a deployment that takes no payments (SONNY-215).
+   *
+   * **`undefined` unmounts nothing.** The two routes are registered either way, and the charge
+   * refuses with `topup.not_permitted`, for the reason `app.ts` gives about the model routes: a
+   * `404` tells a client there is no such route, which is a different and less true statement than
+   * "this deployment does not sell top-ups". The setting route still works, because consent is the
+   * user's and is worth keeping whether or not a pack exists to spend it on today.
+   */
+  readonly topUp?: Omit<TopUpDeps, "pack"> | undefined;
   /** Tests only. Nothing a deployment sets, the same seam and reason as the entitlement route's. */
   readonly now?: (() => Date) | undefined;
 }
 
+export const CREDITS_PATH = "/v1/account/credits";
+export const AUTO_TOP_UP_PATH = "/v1/account/credits/auto-top-up";
+export const TOP_UP_PATH = "/v1/account/credits/top-up";
+
+/**
+ * The setting's body. **`enabled` is required and has no default**, on `config.ts`'s standing rule
+ * about values with no safe reading: a `PUT` that omitted it would be a request to set a
+ * money-spending switch to whatever this code happened to think was sensible.
+ */
+const autoTopUpBody = z.object({ enabled: z.boolean() });
+
+/**
+ * One body, three routes.
+ *
+ * **The `GET`, the setting and the charge all answer the same shape**, so a client decodes one type
+ * and every answer is the account's whole current position rather than a fragment it has to merge
+ * into what it already had. It is also what lets the gate skip a re-read after a successful charge:
+ * the response *is* the new balance.
+ */
+function creditsBody(
+  balance: CreditBalance,
+  facts: CreditFacts,
+  catalogue: CreditCatalogue,
+  topUpConfigured: boolean,
+): Record<string, unknown> {
+  // §2.1 makes the client tolerant of unknown response fields, so this body can grow additively.
+  return {
+    plan: balance.plan,
+    period_start: balance.periodStart.toISOString(),
+    period_end: balance.periodEnd.toISOString(),
+    /** The user-facing unit. Everything below it is the derivation that produced it. */
+    screen_control_runs_left: balance.runsLeft,
+    screen_control_runs_included: balance.runsIncluded,
+    /**
+     * **Diagnostic, and deliberately not a second thing to show a user.** The ticket's own
+     * verification asks the founders to "sanity-check the numbers once measured costs exist", and
+     * a runs figure with no visible derivation cannot be sanity-checked at all — the question is
+     * always whether the weights or the divisor is what moved it. The rounding in `balance.ts`
+     * exists so these five numbers and the run count agree with each other exactly.
+     *
+     * **`remaining` is read by the Mac and the other four are not** (SONNY-213's F1): the gate's
+     * step boundary asks whether the account has actually run out, which `screen_control_runs_left`
+     * cannot answer for a session whose own iterations are already subtracted from it.
+     */
+    credits: {
+      allowance: balance.credits.allowance,
+      drawn: balance.credits.drawn,
+      remaining: balance.credits.remaining,
+      per_run: balance.credits.perRun,
+      topped_up: balance.credits.toppedUp,
+    },
+    /**
+     * The auto-top-up setting, and whether there is anything to spend it on (SONNY-215).
+     *
+     * **`offered` and `opted_in` are separate because they are different facts with different
+     * owners**: the first is the deployment's — is a pack configured and can this gateway charge —
+     * and the second is the user's. The app renders no control when nothing is offered, on the
+     * founder direction of 2026-08-31 that a control which only fails when pressed is a broken
+     * control.
+     */
+    auto_top_up: {
+      offered: topUpConfigured,
+      opted_in: facts.autoTopUpOptedInAt !== null,
+      /** How many attempts this period has left. `0` once the bound is spent. */
+      attempts_left: attemptsLeft(catalogue, facts),
+    },
+  };
+}
+
+/**
+ * How many top-up attempts this period may still make.
+ *
+ * `0` when nothing is offered, which is the honest answer for a deployment that sells no pack and is
+ * also what stops a client reading a positive number off a gateway that would refuse.
+ */
+function attemptsLeft(catalogue: CreditCatalogue, facts: CreditFacts): number {
+  const pack = catalogue.topUp;
+  if (pack === undefined) return 0;
+  return Math.max(0, pack.maxPerPeriod - facts.topUpAttemptsThisPeriod);
+}
+
+/** §7.2's mapping for every way a top-up does not happen. */
+function refuse(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  refusal: TopUpRefusal,
+): FastifyReply {
+  switch (refusal) {
+    case "not_offered":
+    case "not_opted_in":
+    case "not_needed":
+    case "limit_reached":
+    case "no_customer":
+      // **One code for five refusals, and the distinction is logged rather than sent.** They share
+      // everything a client does about them — do not retry, and let the gate refuse exactly as it
+      // would have — and the app's own copy for the wall is SONNY-213's one sentence. What separates
+      // them is what an operator needs to know, which is what the log line beside this carries.
+      return reply
+        .status(409)
+        .send(
+          errorBody("topup.not_permitted", "No top-up was made for this account.", request.id, {
+            retryable: false,
+          }),
+        );
+    case "declined":
+      // **Its own status and its own code**, even though this client does nothing different with it
+      // yet: the difference between "your card" and "your settings" is the one a later surface
+      // cannot recover if the two are collapsed here.
+      return reply
+        .status(402)
+        .send(
+          errorBody("topup.declined", "The payment provider did not complete the charge.", request.id, {
+            retryable: false,
+          }),
+        );
+    case "unavailable":
+      return reply
+        .status(502)
+        .send(
+          errorBody("provider.unavailable", "The payment provider could not be reached.", request.id, {
+            retryable: true,
+          }),
+        );
+    case "timed_out":
+      return reply
+        .status(504)
+        .send(
+          errorBody("provider.timeout", "The payment provider took too long.", request.id, {
+            retryable: true,
+          }),
+        );
+    case "rejected":
+      return reply
+        .status(502)
+        .send(
+          errorBody("provider.rejected", "The payment provider refused this request.", request.id, {
+            retryable: false,
+          }),
+        );
+    case "unconfirmed":
+      // **Not retryable, and that is the whole reason this is not `provider.unavailable`.** The
+      // charge may have gone through. A client told to retry would buy a second pack to recover from
+      // a first one it cannot see.
+      return reply
+        .status(502)
+        .send(
+          errorBody("topup.unconfirmed", "The payment provider's answer could not be read.", request.id, {
+            retryable: false,
+          }),
+        );
+  }
+}
+
 export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps): void {
   const now = deps.now ?? (() => new Date());
+  const pack = deps.catalogue.topUp;
+  const topUpConfigured = pack !== undefined && deps.topUp !== undefined;
 
-  app.get("/v1/account/credits", async (request, reply) => {
-    const caller = callerOf(request);
-    // One clock read for the whole response, so the period whose draw is counted is the period
-    // reported, and the grace window is judged at the same instant both.
-    const at = now();
-    const facts = await deps.store.factsFor(caller.accountId, at);
+  /** The account's whole position, read once. Every route below answers with it. */
+  async function position(accountId: string, at: Date) {
+    const facts = await deps.store.factsFor(accountId, at);
     const balance = creditBalance({
       catalogue: deps.catalogue,
       planKey: facts.planKey,
       draw: facts.draw,
+      toppedUpCredits: facts.toppedUpCredits,
       now: at,
     });
-    // §2.1 makes the client tolerant of unknown response fields, so this body can grow additively.
-    return reply.send({
-      plan: balance.plan,
-      period_start: balance.periodStart.toISOString(),
-      period_end: balance.periodEnd.toISOString(),
-      /** The user-facing unit. Everything below it is the derivation that produced it. */
-      screen_control_runs_left: balance.runsLeft,
-      screen_control_runs_included: balance.runsIncluded,
-      /**
-       * **Diagnostic, and deliberately not a second thing to show a user.** The ticket's own
-       * verification asks the founders to "sanity-check the numbers once measured costs exist", and
-       * a runs figure with no visible derivation cannot be sanity-checked at all — the question is
-       * always whether the weights or the divisor is what moved it. The rounding in `balance.ts`
-       * exists so these four numbers and the run count agree with each other exactly.
-       */
-      credits: {
-        allowance: balance.credits.allowance,
-        drawn: balance.credits.drawn,
-        remaining: balance.credits.remaining,
-        per_run: balance.credits.perRun,
-      },
-    });
+    return { facts, balance };
+  }
+
+  app.get(CREDITS_PATH, async (request, reply) => {
+    const caller = callerOf(request);
+    // One clock read for the whole response, so the period whose draw is counted is the period
+    // reported, and the grace window is judged at the same instant both.
+    const at = now();
+    const { facts, balance } = await position(caller.accountId, at);
+    return reply.send(creditsBody(balance, facts, deps.catalogue, topUpConfigured));
+  });
+
+  app.put(AUTO_TOP_UP_PATH, async (request, reply) => {
+    const caller = callerOf(request);
+    const parsed = autoTopUpBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send(
+          errorBody("request.invalid", "This request body is not a setting.", request.id, {
+            retryable: false,
+          }),
+        );
+    }
+    const at = now();
+    await deps.store.setAutoTopUp(caller.accountId, parsed.data.enabled, at);
+    // **Answered with the whole position rather than with an acknowledgement**, so the app's toggle
+    // and the number above it can never be one request apart: the surface that shows the setting
+    // shows the allowance beside it, and two reads is two chances for them to disagree.
+    const { facts, balance } = await position(caller.accountId, at);
+    request.log.info(
+      { accountId: caller.accountId, optedIn: facts.autoTopUpOptedInAt !== null },
+      "auto top-up setting",
+    );
+    return reply.send(creditsBody(balance, facts, deps.catalogue, topUpConfigured));
+  });
+
+  app.post(TOP_UP_PATH, async (request, reply) => {
+    const caller = callerOf(request);
+    const at = now();
+    const { facts, balance } = await position(caller.accountId, at);
+    const outcome =
+      deps.topUp === undefined
+        ? ({ kind: "refused", refusal: "not_offered" } as const)
+        : await attemptTopUp(
+            { ...deps.topUp, pack },
+            {
+              accountId: caller.accountId,
+              balance,
+              consentedAt: facts.autoTopUpOptedInAt,
+              now: at,
+            },
+          );
+    if (outcome.kind === "refused") {
+      // The reason is logged and never sent, exactly as the webhook's refusal reason and the
+      // portal's are: five of the ten collapse into one code above, and this is where the difference
+      // between "they never asked" and "their card was declined" survives.
+      request.log.info(
+        { accountId: caller.accountId, refusal: outcome.refusal },
+        "top-up refused",
+      );
+      return refuse(request, reply, outcome.refusal);
+    }
+    request.log.info(
+      { accountId: caller.accountId, credits: outcome.credits },
+      "top-up granted",
+    );
+    // Re-read rather than adding the granted credits to the balance in hand. The row is written by
+    // the charge path, so reading it back is what proves the grant actually landed — and computing
+    // the new figure here would be a second derivation of a number `balance.ts` owns.
+    const after = await position(caller.accountId, at);
+    return reply.send(creditsBody(after.balance, after.facts, deps.catalogue, topUpConfigured));
   });
 }

@@ -53,6 +53,16 @@ export interface SubscriptionEvent {
    */
   readonly accountId: string | undefined;
   /**
+   * The provider's **own** id for the customer this subscription belongs to, or `undefined` when the
+   * payload names none (SONNY-215).
+   *
+   * Kept because an off-session top-up charge is addressed to it and to nothing else — the external
+   * id checkout travels on is not accepted there. `undefined` is not a failure, for `accountId`'s
+   * reason: a delivery that names no customer still moves the subscription's state, and what it
+   * costs is that this account cannot be topped up until a delivery that does name one arrives.
+   */
+  readonly customerId: string | undefined;
+  /**
    * The provider's plan key — its product or price identifier. Opaque here, exactly as
    * `sonny.entitlement.plan` is opaque: which capabilities it grants is deployment configuration,
    * and what it costs is SONNY-212's.
@@ -121,6 +131,69 @@ export type PortalLink =
    */
   | { readonly kind: "rejected"; readonly reason: string };
 
+/**
+ * What one automatic top-up charge is asking for (SONNY-215).
+ *
+ * **The provider's own customer id, not the account id.** Checkout sends the account id as an
+ * *external* id and the customer comes back carrying it, which is how a webhook is attributed; an
+ * off-session charge is addressed to the customer the provider minted, and
+ * `sonny.entitlement.billing_customer_id` is where this gateway keeps it.
+ */
+export interface TopUpChargeRequest {
+  readonly customerId: string;
+  /** The provider's one-time product a top-up buys. `CREDIT_PLANS.topUp.productId`. */
+  readonly productId: string;
+}
+
+/**
+ * What happened when this gateway tried to charge a saved payment method (SONNY-215).
+ *
+ * **`PortalLink`'s shape and its reasoning, applied to the one call in this repository that moves
+ * money.** A result type rather than a thrown error, because several of these are ordinary expected
+ * answers rather than faults, and each has a different status and a different client behaviour.
+ *
+ * **Only `charged` grants credit, and every other case grants none.** That is the fail-closed
+ * direction for a *grant*, and it is deliberately not the fail-closed direction for the *user*:
+ * `unconfirmed` is the case where money may have moved and nothing is credited for it. The
+ * alternative — crediting on an answer this gateway could not read — hands out product on a charge
+ * that may never have happened, and a charge that did happen leaves an order at the provider that
+ * an operator can see, which is a recoverable state. That asymmetry is the whole of the choice and
+ * it is argued at `chargeTopUp` in `billing/polar.ts`.
+ */
+export type TopUpCharge =
+  /** The provider charged the customer. `orderId` is its own id for the paid order. */
+  | { readonly kind: "charged"; readonly orderId: string }
+  /**
+   * The provider answered and did **not** charge: the card was declined, there is no payment method
+   * on file, or the charge needs an authentication challenge that an off-session attempt cannot
+   * answer.
+   *
+   * **Not retryable and not a fault.** Sending the same request again produces the same decline, and
+   * the thing that fixes it is the user changing their payment method — which is what the hosted
+   * portal is for.
+   */
+  | { readonly kind: "declined"; readonly reason: string }
+  /** The provider has no such customer. The account cannot be charged and never could be. */
+  | { readonly kind: "noCustomer" }
+  /** The provider could not be reached, answered `5xx`, or throttled this gateway. Worth retrying. */
+  | { readonly kind: "unavailable"; readonly reason: string }
+  /** The provider did not answer inside this gateway's own budget. Worth retrying. */
+  | { readonly kind: "timedOut"; readonly reason: string }
+  /**
+   * The provider answered and refused this *gateway* — a wrong or revoked credential, a product it
+   * does not recognise, a request shape it does not accept. An operator's to fix; a retry fails
+   * identically.
+   */
+  | { readonly kind: "rejected"; readonly reason: string }
+  /**
+   * The charge was attempted and its answer could not be read. **Money may have moved.**
+   *
+   * Distinct from every case above because it is the only one where doing nothing is not obviously
+   * safe. `orderId` is carried whenever the draft got as far as existing, so the row this produces
+   * names the object an operator has to look at.
+   */
+  | { readonly kind: "unconfirmed"; readonly reason: string; readonly orderId: string | undefined };
+
 /** A delivery whose signature has already been checked, as the adapter receives it. */
 export interface VerifiedDelivery {
   /** `webhook-id`, which the signature covers. The provider's own id for this delivery. */
@@ -161,4 +234,12 @@ export interface BillingProvider {
    * customer's invoices and payment methods and therefore has to be minted for that customer.
    */
   readonly portalUrlFor: (accountId: string) => Promise<PortalLink>;
+  /**
+   * Charge this customer's saved payment method for one top-up pack (SONNY-215).
+   *
+   * **The only method on this seam that moves money**, and the only one whose failure cases a caller
+   * must not collapse: `TopUpCharge` distinguishes a decline from an outage from an answer that
+   * could not be read, because what the gateway records and what the user is told differ for each.
+   */
+  readonly chargeTopUp: (request: TopUpChargeRequest) => Promise<TopUpCharge>;
 }
