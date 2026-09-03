@@ -546,8 +546,15 @@ tickets and searching them for `/v1/meta`, `api_version`, `minimum_supported_cli
 therefore needed an owner: the endpoint itself, the middleware that answers `410 version.unsupported`
 on every route, and the deprecation headers. That was filed as **SONNY-155**, a triage ticket, which
 closed on 2026-08-21 handing all three to **SONNY-204** ("Gateway: GET /v1/meta, the version gate,
-and the deprecation headers"). SONNY-204 sits in Backlog and none of the three is built, so every
-statement section 8 makes about them still describes work that has not started.
+and the deprecation headers"). **All three are built** (2026-09-03, SONNY-204):
+`server/src/routes/meta.ts` serves the endpoint, `server/src/version/gate.ts` is the `410` gate and
+section 8.4's headers, and `server/src/version/policy.ts` is the version arithmetic under both. The
+sentence that stood here — "SONNY-204 sits in Backlog and none of the three is built, so every
+statement section 8 makes about them still describes work that has not started" — was true when it
+was written on 2026-08-26 and is the record of the gap that ticket closed. **The client half of 8.3
+is not built and is SONNY-402**: the Mac sends `Sonny-Client-Version` and already decodes
+`version.unsupported` into a typed error, and it neither calls `/v1/meta` nor reads the deprecation
+headers nor renders a too-old state.
 
 ### 4.2 One body shape, two text routes
 
@@ -856,11 +863,20 @@ The claim's decoded payload:
   `GET /v1/meta` publishes the current set so an online client can learn a rotated key without an app
   update. The shipped set is the offline fallback. Rotation therefore never requires a release, and a
   client that has been offline for a long time still verifies against what it shipped with.
-  **Two halves of that are built and one is not** (2026-08-28, SONNY-135): the signing, the `kid`
-  selection and the client's verification against a shipped set all exist, and `GET /v1/meta` does
-  not — it is SONNY-204's, listed in section 13 and still in Backlog — so **rotation without a
-  release is the property this bullet promises and the one thing here that nothing yet delivers**.
-  The shipped set is also **empty in every build today**, because no gateway has been deployed
+  **`GET /v1/meta` publishes the set now** (2026-09-03, SONNY-204), as
+  `entitlement_keys: [{kid, alg, public_key}]`, with the public half derived from the private key at
+  registration so the two cannot be configured into disagreement. This bullet read "**Two halves of
+  that are built and one is not**" until then, naming rotation-without-a-release as "the one thing
+  here that nothing yet delivers".
+  **What is delivered is one key, and the overlap a rotation actually needs is not.** The set is an
+  array by contract rather than by anticipation, and today it holds exactly the key this gateway
+  signs with, because `EntitlementSigningKey` holds one. Publishing the incoming key *before* it
+  signs and the retiring one for a while after — the three-independently-valid-deploys shape
+  `providerCredentials` already gives provider credentials — is a change to the *signing* side, and
+  it is **SONNY-401**. Until it lands a rotation is one deploy, and a Mac whose cached set predates
+  the switch refuses every gated capability until it next reaches `/v1/meta` — up to the offline
+  bound this section states, for a client that is offline across it.
+  The shipped set is still **empty in every build today**, because no gateway has been deployed
   anywhere and there is therefore no key to hold the public half of; that refuses every gated
   capability, which is the direction 5.3.1 requires, and it affects no free capability at all.
 - **`sub` is the identity that asked; what the claim *says* is the account's** (2026-08-28,
@@ -1092,6 +1108,12 @@ deploy, and vice versa, without either surprising the other.
 `code` values are stable strings and are part of the versioned contract: changing what one means is a
 breaking change (section 8.2).
 
+**One code carries a sixth field, and no other does**: `version.unsupported` adds `upgrade_url`
+(section 8.3, built by SONNY-204), because it is the one refusal whose recovery is outside the app —
+and because a client that is refused for being too old must not have to parse `/v1/meta`'s document,
+whose shape may have moved since it shipped, to find out where to go. It is additive under 8.1 and
+2.1: the key is **absent** on every other error rather than present and null.
+
 ### 7.2 The taxonomy
 
 The seven cases **SONNY-124's own scoped requirements** name are distinguishable by `code`, not by
@@ -1216,6 +1238,28 @@ anything else about the response, which is the property that matters, because by
 client predates whatever changed.
 
 The client calls `GET /v1/meta` on launch and on any `410`. It does not call it per request.
+
+**What the comparison reads, and what an unreadable header means** (added 2026-09-03, SONNY-204,
+from building it). §2.2 gives the header as "marketing version plus build". Only the marketing
+version is compared — build metadata is not ordered, so `1.0+7` and `1.0+412` are one version — and
+**one, two or three numeric components are all accepted**, because `SonnyClientIdentity.version`
+builds the header from `CFBundleShortVersionString`, which is `1.0` in the shipping bundle: a parser
+demanding three would refuse the only build a user runs. A prerelease suffix is dropped rather than
+ordered below its release, because this product has no prerelease channel to order.
+
+**A request carrying no version, an unreadable one, or the header twice is served, and is never
+treated as too old.** Every caller that is not the Mac app sends none — a load balancer's liveness
+probe, the payment provider's signed delivery to `POST /v1/billing/webhook`, a deploy script's own
+health check — so refusing them would turn a version policy into an outage at the moment somebody
+first set a real minimum. Nothing is lost by that direction, because this gate is a courtesy to an
+old client rather than a boundary: what protects every route is the `Auth` column of 4.1, which none
+of this touches, and a caller that omits the header reaches only the modern API it could have called
+anyway.
+
+**`minimum_supported_client` and `recommended_client` are the deployment's, and both are `0.0.0`
+until a founder sets them.** No client can compare below `0.0.0`, so a gateway that has been told
+nothing refuses nobody and warns nobody. That is 8.4's rule applied to a default: a minimum above
+zero that nobody decided is a minimum that was never given a deprecation period.
 
 ### 8.4 Before the cliff
 
@@ -1730,7 +1774,7 @@ rows should read the date on each rather than the heading above both.
 | Open | Owner | Status, resolved 2026-08-26 at `d3598a7` |
 |---|---|---|
 | The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2); **amended 2026-08-30 (SONNY-373): the founders dropped the deploymind stage, leaving Oracle Cloud then AWS** (§12.4). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `395:` at `a175020`). The first real remote deploy is recorded as owed on SONNY-126 |
-| **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **SONNY-204** | **Owned, not built.** SONNY-155 was the triage ticket; it closed 2026-08-21 handing all three to SONNY-204, which sits in Backlog. This row read "**nobody yet** — SONNY-155, Backlog, untriaged" until 2026-08-26 (4.1) |
+| **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **SONNY-204**; the Mac's half is **SONNY-402** | **Decided and built, server-side** (2026-09-03). All three landed together — `server/src/routes/meta.ts`, `server/src/version/gate.ts`, `server/src/version/policy.ts` — with `MINIMUM_SUPPORTED_CLIENT`, `RECOMMENDED_CLIENT` and `UPGRADE_URL` as the deployment's own policy, and the gate installed before the auth gate so an outdated client is not sent round a refresh loop by an expired token. **Both bounds default to `0.0.0`, which disarms the gate**: shipping it refuses nobody until a founder sets a real minimum, because 8.4 makes raising the minimum past a version that had no deprecation period a breach of this contract and a default carries no deprecation period. The Mac calls none of it yet (SONNY-402, Backlog). This row read "**Owned, not built**" until 2026-09-03 and "**nobody yet** — SONNY-155, Backlog, untriaged" until 2026-08-26 (4.1) |
 | Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape | **Open.** SONNY-129 is in Backlog |
 | Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 | **Decided.** SONNY-126 closed 2026-08-21: TypeScript on Node >= 22, Fastify, Zod, Postgres via `pg`, a plain-SQL migration runner that refuses a file carrying no `-- @rollback` half (`ls server/src/db/migrations/*.sql \| wc -l` → 10), a containerized deploy path coupled to no host, and credential rotation as an ordered list so a rotation is three independently valid deploys (`server/README.md`). Two acceptance criteria — health on staging and production, a migration rolled back on staging — were deferred by the founder on 2026-08-21 because no remote environment exists; that is the row above |
 | The per-user spend-cap mechanism, and what happens when two requests from one user race it | SONNY-125 names it, SONNY-135 implements it | **Named, demonstrated and now built** (2026-08-28). SONNY-125 settled the mechanism — reserve-then-settle in one statement, with the race and its residuals worked through against Postgres 17 (`docs/sonny-row-12-host-decision.md` §9, §9.3, §9.5); it is a property of Postgres, not of a host, so it survived the move off Edge Functions intact. SONNY-135 implemented that one rather than a second beside it: `sonny.usage_period` with the conditional `UPDATE`, `sonny.usage_reservation` with an expiry and a sweep whose per-period aggregation is §9.5's first residual closed, and a settle that takes a boolean rather than an amount, which is why §9.5's *second* residual cannot arise while one metered call is one unit. The race is held by a forced interleaving and a fifty-way battery against a real Postgres, with the naive read-then-write committed beside them as a control |
@@ -1847,3 +1891,4 @@ record rather than a tidy list.
 | 2026-08-30 | **7.2 gains one code: `entitlement.already_subscribed`, 409, on `POST /v1/billing/checkout` alone.** A second defence beside the entitlement-side refusal that SONNY-211's review (PR #178, F1) required: `sonny.entitlement` holds one subscription per account, so a second subscription's events overwrote the first's and cancelling the duplicate revoked access the other was still billing for. The webhook side refuses that and is what actually holds the property; this code is the checkout route declining to hand a link to an account already live on a subscription. **What it does not close is stated rather than implied**: `checkoutUrlFor` returns a *static* link, so two tabs obtained theirs before any subscription existed and neither asks the route again — the concurrent races are closed by the webhook-side refusal, not here, and the complete checkout-side answer is a per-user checkout session, recorded as a residual. **No existing shape moved**: no endpoint, request body, response body, header, size limit or timeout changed, and no existing `code` changed meaning — §8.2's breaking-change rule is about changing what a code means, and this adds one. A client that does not yet map it falls back to its generic handling, which is correct for a refusal it should not be able to provoke; the copy is SONNY-136's. | SONNY-211 |
 | 2026-08-31 | **4.1 gains `POST /v1/billing/portal`, 7.2 gains `entitlement.no_subscription`, and the gateway makes its first outbound call to a payment provider.** An authenticated route that mints a hosted customer-portal session and returns its URL, so a subscriber can change a payment method, read invoices or cancel. **The outbound call is a deliberate reversal of a property SONNY-211 established** — its record states the hosted checkout "needs no provider API credential and makes no outbound request", and both halves of that stop being true here. The reason is identity, not convenience: the provider's *static* portal authenticates the human by emailing a one-time code to the address on their **provider** record, and `docs/sonny-identity-linking-rule.md:14` states that Sonny's identity key "is never the email address" — §2 of that document records Sign in with Apple returning `abc123@privaterelay.appleid.com`. So a Hide My Email user, or anyone whose Sonny sign-in and provider checkout used different addresses, could not reach their own billing portal at all, with no error this gateway can surface and no recovery the app can offer. A credential is a cost the founders manage by rotating it; that one is a cost the user pays and nobody can fix. **The lookup needs no new state**: `checkoutUrlFor` already sends the account id as `customer_external_id`, so the provider's customer carries it as `external_id` and `external_customer_id` resolves it — no read of `sonny.entitlement`, no column, no migration. **`entitlement.no_subscription` is the mirror of `entitlement.already_subscribed`** and is deliberately not an error condition: it is what a signed-in user who never subscribed looks like, which is most accounts, and the app is expected to know its own entitlement and not offer the control. The other three failures reuse 7.2's existing `provider.timeout`, `provider.unavailable` and `provider.rejected` unchanged. **No existing shape moved**: no endpoint, request body, response body, header, size limit or timeout in this document changed, no existing `code` changed meaning, 5.3's claim is byte-identical, and both new rows are additive. The portal route is **absent from 2.2's convenience list** and challenged by the gate — `gate.test.ts` and `billing.test.ts` each assert it. | SONNY-216 |
 | 2026-09-02 | **No shape moved, and one clause of the row above needs its scope read.** `POST /v1/billing/portal` now reads `sonny.entitlement` before it calls the provider, answering an account this gateway has recorded no subscription for with the existing `entitlement.no_subscription` and no outbound call (SONNY-387). **Nothing in this document changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout moved, both 409 paths return byte-identical bodies — same status, same `code`, same `message`, same `retryable`, which `billing.test.ts` asserts rather than this row asserting it — and 7.2's row for that code is untouched, since the code's meaning is the same fact about the same account whichever side learned it. This row exists for the sentence in the 2026-08-31 row reading *"**The lookup needs no new state**: … no read of `sonny.entitlement`, no column, no migration."* That remains true of what it describes — the *provider-side customer lookup*, which still resolves by `external_customer_id` and still needs no stored state — but it is the sentence a reader greps to answer "does the portal route touch the entitlement table", and read that way it now answers wrongly: the route does, on every request, and no column or migration was added. The 2026-08-31 row stays verbatim as the dated record it is; this is the correction, at the end of the log where the next reader meets it. | SONNY-387 |
+| 2026-09-03 | **Section 8 is built, and it gains three paragraphs recording what building it decided; 7.1 gains one field on one code.** `GET /v1/meta`, the `410 version.unsupported` gate on every route, and 8.4's `Sonny-Deprecation` / `Sonny-Deprecation-Info` headers all exist (SONNY-204) — 4.1's owner note, 5.3's key-set bullet and 13's row each said they did not, and each is corrected where it lives. **The one wire change is additive**: `version.unsupported`'s error body carries `upgrade_url`, which 8.3 already required "an `upgrade_url` in the error body" and 7.1 did not show; the key is absent on every other error rather than present and null, so no existing response moved. **No endpoint, request body, header, size limit, timeout or existing `code` changed meaning**, and `GET /v1/meta` was already in 4.1's table, in 2.2's unauthenticated list and in `auth/gate.ts`'s `PUBLIC_ROUTES` — its entry needed no edit when the handler landed, which is the property that list claims. **Three things 8 left implicit are now stated in 8.3, because the implementation had to choose them**: only the marketing version is compared and one-to-three components are accepted, since the shipping bundle sends `1.0+1`; a request with no version, an unreadable one, or the header twice is **served** and never treated as too old, because every non-app caller sends none and this gate is a courtesy rather than a boundary; and both bounds default to `0.0.0`, which disarms the gate, because 8.4 makes a minimum that had no deprecation period a breach and a default carries none. **What is still not built**: the Mac calls none of this (**SONNY-402**), and the published key set holds one key rather than a rotation overlap (**SONNY-401**), both recorded at 5.3 and 13. | SONNY-204 |

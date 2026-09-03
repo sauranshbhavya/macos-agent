@@ -2426,6 +2426,79 @@ terminal-launched debug build), plus SONNY-212's `CREDIT_PLANS` on the container
       this ticket's; the finding here is only the allowance sentence appearing when nothing was
       counted.)
 
+### A client too old is told so, and one warned before it (new 2026-09-03, SONNY-204)
+
+**What changed:** the gateway can now tell an outdated app that it is outdated. `GET /v1/meta` exists
+and says what this gateway speaks, which client versions it still serves, where to send someone whose
+build it does not, its own clock, and the public keys an entitlement claim may be signed with. Below
+the configured minimum, **every** route answers `410` with `code: "version.unsupported"` and an
+upgrade URL in the body. At or above the minimum but below the recommended version, requests are
+served normally with `Sonny-Deprecation: true` and `Sonny-Deprecation-Info: <url>` on the response.
+
+**Nothing here is on by default, and no deployment refuses anyone today.** Both bounds default to
+`0.0.0`, which no client can be below, so the gate adds no behaviour at all until somebody sets a real
+minimum. That is deliberate — the contract makes raising the minimum past a version that never had a
+deprecation period a breach, and a default has given nobody a deprecation period.
+
+**The Mac does not call any of it yet** (SONNY-402). The app sends its version on every request and
+already understands the `version.unsupported` code, but it does not fetch `/v1/meta`, does not read
+the two headers, and has no "Sonny needs an update" screen. So **every row below is `curl` against a
+local gateway, not the app** — there is nothing to see in the product yet, and that is not a finding.
+
+**Setup, once:** `cd server && ./scripts/deploy.sh local`, the same container the sign-in section
+uses. **`deploy.sh` forwards names from the shell you launch it in — it does not read `server/.env`**,
+so the rows that need an armed gate start it like this instead:
+
+```
+MINIMUM_SUPPORTED_CLIENT=2.0.0 RECOMMENDED_CLIENT=3.0.0 \
+  UPGRADE_URL=https://example.test/download ./scripts/deploy.sh local
+```
+
+- [ ] **(new 2026-09-03, SONNY-204) — the endpoint answers, on a gateway told nothing.** With no
+      version variables set at all, `curl -s localhost:8080/v1/meta`. It must answer 200 with six
+      fields: `api_version` `"1.0"`, `minimum_supported_client` and `recommended_client` both
+      `"0.0.0"`, `upgrade_url` `null`, a `server_time` that is the current UTC time to the second,
+      and `entitlement_keys`. **`entitlement_keys` is `[]` unless you set `ENTITLEMENT_SIGNING_KEY`**
+      — a gateway that signs nothing publishes nothing, which is honest rather than a defect. With
+      that variable set it holds one entry whose `kid` is your `ENTITLEMENT_SIGNING_KEY_ID` and whose
+      `public_key` matches what `npm run entitlements -- public-key` prints. **Those two disagreeing
+      is the finding**, because the whole point of publishing the key is that a Mac can verify a
+      claim against it.
+- [ ] **(new 2026-09-03, SONNY-204) — no version header changes nothing, on the same gateway.**
+      Still with nothing set, `curl -si localhost:8080/v1/health` — 200, and **no** `Sonny-Deprecation`
+      header. Then `curl -si -H 'Sonny-Client-Version: 0.0+0' localhost:8080/v1/health` — also 200.
+      A refusal here would mean the gate armed itself, which is the thing this default exists to
+      prevent.
+- [ ] **(new 2026-09-03, SONNY-204) — the wall, with the three variables set.** Restart with the
+      setup above, then `curl -si -H 'Sonny-Client-Version: 1.5.0' localhost:8080/v1/health`. It must
+      answer **410**, with a body whose `error.code` is `version.unsupported` and whose
+      `error.upgrade_url` is the URL you configured. Then the same header against
+      **`/v1/meta`** — also 410, deliberately: an app that old may not be able to read the meta
+      document at all, so the refusal carries the URL instead. And against a path that does not
+      exist, `/v1/nope` — also 410 rather than 404, because the useful answer to a stale client is
+      "you are out of date", not "no such page".
+- [ ] **(new 2026-09-03, SONNY-204) — it is refused before it is asked for a token, which is the row
+      that matters most.** `curl -si -H 'Sonny-Client-Version: 1.5.0' -X POST localhost:8080/v1/plan`
+      with no `Authorization` header at all. **410, not 401.** Then the same call with
+      `Sonny-Client-Version: 3.0.0` — now **401**. If the old client gets 401 the whole feature is
+      defeated: a six-month-old build's token has expired, 401 means "refresh and retry", and it
+      would loop forever without ever being told the real reason.
+- [ ] **(new 2026-09-03, SONNY-204) — the warning band, and the boundary.**
+      `curl -si -H 'Sonny-Client-Version: 2.5.0' localhost:8080/v1/health` — **200**, served
+      normally, with **both** `Sonny-Deprecation: true` and `Sonny-Deprecation-Info` carrying your
+      URL. Then `2.0.0` (exactly the minimum) — 200 **with** the headers, because the minimum is
+      served and warned. Then `3.0.0` (exactly the recommended) — 200 with **neither** header. The
+      two boundaries being inclusive in opposite directions is the thing to check.
+- [ ] **(new 2026-09-03, SONNY-204) — a bad configuration refuses to start rather than serving
+      wrongly.** Four separate `./scripts/deploy.sh local` runs, each with one thing wrong in the
+      launching shell. The container must **fail to come up**, with a message naming the variable,
+      each time: (a) `MINIMUM_SUPPORTED_CLIENT=banana`; (b) `MINIMUM_SUPPORTED_CLIENT=3.0.0` with
+      `RECOMMENDED_CLIENT=2.0.0`; (c) `MINIMUM_SUPPORTED_CLIENT=2.0.0` with no `UPGRADE_URL` at all;
+      (d) `UPGRADE_URL=example.test/download` with no `https://`. A gateway that starts and serves on
+      any of those is the finding — (c) especially, because it would tell users to update and give
+      them nowhere to go. **The message is what to report if one of them fails differently**: a
+      generic crash with no variable named is still a finding even though the container did stop.
+
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
 SONNY-296 re-checked the seven dated prototype-limitation findings in the spec's §4 and §4A.4
