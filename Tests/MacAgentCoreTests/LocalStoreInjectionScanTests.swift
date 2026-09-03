@@ -261,6 +261,24 @@ struct LocalStoreInjectionScanTests {
             let file: String
             let marker: String
             let labels: [String]
+            /// The floor the parse must clear for the marker to have found the real signature.
+            ///
+            /// **A field rather than the bare `> 1` this used to assert** (SONNY-395). Two was
+            /// right while every vendor here had a long signature, and it is wrong for a
+            /// one-parameter initializer: `RevealInFinderCapabilityAdapter.init` takes `reveal:`
+            /// and nothing else, so `> 1` fails on a correct parse. The repair that must *not* be
+            /// made is dropping the premise, because it is what turns a marker matching too little
+            /// into a failure rather than a silent pass — the loop below then finds none of its
+            /// labels and records an issue per label, which is what carries the premise for a
+            /// vendor whose floor is 1.
+            let minimumParameters: Int
+
+            init(file: String, marker: String, labels: [String], minimumParameters: Int = 2) {
+                self.file = file
+                self.marker = marker
+                self.labels = labels
+                self.minimumParameters = minimumParameters
+            }
         }
 
         let vendors = [
@@ -292,6 +310,19 @@ struct LocalStoreInjectionScanTests {
             // It defaulted to `nil` and fell through to `defaultStoreFileURLs()`, so
             // `LocalDataDeletionService()` compiled and silently pointed at the founder's real
             // thirteen files.
+            // **The sixth is not a store and does not write a file at all** (SONNY-395). It is here
+            // for the reason `otherRequiredParameters` gives above for `finderRevealer`: the rule
+            // is about a shape rather than about a type. `RevealInFinderCapabilityAdapter` was the
+            // one capability adapter reaching the machine with no seam, and a default on its new
+            // `reveal:` would put `NSWorkspace.activateFileViewerSelecting` back behind every call
+            // site that predates the parameter — which is how a full suite run came to open four
+            // real Finder windows on the founder's Mac, and a mutation battery dozens.
+            Vendor(
+                file: "Sources/MacAgentCore/RevealInFinderCapabilityAdapter.swift",
+                marker: "\n    public init(reveal:",
+                labels: ["reveal"],
+                minimumParameters: 1
+            ),
             Vendor(
                 file: "Sources/MacAgentCore/LocalDataDeletionService.swift",
                 // Named to the first parameter, like the two above: this file declares four
@@ -306,7 +337,7 @@ struct LocalStoreInjectionScanTests {
             let url = Self.repositoryRoot.appendingPathComponent(vendor.file)
             let parameters = try Self.parameters(ofInitializerAt: vendor.marker, in: url)
             #expect(
-                parameters.count > 1,
+                parameters.count >= vendor.minimumParameters,
                 "parsed \(parameters.count) parameters of \(vendor.file) — too few to be the real signature"
             )
             for label in vendor.labels {
@@ -352,7 +383,7 @@ struct LocalStoreInjectionScanTests {
 
         // The loop's own input can be emptied, exactly as `otherRequiredParameters` could be
         // (PR #109 review F6): a `vendors` list trimmed to nothing passes every expectation above.
-        #expect(checked == 15, "checked \(checked) vendor parameters, expected 6 + 4 + 2 + 1 + 2")
+        #expect(checked == 16, "checked \(checked) vendor parameters, expected 6 + 4 + 2 + 1 + 1 + 2")
     }
 
     /// The premise everything below rests on: `realFileURL()` really does name the developer's own

@@ -3167,6 +3167,20 @@ Settings, the *Delete* on Command Center &rsaquo; Memory &rsaquo; Task history, 
 Sonny did on screen* all still stop at this Mac. They are SONNY-404's, and the first of them needs a
 founder decision before it is even implementable — whether that wipe is a promise about this Mac or
 about the whole account.
+- [ ] **(SONNY-395)** **The suite no longer opens Finder windows — and this is the row that proves
+      the fix did not simply switch the feature off.** Two halves, in this order.
+      **First, the product still reveals.** In the packaged app, run a command that ends in a reveal
+      ("zip the largest files on my Desktop and show me the zip in Finder", or anything with "show
+      it in Finder" at the end). A real Finder window must open with the file selected — that is the
+      whole feature, and this branch moved the line that performs it, so a founder pressing it is
+      the only proof there is. The **Reveal in Finder** control in Command Center's task/result
+      surfaces must still work too.
+      **Second, a suite run must open nothing.** With the app quit, run the flagged test command
+      from `CLAUDE.md` and watch the screen for the whole run. Before this branch a run opened
+      **four** Finder windows on `$TMPDIR` — measured, not estimated — and a mutation battery
+      multiplied that by the number of mutants, which is how they arrived dozens at a time. Zero
+      windows now. **Report the count you saw, even if it is zero**, because a zero somebody
+      watched for is worth more than a zero nobody looked at.
 
 ## 8. How to report back
 

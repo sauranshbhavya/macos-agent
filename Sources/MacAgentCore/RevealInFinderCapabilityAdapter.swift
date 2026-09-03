@@ -1,8 +1,44 @@
-import AppKit
 import Foundation
 
 public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
-    public init() {}
+    /// What revealing a path actually does.
+    ///
+    /// The live implementation is `NSWorkspace.activateFileViewerSelecting`, and it lives at
+    /// `DefaultCapabilityAdapters.liveFinderReveal` rather than here, so that this file names no
+    /// way to reach the desktop at all — `theRevealAdapterNamesNoWayToReachTheDesktop` is what
+    /// fails if one comes back.
+    public typealias Reveal = @MainActor @Sendable ([URL]) -> Void
+
+    private let reveal: Reveal
+
+    /// **Undefaulted, and that is the whole of SONNY-395** — SONNY-350's rule applied to the one
+    /// adapter that had no seam at all.
+    ///
+    /// This adapter used to call `NSWorkspace.shared.activateFileViewerSelecting` inline, which made
+    /// it the only one of the 27 `*CapabilityAdapter.swift` files reaching the machine directly:
+    /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
+    /// 'Sources/MacAgentCore/*CapabilityAdapter.swift' | grep -vE ':[0-9]+: *//'` answers **1** at
+    /// `619ba62`, the line at `:53`, and **0** with this change in the tree. The comment stage
+    /// earns its place and its control fires — without it the same command answers 2, the extra
+    /// line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open`.
+    ///
+    /// Every other door — `WorkspaceFileOpener`, `NativeMediaOpener`, `MacAppService`,
+    /// `WorkspaceBrowserOpener` — was already behind an injected seam, which is why a probe on all
+    /// six recorded **4** reveals across a full suite run and **0** of anything else: a fixture
+    /// could opt out of the others and could not opt out of this one.
+    ///
+    /// Those four were `ProductShellTests.aJobOverManyItemsPublishesHowFarItHasGot` (three files)
+    /// and `anOrdinaryRunPublishesNoJobProgress` (one), and both fixtures were already passing
+    /// `hermeticFinderRevealer` to the view model — the reveal went around it, through the
+    /// executor's registry. A battery re-runs the suite once per mutant, so four windows a run is
+    /// how the founder met dozens of them in one working session.
+    ///
+    /// A default here would put every one of those back at the first call site that predates the
+    /// parameter, which is SONNY-240's argument and does not care that this parameter opens a
+    /// window rather than writing a file.
+    public init(reveal: @escaping Reveal) {
+        self.reveal = reveal
+    }
 
     public var metadata: CapabilityMetadata {
         Self.metadata
@@ -50,7 +86,7 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let url = try revealSpec(in: plan, context: context, requiresExistingPath: true)
         log(.act, "Revealing \(url.path) in Finder")
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        reveal([url])
         log(.summarize, "Revealed in Finder")
         let summary = "Revealed \(url.path) in Finder."
         return AgentRunResult(plan: plan, previews: previews, summary: summary)

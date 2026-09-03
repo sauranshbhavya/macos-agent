@@ -1786,7 +1786,7 @@ struct AgentRunnerTests {
         finderContextReader: FinderContextReading = FakeFinderContextReader(selection: []),
         routineStore: RoutineStore? = nil,
         workspaceStore: WorkspaceStore? = nil,
-        capabilityRegistry: CapabilityRegistry = .default
+        capabilityRegistry: CapabilityRegistry = .revealingNowhere
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),

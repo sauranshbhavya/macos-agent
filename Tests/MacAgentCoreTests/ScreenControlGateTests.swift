@@ -313,7 +313,8 @@ struct ScreenControlGateFreeCapabilityTests {
     private func execute(_ step: AgentStep, in context: CapabilityExecutionContext) async throws -> String {
         let plan = AgentPlan(summary: "Do it.", requiresConfirmation: false, steps: [step])
         let adapter = try #require(
-            DefaultCapabilityAdapters.all().first { $0.metadata.operations.contains(step.operation) },
+            DefaultCapabilityAdapters.all(finderRevealer: { _ in })
+                .first { $0.metadata.operations.contains(step.operation) },
             "no adapter is registered for \(step.operation)"
         )
         // Nothing in this file constructs an `EntitlementService` or a `SonnyBackendClient`, so the

@@ -1536,7 +1536,7 @@ struct ItemJobTests {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/MacAgentCore")
         var byOperation: [AgentOperation: String] = [:]
-        for adapter in CapabilityRegistry.default.adapters {
+        for adapter in CapabilityRegistry.revealingNowhere.adapters {
             let name = adapter.metadata.id
             _ = name
             let file = directory.appendingPathComponent("\(String(describing: type(of: adapter))).swift")

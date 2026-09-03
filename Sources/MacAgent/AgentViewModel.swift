@@ -768,7 +768,7 @@ final class AgentViewModel: ObservableObject {
     /// `decliningTheOfferPublishesSoTheWidgetRepaints` holds this one.
     @Published private var declinedResumeOfferIDs: Set<String> = []
     private var preserveUsageForNextStart = false
-    private let finderRevealer: ([URL]) -> Void
+    private let finderRevealer: @MainActor @Sendable ([URL]) -> Void
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
     private var clipboardHistoryPollFailure: String?
@@ -1073,7 +1073,14 @@ final class AgentViewModel: ObservableObject {
         // and open Finder windows mid-test. The argument for keeping the default was that it is not
         // a store; the argument against is that "a test that predates the parameter cannot know to
         // pass it" does not care what the parameter is for.
-        finderRevealer: @escaping ([URL]) -> Void,
+        // **Spelled out rather than written as `RevealInFinderCapabilityAdapter.Reveal`**, which is
+        // the same type. This is the only closure-typed parameter on this initializer, and
+        // `LocalStoreInjectionScanTests`' parameter parser exists because a `->` here once took its
+        // bracket depth to -1 and silently parsed 11 parameters instead of 34. Behind an alias the
+        // arrow leaves the real signature, that parser's real-tree coverage goes with it, and the
+        // two doc comments citing `finderRevealer: @escaping ([URL]) -> Void` start describing a
+        // shape the tree no longer has (SONNY-395).
+        finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
@@ -5464,6 +5471,18 @@ final class AgentViewModel: ObservableObject {
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             resumableTaskStore: resumableTaskStore,
+            // **The `reveal_in_finder` capability reveals through this view model's own
+            // `finderRevealer`, not through one of its own** (SONNY-395). The control the user
+            // presses and the capability a plan runs are the same act, so they get one seam: the
+            // shipping app hands `atItsRealStoreLocations()`'s live closure to both, and a fixture
+            // hands `hermeticFinderRevealer` to both.
+            //
+            // Before this line the executor took `CapabilityRegistry.default`, whose reveal
+            // adapter called `NSWorkspace.activateFileViewerSelecting` inline — so a reveal inside
+            // a *plan* went around the undefaulted seam this view model already had, and two
+            // fixtures that were passing `hermeticFinderRevealer` correctly still opened four real
+            // Finder windows per suite run, measured.
+            capabilityRegistry: .revealing(with: finderRevealer),
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
             // The published answer rather than a fresh read: `PermissionReadinessCapabilityAdapter`
             // is synchronous and this is the same value the Settings page is showing, so the tool
