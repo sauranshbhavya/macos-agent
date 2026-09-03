@@ -138,7 +138,7 @@ fi
 # costs one grep of a file that was going to be read anyway; a missed flag costs the whole point.
 # ---------------------------------------------------------------------------------------------
 scan_named_files() {
-  local tok path
+  local tok path rel
   # shellcheck disable=SC2086
   for tok in $command_words; do
     # strip one layer of surrounding quotes and any trailing shell punctuation
@@ -154,6 +154,13 @@ scan_named_files() {
       *)  path="$root/$tok" ;;
     esac
     [ -f "$path" ] && [ -r "$path" ] || continue
+    # The files that DEFINE the class match it by construction. Scanning one refuses a command
+    # that merely sources or reads it, which is what happened on the first command run after this
+    # guard was committed: `. scripts/lib/no-attribution.sh` beside a `git log` was refused for
+    # quoting the rule. They are exempt from being read AS A NAMED FILE and from nothing else —
+    # a commit whose message came from one is still read by .githooks/commit-msg.
+    rel="${path#"$root/"}"
+    if no_attribution_is_self_referential "$rel"; then continue; fi
     # A commit message, a PR body and a ticket are all small. Anything large is not one of them,
     # and scanning a build artefact a command happens to name is wasted work.
     local size

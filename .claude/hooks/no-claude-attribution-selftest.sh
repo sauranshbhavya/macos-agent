@@ -318,6 +318,25 @@ printf 'Summary.\n\n%s\n' "$FOOTER" > "$repo/body.md"
 run_cchook "$repo" 'gh pr create --title t --body-file body.md'
 assert "attribution inside a --body-file is refused" 2 "body.md" -
 
+# THE SELF-REFERENCE PAIR. The files that define the class match it, so scanning one as a "named
+# file" refuses a command that merely reads it — which is what the shipped guard did to
+# `. scripts/lib/no-attribution.sh` on the first command after it was committed. The exemption is
+# narrow, and the second arm is what keeps it narrow: it exempts a file from being READ AS AN
+# ARGUMENT and exempts nothing from the commit-msg hook.
+run_cchook "$repo" '. scripts/lib/no-attribution.sh && git commit -m "docs(x): SONNY-1 clean"'
+assert "a command that merely READS the class definition is not refused for quoting it" \
+  0 - "REFUSED"
+
+printf 'body\n\n%s\n' "$TRAILER" > "$repo/CLAUDE.md"
+git -C "$repo" add -A >/dev/null
+printf 'change %s\n' "$RANDOM" >> "$repo/seed.txt"
+git -C "$repo" add -A >/dev/null
+git -C "$repo" commit -F CLAUDE.md > "$WORK/out" 2> "$WORK/err"
+RUN_EXIT=$?
+RUN_BOTH="$(cat "$WORK/out")
+$(cat "$WORK/err")"
+assert "  ...but committing WITH one as the message is still refused by git" 1 "REFUSED" -
+
 printf 'docs(x): SONNY-1 clean\n' > "$repo/clean.txt"
 run_cchook "$repo" 'gh pr create --title t --body-file clean.txt'
 assert "CONTROL: a clean --body-file is allowed" 0 - "REFUSED"
