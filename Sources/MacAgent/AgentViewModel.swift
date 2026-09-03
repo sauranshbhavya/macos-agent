@@ -3676,8 +3676,23 @@ final class AgentViewModel: ObservableObject {
         pendingServerDeletionDelivery = Task { @MainActor in
             await previous?.value
             await service.deliverPendingDeletions()
+            completedServerDeletionPasses += 1
         }
     }
+
+    /// How many delivery passes have finished since launch. Test-only, and it exists because the
+    /// property it makes observable cannot be waited for through the handle.
+    ///
+    /// **A test of the chain cannot await `pendingServerDeletionDelivery`** (PR #194 cycle-3's own
+    /// battery): that handle is the *last* pass, and without the chain the last pass does not cover
+    /// the first — so awaiting it can return while an earlier pass is still issuing requests, and an
+    /// assertion on how many were issued measures whatever had landed by then. That made the chain's
+    /// only test kill the mutant twice and miss it the third time, which is the same shape as the
+    /// racy lock tests one round earlier: a test that finds a defect only when the timing suits it.
+    /// A count of *finished* passes is monotone and reaches its final value in both directions, so a
+    /// test waits on it and then asserts, and the failing direction is an assertion rather than a
+    /// timeout.
+    private(set) var completedServerDeletionPasses = 0
 
     /// The launch sweep (SONNY-333): everything a previous run could not deliver, tried again.
     ///
