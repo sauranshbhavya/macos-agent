@@ -346,7 +346,7 @@ struct PlannerBoundaryTests {
     func plannerExclusionsAgreeWithEmptyToolAdaptersAndWithInstantResolverCoverage() throws {
         let excluded = Set(AgentOperation.allCases).subtracting(AgentOperation.plannerVisibleCases)
         let emptyToolOperations = Set(
-            CapabilityRegistry.default.metadata
+            CapabilityRegistry.revealingNowhere.metadata
                 .filter { $0.plannerTools.isEmpty }
                 .flatMap(\.operations)
         )

@@ -785,6 +785,57 @@ struct ProductShellTests {
         #expect(viewModel.finalSummary == "Worked through all 3 files.")
     }
 
+    /// **A reveal inside a plan ends at this view model's own `finderRevealer`, not at the
+    /// machine** (SONNY-395).
+    ///
+    /// The two tests directly above are where the founder's Finder windows came from. Both pass
+    /// `hermeticFinderRevealer` into the view model, both were correct to, and both still opened
+    /// real windows — four per suite run, measured with a probe at `619ba62` — because
+    /// `AgentActionExecutor` took `CapabilityRegistry.default`, whose reveal adapter called
+    /// `NSWorkspace.shared.activateFileViewerSelecting` inline. The seam was one level above the
+    /// code that ignored it.
+    ///
+    /// So this asserts the join rather than the adapter: `RevealInFinderSeamTests` already proves
+    /// the adapter reveals through whatever seam its registry was built with, and what that cannot
+    /// see is `makeExecutor` handing it a *different* one. Run through `start(prebuiltPlan:)`, the
+    /// same door as the two tests above, so the thing asserted is the thing that was broken.
+    ///
+    /// **It fails if the real call comes back** — by replacing the seam or by joining it, since
+    /// either leaves this recorder holding something other than exactly one reveal of exactly this
+    /// file, and it fails if `makeExecutor` stops threading `finderRevealer` at all.
+    @Test
+    func aRevealInsideAPlanEndsAtThisViewModelsOwnRevealer() async throws {
+        let revealed = ProductShellFinderRevealer()
+        let fixture = try makeProductShellFixture(finderRevealer: { revealed.record($0) })
+        let viewModel = fixture.viewModel
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let file = fixture.root.appendingPathComponent("shown.pdf")
+        try Data("x".utf8).write(to: file, options: .atomic)
+
+        viewModel.command = "Reveal it"
+        viewModel.start(
+            prebuiltPlan: AgentPlan(
+                summary: "Reveal it.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(
+                        id: "reveal",
+                        operation: .revealInFinder,
+                        description: "Reveal it.",
+                        inputPath: file.path
+                    )
+                ]
+            )
+        )
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The control: the run reached the reveal capability rather than failing somewhere earlier.
+        #expect(viewModel.finalSummary == "Revealed \(file.path) in Finder.")
+        #expect(revealed.calls.count == 1, "the view model's seam was called \(revealed.calls.count) times")
+        #expect(revealed.calls.first == [file])
+    }
+
     /// The control beside the test above, and the one that makes a non-nil progress mean something:
     /// an ordinary run publishes none at all, so a surface that renders it renders nothing.
     @Test
@@ -3810,7 +3861,12 @@ private func makeProductShellFixture(
     planDetailRoot: URL? = nil,
     /// The mirror of `planDetailRoot`, for the test that has to fail the *row* write while every
     /// other store — the plan store included — stays writable (SONNY-201).
-    taskHistoryRoot: URL? = nil
+    taskHistoryRoot: URL? = nil,
+    /// The one seam in this fixture whose live implementation opens a window rather than writing a
+    /// file (SONNY-395). Defaulted, unlike the stores, and safely: the default is the *inert* one,
+    /// so a fixture that never heard of this parameter reveals nowhere. Only the test that asserts
+    /// where a reveal ends up passes anything else.
+    finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void = hermeticFinderRevealer,
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -3831,7 +3887,8 @@ private func makeProductShellFixture(
         userDefaultsSuiteName: userDefaultsSuiteName,
         taskHistoryMaxItems: taskHistoryMaxItems,
         planDetailRoot: planDetailRoot,
-        taskHistoryRoot: taskHistoryRoot
+        taskHistoryRoot: taskHistoryRoot,
+        finderRevealer: finderRevealer
     )
 }
 
@@ -3841,7 +3898,12 @@ private func makeProductShellFixture(
     userDefaultsSuiteName: String? = nil,
     taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
     planDetailRoot: URL? = nil,
-    taskHistoryRoot: URL? = nil
+    taskHistoryRoot: URL? = nil,
+    /// The one seam in this fixture whose live implementation opens a window rather than writing a
+    /// file (SONNY-395). Defaulted, unlike the stores, and safely: the default is the *inert* one,
+    /// so a fixture that never heard of this parameter reveals nowhere. Only the test that asserts
+    /// where a reveal ends up passes anything else.
+    finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void = hermeticFinderRevealer,
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -3907,7 +3969,7 @@ private func makeProductShellFixture(
         browserOpener: browserOpener,
         appOpener: appOpener,
         fileOpener: fileOpener,
-        finderRevealer: hermeticFinderRevealer,
+        finderRevealer: finderRevealer,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
@@ -4092,6 +4154,25 @@ final class HermeticAppOpener: AppOpening {
 @MainActor
 func hermeticFinderRevealer(_ urls: [URL]) {
     _ = urls
+}
+
+/// The recording counterpart of the stand-in above, for the one test that asserts *where* a reveal
+/// ends up (SONNY-395). `@unchecked Sendable` with a lock because the seam is a `@Sendable` closure.
+final class ProductShellFinderRevealer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [[URL]] = []
+
+    func record(_ urls: [URL]) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(urls)
+    }
+
+    var calls: [[URL]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
 }
 
 @MainActor

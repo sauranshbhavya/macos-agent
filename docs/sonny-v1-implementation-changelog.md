@@ -170,6 +170,45 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/the-suite-stops-opening-finder-windows
+Status: complete
+Date: 2026-09-03
+Tickets: SONNY-395 — `reveal_in_finder` reveals through an injected seam with no default, so a suite run no longer opens real Finder windows on the machine every manual test is run on.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+**The seam a fixture cannot reach is the seam that does not exist, and a correct fixture is no protection against one.** Stated first because it is the transferable part. `ProductShellTests` passed `hermeticFinderRevealer` into the view model, correctly, deliberately, with a doc comment beside it explaining that the live one would "steal focus and open Finder windows in the middle of a suite run". It then opened four real Finder windows per suite run anyway, because the reveal a *plan* performs never went through that parameter: `AgentActionExecutor` took `CapabilityRegistry.default`, whose `RevealInFinderCapabilityAdapter` called `NSWorkspace.shared.activateFileViewerSelecting` inline. Two seams for one act, one of them injected and one of them not, and the fixture could only see the injected one.
+
+Spec sections covered: none — a defect fix in existing capability wiring.
+Files changed: `Sources/MacAgentCore/RevealInFinderCapabilityAdapter.swift`, `Sources/MacAgentCore/DefaultCapabilityAdapters.swift`, `Sources/MacAgentCore/CapabilityAdapter.swift`, `Sources/MacAgentCore/AgentActionExecutor.swift`, `Sources/MacAgentCore/ToolRegistry.swift`, `Sources/MacAgent/AgentViewModel.swift`, `Tests/MacAgentCoreTests/RevealInFinderSeamTests.swift` (new), `Tests/MacAgentCoreTests/LocalStoreInjectionScanTests.swift`, `Tests/MacAgentCoreTests/CapabilityRegistryTests.swift`, `Tests/MacAgentCoreTests/AgentRunnerTests.swift`, `Tests/MacAgentCoreTests/ItemJobTests.swift`, `Tests/MacAgentCoreTests/PlannerBoundaryTests.swift`, `Tests/MacAgentCoreTests/RiskApprovalTests.swift`, `Tests/MacAgentCoreTests/ScreenControlGateTests.swift`, `Tests/MacAgentTests/ProductShellTests.swift`, `Tests/MacAgentTests/ScreenControlGateReachTests.swift`, `docs/sonny-v1-implementation-changelog.md`, `docs/sonny-manual-test-checklist.md`
+Tests: the flagged command from `CLAUDE.md` -> pass, 2773 tests in 190 suites, 7 known issues, exit 0, at `PLACEHOLDER_SHA`. Baseline on `main` at `619ba62` was 2767 in 189 with the same 7, so the diff adds 6 tests and one suite. `scripts/warnings` -> PLACEHOLDER_WARNINGS. `scripts/changelog-order` -> PLACEHOLDER_ORDER. Mutation battery: PLACEHOLDER_BATTERY.
+
+Behavior added:
+- `RevealInFinderCapabilityAdapter.init(reveal:)` — an undefaulted seam, per SONNY-350's rule. The adapter names no way to reach the desktop at all; `DefaultCapabilityAdapters.liveFinderReveal` is the one line in the package that opens a Finder window.
+- `CapabilityRegistry.revealing(with:)` and `CapabilityRegistry.revealingNowhere` replace `CapabilityRegistry.default`. The shipping app names the first at exactly one site; the second is `AgentActionExecutor`'s parameter default.
+- `AgentViewModel.makeExecutor` builds its registry from the view model's own `finderRevealer`, so the Reveal in Finder control and the `reveal_in_finder` capability are one seam. A fixture that passes `hermeticFinderRevealer` now gets it on both paths.
+
+Behavior preserved (required, no blanket claims):
+- **The product's Reveal in Finder still opens a real window.** `atItsRealStoreLocations()` passes the live closure, `makeExecutor` threads it into the registry, and `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal` still holds the shipping site. Owed a founder press — the manual item below.
+- **`reveal_in_finder` still resolves, previews, risk-assesses and summarises exactly as before.** Only the line performing the reveal moved; `revealSpec`, the whitelist validation, the existence check, both `invalidPlan` messages and the `"Revealed <path> in Finder."` summary are untouched, and `ProductShellTests`' two job-progress tests assert the same values they did.
+- **Every capability the registry routes is the same set.** `CapabilityRegistryTests` reads the same registry under its new name and still maps every executable operation to the same capability ID.
+- **`ToolRegistry.default` answers the same tools.** Tools are metadata; no registry's revealer is called to produce them.
+- **The chained-artifact reveal path** (`reveal_in_finder` with no `outputPath`, resolving the previous unit's artifact) is unchanged — `RunUnitProgressTests` and `ItemJobTests` cover it and were not touched.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **The default is inverted here, and only here, and it is a trade rather than an oversight.** Everywhere else this repository removes a default that reaches the machine so the shipping site must name the real thing (SONNY-240, SONNY-350). `AgentActionExecutor.capabilityRegistry` could not take that remedy: `git grep -n 'AgentActionExecutor(' 619ba62 -- Tests | grep -vE ':[0-9]+: *//' | wc -l` → **42** construction lines across **26** files, of which **4** lines in **1** file name a registry at all (`git grep -n 'capabilityRegistry:' 619ba62 -- Tests | wc -l` → 4). Removing the default meant 42 edits across 26 test files in a repository running parallel lanes, to protect a parameter one file has ever passed. So the default is `.revealingNowhere` — it cannot open a window — and the shipping path is held by a behavioural test rather than by the compiler. The cost is real and stated: a future executor construction site in the app that forgets the argument reveals nothing, silently. What catches that is `ProductShellTests.aRevealInsideAPlanEndsAtThisViewModelsOwnRevealer`, whose recorder goes empty the moment `makeExecutor` stops threading its revealer, plus a founder pressing the control.
+- **The census that decided the scope was a measurement, not an argument.** The ticket asked whether other adapters reach the desktop unseamed, naming `MediaPlaybackService` and `AppWebsiteActionDescriptors` as candidates. A probe on all six of the package's desktop doors, run over a full flagged suite at `619ba62`, recorded **4** reveals and **0** of `WorkspaceFileOpener.openFile`, `NativeMediaOpener.openURL`, `MacAppService.open`, `WorkspaceBrowserOpener`'s default `openURL` or its `launchServicesOpen`. Those zeros are trustworthy because the four reveals came through the same recorder and the same log file, so the instrument was proven live rather than assumed — `CLAUDE.md`'s clean-zero rule. The reading: the other doors have seams and every fixture that could reach one passes a double; this door had none, so no fixture could opt out. The static form of the same finding is `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 -- 'Sources/MacAgentCore/*CapabilityAdapter.swift' | grep -vE ':[0-9]+: *//'` → 1 line of 27 files, and 0 with this change in the tree; the comment stage is load-bearing and its control fires — without it the answer is 2, the extra being `RunRoutineCapabilityAdapter`'s prose.
+- **`AgentViewModel.init`'s `finderRevealer` is spelled `@escaping @MainActor @Sendable ([URL]) -> Void` rather than as the adapter's `Reveal` typealias, and the long spelling is deliberate.** It is the only closure-typed parameter on that initializer — after this change `awk` over the init's parameter list finds zero others with a `->`. `LocalStoreInjectionScanTests`' parameter parser exists precisely because a `->` there once took its bracket depth to `-1` and silently parsed 11 parameters instead of 34, and two of its doc comments cite `finderRevealer: @escaping ([URL]) -> Void` by name. Behind an alias the arrow leaves the real signature, that parser's real-tree coverage goes with it, and those comments start describing a shape the tree no longer has. The type had to change at all because `CapabilityAdapter: Sendable` and the adapter stores the closure, so a plain `([URL]) -> Void` will not convert.
+- **A premise check tuned to one shape fails honestly on another, and the tempting repair is the wrong one.** `noStoreVendorDefaultsAStoreParameter` asserted `parameters.count > 1` for every vendor, which was right while all of them had long signatures and wrong for `RevealInFinderCapabilityAdapter.init(reveal:)`, whose real signature has exactly one parameter. The premise is what turns a marker that matched too little into a failure rather than a silent pass, so dropping it was not available; it is a per-vendor `minimumParameters` now, defaulting to the 2 the others already had. For the one-parameter vendor the premise is carried instead by the label lookup, which records an issue per label it cannot find.
+- **A scan anchored on a count of one is satisfied by the wrong one of two sites.** `onlyOneLineInTheCoreOpensAFinderWindow` therefore asserts the whole file-to-count map equals `["DefaultCapabilityAdapters.swift": 1]` rather than asserting a total, and it carries its own comment-stripper control (`theSweepReadsPastAComment`) because this very file's prose names both searched tokens repeatedly — a sweep that could not see past a comment would answer from its own documentation.
+
+Known limitations / deferred scope:
+- The sweep in `onlyOneLineInTheCoreOpensAFinderWindow` strips line comments only, not block comments. `MacAgentSource` is this repository's one block-comment-aware scanner and it lives in the app test target, which the core test target cannot import; a second copy of that discipline is what `CLAUDE.md` records being bitten by twice. The files it reads carry their prose in `///` and `//`.
+- Nothing here changes the other five desktop doors. They have seams and the census found none of them firing, so there is no defect to fix; their *defaults* are still live implementations, which is the wider SONNY-240 question and is not this ticket's.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap.
+
 ### Branch: feature/delete-reaches-the-server
 Status: complete
 Date: 2026-09-03
@@ -502,7 +541,6 @@ Known limitations / deferred scope: `migration-round-trip.db.test.ts`'s `2099-01
 Open questions (required, write "none" if true): none.
 
 Next branch: unchanged by this work — this is a test-integrity fix across three tickets, not a roadmap row.
-
 
 ### Branch: feature/screen-control-stops-when-the-allowance-is-gone
 Status: complete

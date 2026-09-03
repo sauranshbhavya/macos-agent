@@ -1,7 +1,25 @@
+import AppKit
 import Foundation
 
 public enum DefaultCapabilityAdapters {
-    public static func all() -> [any CapabilityAdapter] {
+    /// **The one place in this package that opens a Finder window** (SONNY-395).
+    ///
+    /// It is a named constant rather than a literal at the call site so that the sweep in
+    /// `RevealInFinderSeamTests` can assert there is exactly one of it, and so that the two
+    /// registries below read as a choice between named things rather than as one of them quietly
+    /// carrying an `NSWorkspace` call.
+    public static let liveFinderReveal: RevealInFinderCapabilityAdapter.Reveal = {
+        NSWorkspace.shared.activateFileViewerSelecting($0)
+    }
+
+    /// **`finderRevealer` is undefaulted for the reason the adapter's own initializer gives.**
+    ///
+    /// A default here would be a default one level out — every caller of `all()` that predates the
+    /// parameter would keep whatever this line chose, which is the exact shape SONNY-350 removed
+    /// from the store vendors.
+    public static func all(
+        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal
+    ) -> [any CapabilityAdapter] {
         [
             LargestFilesZipCapabilityAdapter(),
             DocxConversionCapabilityAdapter(),
@@ -19,7 +37,7 @@ public enum DefaultCapabilityAdapters {
             RecentArtifactsCapabilityAdapter(),
             OpenMediaResultCapabilityAdapter(),
             FinderSelectionCapabilityAdapter(),
-            RevealInFinderCapabilityAdapter(),
+            RevealInFinderCapabilityAdapter(reveal: finderRevealer),
             PermissionReadinessCapabilityAdapter(),
             SaveRoutineCapabilityAdapter(),
             RunRoutineCapabilityAdapter(),

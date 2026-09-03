@@ -527,13 +527,48 @@ public struct CapabilityRegistry: Sendable {
         self.operationIndex = operationIndex
     }
 
-    public static let `default`: CapabilityRegistry = {
+    /// **The registry the shipping app runs on: its `reveal_in_finder` opens a real Finder
+    /// window.** Named at exactly one call site — `AgentViewModel.makeExecutor` — through the
+    /// revealer that view model was constructed with, so the app's Reveal in Finder control and
+    /// the `reveal_in_finder` capability are one seam rather than two (SONNY-395).
+    public static func revealing(
+        with finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal
+    ) -> CapabilityRegistry {
         do {
-            return try CapabilityRegistry(adapters: DefaultCapabilityAdapters.all())
+            return try CapabilityRegistry(
+                adapters: DefaultCapabilityAdapters.all(finderRevealer: finderRevealer)
+            )
         } catch {
-            preconditionFailure("Default capability registry is invalid: \(error)")
+            preconditionFailure("Capability registry is invalid: \(error)")
         }
-    }()
+    }
+
+    /// **The same capabilities, revealing nowhere — and it is `AgentActionExecutor`'s default on
+    /// purpose, which inverts this repository's usual rule about defaults** (SONNY-395).
+    ///
+    /// Everywhere else the rule is that a default must not reach the machine, and the remedy is to
+    /// remove the default so that the shipping site has to name the real thing. That remedy was not
+    /// available here, because of how many call sites this one parameter sits on:
+    /// `git grep -n 'AgentActionExecutor(' 619ba62 -- Tests | grep -vE ':[0-9]+: *//' | wc -l`
+    /// → **42** construction lines across **26** files
+    /// (`git grep -ln 'AgentActionExecutor(' 619ba62 -- Tests | wc -l`), and of all of them just
+    /// **4** lines in **1** file name a registry at all
+    /// (`git grep -n 'capabilityRegistry:' 619ba62 -- Tests | wc -l` → 4,
+    /// `git grep -ln …` → 1). The comment stage is not decoration and its control fires: without
+    /// it the first command answers 43, the extra line being `LocalStoreInjectionScanTests`' prose
+    /// about this very initializer.
+    ///
+    /// So removing the default would have been 42 edits across 26 test files, in a repository that
+    /// runs parallel lanes, to protect a parameter one file has ever passed.
+    ///
+    /// So the default is the one that cannot open a window, and what protects the shipping path is
+    /// not a compiler error but a behavioural test: `ProductShellTests`' reveal runs through the
+    /// view model's own dispatch and asserts the fixture's recorder saw the URL, which goes empty
+    /// the moment `makeExecutor` stops threading its revealer. The trade is deliberate — a silent
+    /// no-op in the product is caught by that test and by a founder pressing the control, while
+    /// the alternative was leaving a default that seizes the window server of the machine every
+    /// manual test is run on.
+    public static let revealingNowhere: CapabilityRegistry = revealing(with: { _ in })
 
     public var metadata: [CapabilityMetadata] {
         adapters.map(\.metadata)
