@@ -21,12 +21,20 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// adapter that had no seam at all.
     ///
     /// This adapter used to call `NSWorkspace.shared.activateFileViewerSelecting` inline, which made
-    /// it the only one of the 27 `*CapabilityAdapter.swift` files reaching the machine directly:
+    /// it the only capability adapter reaching the machine directly:
     /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
-    /// 'Sources/MacAgentCore/*CapabilityAdapter.swift' | grep -vE ':[0-9]+: *//'` answers **1** at
-    /// `619ba62`, the line at `:53`, and **0** with this change in the tree. The comment stage
-    /// earns its place and its control fires — without it the same command answers 2, the extra
-    /// line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open`.
+    /// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'`
+    /// answers **1** at `619ba62` — the line at `:53` — and **0** at this branch's head. The
+    /// comment stage earns its place and its control fires: without it the same command answers 2,
+    /// the extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open`.
+    ///
+    /// **The file filter is a pipe rather than the pathspec you would reach for first**, and that
+    /// is not style. A `pathspec` naming the adapter glob puts the two characters that open a
+    /// block comment into this doc comment, and `MacAgentSource.read` strips block comments
+    /// *before* it drops `//` lines — so every line below would vanish from every source scan that
+    /// reads this file, silently. `CLAUDE.md` records that arriving from this exact glob once
+    /// already (SONNY-220), from a session obeying the write-the-command-beside-the-number rule,
+    /// which is why it keeps arriving from sessions doing the right thing.
     ///
     /// Every other door — `WorkspaceFileOpener`, `NativeMediaOpener`, `MacAppService`,
     /// `WorkspaceBrowserOpener` — was already behind an injected seam, which is why a probe on all
