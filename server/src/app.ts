@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
+  optionalEntitlementSigningKey,
+  requireClientVersionPolicy,
   requireCreditCatalogue,
   requireEntitlementSigningKey,
   requireRateLimitSalt,
@@ -16,6 +18,8 @@ import { registerCreditRoutes } from "./routes/credits.js";
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
+import { registerMetaRoute } from "./routes/meta.js";
+import { registerVersionGate } from "./version/gate.js";
 import { registerIdempotency } from "./idempotency/hook.js";
 import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerMetering } from "./metering/hook.js";
@@ -247,6 +251,23 @@ export function buildApp(
   // error envelope rather than the framework's.
   registerErrorHandlers(app);
 
+  /**
+   * Contract §8's version gate (SONNY-204), installed on THIS instance and **before the auth gate**.
+   *
+   * The instance is what decides coverage, for the reason `auth/gate.ts` measured; the *order*
+   * against the auth gate is what decides whether an outdated client ever learns it is outdated.
+   * An old build's access token has almost certainly expired, and §7.2 makes `auth.token_expired`
+   * the one 401 a client answers by refreshing and retrying — so with the auth gate first, a client
+   * six months out of date spends its session in a refresh loop instead of receiving the one status
+   * §8.3 designed for it. `version/gate.ts` carries the argument in full.
+   *
+   * `requireClientVersionPolicy` runs on every deployment, so a malformed bound is a named startup
+   * failure rather than a gateway that refuses the wrong people. With both bounds at their `0.0.0`
+   * default the gate is disarmed and adds no hook at all.
+   */
+  const versionPolicy = requireClientVersionPolicy(config);
+  registerVersionGate(app, versionPolicy);
+
   // **And so does the auth gate** (SONNY-203) — installed on THIS instance, the root one, which is
   // what decides which routes it covers.
   //
@@ -272,6 +293,21 @@ export function buildApp(
   );
 
   registerHealth(app, config);
+
+  /**
+   * `GET /v1/meta` (SONNY-204), contract §8.3 — mounted beside health and on the same terms.
+   *
+   * Both are public (§2.2), both are mounted whatever the environment, and both answer honestly
+   * about a deployment rather than changing shape with it: a gateway with no signing key publishes
+   * an empty `entitlement_keys` rather than a `404`. `optionalEntitlementSigningKey` is the door
+   * that allows that while still refusing a half-configured or malformed key at startup.
+   */
+  registerMetaRoute(app, {
+    apiVersion: API_VERSION,
+    policy: versionPolicy,
+    signingKey: optionalEntitlementSigningKey(config),
+    ...(auth?.now ? { now: auth.now } : {}),
+  });
 
   /**
    * Contract §9's `Idempotency-Key`, on THIS instance for the same reason the gate is (SONNY-300).

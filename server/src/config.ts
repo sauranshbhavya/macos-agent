@@ -3,6 +3,13 @@ import { z } from "zod";
 import type { SupabaseJwtPolicy } from "./auth/token.js";
 import { entitlementSigningKeyFrom, type EntitlementSigningKey } from "./entitlement/claim.js";
 import {
+  ZERO_VERSION,
+  compareVersions,
+  formatVersion,
+  parseMarketingVersion,
+  type ClientVersionPolicy,
+} from "./version/policy.js";
+import {
   CreditCatalogueError,
   parseCreditCatalogue,
   type CreditCatalogue,
@@ -437,6 +444,50 @@ const schema = z.object({
    * Bounded at both ends so neither a zero nor a year is reachable by a typo.
    */
   BILLING_GRACE_DAYS: z.coerce.number().int().min(1).max(60).default(14),
+
+  /**
+   * Contract §8.3's `minimum_supported_client` — the version below which every route answers
+   * `410 version.unsupported` (SONNY-204).
+   *
+   * **Defaulted to `0.0.0`, which disarms the gate, and the direction is the whole decision.** No
+   * client can compare below it, so a deployment that has said nothing about versions refuses
+   * nobody. The alternative — defaulting to the current release — would have locked out every build
+   * below it on the day this landed, including the `0.0+0` a bare `swift run MacAgent` reports
+   * (`SonnyClientIdentity.version`, which has no bundle to read a version from). That is the
+   * opposite direction to `DEFAULT_BODY_LIMIT_BYTES` and `PUBLIC_ROUTES`, both of which default to
+   * the *restrictive* answer, and the difference is what each protects: those two fail closed
+   * because a forgotten decision there serves something it should not, while a forgotten decision
+   * here refuses a paying user who has done nothing wrong.
+   *
+   * It is also not a decision this repository may make on its own. §8.4: "Raising
+   * `minimum_supported_client` past a version that was never given a deprecation period is itself a
+   * breach of this contract." A default carries no deprecation period, so a default above zero
+   * would ship a breach.
+   */
+  MINIMUM_SUPPORTED_CLIENT: nonEmpty.default("0.0.0"),
+  /**
+   * Contract §8.4's `recommended_client` — the version below which a served client also gets
+   * `Sonny-Deprecation` and `Sonny-Deprecation-Info` (SONNY-204).
+   *
+   * "`minimum_supported_client` is a wall. `recommended_client` is a warning, and it exists so
+   * nobody ever hits the wall by surprise." Defaulted to `0.0.0` for the reason the minimum is: a
+   * warning nobody decided to give is a header on every response saying something nobody meant.
+   * Equal to the minimum means the band is empty and no client is ever warned, which is what an
+   * untold deployment should do.
+   */
+  RECOMMENDED_CLIENT: nonEmpty.default("0.0.0"),
+  /**
+   * Where a user whose build is refused or deprecated is sent. §8.3's `upgrade_url`.
+   *
+   * Configuration rather than a constant for the reason `BILLING_CHECKOUT_URL` is: it is neither
+   * secret nor guessable-wrong, and a staging gateway pointing at a production download page is a
+   * mistake that should be a redeploy to fix rather than an image rebuild.
+   *
+   * **No default, and `requireClientVersionPolicy` refuses to arm the gate without it**, because
+   * §8.3's actionable state is a button and a button needs somewhere to go. Absent while both
+   * bounds are `0.0.0` is fine and is what every deployment looks like today.
+   */
+  UPGRADE_URL: nonEmpty.optional(),
 });
 
 export interface Config {
@@ -489,6 +540,11 @@ export interface Config {
   readonly billingApiBaseUrl: string | undefined;
   readonly billingPlans: string;
   readonly billingGraceDays: number;
+  /** §8.3's bound, as configured. `requireClientVersionPolicy` is what parses and checks it. */
+  readonly minimumSupportedClient: string;
+  /** §8.4's bound, as configured. */
+  readonly recommendedClient: string;
+  readonly upgradeUrl: string | undefined;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -682,6 +738,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     billingApiBaseUrl: value.BILLING_API_BASE_URL,
     billingPlans: value.BILLING_PLANS,
     billingGraceDays: value.BILLING_GRACE_DAYS,
+    minimumSupportedClient: value.MINIMUM_SUPPORTED_CLIENT,
+    recommendedClient: value.RECOMMENDED_CLIENT,
+    upgradeUrl: value.UPGRADE_URL,
     credentials: providerCredentials(env),
   };
 }
@@ -744,6 +803,131 @@ export function requireEntitlementSigningKey(config: Config): EntitlementSigning
   // Non-null by the sweep above. `entitlementSigningKeyFrom` refuses a key that is not base64 PKCS#8
   // DER, and one that is not Ed25519, without ever putting the value in the message.
   return entitlementSigningKeyFrom(config.entitlementSigningKey!, config.entitlementSigningKeyId!);
+}
+
+/**
+ * The entitlement signing key when this deployment has one, or `undefined` when it has neither name.
+ *
+ * **The tolerant door, for the one route that is mounted whatever the environment.**
+ * `GET /v1/meta` publishes §5.3's public key set unconditionally — `app.ts`'s standing argument that
+ * the route table must not change shape — so it needs a way to ask for the key that answers "there
+ * is none" instead of refusing to start. A health-only deployment mounts no authenticated route,
+ * signs nothing, and correctly publishes an empty set.
+ *
+ * **A half-configured pair is still a startup failure**, because it delegates: with one of the two
+ * names set, `requireEntitlementSigningKey` raises its own message naming the missing one, and a
+ * present-but-malformed key still fails here rather than on a client that cannot verify a claim.
+ * Only *neither* is an answer.
+ */
+export function optionalEntitlementSigningKey(config: Config): EntitlementSigningKey | undefined {
+  if (!config.entitlementSigningKey && !config.entitlementSigningKeyId) return undefined;
+  return requireEntitlementSigningKey(config);
+}
+
+/**
+ * Contract §8's version policy, or a startup failure naming what is wrong.
+ *
+ * **`requireCreditCatalogue`'s shape: unset is an answer, present-and-malformed is not.** Both
+ * bounds have defaults, so this can never fail for absence; what it refuses is a value that is
+ * there and cannot be honoured. Every one of the four refusals below is a deployment error that
+ * would otherwise present as a product bug — a gateway refusing every client, or refusing none
+ * while looking configured, or telling a user to update and giving them nowhere to go.
+ *
+ * Called unconditionally from `buildApp`, because `GET /v1/meta` and the version gate are both
+ * mounted whatever the environment. So a typo in `MINIMUM_SUPPORTED_CLIENT` is a named startup
+ * failure on every deployment, which is this file's standing property.
+ */
+export function requireClientVersionPolicy(config: Config): ClientVersionPolicy {
+  const minimum = parseMarketingVersion(config.minimumSupportedClient);
+  if (minimum === undefined) {
+    throw new ConfigError(
+      `MINIMUM_SUPPORTED_CLIENT is not a marketing version: expected one to three numeric ` +
+        `components such as 1.0.0, optionally with a +build suffix, as the Mac sends in ` +
+        `Sonny-Client-Version (contract section 2.2). Below this version every route answers 410 ` +
+        `version.unsupported, so an unreadable one has no safe reading -- refusing nobody hides a ` +
+        `policy somebody set, and refusing everybody is an outage. Leave it unset for 0.0.0, which ` +
+        `refuses nobody deliberately. See server/.env.example for the expected shape.`,
+    );
+  }
+  const recommended = parseMarketingVersion(config.recommendedClient);
+  if (recommended === undefined) {
+    throw new ConfigError(
+      `RECOMMENDED_CLIENT is not a marketing version: expected one to three numeric components ` +
+        `such as 1.0.0, optionally with a +build suffix. Below this version a client is served and ` +
+        `told to update (contract section 8.4). Leave it unset for 0.0.0, which warns nobody. See ` +
+        `server/.env.example for the expected shape.`,
+    );
+  }
+  if (compareVersions(recommended, minimum) < 0) {
+    throw new ConfigError(
+      `RECOMMENDED_CLIENT (${formatVersion(recommended)}) is below MINIMUM_SUPPORTED_CLIENT ` +
+        `(${formatVersion(minimum)}), which describes no client that can exist: contract section ` +
+        `8.4 makes the recommended version the warning a client gets BEFORE it reaches the wall, so ` +
+        `every version it would warn is already refused. Set them equal to arm the wall with no ` +
+        `warning period.`,
+    );
+  }
+
+  const bounds = {
+    minimum,
+    recommended,
+    minimumText: formatVersion(minimum),
+    recommendedText: formatVersion(recommended),
+  } as const;
+
+  const armed =
+    compareVersions(minimum, ZERO_VERSION) > 0 || compareVersions(recommended, ZERO_VERSION) > 0;
+  const upgradeUrl = config.upgradeUrl === undefined ? null : checkedUpgradeUrl(config.upgradeUrl);
+
+  if (!armed) return { ...bounds, armed: false, upgradeUrl };
+  if (upgradeUrl === null) {
+    throw new ConfigError(
+      `UPGRADE_URL is required once MINIMUM_SUPPORTED_CLIENT or RECOMMENDED_CLIENT is above ` +
+        `0.0.0. Contract section 8.3 puts an upgrade_url in the 410 body and section 8.4 puts one ` +
+        `in Sonny-Deprecation-Info, because the state those describe is "a definite, actionable ` +
+        `state that the app can render as 'Sonny needs an update' with a button" -- and a button ` +
+        `needs somewhere to go. See server/.env.example for the expected shape.`,
+    );
+  }
+  return { ...bounds, armed: true, upgradeUrl };
+}
+
+/**
+ * The upgrade URL, checked for the two things that make it usable.
+ *
+ * **Parsed rather than pattern-matched**, so `https://example.test/download` passes and
+ * `example.test/download` — which has no scheme and is what an operator types — is refused here
+ * instead of becoming a relative link inside whatever renders it.
+ *
+ * **The scheme is restricted to http and https**, which is narrower than "a valid URL" for a reason
+ * that is about the Mac and not about this gateway: §8.3's actionable state is a button, so
+ * something on the client eventually opens this, and `NSWorkspace.open` will happily launch a
+ * `file:` path or a custom scheme registered by any installed app. That makes an operator's typo a
+ * local action rather than a browser tab. This is a server-configured value and never a
+ * caller-supplied one, so it is not a wire attack surface; it is a mistake this refuses to carry.
+ *
+ * The value is named in the message, unlike a credential: a URL is not a secret and there is no way
+ * to fix one without seeing which one is wrong.
+ */
+function checkedUpgradeUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ConfigError(
+      `UPGRADE_URL is not a URL: ${JSON.stringify(raw)}. Expected an absolute http or https URL ` +
+        `such as https://example.test/download -- a bare host with no scheme is the usual cause.`,
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ConfigError(
+      `UPGRADE_URL must be http or https, not ${JSON.stringify(parsed.protocol)}: ` +
+        `${JSON.stringify(raw)}. It is the address a user is sent to when their build is refused, ` +
+        `so the client opens it -- and every other scheme is a local action on that user's Mac ` +
+        `rather than a download page.`,
+    );
+  }
+  return parsed.toString();
 }
 
 /**
