@@ -147,12 +147,27 @@ function windowStart(limit: Limit, now: Date): Date {
  * incremented in one statement, and the `WHERE` on the update is what refuses the increment once the
  * ceiling is reached. Two concurrent callers cannot both read a stale count, because neither reads
  * one — the second waits on the first's row lock and then re-evaluates against the committed value.
+ *
+ * **`now` has no default, and that is the whole guard against SONNY-341's defect class.** The window
+ * above is FIXED — `windowStart` is `floor(now / windowSeconds) * windowSeconds` — so a caller on the
+ * real clock is a caller whose budget silently restarts at :00, :15, :30 and :45. That is correct in
+ * production, where every call site already passes the request's own `now`, and in a test it is a
+ * failure four times an hour for a reason unconnected to the code: the call that should have been
+ * refused lands in a new window, the counter is 0 again, and it is allowed. Observed, and worse than
+ * an ordinary flake because `scripts/mutate` reads such a failure as the mutant being caught
+ * (SONNY-224) — a battery spanning an hour crosses four turnovers, so it fires on a schedule rather
+ * than rarely, while a session investigating by re-running usually sees green.
+ *
+ * A default made the wrong thing the shorter thing to write, and every rate-limit test in the suite
+ * had written it. Removing it is the same move `AgentViewModel`'s store parameters made for the same
+ * reason: what the compiler refuses cannot be forgotten, and nothing was gained by the default
+ * because no production caller ever used it.
  */
 export async function consume(
   client: pg.Client,
   bucket: string,
   limit: Limit,
-  now: Date = new Date(),
+  now: Date,
 ): Promise<Verdict> {
   const start = windowStart(limit, now);
   const result = await client.query<{ count: number }>(

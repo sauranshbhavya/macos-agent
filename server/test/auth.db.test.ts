@@ -36,6 +36,40 @@ const withConnection = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> 
 
 const config: Config = testConfig({ databaseUrl: url });
 
+/**
+ * **The instant every app built in this file runs on** (SONNY-341).
+ *
+ * `src/auth/ratelimit.ts` counts against a FIXED window — `windowStart` is
+ * `floor(now / windowSeconds) * windowSeconds` — so a 15-minute window turns over at :00, :15, :30
+ * and :45 of every hour and a 60-minute one at :00. Every test below that spends a limit's budget to
+ * its ceiling and then asserts the next request is refused was, on the real clock, betting that its
+ * requests would not straddle one of those instants. Four times an hour they did: the ceiling
+ * request landed in a new window, the counter was 0 again, and it was allowed. Observed as a real
+ * failure on a run that started at 13:29:54, six seconds before a turnover.
+ *
+ * **Worse than an ordinary flake, which is why it is fixed rather than tolerated.** A failure this
+ * shape is read by `scripts/mutate` as the mutant being caught — the manufactured kill SONNY-224
+ * exists for — and a battery running the server suite over an hour crosses four turnovers, so it
+ * fires on a schedule rather than rarely. A session investigating it by re-running sees green.
+ *
+ * **The fix is a frozen instant, not a wider margin or a retry.** Every `now()` inside a test returns
+ * this one value, so every `consume` in that test lands in one window and there is no turnover left
+ * to straddle, however long the test takes and whenever it runs. Where the instant SITS is not what
+ * makes that work — the freezing is — but it is strictly interior to all three declared window
+ * lengths, exactly centred in the 60-second and 15-minute ones and 62.5% through the hour, which
+ * keeps the `Retry-After` assertions below strict bounds rather than equalities. The same instant,
+ * and the same reasoning, is in `authlimits.db.test.ts`.
+ *
+ * **Everything else in this file that reads a clock is pinned to it too.** Otherwise the file would
+ * trade one clock dependency for a disagreement between two: the access tokens `signedIn` mints are
+ * minted at this instant, and the three fixtures that age a code out set `expires_at` relative to it
+ * instead of to the database's own `now()`, which is a different date entirely.
+ */
+const PINNED_NOW = new Date("2026-08-21T10:37:30Z");
+
+/** An issuance aged past its expiry, in the pinned clock's terms rather than the database's. */
+const EXPIRED_AT = new Date(PINNED_NOW.getTime() - 60_000);
+
 /** A provider that records what it was asked and answers however the test needs. */
 class FakeProvider implements AuthProvider {
   sent: string[] = [];
@@ -140,7 +174,7 @@ describeDb("the auth endpoints", () => {
     provider = new FakeProvider();
   });
 
-  const build = () => buildApp(config, { provider, withConnection });
+  const build = () => buildApp(config, { provider, withConnection, now: () => PINNED_NOW });
 
   /**
    * A real, correctly signed access token for the Supabase user `FakeProvider` signs everyone in as
@@ -154,7 +188,8 @@ describeDb("the auth endpoints", () => {
    * always ahead of the clock the gate reads.
    */
   const SESSION_USER = "11111111-1111-1111-1111-111111111111";
-  const signedIn = (user: string = SESSION_USER) => ({ authorization: `Bearer ${accessTokenFor(user)}` });
+  const signedIn = (user: string = SESSION_USER) =>
+    ({ authorization: `Bearer ${accessTokenFor(user, { now: PINNED_NOW })}` });
 
   describe("POST /v1/auth/email/start", () => {
     itUnderHangBackstop("answers identically for an address with an account and one without", async () => {
@@ -247,9 +282,20 @@ describeDb("the auth endpoints", () => {
       // which one works."
       expect(rows[0]!.total).toBe(3);
       expect(rows[0]!.live).toBe(1);
+      // **"Newest" is `consumeLatest`'s notion of it, not a second one invented here** (SONNY-353,
+      // reached through SONNY-341). This read `ORDER BY issued_at DESC, id DESC`, which agreed with
+      // the production ordering only by accident: `issued_at` is written from the app's clock
+      // (`recordIssue`), so with the clock pinned above all three rows carry the SAME instant and the
+      // tie-break decides — and `id` is `gen_random_uuid()`, so it decided at random. Measured on the
+      // pinned clock before this line changed: 8 passes and 7 failures in 15 runs of this test alone.
+      // `issue_seq` is `GENERATED ALWAYS AS IDENTITY` (migration 0017), so it is the one column that
+      // orders issuance deterministically whatever the clock does, which is exactly why 0017 added
+      // it and why `codes.ts:86` orders by it. Asserting against the row the product would actually
+      // redeem is also the stronger claim: the old ordering could disagree with `consumeLatest`
+      // whenever `issue_seq` and `issued_at` disagree, which is the case 0017 exists for.
       const newest = await client.query<{ consumed_at: Date | null }>(
         `SELECT consumed_at FROM sonny.sign_in_code_issue
-          WHERE mailbox_key = 'swarm@example.com' ORDER BY issued_at DESC, id DESC LIMIT 1`,
+          WHERE mailbox_key = 'swarm@example.com' ORDER BY issue_seq DESC, issued_at DESC LIMIT 1`,
       );
       expect(newest.rows[0]!.consumed_at).toBeNull();
       await app.close();
@@ -394,7 +440,9 @@ describeDb("the auth endpoints", () => {
       // expired: issued, then aged past its lifetime
       provider.accept = true;
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "exp@example.com" } });
-      await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'exp@example.com'");
+      await client.query(
+          "UPDATE sonny.sign_in_code_issue SET expires_at = $1 WHERE mailbox_key = $2",
+          [EXPIRED_AT, "exp@example.com"]);
       provider.accept = false;
       expect((await verify(app, "123456", "exp@example.com")).json().error.code).toBe("auth.code_expired");
       await app.close();
@@ -508,7 +556,9 @@ describeDb("the auth endpoints", () => {
         await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: VICTIM, payload: { email: "has@example.com", code: "123456" } });
         // A second mailbox asked for a code and never used it — the third state that used to leak.
         await app.inject({ method: "POST", url: "/v1/auth/email/start", remoteAddress: VICTIM, payload: { email: "asked@example.com" } });
-        await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'asked@example.com'");
+        await client.query(
+          "UPDATE sonny.sign_in_code_issue SET expires_at = $1 WHERE mailbox_key = $2",
+          [EXPIRED_AT, "asked@example.com"]);
 
         const answers = [
           await probe(app, "has@example.com", ATTACKER),
@@ -534,7 +584,9 @@ describeDb("the auth endpoints", () => {
         expect(await probe(app, "used@example.com", VICTIM)).toBe("auth.code_used");
 
         await start("gone@example.com");
-        await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'gone@example.com'");
+        await client.query(
+          "UPDATE sonny.sign_in_code_issue SET expires_at = $1 WHERE mailbox_key = $2",
+          [EXPIRED_AT, "gone@example.com"]);
         expect(await probe(app, "gone@example.com", VICTIM)).toBe("auth.code_expired");
 
         await start("wrong@example.com");
@@ -990,7 +1042,7 @@ describeDb("the auth endpoints", () => {
         }
       };
 
-      const app = buildApp(config, { provider, withConnection: interposing });
+      const app = buildApp(config, { provider, withConnection: interposing, now: () => PINNED_NOW });
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "late@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "late@example.com", code: "1" } })).json().user.id;
       provider.revokedUsers = [];
@@ -1149,7 +1201,7 @@ describeDb("the auth endpoints", () => {
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "raw@example.com" } });
       await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "raw@example.com", code: "1" } });
-      const presented = accessTokenFor(SESSION_USER);
+      const presented = accessTokenFor(SESSION_USER, { now: PINNED_NOW });
       expect((await app.inject({
         method: "POST", url: "/v1/auth/signout", headers: { authorization: `Bearer ${presented}` },
       })).statusCode).toBe(204);
