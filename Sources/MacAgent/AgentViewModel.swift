@@ -1659,6 +1659,46 @@ final class AgentViewModel: ObservableObject {
     /// the session changes, and the next one to appear asks for the new account's number.
     func forgetScreenControlAllowance() {
         screenControlAllowance = nil
+        screenControlAutoTopUpFailure = nil
+    }
+
+    // MARK: - Auto top-up (SONNY-215)
+
+    /// Why the auto-top-up setting could not be changed, or `nil`.
+    ///
+    /// **Its own channel, and not `errorMessage`.** That property means *the task failed*, and the
+    /// widget picks `.failure` ahead of `.result` — so a setting that would not save, routed there,
+    /// would replace the result of a task that ran and succeeded. This is the same distinction
+    /// `recordLocalStorageWriteFailure` draws for a bookkeeping write, applied to a network one:
+    /// what the user pressed did not happen, so they are owed a sentence, and it belongs beside the
+    /// control they pressed. `SonnyAccountModel.portalFailure` is the shape this follows.
+    @Published private(set) var screenControlAutoTopUpFailure: BillingSettingFailure?
+
+    /// Whether the setting is being written right now, so the control can be held while it is.
+    @Published private(set) var isSettingScreenControlAutoTopUp = false
+
+    /// Turn automatic top-ups on or off (SONNY-215).
+    ///
+    /// **The gateway is the one that holds this**, so the published figure is replaced with whatever
+    /// it answers rather than with what was asked for — a control that showed the requested state
+    /// before the server agreed would be a switch that lies about whether a charge can happen.
+    ///
+    /// **A failure leaves the previous figure in place**, which is deliberately not what
+    /// `refreshScreenControlAllowance` does with a failed read. That method is reading an ambient
+    /// number and `nil` means "no line"; this is a write the user pressed for, and clearing the row
+    /// they were looking at would take the setting off screen instead of telling them it did not
+    /// change.
+    func setScreenControlAutoTopUp(_ enabled: Bool) async {
+        isSettingScreenControlAutoTopUp = true
+        screenControlAutoTopUpFailure = nil
+        defer { isSettingScreenControlAutoTopUp = false }
+        do {
+            screenControlAllowance = try await screenControlAllowanceService.setAutoTopUp(enabled)
+        } catch let error as SonnyBackendError {
+            screenControlAutoTopUpFailure = BillingSettingFailure(error)
+        } catch {
+            screenControlAutoTopUpFailure = .cannotBeChanged
+        }
     }
 
     /// Whether the task in flight — or the one waiting on an approval — is a screen-control run.

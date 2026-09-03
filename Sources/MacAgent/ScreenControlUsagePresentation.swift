@@ -50,4 +50,24 @@ enum ScreenControlUsagePresentation {
         "\(allowance.runsLeft) of \(allowance.runsIncluded) "
             + "\(allowance.runsIncluded == 1 ? "run" : "runs") left this month"
     }
+
+    /// The auto-top-up control's name (SONNY-215).
+    ///
+    /// **A precise label rather than a label plus an explanation**, which is the pattern the founders
+    /// recorded on 2026-08-16 and this is the fourth application of it: narrow the name until the
+    /// sentence beside it is unnecessary. "Auto top-up" is what every record calls this feature and
+    /// it is exactly the name that would need one — it says neither what is bought nor when, so the
+    /// obvious remedy is a line of how-it-works copy, which the no-explanatory-copy rule of
+    /// 2026-08-14 forbids.
+    ///
+    /// So the name carries all three: **buy** (it costs money), **more runs** (of the thing named
+    /// directly above it), and **when these run out** (not on a schedule, and not now). "These"
+    /// has a referent on screen — the row above is ``label`` and ``usageLine`` — which is the same
+    /// device "Delete what Sonny did on screen" uses, reusing the section title beside it so the
+    /// object of the verb is literally visible.
+    ///
+    /// **What it deliberately does not say** is what a pack costs, how many can be bought in a
+    /// month, or what happens when a card is declined. Those are real and they belong on the
+    /// website's terms; the product says what the control does and stops.
+    static let autoTopUpLabel = "Buy more runs when these run out"
 }

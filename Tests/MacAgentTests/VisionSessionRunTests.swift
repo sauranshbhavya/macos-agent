@@ -2476,7 +2476,12 @@ struct VisionSessionRunTests {
         // and is `anUnreadableAllowanceRefusesAtTheDoorAndDoesNotHaltARunningSession`'s.
         let gate = SonnyScreenControlGate(
             entitlements: StubEntitlementConfirmation(.entitled),
-            allowance: StubAllowanceReading(answers: [.runsLeft(5)], thereafter: .failure)
+            allowance: StubAllowanceReading(answers: [.runsLeft(5)], thereafter: .failure),
+            // **Never called, and here that is the load-bearing half** (SONNY-215): a failed read is
+            // not a confirmed exhaustion, so nothing may buy runs on the strength of it. The count
+            // is what says so — an outcome assertion alone passes just as well against a gate that
+            // bought a pack and carried on anyway.
+            topUp: StubTopUpPurchasing.neverCalled()
         )
         let fixture = try makeFixture(
             replies: [
@@ -2519,7 +2524,10 @@ struct VisionSessionRunTests {
             allowance: StubAllowanceReading(
                 answers: [.runsLeft(1)],
                 thereafter: .runsAndCredits(runsLeft: 0, creditsRemaining: 0.6)
-            )
+            ),
+            // **Never called: none of these accounts opted in** (SONNY-215), which is what keeps
+            // SONNY-213's halt the behaviour under test here.
+            topUp: StubTopUpPurchasing.neverCalled()
         )
         let fixture = try makeFixture(
             replies: [
@@ -2557,7 +2565,10 @@ struct VisionSessionRunTests {
             allowance: StubAllowanceReading(
                 answers: [.runsLeft(1)],
                 thereafter: .runsAndCredits(runsLeft: 0, creditsRemaining: 0)
-            )
+            ),
+            // **Never called: none of these accounts opted in** (SONNY-215), which is what keeps
+            // SONNY-213's halt the behaviour under test here.
+            topUp: StubTopUpPurchasing.neverCalled()
         )
         let fixture = try makeFixture(
             replies: [

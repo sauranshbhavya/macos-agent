@@ -393,6 +393,115 @@ struct ScreenControlUsageSurfaceTests {
         #expect(MacAgentSource.count(of: "refreshScreenControlAllowance: nil", inText: firstRun) == 1)
     }
 
+    /// The auto-top-up control sits under the usage row, is System A, and is absent when this
+    /// deployment sells nothing (SONNY-215).
+    ///
+    /// **Under the usage row is a property rather than a layout preference**, and it is what the
+    /// control's own name leans on: "Buy more runs when *these* run out" has a referent only while
+    /// the figure is the line above it. Moved anywhere else the label stops being self-contained and
+    /// would want the explanatory sentence the no-explanatory-copy rule forbids.
+    @Test
+    func theAutoTopUpControlSitsUnderTheUsageRowAndOnlyWhenThereIsSomethingToBuy() throws {
+        let source = try MacAgentSource.read("SignInView.swift")
+        for anchor in [
+            "private var signedInStep: some View {",
+            "private var screenControlAutoTopUpRow: some View {"
+        ] {
+            #expect(MacAgentSource.count(of: anchor, inText: source) == 1, "anchor is not unique: \(anchor)")
+        }
+
+        // The order inside the signed-in step: the plan, then the figure, then the control about it.
+        let signedIn = try MacAgentSource.braceBlock(of: source, openedBy: "private var signedInStep: some View {")
+        let usageAt = try #require(signedIn.range(of: "screenControlUsageRow"))
+        let controlAt = try #require(signedIn.range(of: "screenControlAutoTopUpRow"))
+        #expect(usageAt.lowerBound < controlAt.lowerBound)
+
+        let row = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private var screenControlAutoTopUpRow: some View {"
+        )
+        // **Both conditions, and neither is enough alone.** `isOffered` is the deployment's answer —
+        // a gateway with no pack configured refuses every purchase, and a control that only fails
+        // when pressed is a broken control (founder direction, 2026-08-31). The allowance being
+        // present is the other: with no figure there is nothing for "these" to name.
+        #expect(MacAgentSource.count(of: "allowance.autoTopUp.isOffered", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "if let allowance = screenControlAllowance", inText: row) == 1)
+        // The label comes from the one place the copy lives, not from a literal in the view.
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.autoTopUpLabel", inText: row) == 2)
+        // The shared System A components rather than a hand-rolled row or a second toggle.
+        #expect(MacAgentSource.count(of: "SettingsAdaptiveControlRow", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "SonnySettingsToggle(", inText: row) == 1)
+        // System A, and only System A.
+        #expect(MacAgentSource.count(of: "WidgetTheme.", inText: row) == 0)
+        #expect(MacAgentSource.count(of: "WidgetType.", inText: row) == 0)
+        // The control for those two zeros — the same one the usage row's test uses, and for the same
+        // reason: a token absent from the whole file would answer zero from a scan that cannot see
+        // its shape at all.
+        let widgetSource = try MacAgentSource.read("FloatingWidgetView.swift")
+        #expect(MacAgentSource.count(of: "WidgetTheme.", inText: widgetSource) > 0)
+
+        // **The switch reads the server's answer and never a local copy.** A view that held its own
+        // `@State` would show a user that a charge could happen before anything agreed to it.
+        #expect(MacAgentSource.count(of: "allowance.autoTopUp.isOptedIn", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "@State", inText: row) == 0)
+
+        // First run passes no control, for the same reason it passes no figure.
+        let firstRun = try MacAgentSource.read("FirstRunSequence.swift")
+        #expect(MacAgentSource.count(of: "screenControlAutoTopUp: nil", inText: firstRun) == 1)
+    }
+
+    /// The control's name says what it does and nothing else explains it.
+    ///
+    /// **The same prohibition the two figure sentences are held to**, widened by one — a switch that
+    /// authorises a charge is exactly where a how-it-works sentence would feel most justified, which
+    /// is why the label carries the whole meaning instead (the "a precise label is not explanation"
+    /// pattern, 2026-08-16).
+    @Test
+    func theAutoTopUpLabelExplainsNothingAndPromisesNoPrice() {
+        let label = ScreenControlUsagePresentation.autoTopUpLabel
+
+        #expect(label == "Buy more runs when these run out")
+        // One phrase, no second sentence.
+        #expect(label.split(separator: ".").count == 1)
+        // It says the three things it has to and none of the things that belong on the website: what
+        // a pack costs, how many can be bought, or what happens when a card is declined.
+        for word in ["$", "charge", "card", "automatically", "per month", "billing", "because", "will be"] {
+            #expect(!label.lowercased().contains(word), "\(label) explains itself: \(word)")
+        }
+        // The three it does say. "these" is what makes the row's placement load-bearing.
+        for word in ["buy", "runs", "these", "run out"] {
+            #expect(label.lowercased().contains(word), "\(label) dropped: \(word)")
+        }
+    }
+
+    /// The failure sentences say what happened and what to do, and never how any of it works.
+    @Test
+    func aSettingThatWouldNotChangeSaysSoWithoutExplainingItself() {
+        for failure in BillingSettingFailure.allCases {
+            let sentence = BillingSettingCopy.message(for: failure)
+            #expect(!sentence.isEmpty)
+            // **At most two, not one — and the difference from the figure sentences above is the
+            // point.** A usage line is a fact and gets one clause; a failure is what happened plus
+            // what to do about it, which is the shape `BillingPortalCopy` already ships and the
+            // shape "error handling is UX" asks for. A third sentence is where an explanation
+            // starts.
+            #expect(
+                sentence.split(separator: ".").count <= 2,
+                "\(sentence) carries more than what-happened and what-to-do"
+            )
+            for word in ["because", "top-up", "charge", "card", "gateway", "server"] {
+                #expect(!sentence.lowercased().contains(word), "\(sentence) explains itself: \(word)")
+            }
+        }
+        // **The one case that must not suggest a retry**, which is `BillingPortalCopy`'s own call
+        // for the same shape: nothing about it says a second attempt would land differently.
+        #expect(!BillingSettingCopy.message(for: .cannotBeChanged).contains("Try again"))
+        #expect(BillingSettingCopy.message(for: .temporarilyUnavailable).contains("Try again"))
+        // And the three are distinct, or two states would be one sentence.
+        let sentences = Set(BillingSettingFailure.allCases.map(BillingSettingCopy.message(for:)))
+        #expect(sentences.count == BillingSettingFailure.allCases.count)
+    }
+
     /// **Insights shows no usage or quota figure of any kind, and until now that founder decision
     /// had no mechanical hold on the product at all.**
     ///
@@ -480,7 +589,12 @@ struct ScreenControlUsageSurfaceTests {
             runsIncluded: runsIncluded,
             creditsRemaining: creditsRemaining ?? Double(runsLeft),
             periodStart: Date(timeIntervalSince1970: 1_753_920_000),
-            periodEnd: Date(timeIntervalSince1970: 1_756_598_400)
+            periodEnd: Date(timeIntervalSince1970: 1_756_598_400),
+            // **Nothing offered and nothing agreed** (SONNY-215). This suite is about the usage
+            // line, and every one of its assertions is written about an account that has not opted
+            // in — which is also the default a fresh account is in. A fixture that consented by
+            // omission would put a control on a surface no test here mentions.
+            autoTopUp: .none
         )
     }
 }

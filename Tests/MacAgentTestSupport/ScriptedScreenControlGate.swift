@@ -95,21 +95,32 @@ public final class StubAllowanceReading: ScreenControlAllowanceReading, @uncheck
     private let lock = NSLock()
     private var scripted: [Answer]
     private let fallback: Answer
+    private let autoTopUp: ScreenControlAutoTopUp
     private var fetches = 0
 
     /// The same answer to every read.
-    public init(_ answer: Answer) {
+    ///
+    /// **`autoTopUp` defaults to `.none`, which is the fixture half of "off by default"**
+    /// (SONNY-215): nothing offered and nothing agreed, so every test written before this parameter
+    /// existed keeps meaning what it meant, and a test about a purchase has to say so in words.
+    public init(_ answer: Answer, autoTopUp: ScreenControlAutoTopUp = .none) {
         self.scripted = []
         self.fallback = answer
+        self.autoTopUp = autoTopUp
     }
 
     /// A read that changes partway through — **the shape the gate's asymmetry needs**. A session
     /// admitted with runs in hand and then losing the network is the only way to reach the step
     /// boundary's read-failure branch at all: a reader that failed from the first call would be
     /// refused at the door, which is the other branch.
-    public init(answers: [Answer], thereafter: Answer) {
+    public init(
+        answers: [Answer],
+        thereafter: Answer,
+        autoTopUp: ScreenControlAutoTopUp = .none
+    ) {
         self.scripted = answers
         self.fallback = thereafter
+        self.autoTopUp = autoTopUp
     }
 
     /// How many times the gate actually asked. **A class rather than a struct for this one field**:
@@ -130,20 +141,99 @@ public final class StubAllowanceReading: ScreenControlAllowanceReading, @uncheck
         case .failure:
             throw ReadFailed()
         case .runsLeft(let runs):
-            return Self.allowance(runsLeft: runs, creditsRemaining: Double(runs))
+            return Self.allowance(
+                runsLeft: runs,
+                creditsRemaining: Double(runs),
+                autoTopUp: autoTopUp
+            )
         case .runsAndCredits(let runs, let credits):
-            return Self.allowance(runsLeft: runs, creditsRemaining: credits)
+            return Self.allowance(runsLeft: runs, creditsRemaining: credits, autoTopUp: autoTopUp)
         }
     }
 
-    private static func allowance(runsLeft: Int, creditsRemaining: Double) -> ScreenControlAllowance {
+    /// An allowance a test can build without naming every field. **`autoTopUp` has no default here**
+    /// even though the initializers above do — a reading built by hand is one a test is saying
+    /// something specific about, and the two callers that matter say opposite things.
+    public static func allowance(
+        runsLeft: Int,
+        creditsRemaining: Double,
+        autoTopUp: ScreenControlAutoTopUp
+    ) -> ScreenControlAllowance {
         ScreenControlAllowance(
             plan: "test.plan",
             runsLeft: runsLeft,
             runsIncluded: max(runsLeft, 1),
             creditsRemaining: creditsRemaining,
             periodStart: Date(timeIntervalSince1970: 0),
-            periodEnd: Date(timeIntervalSince1970: 2_678_400)
+            periodEnd: Date(timeIntervalSince1970: 2_678_400),
+            autoTopUp: autoTopUp
         )
+    }
+}
+
+/// A ``ScreenControlTopUpPurchasing`` that answers a purchase, or throws (SONNY-215).
+///
+/// **The count is the point, and it is why this is a class.** The ticket's hard requirement is a
+/// negative — no charge without the explicit opt-in — and an outcome assertion alone passes just as
+/// well against a gate that buys a pack and then refuses anyway. `purchaseCount` is the only way to
+/// assert that nothing was bought.
+public final class StubTopUpPurchasing: ScreenControlTopUpPurchasing, @unchecked Sendable {
+    public enum Answer: Sendable {
+        /// The purchase landed, and this is the allowance that followed it.
+        case granted(runsLeft: Int, creditsRemaining: Double)
+        /// Every way a purchase does not happen. The gate treats them all alike, on purpose.
+        case failure
+    }
+
+    public struct PurchaseFailed: Error, Equatable {
+        public init() {}
+    }
+
+    private let lock = NSLock()
+    private let answer: Answer
+    private let autoTopUp: ScreenControlAutoTopUp
+    private var purchases = 0
+
+    /// - Parameters:
+    ///   - answer: what every purchase returns.
+    ///   - autoTopUp: the setting the *post-purchase* reading carries. Defaults to opted in with one
+    ///     attempt left, because an allowance handed back by a successful purchase describes an
+    ///     account that has just made one.
+    public init(
+        _ answer: Answer,
+        autoTopUp: ScreenControlAutoTopUp = ScreenControlAutoTopUp(
+            isOffered: true,
+            isOptedIn: true,
+            attemptsLeft: 1
+        )
+    ) {
+        self.answer = answer
+        self.autoTopUp = autoTopUp
+    }
+
+    /// A purchaser that must never be reached. **The default for every gate fixture that is not
+    /// about buying anything**: if it is called, the test fails on the count rather than on a
+    /// puzzling allowance.
+    public static func neverCalled() -> StubTopUpPurchasing {
+        StubTopUpPurchasing(.failure)
+    }
+
+    /// How many times the gate actually tried to buy something.
+    public var purchaseCount: Int {
+        lock.withLock { purchases }
+    }
+
+    public func purchaseTopUp() async throws -> ScreenControlAllowance {
+        lock.withLock { purchases += 1 }
+        switch answer {
+        case .failure:
+            throw PurchaseFailed()
+        case .granted(let runs, let credits):
+            return StubAllowanceReading.allowance(
+                runsLeft: runs,
+                creditsRemaining: credits,
+                autoTopUp: autoTopUp
+            )
+        }
     }
 }

@@ -325,7 +325,12 @@ struct FirstRunSequenceView: View {
                 // is not something they have any use for before they have run anything, and the
                 // figure is one request they do not need to wait on here. Account is where it shows.
                 screenControlAllowance: nil,
-                refreshScreenControlAllowance: nil
+                refreshScreenControlAllowance: nil,
+                // **And no auto-top-up control, for a sharper version of the same reason**
+                // (SONNY-215). This step exists to get somebody signed in; a switch that authorises
+                // a charge is the last thing to put in front of somebody who has not used the
+                // product yet, and it would have no figure to attach its own name to.
+                screenControlAutoTopUp: nil
             )
         case .screenAccess:
             ScreenAccessOnboardingView(model: screenAccessModel, isPresented: skipBinding)

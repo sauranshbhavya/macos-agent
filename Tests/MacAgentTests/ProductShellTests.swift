@@ -1074,6 +1074,14 @@ struct ProductShellTests {
             // held it. A wipe that cleared the figure would blank Command Center's usage line for a
             // user who is still signed in, until the next refresh put the same number back.
             "screenControlAllowance",
+            // The auto-top-up control's two fields sit here with it (SONNY-215), and each for a
+            // slightly different half of the same reason. `screenControlAutoTopUpFailure` is why the
+            // last *write* of a gateway-held setting did not land — a fact about a network call, not
+            // about anything under `~/Library/Application Support/Sonny/`, so a wipe has nothing to
+            // find in it, and clearing it would take a sentence off a control the user is still
+            // looking at. `isSettingScreenControlAutoTopUp` is in-flight bookkeeping for that one
+            // request; it is `false` at rest and the wipe guards on `!isRunning` besides.
+            "screenControlAutoTopUpFailure", "isSettingScreenControlAutoTopUp",
             // `plannerFallbackNotice` stood beside `scheduledRunNotice` and is gone with the widget
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
