@@ -188,8 +188,16 @@ struct TaskDeletionReachesTheServerTests {
     /// same two entries and send each twice.
     ///
     /// Deterministic rather than a race: nothing between the two presses yields the main actor, so
-    /// both entries are queued before either task runs, and the gate holds every request until the
-    /// test opens it.
+    /// both entries are queued before either task runs.
+    ///
+    /// **It waits on the number of passes that have *finished*, not on the delivery handle, and that
+    /// is the whole reason it is reliable** (found by this branch's own battery, which watched the
+    /// chain mutant survive a run after two earlier runs killed it). The handle is the *last* pass;
+    /// without the chain the last pass does not cover the first, so awaiting it can return while an
+    /// earlier pass is still issuing requests and the count below measures whatever had landed by
+    /// then. Two finished passes is a state both versions reach, so the wait succeeds either way and
+    /// the mutant dies on the assertion rather than on a timeout — which is what keeps it a kill
+    /// (`CLAUDE.md`'s note that a backstop timeout can never be counted as one).
     @Test
     func twoPressesInARowSendOneDeleteEach() async throws {
         let fixture = try TaskDeletionFixture()
@@ -201,7 +209,7 @@ struct TaskDeletionReachesTheServerTests {
         fixture.viewModel.deleteTask(first)
         fixture.viewModel.deleteTask(second)
         fixture.releaseTheGateway(8)
-        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+        try await fixture.waitForDeliveryPasses(2)
 
         #expect(fixture.seen.all.count == 2)
         #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks/task-a", "/v1/tasks/task-b"])
@@ -230,7 +238,7 @@ struct TaskDeletionReachesTheServerTests {
         await Task.yield()
         fixture.viewModel.deleteTask(second)
         fixture.releaseTheGateway(8)
-        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+        try await fixture.waitForDeliveryPasses(2)
 
         #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks/task-a", "/v1/tasks/task-b"])
         #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
@@ -440,6 +448,32 @@ private struct TaskDeletionFixture {
                 keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
             )
         ).loadAll().compactMap(\.id)
+    }
+
+    /// Waits until this many delivery passes have finished.
+    ///
+    /// **The handle first, and the poll only if that was not enough** — which is what keeps the
+    /// passing path free of any wall clock at all. In the shipped code the passes chain, so awaiting
+    /// the last handle transitively covers every earlier one and the count is already there: the
+    /// loop below never runs a single iteration. It runs only under a mutant that breaks the chain,
+    /// where the last handle covers nothing, and there a timeout is a red on a broken tree rather
+    /// than a flake on a healthy one.
+    ///
+    /// **Written this way after the poll-only version failed a loaded full-suite run** and passed in
+    /// 0.049 s on its own: a neighbouring test held the main actor for 43 seconds, so a 30-second
+    /// deadline for a main-actor hop was reachable without anything being wrong. That is the third
+    /// time on this branch a test has depended on the machine being idle, which is why the fix is to
+    /// remove the dependency rather than to widen the number.
+    func waitForDeliveryPasses(_ count: Int, timeout: TimeInterval = 60) async throws {
+        await viewModel.pendingServerDeletionDeliveryForTests?.value
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while viewModel.completedServerDeletionPasses < count {
+            if Date() > deadline {
+                Issue.record("only \(viewModel.completedServerDeletionPasses) of \(count) delivery passes finished — treat as genuinely stuck.")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     func goOffline() { network.set(.failure(URLError(.notConnectedToInternet))) }

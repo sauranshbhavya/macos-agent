@@ -981,6 +981,11 @@ struct ProductShellTests {
             // deleted the queue file underneath it and the pass reads that file itself — a pass
             // that survives the wipe finds an empty queue and does nothing, which is exactly right.
             "pendingServerDeletionStore", "taskDeletionService", "pendingServerDeletionDelivery",
+            // A monotone count of finished delivery passes, for the test that cannot wait on the
+            // handle above (PR #194 cycle-3). Not local data and not task state — it counts
+            // background work since launch, so a wipe has nothing to find in it and resetting it
+            // would only make a test's wait ambiguous.
+            "completedServerDeletionPasses",
             "clipboardHistoryMonitor", "finderRevealer",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             // `plannerProviderRegistry` and `plannerSelection` stood here and were deleted with the
