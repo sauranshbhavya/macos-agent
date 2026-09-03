@@ -444,6 +444,32 @@ struct ScreenControlUsageSurfaceTests {
         #expect(after.autoTopUp.isOptedIn == false)
     }
 
+    /// A read that lands takes the failed write's sentence off the screen (PR #196's F10).
+    ///
+    /// **The sentence is about a request, not about a state**, so it has to stop being shown when
+    /// the gateway is answering again — otherwise a user who pressed the switch during an outage,
+    /// closed the dialog and reopened it reads a complaint about a request made minutes ago, under a
+    /// row that is now correct. `setScreenControlAutoTopUp` and `forgetScreenControlAllowance`
+    /// cleared it; the read did not.
+    @Test
+    func aSuccessfulReadClearsTheSentenceLeftByAFailedWrite() async throws {
+        let fixture = try makeUsageFixture()
+        defer { fixture.tearDown() }
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20, autoTopUp: (true, false, 3))
+        await fixture.viewModel.refreshScreenControlAllowance()
+
+        fixture.backend.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        await fixture.viewModel.setScreenControlAutoTopUp(true)
+        #expect(fixture.viewModel.screenControlAutoTopUpFailure == .temporarilyUnavailable)
+
+        // The dialog is reopened and its read lands.
+        fixture.serveCredits(runsLeft: 12, runsIncluded: 20, autoTopUp: (true, false, 3))
+        await fixture.viewModel.refreshScreenControlAllowance()
+
+        #expect(fixture.viewModel.screenControlAutoTopUpFailure == nil)
+        #expect(fixture.viewModel.screenControlAllowance != nil)
+    }
+
     /// The auto-top-up control sits under the usage row, is System A, and is absent when this
     /// deployment sells nothing (SONNY-215).
     ///

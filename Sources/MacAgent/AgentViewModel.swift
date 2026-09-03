@@ -1632,8 +1632,16 @@ final class AgentViewModel: ObservableObject {
     /// from inside the run path would also land in the middle of every scripted backend fixture that
     /// counts what a session put on the wire.
     func refreshScreenControlAllowance() async {
+        // **A successful read clears the setting's failure sentence** (PR #196's F10). That sentence
+        // is about a write that did not land, and a read that lands says the gateway is answering
+        // again — leaving it up means a user who pressed the switch during an outage, closed the
+        // dialog and reopened it reads a complaint about a request made minutes ago, under a row
+        // that is now correct. It is cleared on success only: a read that *fails* clears the whole
+        // allowance and the row goes with it, so there is nothing left for the sentence to sit
+        // under either way.
         do {
             screenControlAllowance = try await screenControlAllowanceService.fetch()
+            screenControlAutoTopUpFailure = nil
         } catch {
             // Swallowed on purpose, and this is the one place that decision lives. A usage line is
             // ambient: the user did not press anything to get it, so a failure to read it is not an

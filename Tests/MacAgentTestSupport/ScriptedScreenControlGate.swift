@@ -222,9 +222,16 @@ public final class StubTopUpPurchasing: ScreenControlTopUpPurchasing, @unchecked
         self.autoTopUp = autoTopUp
     }
 
-    /// A purchaser that must never be reached. **The default for every gate fixture that is not
-    /// about buying anything**: if it is called, the test fails on the count rather than on a
-    /// puzzling allowance.
+    /// A purchaser that is not expected to be reached.
+    ///
+    /// **What that buys differs by call site, and the name promises more than it can deliver at some
+    /// of them** (PR #196's F7c). In `ScreenControlGateTests` the surrounding tests assert
+    /// `purchaseCount == 0`, so a gate that started buying fails on the count. In
+    /// `VisionSessionRunTests` nothing asserts the count, and what makes those tests safe is a
+    /// different fact: they build their readings with `autoTopUp: .none`, so `mayPurchase` is false
+    /// and the gate never reaches a purchaser at all. Throwing rather than granting is the third
+    /// line of defence — if one were reached, the run would refuse rather than silently continuing
+    /// on credit nobody bought.
     public static func neverCalled() -> StubTopUpPurchasing {
         StubTopUpPurchasing(.failure)
     }
