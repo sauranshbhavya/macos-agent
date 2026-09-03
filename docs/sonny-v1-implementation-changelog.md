@@ -192,6 +192,19 @@ Files changed (across `8b6af75`, `39675ec`, `968d7a6`, `5ad4203`, `cff73a6`, plu
 
 Tests: **`npm test` exit 0, 721 passed / 365 skipped, at `cff73a6`** (baseline on `main` at `619ba62`: 681 / 365 — the +40 is `version.test.ts` and nothing else). `npm run build` exit 0, `npm run typecheck` exit 0, `npm run check:secrets` exit 0 (593 tracked files, 12 patterns), `./scripts/check-secrets-selftest.sh` exit 0, all at `cff73a6`. `npm run test:db` against a lane-derived container: **1078 passed / 8 failed**, and all eight are `credit.db.test.ts`'s expired calendar window — **SONNY-396, lane 1's, not this branch's**; that file is the only one red (`grep '^ FAIL ' | sed 's/ >.*//' | sort -u` → one path). **No Swift command is owed**: this diff touches neither `Sources/` nor `Tests/`, and `Package.swift` declares five targets all pathed under one of those two (`grep -cE '\.(target|testTarget|executableTarget)\(' Package.swift` → 5 and `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `39675ec`), which is `WORKFLOW.md` step 7's server-only branch.
 
+**Every figure above is measured at `cff73a6` and carried to the merging head under step 5's
+tree-identity proof, not re-stamped**: the two commits after it are this entry and the checklist,
+and `git rev-parse cff73a6:server <head>:server` prints
+`a86cb32772fe2b74a2ee291d59f1c8d2a54141ed` twice — which is the whole scope these figures depend on,
+since `npm test`, `npm run typecheck`, `npm run build`, `check:secrets` and the battery all read
+`server/` and nothing else. **The control fires**, which is what says the command can see a
+difference at all: the same command over the fix round that really moved that tree,
+`git rev-parse 39675ec:server 968d7a6:server`, prints `0961cd0…` and `923121c…`. **Written with
+literal SHAs rather than a shell variable, deliberately** — `CLAUDE.md` records that zsh reads
+`$s:server` as a substitute modifier and hands back the commit SHA instead of a tree hash, silently;
+re-run here at this head, `zsh -c 's=cff73a6; git rev-parse $s:server'` prints
+`cff73a6a159ee5581b8a516137f92fabb9a54b6e` and the braced form prints the tree.
+
 **Mutation battery: 17 mutants, 17 killed, 0 survived, 0 unattributed, at `cff73a6`** — the plan mutates the properties §8 claims rather than the lines that changed: the wall's boundary made inclusive, an unreadable version and an absent header each treated as too old, the deprecation band deleted, build metadata made significant, the two-component parse removed, the missing components defaulted to one, the gate disarmed unconditionally, the refusal served, the `upgrade_url` dropped from the `410`, the two headers deleted, the wall armed with no URL, a recommended below the minimum accepted, any URL scheme accepted, the published bounds left unnormalised, the key set forced empty, and the envelope's optional key written unconditionally. **The battery ran three times and the re-runs were not ceremony.** Its first run at `39675ec` reported **V17 SURVIVED** — a real gap, below. Its third at `cff73a6`, re-run in full because the fix round had edited the file every one of the seventeen killers lives in, reported **five mutants with more killers than the run before** (V1 five→seven, V4 three→four, V5 five→six, V6 seven→eight, V15 five→six). Carrying those verdicts would have understated coverage, which is the direction `CLAUDE.md`'s scoping rule warns is the one a reader is not watching for.
 
 Behavior added:
