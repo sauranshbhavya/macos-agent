@@ -54,13 +54,16 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * The routes that carry no `Authorization` header, taken from the contract's §4.1 `Auth` column,
  * which §2.2 names as the single source of truth for that question.
  *
- * Three of these have no handler yet — `GET /v1/meta` (SONNY-155), and the two OAuth routes
- * (SONNY-129). They are listed because this list answers "is this route public", not "does this
- * route exist": an entry for a route nobody has written matches nothing, while an entry *missing*
- * when its ticket lands means a public sign-in route that answers 401 to the person who cannot yet
- * have a token. `POST /v1/auth/refresh` is the subtle one and the contract explains it: it
- * authenticates with the refresh token in its body and deliberately sends no header, so that an
- * expired or missing access token can never be the reason a refresh fails.
+ * Two of these have no handler yet — the two OAuth routes (SONNY-129). They are listed because this
+ * list answers "is this route public", not "does this route exist": an entry for a route nobody has
+ * written matches nothing, while an entry *missing* when its ticket lands means a public sign-in
+ * route that answers 401 to the person who cannot yet have a token. **`GET /v1/meta` was the third
+ * until SONNY-204 built it** (`routes/meta.ts`), and its entry needed no change when it landed,
+ * which is the property this paragraph is claiming.
+ *
+ * `POST /v1/auth/refresh` is the subtle one and the contract explains it: it authenticates with the
+ * refresh token in its body and deliberately sends no header, so that an expired or missing access
+ * token can never be the reason a refresh fails.
  *
  * Method and path together, because `DELETE /v1/account` and a future `GET /v1/account` are not the
  * same question.

@@ -68,6 +68,12 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     billingApiBaseUrl: undefined,
     billingPlans: "",
     billingGraceDays: 14,
+    // SONNY-204. The shipped defaults, so a test that says nothing about versions gets the gate a
+    // deployment that says nothing about versions gets -- disarmed, refusing and warning nobody.
+    // `version.test.ts` builds its own armed policies.
+    minimumSupportedClient: "0.0.0",
+    recommendedClient: "0.0.0",
+    upgradeUrl: undefined,
     // SONNY-135. A key per process rather than a literal — `support/entitlement.ts` says why a
     // signing key is the one fixture this suite generates instead of writing down. The `Config`
     // carries the encoded form; `requireEntitlementSigningKey` is what turns it into a key object,
