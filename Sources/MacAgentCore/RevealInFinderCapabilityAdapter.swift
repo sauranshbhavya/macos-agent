@@ -3,10 +3,16 @@ import Foundation
 public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// What revealing a path actually does.
     ///
-    /// The live implementation is `NSWorkspace.activateFileViewerSelecting`, and it lives at
-    /// `DefaultCapabilityAdapters.liveFinderReveal` rather than here, so that this file names no
-    /// way to reach the desktop at all — `theRevealAdapterNamesNoWayToReachTheDesktop` is what
-    /// fails if one comes back.
+    /// The live implementation is `NSWorkspace.activateFileViewerSelecting`, and after SONNY-395 it
+    /// exists at exactly one place in the repository — the `finderRevealer:` argument
+    /// `AgentViewModel.atItsRealStoreLocations()` passes, which
+    /// `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal` holds.
+    /// `MacAgentCore` names no way to reach Finder at all, which is stronger than naming one and
+    /// is what `noLineInTheCoreOpensAFinderWindow` asserts.
+    ///
+    /// The package deliberately ships no live revealer of its own to pass here. One would be a
+    /// constant nothing in the package calls, and a caller reaching for it by name is the shape a
+    /// default is — the thing this seam exists to remove.
     public typealias Reveal = @MainActor @Sendable ([URL]) -> Void
 
     private let reveal: Reveal
