@@ -42,6 +42,14 @@ public struct ScreenControlAllowance: Sendable, Equatable {
     /// Whether more runs can be bought when these run out, and whether the user asked for that
     /// (SONNY-215).
     public let autoTopUp: ScreenControlAutoTopUp
+    /// **What this account was last charged for a top-up, and when** — `nil` when it never has been
+    /// (SONNY-215's F6, founder decision option B).
+    ///
+    /// **Not part of ``autoTopUp``, because it is not the setting.** It is a record of something
+    /// that happened, and it stays true after the switch is turned off. It is not part of the
+    /// credits block either, for the mirror of that reason: every figure there is a credit in this
+    /// period's pool, and this is money in a currency at an instant that may be months old.
+    public let lastTopUp: ScreenControlTopUpCharge?
 
     public init(
         plan: String,
@@ -50,7 +58,8 @@ public struct ScreenControlAllowance: Sendable, Equatable {
         creditsRemaining: Double,
         periodStart: Date,
         periodEnd: Date,
-        autoTopUp: ScreenControlAutoTopUp
+        autoTopUp: ScreenControlAutoTopUp,
+        lastTopUp: ScreenControlTopUpCharge?
     ) {
         self.plan = plan
         self.runsLeft = runsLeft
@@ -59,6 +68,36 @@ public struct ScreenControlAllowance: Sendable, Equatable {
         self.periodStart = periodStart
         self.periodEnd = periodEnd
         self.autoTopUp = autoTopUp
+        self.lastTopUp = lastTopUp
+    }
+}
+
+/// A sum of money, as a payment provider counts one (SONNY-215's F6).
+///
+/// **Minor units and a currency code, never a formatted string.** §7.1's rule is that the words are
+/// this repository's rather than the server's, and a price is words the moment it is written down —
+/// a currency symbol, a separator and a decimal place are all locale decisions. The gateway sends
+/// the number and the code; `ScreenControlUsagePresentation` is where they become something to read.
+public struct ScreenControlMoney: Sendable, Equatable {
+    /// In the currency's smallest unit — 500 for $5.00. Never fractional.
+    public let amount: Int
+    /// ISO 4217, as the provider writes it. Case is not normalised here; the formatter uppercases.
+    public let currency: String
+
+    public init(amount: Int, currency: String) {
+        self.amount = amount
+        self.currency = currency
+    }
+}
+
+/// One charge that happened: what it cost, and when the session that triggered it asked.
+public struct ScreenControlTopUpCharge: Sendable, Equatable {
+    public let price: ScreenControlMoney
+    public let at: Date
+
+    public init(price: ScreenControlMoney, at: Date) {
+        self.price = price
+        self.at = at
     }
 }
 
@@ -82,16 +121,29 @@ public struct ScreenControlAutoTopUp: Sendable, Equatable {
     /// would refuse anyway; putting it on a surface would be a second number beside the run count,
     /// which is what the one-paid-line decision exists to prevent.
     public let attemptsLeft: Int
+    /// **What one pack costs, so the switch that authorises the charge can say it** (SONNY-215's F6,
+    /// founder decision option B). `nil` when this deployment sells none.
+    ///
+    /// This is the *configured* price, which is the only one available before a purchase has
+    /// happened. The record of a charge that did happen is ``ScreenControlAllowance/lastTopUp``, and
+    /// that one carries the provider's own figure.
+    public let price: ScreenControlMoney?
 
-    /// The state a build gets before it has read anything. **Nothing offered and nothing agreed** —
-    /// fail-closed in both directions, so a decoding path that lost this field could not turn the
-    /// feature on.
-    public static let none = ScreenControlAutoTopUp(isOffered: false, isOptedIn: false, attemptsLeft: 0)
+    /// The state a build gets before it has read anything. **Nothing offered, nothing agreed and no
+    /// price** — fail-closed in every direction, so a decoding path that lost these fields could not
+    /// turn the feature on or put a number on a control.
+    public static let none = ScreenControlAutoTopUp(
+        isOffered: false,
+        isOptedIn: false,
+        attemptsLeft: 0,
+        price: nil
+    )
 
-    public init(isOffered: Bool, isOptedIn: Bool, attemptsLeft: Int) {
+    public init(isOffered: Bool, isOptedIn: Bool, attemptsLeft: Int, price: ScreenControlMoney?) {
         self.isOffered = isOffered
         self.isOptedIn = isOptedIn
         self.attemptsLeft = attemptsLeft
+        self.price = price
     }
 
     /// Whether a session that has just run out should ask the gateway to buy more.
@@ -230,8 +282,17 @@ public actor ScreenControlAllowanceService {
             autoTopUp: ScreenControlAutoTopUp(
                 isOffered: wire.auto_top_up?.offered ?? false,
                 isOptedIn: wire.auto_top_up?.opted_in ?? false,
-                attemptsLeft: wire.auto_top_up?.attempts_left ?? 0
-            )
+                attemptsLeft: wire.auto_top_up?.attempts_left ?? 0,
+                price: wire.auto_top_up?.price.map {
+                    ScreenControlMoney(amount: $0.amount, currency: $0.currency)
+                }
+            ),
+            lastTopUp: wire.last_top_up.map {
+                ScreenControlTopUpCharge(
+                    price: ScreenControlMoney(amount: $0.amount, currency: $0.currency),
+                    at: $0.at
+                )
+            }
         )
     }
 
@@ -277,6 +338,22 @@ private struct WireScreenControlAllowance: Decodable {
         let offered: Bool
         let opted_in: Bool
         let attempts_left: Int
+        /// `null` on a deployment that sells no pack, and absent on a gateway too old to send it.
+        /// Both decode to `nil`, which renders no price rather than a wrong one.
+        let price: Money?
+    }
+
+    /// A sum of money on the wire — minor units and a code, never a formatted string.
+    struct Money: Decodable {
+        let amount: Int
+        let currency: String
+    }
+
+    /// One charge that happened (SONNY-215's F6).
+    struct LastTopUp: Decodable {
+        let amount: Int
+        let currency: String
+        let at: Date
     }
 
     let plan: String
@@ -286,4 +363,5 @@ private struct WireScreenControlAllowance: Decodable {
     let period_start: Date
     let period_end: Date
     let auto_top_up: AutoTopUp?
+    let last_top_up: LastTopUp?
 }

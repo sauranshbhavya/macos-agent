@@ -477,8 +477,16 @@ struct ScreenControlUsageSurfaceTests {
         // present is the other: with no figure there is nothing for "these" to name.
         #expect(MacAgentSource.count(of: "allowance.autoTopUp.isOffered", inText: row) == 1)
         #expect(MacAgentSource.count(of: "if let allowance = screenControlAllowance", inText: row) == 1)
-        // The label comes from the one place the copy lives, not from a literal in the view.
-        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation.autoTopUpLabel", inText: row) == 2)
+        // The label comes from the one place the copy lives, not from a literal in the view — and it
+        // is the **priced** one (SONNY-215's F6), bound once and read by both the visible text and
+        // the screen reader's so the two cannot come to say different things.
+        #expect(
+            MacAgentSource.count(
+                of: "ScreenControlUsagePresentation.autoTopUpLabel(price: allowance.autoTopUp.price)",
+                inText: row
+            ) == 1
+        )
+        #expect(MacAgentSource.count(of: ".accessibilityLabel(label)", inText: row) == 1)
         // The shared System A components rather than a hand-rolled row or a second toggle.
         #expect(MacAgentSource.count(of: "SettingsAdaptiveControlRow", inText: row) == 1)
         #expect(MacAgentSource.count(of: "SonnySettingsToggle(", inText: row) == 1)
@@ -494,7 +502,16 @@ struct ScreenControlUsageSurfaceTests {
         // **The switch reads the server's answer and never a local copy.** A view that held its own
         // `@State` would show a user that a charge could happen before anything agreed to it.
         #expect(MacAgentSource.count(of: "allowance.autoTopUp.isOptedIn", inText: row) == 1)
-        #expect(MacAgentSource.count(of: "@State", inText: row) == 0)
+        // **Scanned over the whole struct, not over this row** (PR #196's F7b). A `@State` mirror is
+        // a stored property on `SignInDialogView` and could never appear inside a computed row's
+        // own braces, so the zero this used to assert was answered by a region the defect cannot
+        // occupy — the vacuous-negative shape `CLAUDE.md` records from PR #175's F6.
+        let dialog = try MacAgentSource.braceBlock(of: source, openedBy: "struct SignInDialogView: View {")
+        #expect(MacAgentSource.count(of: "@State", inText: dialog) == 0)
+        // **And the control that makes that zero a measurement.** `@ObservedObject` is the same kind
+        // of token in the same region, and this file really does carry two of them — so a scan that
+        // could not see a property wrapper at all would fail here rather than passing above.
+        #expect(MacAgentSource.count(of: "@ObservedObject", inText: dialog) > 0)
 
         // First run passes no control, for the same reason it passes no figure.
         let firstRun = try MacAgentSource.read("FirstRunSequence.swift")
@@ -523,6 +540,112 @@ struct ScreenControlUsageSurfaceTests {
         for word in ["buy", "runs", "these", "run out"] {
             #expect(label.lowercased().contains(word), "\(label) dropped: \(word)")
         }
+    }
+
+    /// **The price is on the switch, and it is a price rather than a sentence** (SONNY-215's F6).
+    @Test
+    func theSwitchNamesWhatPressingItCosts() {
+        let priced = ScreenControlUsagePresentation.autoTopUpLabel(
+            price: ScreenControlMoney(amount: 500, currency: "usd")
+        )
+
+        // The name is unchanged and the price is appended, so the label still reads once at a glance.
+        #expect(priced.hasPrefix(ScreenControlUsagePresentation.autoTopUpLabel))
+        #expect(priced.contains("5"))
+        // **Still one phrase: a price in parentheses, not "which costs … each time".** Split on a
+        // sentence boundary rather than on a full stop, because `$5.00` carries one of those and a
+        // naive count reads a decimal point as a second sentence — which is what this assertion did
+        // until the price arrived.
+        #expect(!priced.contains(". "))
+        #expect(!priced.hasSuffix("."))
+        for word in ["costs", "each time", "per", "will be charged", "because"] {
+            #expect(!priced.lowercased().contains(word), "\(priced) explains itself: \(word)")
+        }
+    }
+
+    /// A currency with no minor unit is not divided by a hundred.
+    @Test
+    func aPriceIsScaledByItsOwnCurrencyRatherThanByAConstant() {
+        let yen = ScreenControlUsagePresentation.autoTopUpLabel(
+            price: ScreenControlMoney(amount: 500, currency: "jpy")
+        )
+        let dollars = ScreenControlUsagePresentation.autoTopUpLabel(
+            price: ScreenControlMoney(amount: 500, currency: "usd")
+        )
+
+        // **500 yen is ¥500 and 500 cents is $5.00.** A hard-coded divisor of a hundred shows the
+        // first as ¥5, which is the whole reason the exponent comes from the currency.
+        #expect(yen.contains("500"))
+        #expect(!dollars.contains("500"))
+        #expect(yen != dollars)
+    }
+
+    /// No price renders the bare name rather than a wrong number.
+    @Test
+    func aLabelWithNoPriceIsTheNameAndNothingElse() {
+        #expect(
+            ScreenControlUsagePresentation.autoTopUpLabel(price: nil)
+                == ScreenControlUsagePresentation.autoTopUpLabel
+        )
+    }
+
+    /// **The record of a charge: what was taken and when, and nothing else** (SONNY-215's F6).
+    @Test
+    func theLastChargeLineIsAnAmountAndADateAndNoMore() throws {
+        let line = try #require(
+            ScreenControlUsagePresentation.lastTopUpLine(
+                ScreenControlTopUpCharge(
+                    price: ScreenControlMoney(amount: 500, currency: "usd"),
+                    at: Date(timeIntervalSince1970: 1_755_162_900)
+                )
+            )
+        )
+
+        #expect(line.contains("5"))
+        #expect(line.contains("on "))
+        // It does not say what the charge bought, whether it worked, or that more may follow — the
+        // first is the runs line above it and the other two would be explanation.
+        for word in ["runs", "credit", "again", "will", "because", "automatic"] {
+            #expect(!line.lowercased().contains(word), "\(line) says more than what and when: \(word)")
+        }
+    }
+
+    /// The last-charge row survives the setting being turned off, and the switch does not.
+    @Test
+    func theChargeRecordIsRenderedIndependentlyOfTheSettingThatCausedIt() throws {
+        let source = try MacAgentSource.read("SignInView.swift")
+        #expect(
+            MacAgentSource.count(of: "private var screenControlLastTopUpRow: some View {", inText: source) == 1
+        )
+        let row = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private var screenControlLastTopUpRow: some View {"
+        )
+
+        // **It gates on the charge existing and on nothing else.** A user who was charged is owed
+        // the record whatever the switch says now, and whatever the deployment sells today — hiding
+        // it behind `isOffered`, as the switch above is, would make a receipt disappear because a
+        // configuration changed.
+        #expect(MacAgentSource.count(of: "screenControlAllowance?.lastTopUp", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "isOffered", inText: row) == 0)
+        #expect(MacAgentSource.count(of: "isOptedIn", inText: row) == 0)
+        // The control for those two zeros: both tokens are plentiful in the row above it.
+        let switchRow = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private var screenControlAutoTopUpRow: some View {"
+        )
+        #expect(MacAgentSource.count(of: "isOffered", inText: switchRow) > 0)
+        #expect(MacAgentSource.count(of: "isOptedIn", inText: switchRow) > 0)
+
+        // System A, like everything else in this dialog.
+        #expect(MacAgentSource.count(of: "WidgetTheme.", inText: row) == 0)
+        #expect(MacAgentSource.count(of: "SettingsAdaptiveControlRow", inText: row) == 1)
+
+        // And it sits below the switch, which is where a record of what the switch did belongs.
+        let signedIn = try MacAgentSource.braceBlock(of: source, openedBy: "private var signedInStep: some View {")
+        let switchAt = try #require(signedIn.range(of: "screenControlAutoTopUpRow"))
+        let recordAt = try #require(signedIn.range(of: "screenControlLastTopUpRow"))
+        #expect(switchAt.lowerBound < recordAt.lowerBound)
     }
 
     /// The failure sentences say what happened and what to do, and never how any of it works.
@@ -632,7 +755,11 @@ struct ScreenControlUsageSurfaceTests {
     static func allowance(
         runsLeft: Int,
         runsIncluded: Int = 20,
-        creditsRemaining: Double? = nil
+        creditsRemaining: Double? = nil,
+        /// SONNY-215's F6. **Nothing by default**, which is what an account that has never been
+        /// charged looks like — a fixture carrying a receipt by omission would put one on a surface
+        /// most of this suite's assertions never mention.
+        lastTopUp: ScreenControlTopUpCharge? = nil
     ) -> ScreenControlAllowance {
         ScreenControlAllowance(
             plan: "test-plan-a",
@@ -645,7 +772,8 @@ struct ScreenControlUsageSurfaceTests {
             // line, and every one of its assertions is written about an account that has not opted
             // in — which is also the default a fresh account is in. A fixture that consented by
             // omission would put a control on a surface no test here mentions.
-            autoTopUp: .none
+            autoTopUp: .none,
+            lastTopUp: lastTopUp
         )
     }
 }

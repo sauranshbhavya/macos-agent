@@ -1,6 +1,12 @@
 import Foundation
 import MacAgentCore
 
+/// The fixture price every suite's top-up setting carries (SONNY-215's F6).
+///
+/// **A fixture number and not a plan's**, exactly as `TEST_CREDIT_PLANS` is on the server side: this
+/// repository names no amount, and a test that is *about* a price builds its own.
+public let TEST_PACK_PRICE = ScreenControlMoney(amount: 500, currency: "usd")
+
 /// A ``ScreenControlGating`` a test drives, for both of SONNY-213's consult sites.
 ///
 /// **In `MacAgentTestSupport` rather than in one suite**, for the reason that target exists
@@ -166,7 +172,11 @@ public final class StubAllowanceReading: ScreenControlAllowanceReading, @uncheck
             creditsRemaining: creditsRemaining,
             periodStart: Date(timeIntervalSince1970: 0),
             periodEnd: Date(timeIntervalSince1970: 2_678_400),
-            autoTopUp: autoTopUp
+            autoTopUp: autoTopUp,
+            // **No charge on record, which is what an account that has never bought one looks
+            // like** (SONNY-215's F6). A fixture that carried one by default would put a receipt on
+            // a surface no test in the gate's suites mentions.
+            lastTopUp: nil
         )
     }
 }
@@ -204,7 +214,8 @@ public final class StubTopUpPurchasing: ScreenControlTopUpPurchasing, @unchecked
         autoTopUp: ScreenControlAutoTopUp = ScreenControlAutoTopUp(
             isOffered: true,
             isOptedIn: true,
-            attemptsLeft: 1
+            attemptsLeft: 1,
+            price: ScreenControlMoney(amount: 500, currency: "usd")
         )
     ) {
         self.answer = answer

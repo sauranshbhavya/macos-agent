@@ -63,8 +63,16 @@ struct ScreenControlAllowanceTests {
         document["auto_top_up"] = [
             "offered": offered,
             "opted_in": optedIn,
-            "attempts_left": attemptsLeft
+            "attempts_left": attemptsLeft,
+            "price": ["amount": 500, "currency": "usd"]
         ]
+        return try! JSONSerialization.data(withJSONObject: document)
+    }
+
+    /// A body carrying the record of a charge that happened (SONNY-215's F6).
+    static func bodyWithLastTopUp(amount: Int, currency: String, at: String) -> Data {
+        var document = try! JSONSerialization.jsonObject(with: body()) as! [String: Any]
+        document["last_top_up"] = ["amount": amount, "currency": currency, "at": at]
         return try! JSONSerialization.data(withJSONObject: document)
     }
 
@@ -272,9 +280,61 @@ struct ScreenControlAllowanceTests {
         let setting = ScreenControlAutoTopUp(
             isOffered: offered,
             isOptedIn: optedIn,
-            attemptsLeft: attemptsLeft
+            attemptsLeft: attemptsLeft,
+            price: TEST_PACK_PRICE
         )
         #expect(setting.mayPurchase == expected)
+    }
+
+    @Test
+    @MainActor
+    func thePriceAndTheChargeRecordAreReadAsMoneyRatherThanAsWords() async throws {
+        // **SONNY-215's F6, and §7.1's rule is why the wire carries neither a symbol nor a
+        // sentence.** A price is words the moment it is written down — a currency symbol, a
+        // separator and a decimal place are all locale decisions — so the gateway sends minor units
+        // and a code, and `ScreenControlUsagePresentation` turns them into something to read.
+        let fixture = SignedInBackendFixture(now: { Self.now })
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            Self.reply(Self.bodyWithLastTopUp(amount: 700, currency: "eur", at: "2026-08-14T09:15:00.000Z"))
+        }
+
+        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+
+        let charge = try #require(allowance.lastTopUp)
+        #expect(charge.price == ScreenControlMoney(amount: 700, currency: "eur"))
+        #expect(charge.at == SonnyISO8601.parse("2026-08-14T09:15:00Z")!)
+    }
+
+    @Test
+    @MainActor
+    func anAccountWithNoChargeOnRecordCarriesNone() async throws {
+        // The default, and the one every existing body in this suite describes: a `last_top_up` that
+        // is absent decodes to `nil`, which renders no row rather than an empty one.
+        let fixture = SignedInBackendFixture(now: { Self.now })
+        defer { fixture.unregister() }
+        fixture.register { _ in Self.reply(Self.body()) }
+
+        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+
+        #expect(allowance.lastTopUp == nil)
+        // And a body with no setting block carries no price either, so nothing can put a number on
+        // a control the gateway never priced.
+        #expect(allowance.autoTopUp.price == nil)
+    }
+
+    @Test
+    @MainActor
+    func aSettingBlockCarriesThePriceTheSwitchWillSay() async throws {
+        let fixture = SignedInBackendFixture(now: { Self.now })
+        defer { fixture.unregister() }
+        fixture.register { _ in
+            Self.reply(Self.bodyWithAutoTopUp(offered: true, optedIn: false, attemptsLeft: 2))
+        }
+
+        let allowance = try await ScreenControlAllowanceService(client: fixture.client).fetch()
+
+        #expect(allowance.autoTopUp.price == ScreenControlMoney(amount: 500, currency: "usd"))
     }
 
     @Test
