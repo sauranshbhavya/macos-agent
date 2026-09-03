@@ -42,7 +42,31 @@ async function main(): Promise<void> {
     process.exit(78); // EX_CONFIG
   }
 
-  const app = buildApp(config, wiring?.deps);
+  /**
+   * **Same `ConfigError` handling as the two blocks above, because `buildApp` raises them too.**
+   *
+   * `authWiringFrom` deliberately pre-checks the auth-side ones — its own comment says a malformed
+   * signing key "would otherwise be discovered by `buildApp`, which is after the pool is open" — but
+   * that pre-check covers only a deployment that mounts sign-in, and only the names it names.
+   * SONNY-204's `requireClientVersionPolicy` runs on **every** deployment, health-only included,
+   * because `GET /v1/meta` and the version gate mount whatever the environment holds. Without this
+   * block a mistyped `MINIMUM_SUPPORTED_CLIENT` came out as an unhandled exception and a stack
+   * trace, which is the one thing `config.ts`'s standing property says a bad environment must never
+   * be: "a named `ConfigError` identifying the variable, not a crash". Found by writing this
+   * feature's own manual-test rows, which claim exactly that behaviour.
+   *
+   * Nothing is open at this point — the pool `authWiringFrom` built is not connected until a route
+   * asks — so exiting here leaves nothing behind, which is the property the block above is ordered
+   * for.
+   */
+  let app;
+  try {
+    app = buildApp(config, wiring?.deps);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    process.stderr.write(`${error.message}\n`);
+    process.exit(78); // EX_CONFIG
+  }
 
   /**
    * The content clock, started here and nowhere else (SONNY-134).

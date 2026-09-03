@@ -170,6 +170,136 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/a-client-too-old-is-told-so
+Status: complete
+Date: 2026-09-03
+Tickets: SONNY-204 — contract §8's three parts: `GET /v1/meta`, the `410 version.unsupported` gate on every route, and §8.4's `Sonny-Deprecation` / `Sonny-Deprecation-Info` headers. Server half only; the Mac's half is filed as SONNY-402.
+Reviewed by: fresh session, per `WORKFLOW.md` step 7 — pending at the time this entry was written.
+
+**The two defects that mattered on this branch were both found by running the built server, and the suite was silent on both.** Stated first because it is the transferable part. `app.inject` drives the whole real app and is genuinely good evidence — forty tests of it here, seventeen mutants dead against it — and it shares one thing with every test in this repository: it starts from a `Config` object a fixture built. So it can say nothing about what `loadConfig` does with an *environment*, and nothing about what `server.ts` does when a `require*` throws. Both defects lived exactly there. `RECOMMENDED_CLIENT` defaulted to `0.0.0`, so `MINIMUM_SUPPORTED_CLIENT=2.0.0` alone — the most ordinary configuration this feature has — **exited 78 at startup** on the recommended-below-minimum check, refusing the operator by a message telling them to set the two equal by hand; every armed fixture in the suite set both, so nothing disagreed. And `requireClientVersionPolicy` runs inside `buildApp`, which sits *outside* `server.ts`'s two `ConfigError` blocks, so a mistyped bound came out as an unhandled exception and a stack trace rather than the named exit 78 `config.ts`'s standing property promises. **The thing that found them was writing the founder's manual-test rows and then running them**: the rows claim "it must fail to start and name the variable", and checking that claim before shipping it is what produced both. **The habit worth keeping is narrow** — for anything whose contract is with an *environment* rather than with a caller, run the artifact the deployment runs, once, before writing down what it does.
+
+Spec sections covered: API contract §8 in full (8.1's additive rule is what makes the new `upgrade_url` field legal, 8.2 unaffected, **8.3** and **8.4** built, 8.5 unaffected); §7.1's envelope gains one optional field on one code; §5.3's `entitlement_keys` published; §2.3's two deprecation response headers; §4.1's `GET /v1/meta` row served. §2.2's request-header table and the `PUBLIC_ROUTES` entry needed no change — `GET /v1/meta` has been in both since SONNY-203, which is the property that list claims for itself and which this branch is the first test of.
+
+Files changed (across `848870c`, `138ffa4`, `1366dfd`, `3f3f872`, `fad0c82`, plus this entry's commits):
+- `server/src/version/policy.ts` (new — `parseMarketingVersion`, `compareVersions`, `formatVersion`, `ClientVersionPolicy` and its `armed` discriminant, `bandFor`)
+- `server/src/version/gate.ts` (new — the `onRequest` hook: `410` below the minimum, §8.4's two headers inside the band, nothing at all when disarmed)
+- `server/src/routes/meta.ts` (new — `GET /v1/meta`)
+- `server/src/config.ts` (`MINIMUM_SUPPORTED_CLIENT`, `RECOMMENDED_CLIENT`, `UPGRADE_URL`; `requireClientVersionPolicy`, `checkedUpgradeUrl`, `optionalEntitlementSigningKey`)
+- `server/src/app.ts` (the gate registered before `registerAuthGate`; the meta route beside health), `server/src/server.ts` (a `ConfigError` out of `buildApp` is exit 78, not a stack trace), `server/src/errors.ts` (`upgrade_url` on the envelope), `server/src/auth/gate.ts` (comment only — the list said `/v1/meta` had no handler)
+- `server/scripts/deploy.sh` (the three names in `PASSTHROUGH_SETTINGS`), `server/.env.example`
+- `server/test/version.test.ts` (new, 40), `server/test/support/config.ts` (three fields)
+- `docs/sonny-backend-api-contract.md` (§4.1, §5.3, §7.1, §8.3, §13, §14), `docs/sonny-manual-test-checklist.md` (six rows)
+
+Tests: **every figure below was re-measured after the rebase onto `624653d`, at `d9d7a12`, and none was translated from the pre-rebase heads** — see the rebase note under pitfalls. `npm test` exit 0, **721 passed / 365 skipped**. `npm run build` exit 0, `npm run typecheck` exit 0, `npm run check:secrets` exit 0 (593 tracked files, 12 patterns), `./scripts/check-secrets-selftest.sh` exit 0. `npm run test:db` against a lane-derived container: **exit 0, 45 files passed (45), 1086 passed (1086)** — fully green, with `grep -c '^ FAIL '` → 0. All six at `d9d7a12`.
+
+**The base's own figures, and the arithmetic that ties this branch's to them.** `origin/main` at `624653d` carries `npm test` **681 / 365** and `npm run test:db` **44 files / 1046 tests** — both are SONNY-396's numbers rather than this branch's measurements of them, recorded in the entry directly below this one and confirmed by the coordinator. What this branch measured is the delta: `npx vitest run test/version.test.ts` alone reports **40 passed (40)** at `d9d7a12`, and 721 − 40 = 681 and 1086 − 40 = 1046, so the new file is the whole of the difference in both suites and nothing else in either moved. (The pre-rebase run of this branch read 1078 passed / 8 failed against a `main` whose `credit.db.test.ts` pinned a calendar window that had expired; those eight were never this branch's and are gone with SONNY-396.)
+
+**No Swift command is owed**: this diff touches neither `Sources/` nor `Tests/` (`git diff --name-only 624653d..d9d7a12 -- Sources Tests Package.swift` prints nothing), and `Package.swift` declares five targets all pathed under one of those two (`grep -cE '\.(target|testTarget|executableTarget)\(' Package.swift` → 5 and `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `d9d7a12`), which is `WORKFLOW.md` step 7's server-only branch.
+
+**Every figure above is measured at `d9d7a12`**, which is the head the rebase produced and the head
+the battery, both suites, the typecheck, the build and the secret scan all ran at. The only commit
+after it is the one that re-stamped this entry, so the figures cross one docs-only commit under step
+5's tree-identity proof rather than being re-stamped: `git rev-parse d9d7a12:server <head>:server`
+prints `56cd6f24ea146a0df7d8d7b376a1951c54f64ba0` twice — which is the whole scope these figures
+depend on, since `npm test`, `npm run test:db`, `npm run typecheck`, `npm run build`,
+`check:secrets` and the battery all read `server/` and nothing else. **That hash is not the one the
+pre-rebase version of this paragraph carried**, and the difference is the rebase itself: replaying
+onto `624653d` brought SONNY-396's four `server/` files into this tree, so `server/` legitimately
+holds different content than it did before, and copying the old hash forward would have been a
+proof about a tree that no longer exists. It was copied forward, in the commit that re-stamped this
+entry, and running the command is what caught it. **The control fires**, which is what says the
+command can see a difference at all: the same command over the fix round that really moved that
+tree, `git rev-parse 138ffa4:server 1366dfd:server`, prints `a59d6df…` and `3071756…`.
+**Written with literal SHAs rather than a shell variable, deliberately** — `CLAUDE.md` records that
+zsh reads `$s:server` as a substitute modifier and hands back the commit SHA instead of a tree hash,
+silently; re-run here, `zsh -c 's=d9d7a12; git rev-parse $s:server'` prints
+`d9d7a1237ab29f928e89fe89f46048f962ec7a19` and the braced form prints the tree.
+
+**Mutation battery: 17 mutants, 17 killed, 0 survived, 0 unattributed, at `d9d7a12`** — post-rebase, re-run rather than carried, for the reason in the rebase note below. The plan mutates the properties §8 claims rather than the lines that changed: the wall's boundary made inclusive, an unreadable version and an absent header each treated as too old, the deprecation band deleted, build metadata made significant, the two-component parse removed, the missing components defaulted to one, the gate disarmed unconditionally, the refusal served, the `upgrade_url` dropped from the `410`, the two headers deleted, the wall armed with no URL, a recommended below the minimum accepted, any URL scheme accepted, the published bounds left unnormalised, the key set forced empty, and the envelope's optional key written unconditionally. **The battery ran four times and none of the re-runs was ceremony.** Run 1, pre-rebase, reported **V17 SURVIVED** — a real gap, below. Run 3, re-run in full because the fix round had edited the file every one of the seventeen killers lives in, reported **five mutants with more killers than run 2** (V1 five→seven, V4 three→four, V5 five→six, V6 seven→eight, V15 five→six): carrying those verdicts would have *understated* coverage, which is the direction `CLAUDE.md`'s scoping rule warns is the one a reader is not watching for. Run 4 is the post-rebase one above and reproduced run 3's killer counts exactly, mutant for mutant — which is the outcome a re-run is supposed to have most of the time, and is not a reason to have skipped it.
+
+Behavior added:
+- **`GET /v1/meta`** — `api_version`, both client-version bounds, `upgrade_url`, `server_time`, and §5.3's `entitlement_keys`. Unauthenticated, mounted unconditionally, `Cache-Control: no-store`.
+- **`410 version.unsupported` on every route** to a client below `MINIMUM_SUPPORTED_CLIENT`, with `upgrade_url` in the error body, refused **before authentication**.
+- **`Sonny-Deprecation: true` and `Sonny-Deprecation-Info: <url>`** on every response to a client at or above the minimum and below `RECOMMENDED_CLIENT`, including responses no route handler produced.
+- **Three configuration names**, forwarded by `deploy.sh local`, with four named startup refusals between them.
+
+Behavior preserved (required, no blanket claims):
+- **The auth gate.** Unchanged and still first past the version gate: `POST /v1/plan` with no token answers `401 auth.unauthenticated` exactly as before for any current client, asserted in `version.test.ts` beside the `410` and re-proved over real HTTP. With both bounds at their default the version gate **registers no hook at all**, so a deployment that says nothing about versions has a byte-identical request path.
+- **The error envelope.** `resource.not_found`, `auth.unauthenticated` and every other code carry the same five fields; the sixth is absent, not null, asserted on `errorBody`'s own return value and on a live `404`.
+- **`GET /v1/health`.** Same body, same `no-store`, same headers, and still answered for a caller sending no version header — which is what a liveness probe is.
+- **`registerErrorHandlers`, the idempotency hook, the metering hook, the content hook and the entitlement hook** are untouched, and `app.ts`'s ordering argument for them is unchanged; the version gate is inserted before all of them and returns `undefined` for every request it does not refuse.
+- **`npm run test:db`'s 1078 other passes**, including every migration, race and content test, over a `testConfig` that grew three fields.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The gate is registered before the auth gate, and that order is the feature.** An outdated build's access token has almost certainly expired, and §7.2 makes `auth.token_expired` the one `401` a client answers by refreshing and retrying once. With the auth gate first, a six-month-old app spends its whole session in a refresh loop and never receives the one status that would end it — which is §8.3's "a spinner that never resolves", arrived at by hook ordering rather than by any bug in either gate. Registered second, it is also what lets a client learn it is outdated **without holding a valid token at all**, which is the state a user who reinstalled an old build is actually in.
+
+**The gate fails open on an unreadable version, and that is a decision rather than a leniency.** A request with no `Sonny-Client-Version`, an unparseable one, or the header twice is served. Every caller that is not the Mac app sends none: a load balancer's liveness probe, the payment provider's signed delivery to `POST /v1/billing/webhook` — §4.1's "the one row in this table no client ever calls" — `deploy.sh local`'s own health check, and a founder with `curl`. Refusing them turns a version policy into an outage at the exact moment somebody first sets a real minimum. Nothing is lost, because this gate is a **courtesy to an old client and not a boundary**: what protects every route is the `Auth` column, untouched by any of this, and a caller that omits the header reaches only the modern API it could have called anyway. A repeated header is `unknown` rather than resolved, because picking the first or the last is choosing which of two claims to believe about a caller who has made two.
+
+**Both bounds default to `0.0.0`, which is the opposite direction to every other default in this gateway, and the difference is what each protects.** `DEFAULT_BODY_LIMIT_BYTES` is the *smallest* limit and `PUBLIC_ROUTES` is deny-by-default, both because a forgotten decision there serves something it should not. A forgotten decision here **refuses a paying user who has done nothing wrong** — including, on the day this landed, the `0.0+0` a bare `swift run MacAgent` reports, which has no bundle to read a version from. And it is not this repository's decision to make: §8.4 says raising the minimum past a version that was never given a deprecation period is itself a breach of the contract, and a default has given nobody a deprecation period.
+
+**`RECOMMENDED_CLIENT` unset means the minimum, not zero, and the version that assumed otherwise refused the most ordinary configuration there is.** Covered above; what generalises is the shape. Two bounds with an ordering constraint between them have a *default* that must satisfy the constraint at every point on the lattice, not merely at the origin — and the origin is the only point a fixture that always sets both ever visits.
+
+**A `410` reaches `/v1/meta` itself, which §8.3 requires in as many words and which is why `upgrade_url` is in the error body.** An old client may not be able to parse the meta document at all — by definition it predates whatever changed — so the one string it needs travels in the refusal, on the one code that carries it. Adding a field to §7.1's envelope for a single code is legal under §8.1 and §2.1 and is absent rather than null everywhere else.
+
+**A mutation battery found the one place an HTTP-level assertion could not look.** V17 — writing `upgrade_url` unconditionally rather than spreading it in — **survived** a suite containing a test that asserts the exact key set of a `404` body. `JSON.stringify` drops an undefined value and `app.inject`'s `.json()` parses what was stringified, so at the HTTP level the two spellings are the same bytes. The comment beside the code claimed the opposite, naming `.json()` and a deep-equality assertion as the things that would tell them apart. That is this wave's recurring shape — a comment *arguing* a property, written by the person who wrote the code, true of the case they were thinking about, foreclosing the question for every later reader — and the battery is what asked the question anyway. The property does exist: `exactOptionalPropertyTypes` is on, so the direct assignment is a type error and the surviving mutant would not have passed `npm run typecheck`. It is asserted now on `errorBody`'s own return value, which is the level it lives at.
+
+**`app.inject` is not the deployment.** The general form of the first paragraph: every test in this repository starts from a `Config` a fixture built, so the whole of `loadConfig`, `server.ts`'s error handling and `deploy.sh`'s passthrough list sit outside what any of them can see. Two of this branch's three real defects were there, and the third — the three names missing from `PASSTHROUGH_SETTINGS`, without which the gate is unconfigurable on the only deploy target that exists — is the same class again, and is exactly the failure `CONTENT_RETENTION_DAYS`' own comment on that array records ("how a configurable window ends up being one value forever"). No test reads that file; nothing could have caught it but reading it.
+
+**`optionalEntitlementSigningKey` exists because one route is mounted whatever the environment holds.** `requireEntitlementSigningKey` refuses at startup, correctly, for the authenticated routes. `/v1/meta` cannot use that door — `app.ts`'s standing argument is that the route table must not change shape with the environment — so a health-only deployment publishes an empty `entitlement_keys`, which is a true statement about it and which §5.3.1 makes refuse every *gated* capability and no free one. A half-configured pair still fails, because the new door delegates.
+
+**The rebase onto `624653d`, and why nothing was carried.** SONNY-396's branch merged first, so this
+one rebased once at merge time (`WORKFLOW.md` step 3's one-hop rule) rather than hopping as the wave
+landed. The merged range is five files —
+`docs/sonny-v1-implementation-changelog.md`, `server/src/auth/ratelimit.ts`,
+`server/test/auth.db.test.ts`, `server/test/credit.db.test.ts`, `server/test/pool.db.test.ts` —
+and the only conflict was the changelog, where both branches had appended an entry directly under
+`## Entries`; resolved newest-first, this branch's above SONNY-396's, since it merges later.
+
+**SONNY-391's four conditions were applied per mutant and the fourth fails, so the whole plan was
+re-run.** The first three hold cleanly and are worth stating because they are the ones that usually
+decide it: no mutant's target file is in the range (the five targets are `version/policy.ts`,
+`version/gate.ts`, `config.ts`, `routes/meta.ts` and `errors.ts`); every one of the **59** killer
+lines in run 3's report is in `server/test/version.test.ts`, which is not in the range
+(`grep -oE '^      test/[a-z.-]+\.test\.ts' <report> | sort | uniq -c` → one file, 59); and no
+killer scans a population, that file containing no directory or filesystem read at all. **The fourth
+is the one that bites**: every killer drives `buildApp`, and `buildApp` registers the entitlement
+hook, whose `entitlement/store.ts` imports `consume` from `server/src/auth/ratelimit.ts` — which the
+range changed. Whether that path *executes* under these fixtures is exactly the kind of thing the
+rule says not to argue, so it was not argued. Run 4 reproduced run 3 mutant for mutant, and the
+forty seconds it cost is the price of a number rather than an argument.
+
+**A rebase's conflicted-file list is not the population it can break, so the changed signature was
+swept across the whole tree** (`CLAUDE.md`'s PR #111 gotcha). SONNY-341 removed the `now` default
+from `ratelimit.ts`'s `consume`, and a caller that relied on it would not compile while nothing in
+the conflict machinery would say so. `git grep -n 'consume('` over `server/src` and `server/test`
+finds **20** lines at `d9d7a12`, none of them in any file this branch added or changed — that scoped grep exits 1
+with no output, and the control on the same paths (`git grep -c 'buildApp(' --
+server/test/version.test.ts` → 23) fires, which is what makes the zero a measurement rather than a
+pattern that matched nothing. `npm run typecheck` and `npm run build` both exit 0 on the rebased
+tree, and the full suite ran, because `swift build`-style green on a partial view is what that
+gotcha is about.
+
+**Every SHA the pre-rebase version of this entry cited is now non-ancestral, and all seven still
+resolve.** `8b6af75`, `39675ec`, `968d7a6`, `5ad4203`, `cff73a6`, `1eef8fe` and `c246b1a` each fail
+`git merge-base --is-ancestor <sha> HEAD` with exit 1 while `git show` still prints a real tree for
+each — which is `CLAUDE.md`'s trap exactly: a stamp goes bad without going missing. Their figures
+were **re-measured at the new heads, never translated**, per the rule that a rebase replays onto a
+moved base so the old commit's content is not this one's. The check discriminates rather than
+passing everything: the same loop over the seven new heads plus `624653d` and `619ba62` exits 0 for
+all nine.
+
+Known limitations / deferred scope:
+- **The Mac calls none of this — SONNY-402**, filed by this ticket. The app sends its version and already decodes `version.unsupported` into a typed error; it does not fetch `/v1/meta`, does not read the two headers, and has no "Sonny needs an update" surface. The copy for that state is SONNY-136's. This is why every manual-test row for this branch is `curl` rather than the app.
+- **The published key set holds one key, and a rotation overlap needs the signing side to hold more — SONNY-401**, also filed by this ticket and recorded at §5.3. Until it lands, a rotation is one deploy and a Mac whose cached set predates it refuses gated capabilities until its next `/v1/meta` call.
+- **`BILLING_PROVIDER`, `BILLING_WEBHOOK_SECRET`, `BILLING_CHECKOUT_URL`, `BILLING_PLANS` and `BILLING_PROVIDER_ACCESS_TOKEN` are in neither `deploy.sh` array**, found while adding this branch's three. Not touched here — it is SONNY-211's and SONNY-216's area and outside this ticket — and filed as **SONNY-405**.
+- **No remote deploy.** `./scripts/deploy.sh staging` and `production` still exit 3, so every measurement here is local, as everywhere else in row 12.
+
+Open questions (required, write "none" if true): **what the founders want the two bounds set to, and when.** Nothing is armed today and nothing should be until a version is picked deliberately — §8.4 makes the first raise conditional on a deprecation period having run, so the honest first move is `RECOMMENDED_CLIENT` alone, with no wall, which this branch supports as a complete configuration. That decision waits on there being a shipped version to be behind.
+
+Manual checklist for the founder: six rows in `docs/sonny-manual-test-checklist.md`, all `curl` against `./scripts/deploy.sh local` — the endpoint on a gateway told nothing, that a default gateway refuses nobody, the wall on three different paths, the refusal arriving before authentication, both boundaries of the warning band, and four bad configurations that must each refuse to start naming their variable.
+
+Next branch: unchanged by this one — SONNY-402 and SONNY-401 are in Backlog awaiting triage, and the roadmap ahead of them is untouched.
 ### Branch: fix/no-test-depends-on-what-day-it-is
 Status: complete
 Date: 2026-09-03

@@ -22,6 +22,18 @@ export interface ErrorBody {
     readonly retryable: boolean;
     readonly retry_after_seconds: number | null;
     readonly request_id: string;
+    /**
+     * Where to get a version this gateway still serves. **Present only on `version.unsupported`**
+     * (§8.3, SONNY-204), which is the one refusal whose recovery is outside the app.
+     *
+     * Added to the envelope rather than composed at the call site because §7.1's envelope has one
+     * home and a second shape built beside it is how the two drift. Optional rather than nullable
+     * everywhere: §2.1 makes the client ignore fields it does not know, so a field that appears on
+     * one code and not the others is additive in exactly the way §8.1 permits, while making it
+     * `string | null` on every error would put a null on tens of thousands of responses to say
+     * nothing.
+     */
+    readonly upgrade_url?: string;
   };
 }
 
@@ -29,7 +41,11 @@ export function errorBody(
   code: string,
   message: string,
   requestId: string,
-  options: { retryable?: boolean; retryAfterSeconds?: number | null } = {},
+  options: {
+    retryable?: boolean;
+    retryAfterSeconds?: number | null;
+    upgradeUrl?: string | undefined;
+  } = {},
 ): ErrorBody {
   return {
     error: {
@@ -38,6 +54,21 @@ export function errorBody(
       retryable: options.retryable ?? false,
       retry_after_seconds: options.retryAfterSeconds ?? null,
       request_id: requestId,
+      // Spread rather than `upgrade_url: options.upgradeUrl`, so the key is absent from the object
+      // instead of present and undefined.
+      //
+      // **Not for the wire**, and the first version of this comment claimed it was: `JSON.stringify`
+      // drops an undefined value, and `app.inject`'s `.json()` parses what was stringified, so an
+      // HTTP-level assertion cannot tell the two apart. SONNY-204's mutation battery is what said
+      // so — the mutant that writes the key unconditionally SURVIVED a suite whose test asserts the
+      // exact key set of a 404 body, because at that level there was nothing to see.
+      //
+      // What it is for is the object this function returns, which is a value before it is a
+      // response. `exactOptionalPropertyTypes` is on, so `upgrade_url?: string` does not accept
+      // `string | undefined` and the direct assignment is a type error rather than a style
+      // preference — which is why the surviving mutant would not have passed `npm run typecheck`.
+      // The suite holds it too now, at the level it exists: `errorBody` is asserted directly.
+      ...(options.upgradeUrl === undefined ? {} : { upgrade_url: options.upgradeUrl }),
     },
   };
 }
