@@ -2566,6 +2566,36 @@ entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
       switch. **A line appears under it saying Sonny couldn't change that setting** and the switch
       goes back to what the server last said — it does not sit in the position you pressed. The
       finding is a switch that shows "on" when nothing agreed to it.
+- [ ] **(SONNY-215) — the price is on the switch, and it is the right one.** With `topUp.price` set
+      (e.g. `{"amount": 500, "currency": "usd"}`), open Account. **The switch reads "Buy more runs
+      when these run out ($5.00)"** — the price in parentheses, no sentence beside it. Then open the
+      Polar product the `productId` names and **check the two amounts are the same**. Nothing in the
+      gateway can check this for you: it never reads the product, so a `price` that disagrees shows
+      one number on the switch and takes another off the card. The finding is a mismatch, or a
+      sentence appearing under the switch explaining what it costs.
+- [ ] **(SONNY-215) — a currency with no minor unit.** Set `{"amount": 500, "currency": "jpy"}` and
+      reopen Account. **The switch reads ¥500, not ¥5.** The finding is a hundredfold error, which is
+      what dividing every currency by a hundred produces.
+- [ ] **(SONNY-215) ⚠️ the record of a charge.** After the successful top-up above, reopen Account.
+      **A "Last top-up" row sits under the switch showing the amount and the date** — and the amount
+      is what Polar's order says, which is the figure to compare against the invoice rather than
+      against `CREDIT_PLANS`. Then **turn the switch off** and reopen: **the record is still there.**
+      A user who was charged is owed the record whatever the switch says now; the finding is a
+      receipt that disappears.
+- [ ] **(SONNY-215) — no record before a charge, and none for a decline.** On a fresh account there
+      is **no "Last top-up" row at all**. After the declining-card row above, there is still none —
+      a declined attempt took no money and must not appear as a charge.
+- [ ] **(SONNY-215) ⚠️ the lost record, which is the one worth engineering for.** With the switch on
+      and the account at zero, start a top-up and **kill the gateway container the moment the charge
+      is placed** (watch `docker logs` for the finalize). Bring it back and ask for a screen-control
+      session again. **No second order appears at Polar** and the account is granted the pack it
+      already paid for — `SELECT outcome, provider_order_id FROM sonny.credit_topup` shows **one**
+      row, moving from `attempted` or `unconfirmed` to `granted`. The finding is two paid orders, or
+      an `attempted` row with a NULL order id after a charge that reached Polar.
+- [ ] **(SONNY-215) — a pack that cannot buy a run does not deploy.** Set `topUp.credits` below
+      `runCredits` and restart the container. **It refuses to start**, naming the pack. The finding
+      is a gateway that boots and then charges for a pack that leaves the account exactly as unable
+      to run as it was.
 - [ ] **(SONNY-215) — nothing else moved.** With the switch **on** and the account **not** low, run
       the everyday free things and an ordinary screen-control session. **No purchase happens**
       (`sonny.credit_topup` stays empty) and nothing about the run changes.
