@@ -1,12 +1,13 @@
 import pg from "pg";
 import { describe, expect } from "vitest";
-import { creditBalance } from "../src/credit/balance.js";
+import { creditBalance, periodEnd } from "../src/credit/balance.js";
 import { postgresCreditStore, readScreenControlDraw } from "../src/credit/store.js";
 import { periodStart } from "../src/entitlement/period.js";
 import { meteredRoutes, type MeteringEvent } from "../src/metering/event.js";
 import { insertMeteringEvent } from "../src/metering/store.js";
 import {
   afterAllUnderHangBackstop,
+  afterEachUnderHangBackstop,
   beforeAllUnderHangBackstop,
   beforeEachUnderHangBackstop,
   itUnderHangBackstop,
@@ -70,12 +71,32 @@ function event(overrides: Partial<MeteringEvent> = {}): MeteringEvent {
 
 describeDb("what draws on the credit pool", () => {
   let client: pg.Client;
+  /**
+   * **The one instant this file is written in terms of** (SONNY-396).
+   *
+   * Everything here used to be half pinned: the window was two calendar literals while the rows took
+   * `metering_event.occurred_at`'s own `now()` default, which is the database's clock. That is a test
+   * whose answer depends on what day it is, and on 2026-09-01 the answer changed — the window closed,
+   * every insert landed at or after `until`, and eight tests in this file began failing every day on
+   * zero rows matched, with nothing about the code under test wrong. `npm test` skips this file, so
+   * the greener command saw nothing and only `npm run test:db` — the more thorough thing — went red.
+   *
+   * **The trap is fixing that by moving the window forward.** It buys months and reproduces the same
+   * failure on a later date, for a reader with no reason to suspect a fixed date because the file will
+   * have passed all along. The window was never the problem; the *mixture* was. So the clock is gone
+   * instead: `insert` stamps every row it writes at `at`, the window is `at`'s own period rather than
+   * two literals that happen to bracket it, and no value anywhere below comes from a clock. `at` may
+   * therefore stay a literal forever — a pinned input is not a calendar.
+   */
   const at = new Date("2026-08-15T12:00:00Z");
-  const window = () => ({
-    accountId: ACCOUNT,
-    since: new Date("2026-08-01T00:00:00Z"),
-    until: new Date("2026-09-01T00:00:00Z"),
-  });
+
+  /**
+   * The period `factsFor` itself computes for `at` — `periodStart(now)` to `periodEnd(now)`, read off
+   * `credit/store.ts` rather than restated. The end-to-end test below asserts the two agree by using
+   * this window and that call interchangeably, so a hand-copied pair of literals drifting away from
+   * the real period is one fewer thing that can happen.
+   */
+  const window = () => ({ accountId: ACCOUNT, since: periodStart(at), until: periodEnd(at) });
 
   beforeAllUnderHangBackstop(async () => {
     client = new pg.Client({ connectionString: url });
@@ -90,8 +111,42 @@ describeDb("what draws on the credit pool", () => {
     await client.query("TRUNCATE sonny.entitlement");
   });
 
+  /**
+   * **The guard that would have caught SONNY-396, and it fires on any date rather than once a window
+   * expires.** The defect was a row stamped by a clock this file does not control, so the property is
+   * that no row this file leaves behind sits anywhere near the database's own `now()`. A test added
+   * later that inserts without stamping — through `insert`, or with a raw `INSERT` that bypasses it —
+   * fails here immediately and deterministically, rather than passing until the next calendar bound
+   * runs out.
+   *
+   * **Deliberately not "is the window still in the future".** That guard would pass for months and
+   * then ask the next reader to move the window, which is the fix this ticket exists to refuse.
+   * The one reading this cannot make is a machine whose clock has been set inside `at`'s own period,
+   * which fails loudly on a property it names instead of quietly on assertions that name nothing.
+   */
+  afterEachUnderHangBackstop(async () => {
+    const { rows } = await client.query<{ stray: string }>(
+      `SELECT count(*) AS stray FROM sonny.metering_event
+        WHERE occurred_at BETWEEN now() - interval '10 minutes' AND now() + interval '10 minutes'`,
+    );
+    expect(Number(rows[0]!.stray)).toBe(0);
+  });
+
+  /**
+   * Insert through the production writer, then stamp exactly those rows at `at`.
+   *
+   * `insertMeteringEvent` leaves `occurred_at` to the column default, which is the whole of
+   * SONNY-396. The stamp is scoped to these events' own `request_id`s rather than done through
+   * `backDateAllTo`, because tests below deliberately leave earlier rows in a neighbouring period and
+   * a blanket update would drag them back into this one. The row count is asserted because an update
+   * that matched nothing and one that worked are otherwise the same clean result — `CLAUDE.md`'s rule
+   * about a zero being the answer that looks like good news.
+   */
   const insert = async (...events: MeteringEvent[]): Promise<void> => {
     for (const one of events) await insertMeteringEvent(client, one);
+    const stamped = await client.query("UPDATE sonny.metering_event SET occurred_at = $1 WHERE request_id = ANY($2)",
+      [at, events.map((one) => one.requestId)]);
+    expect(stamped.rowCount).toBe(events.length);
   };
 
   /** Move every row already written into a chosen instant, rather than sleeping to reach one. */
@@ -228,7 +283,7 @@ describeDb("what draws on the credit pool", () => {
 
   itUnderHangBackstop("counts this period and not the one before it", async () => {
     await insert(...[1, 2].map((n) => event({ sessionId: "last-month", sessionIteration: n })));
-    await backDateAllTo(new Date("2026-07-31T23:59:59.999Z"));
+    await backDateAllTo(new Date(periodStart(at).getTime() - 1));
     await insert(event({ sessionId: "this-month", sessionIteration: 1 }));
 
     expect(await readScreenControlDraw(client, window())).toEqual({
@@ -251,7 +306,7 @@ describeDb("what draws on the credit pool", () => {
     // midnight UTC on the 1st into the period that just closed — a real answer to give a user, at
     // the one moment they are most likely to look.
     await insert(event({ sessionId: "next-period", sessionIteration: 1 }));
-    await backDateAllTo(new Date("2026-09-01T00:00:00.000Z"));
+    await backDateAllTo(periodEnd(at));
     expect(await readScreenControlDraw(client, window())).toEqual({
       sessions: 0,
       iterations: 0,
@@ -260,7 +315,7 @@ describeDb("what draws on the credit pool", () => {
 
     // One millisecond earlier is the last instant this period owns, and it is counted — so the zero
     // above is a boundary and not a query matching nothing.
-    await backDateAllTo(new Date("2026-08-31T23:59:59.999Z"));
+    await backDateAllTo(new Date(periodEnd(at).getTime() - 1));
     expect(await readScreenControlDraw(client, window())).toEqual({
       sessions: 1,
       iterations: 1,
@@ -268,7 +323,7 @@ describeDb("what draws on the credit pool", () => {
     });
 
     // And the lower bound is inclusive: the period's own first instant belongs to it.
-    await backDateAllTo(new Date("2026-08-01T00:00:00.000Z"));
+    await backDateAllTo(periodStart(at));
     expect((await readScreenControlDraw(client, window())).iterations).toBe(1);
   });
 
