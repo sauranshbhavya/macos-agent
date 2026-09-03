@@ -226,10 +226,18 @@ export interface PolarProviderConfig {
   /** The hosted checkout link, from Polar's dashboard. Where a user is sent to subscribe. */
   readonly checkoutUrl: string;
   /**
-   * An Organization Access Token with `customer_sessions:write` (SONNY-216). Never logged.
+   * An Organization Access Token with `customer_sessions:write` **and `orders:write`**
+   * (SONNY-216, widened by SONNY-215). Never logged.
    *
    * **This is the first provider API credential this gateway has ever held**, and its arrival is a
-   * deliberate reversal argued in this file's portal section below.
+   * deliberate reversal argued in this file's portal section below. One token for both calls
+   * because they are one credential at the provider; the second scope is what places an automatic
+   * top-up's off-session order.
+   *
+   * **Nothing here validates a scope at startup**, which is the same gap `server/README.md` records
+   * for the token itself: a token carrying only the first scope deploys cleanly, mints portal
+   * sessions, and fails on the first purchase. The only check is a real order, which is what
+   * SONNY-215's manual rows are for.
    */
   readonly accessToken: string;
   /**
