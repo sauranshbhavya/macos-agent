@@ -521,6 +521,19 @@ assert "with jq broken, a MULTI-LINE body is still read past its first line" 2 "
 run_cchook "$repo" "$MULTILINE_BODY"
 assert "  CONTROL: the same multi-line body with jq working" 2 "REFUSED" -
 
+# H1 (PR #195 scoped round). base64 is a THIRD tool the fallback needs, and every arm above breaks
+# jq and python3 TOGETHER — so none of them can see the one pair that was silent. Isolated one tool
+# at a time, base64 alone, jq alone and jq+python3 were each refused; jq+base64 was allowed, exit 0,
+# nothing on stderr, because `parsed=1` was set before the decodes and put base64 on the far side
+# of the raw-payload scan. This arm drives that pair and nothing else.
+printf '#!/bin/sh\nexit 1\n' > "$STUB/base64"; chmod +x "$STUB/base64"
+run_cchook_stubbed "$repo" "$STUB" "gh pr create --title t --body \"$FOOTER\""
+assert "with jq AND base64 broken, the raw-payload scan still refuses" 2 "could not parse" -
+
+run_cchook_stubbed "$repo" "$STUB" 'git commit -m "docs(x): SONNY-1 perfectly clean"'
+assert "  ...and a clean one is allowed but SAYS it was not checked" 0 "NOT checked" -
+rm -f "$STUB/base64"
+
 # ---------------------------------------------------------------------------------------------
 # The two layers together. Each was proved in isolation above; this is the only arm showing that
 # the config one of them installs actually arms the other.
