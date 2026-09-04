@@ -112,12 +112,19 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # shell. `VISION_API_KEY` is absent for its own reason, above.
 #
 # **The paragraph stamped at `6b72909` says "eleven names ... the five that remain are these", and
-# both halves are that tree's rather than this one's.** Re-measured on the working tree: the schema
-# holds **26** names (`grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort | wc -l` -> 26),
-# `providerDataPolicies` reads a further **10** off the environment that the schema never sees, this
-# credential array holds **11** and the settings array **25**. The historical figure is left as it
-# was written, per this repository's rule about dated records, rather than edited to agree with a
-# tree it was not taken on.
+# both halves are that tree's rather than this one's.** Re-measured: the schema holds **44** names
+# (`git grep -ohE '^  [A-Z_]+:' 2856840 -- server/src/config.ts | tr -d ' :' | sort | wc -l` -> 44,
+# read at a commit SONNY-405 does not touch), and `providerDataPolicies` reads two more per provider
+# off the environment that the schema never sees. The historical figure is left as it was written,
+# per this repository's rule about dated records, rather than edited to agree with a tree it was not
+# taken on.
+#
+# **The two arrays' own sizes are deliberately not written here any more** (SONNY-405). This
+# sentence used to carry them, and both were wrong by the time anyone read them -- "eleven" against
+# fifteen and "twenty-five" against thirty. A count in a comment about the array it sits inside is a
+# second copy of something the array already is, and it goes stale on the next line anybody adds.
+# The script prints both at run time, on the two "forwarding N of M" lines in the `local` branch
+# below, which is the honest place to read them from.
 #
 # **No value is read, stored, defaulted, printed or written down here.** `docker run -e NAME` with
 # no `=` is Docker's own pass-from-the-environment form: the value never reaches a variable in this
@@ -187,6 +194,39 @@ PASSTHROUGH=(
   # neither is unchanged -- a chain entry with no credential is not a candidate.
   ANTHROPIC_API_KEY
   CEREBRAS_API_KEY
+  # SONNY-405's five: billing's trigger and the four names that trigger makes required. **What places
+  # them here is `src/billing/deps.ts`'s own `BILLING_REQUIREMENTS` rather than a judgment about
+  # secrecy.** `billingDepsFrom` returns `undefined` when BILLING_PROVIDER is unset -- no billing
+  # routes, a supported deployment -- and throws a ConfigError naming every missing one the moment it
+  # is set. So the four are required-when-triggered, which is exactly the shape
+  # ENTITLEMENT_SIGNING_KEY, ENTITLEMENT_SIGNING_KEY_ID, SPEND_CAP_UNITS and CREDIT_PLANS already
+  # have on this list: required wherever *auth* is mounted, forwarded here regardless. CREDIT_PLANS'
+  # note above states the rule this follows -- what decides this list is what `src/config.ts`
+  # requires and not what is sensitive -- and BILLING_PLANS and BILLING_CHECKOUT_URL join it as
+  # entries that are not secrets.
+  #
+  # **BILLING_PROVIDER is here because its absence is the one that must not be silent.** It is the
+  # trigger, and a container that never received it mounts no `POST /v1/billing/webhook` at all, so
+  # the provider's delivery gets a 404 -- which reads as a broken feature rather than as a name that
+  # did not get through, and is the failure SONNY-405 was filed for. On this list it is printed by
+  # name before the container starts; on the other one the only tell would be a count moving by one
+  # in a line that reports thirty-odd settings.
+  #
+  # **UPGRADE_URL's note below is the closest argument against this and does not reach.** It keeps a
+  # no-default name off this list because listing it as missing on every run would be noise around
+  # the lines that mean something. Two differences. Its trigger, MINIMUM_SUPPORTED_CLIENT, is itself
+  # a defaulted setting sitting beside it, so that whole cluster is coherent where it is; billing's
+  # trigger is neither defaulted nor a setting. And no key is behind UPGRADE_URL, while two of these
+  # five are keys -- the webhook secret is, in `config.ts`' words, "the only thing standing between
+  # anyone on the internet and a paid entitlement", and the access token is write-capable at the
+  # provider -- and "did my key get in" is the exact question this array's by-name report answers.
+  # The cost is accepted rather than denied: a billing-free `deploy.sh local` prints five more names
+  # on its "not set here" line than it did.
+  BILLING_PROVIDER
+  BILLING_WEBHOOK_SECRET
+  BILLING_CHECKOUT_URL
+  BILLING_PROVIDER_ACCESS_TOKEN
+  BILLING_PLANS
 )
 
 # Everything else that changes what the gateway does with a request: where each provider sends, what
@@ -252,6 +292,24 @@ PASSTHROUGH_SETTINGS=(
   MINIMUM_SUPPORTED_CLIENT
   RECOMMENDED_CLIENT
   UPGRADE_URL
+  # SONNY-405's two, and the line between these and the five on the credential array is
+  # `billingDepsFrom`'s rather than a judgment: neither of these is required when BILLING_PROVIDER is
+  # set, both have a real default, and neither is a secret. BILLING_API_BASE_URL is the payment
+  # provider's API origin, defaulted inside `billing/polar.ts` -- the endpoint shape OPENAI_BASE_URL
+  # and VISION_BASE_URL have above -- and absent is its ordinary, correct state, so a by-name "not
+  # set" line for it would be the noise UPGRADE_URL's note describes. BILLING_GRACE_DAYS is
+  # CONTENT_RETENTION_DAYS' shape exactly: defaulted to fourteen, bounded at both ends, and in
+  # `config.ts`' words "a mechanism default the founders may move" -- which they cannot do on any
+  # deployment while it stops at the container wall.
+  #
+  # **Neither is among SONNY-405's five and both are forwarded anyway**, because that ticket's own
+  # argument reaches them. `docs/sonny-manual-test-checklist.md`'s SONNY-216 row sets
+  # BILLING_API_BASE_URL to a non-Polar https origin and restarts the gateway to prove a paying
+  # subscriber is not told their subscription does not exist; that row cannot be run against this
+  # command at all while the name is unforwarded, which is the same "cannot be run this way" the
+  # ticket was filed about.
+  BILLING_API_BASE_URL
+  BILLING_GRACE_DAYS
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --

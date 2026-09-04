@@ -2111,6 +2111,41 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       offline. Everything Sonny does on this Mac still works."* rather than with an allowance
       message, because being offline and being out of allowance are different states and the app
       must not confuse them.
+- [ ] **(new 2026-09-04, SONNY-405) — billing's names reach the container, and this row runs before
+      the three below it.** Until this ticket `./scripts/deploy.sh local` forwarded none of billing's
+      seven variables, so the rows below started a container with no `POST /v1/billing/webhook` at
+      all and the provider's delivery got a 404 — which reads as a broken feature rather than as a
+      name that stopped at the container wall. Run `cd server && ./scripts/deploy.sh local` twice
+      from the same terminal. **First with no `BILLING_` variable exported at all**: the
+      `not set here, so not forwarded:` line must name all five of `BILLING_PROVIDER`,
+      `BILLING_WEBHOOK_SECRET`, `BILLING_CHECKOUT_URL`, `BILLING_PROVIDER_ACCESS_TOKEN` and
+      `BILLING_PLANS`, the run must still end `==> ok — serving <build>`, and
+      `curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/v1/billing/webhook` must answer
+      **404** — a deployment that takes no payments is a supported one and must start. **Then export
+      the five and run it again**, values of your own, no provider account needed:
+
+      ```
+      export BILLING_PROVIDER=polar
+      export BILLING_WEBHOOK_SECRET='not a real secret'
+      export BILLING_CHECKOUT_URL=https://buy.example.test/checkout/x
+      export BILLING_PROVIDER_ACCESS_TOKEN='not a real token'
+      export BILLING_PLANS=prod_x=paid:screen_control
+      ./scripts/deploy.sh local
+      ```
+
+      None of the five may appear on the `not set here` line now, the run must end
+      `==> ok — serving <build>`, and the same `curl` must answer **anything but 404** (the signature
+      check refuses the empty body, which is the route existing). **A 404 on the second run is the
+      finding**, and it means the names did not travel.
+- [ ] **(new 2026-09-04, SONNY-405) — a half-configured billing container says which name is
+      missing, before you go looking.** From the row above, `unset BILLING_WEBHOOK_SECRET` and run
+      `./scripts/deploy.sh local` again. Two things must happen and the first is the point of putting
+      these names on the credential array: `BILLING_WEBHOOK_SECRET` appears on the
+      `not set here, so not forwarded:` line **before the container starts**, and then the container
+      refuses to come up — `verify` fails and dumps `docker logs`, which must carry a startup error
+      naming `BILLING_WEBHOOK_SECRET`. **A container that comes up healthy here is the finding**: it
+      would mean a gateway serving a webhook endpoint with no secret, which refuses every real
+      delivery and looks exactly like an outage. Re-export the secret before running the rows below.
 - [ ] **(new 2026-08-30, SONNY-211) — the end-to-end subscription, and it is the founders' row that
       nothing else can stand in for.** In the Polar dashboard, create the product, create a webhook
       endpoint pointing at the gateway's `POST /v1/billing/webhook`, and copy its signing secret.
