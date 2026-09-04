@@ -49,7 +49,19 @@ struct TaskRecordingPolicyTests {
             .visionSessionJournal
         ])
         let kept = Set(LocalStore.allCases.filter { TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })
-        #expect(kept == [.routines, .workspaces, .snippets, .clipboardHistorySettings, .approvedApps])
+        #expect(kept == [
+            .routines,
+            .workspaces,
+            .snippets,
+            .clipboardHistorySettings,
+            .approvedApps,
+            // Task deletions this Mac owes the gateway (SONNY-333) — kept, and this is the one
+            // entry here whose *reason* is a live defect rather than a classification preference.
+            // No task writes it, so there is nothing to withhold; and withholding it anyway would
+            // let a run with "Don't save this task" on stop a deletion the user pressed for from
+            // ever reaching the server.
+            .pendingServerDeletions
+        ])
         // The two sets partition the whole population, which is what makes naming them a claim about
         // every store rather than about the ones somebody remembered.
         #expect(withheld.count + kept.count == LocalStore.allCases.count)

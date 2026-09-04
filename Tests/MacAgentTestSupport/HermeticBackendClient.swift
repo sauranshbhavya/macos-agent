@@ -4,7 +4,7 @@ import Foundation
 /// A `SonnyBackendClient` that reaches nothing on this Mac (SONNY-130).
 ///
 /// **Every fixture in both test targets uses this rather than building one by hand**, for the reason
-/// `AgentViewModel`'s fixtures name their thirteen stores and `makeHermeticAccountModel` names the
+/// `AgentViewModel`'s fixtures name their fourteen stores and `makeHermeticAccountModel` names the
 /// Keychain: the real Keychain is shared by every packaged build on this machine, so a test that
 /// reached it would read and delete the founder's own session. `SonnyBackendClient.init` has no
 /// default for its token store precisely so that no call site can acquire one by saying nothing —

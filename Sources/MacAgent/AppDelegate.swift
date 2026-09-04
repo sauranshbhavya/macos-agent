@@ -162,6 +162,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // widget shows the panel off published state, so the state has to exist before it renders.
         viewModel.refreshResumableTasks()
 
+        // The deliveries a previous run could not make (SONNY-333), retried once at launch — the
+        // "retry it on next launch" half of the founders' decision of 2026-08-30.
+        //
+        // **Here rather than beside the session restore above, and it needs nothing from it.**
+        // `SonnyBackendClient` reads the Keychain the first time it is asked for a token, so this
+        // pass authenticates itself; sequencing it after `decideFirstRunAfterRestoringTheSession()`
+        // would buy nothing and would tie a background sweep to the first-run decision. It reaches
+        // no surface either way: a pass that finds nothing owed makes no request, and one that
+        // cannot reach the gateway leaves the queue exactly as it found it.
+        viewModel.sweepPendingServerDeletions()
+
         // Both surfaces open on launch, matching Wispr Flow's reference behavior — a real,
         // confirmed tradeoff: this also makes the Dock icon a permanent fixture, since
         // PrimaryWindowActivationManager only switches out of accessory mode when Command Center

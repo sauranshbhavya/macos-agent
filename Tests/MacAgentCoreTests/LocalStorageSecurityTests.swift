@@ -433,17 +433,18 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Thirteen stores is the current whole population, since row 13's unfinished
-    /// runs.
+    /// wipe silently. Fourteen stores is the current whole population, since SONNY-333's queue of
+    /// deletions this Mac owes the gateway.
     ///
     /// **The count moved four times and no longer lives in this test's name** (SONNY-209). Row E's
     /// plan details landed first, at `ebd6c1d`, taking it to ten; row J's approved apps rebased on
     /// top of that and took it to eleven; row 13's output locations took it to twelve, and row 13's
-    /// unfinished runs (SONNY-210) to thirteen. Each of the first three moves renamed this test, and
+    /// unfinished runs (SONNY-210) to thirteen, and SONNY-333's pending server deletions to
+    /// fourteen. Each of the first three moves renamed this test, and
     /// each rename left the doc comments elsewhere that name it pointing at a symbol that no longer
     /// existed. So the name is count-free now and the number lives only in the assertion below,
-    /// where the suite is what complains — which is what let the fourth move cost nothing but two
-    /// numerals. A fourteenth store raises this number and the one in
+    /// where the suite is what complains — which is what let the fourth and fifth moves cost
+    /// nothing but two numerals apiece. A fifteenth store raises this number and the one in
     /// `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
     /// **What the shipping app's wipe actually reaches, as opposed to what the list contains**
     /// (PR #162 review N1a).
@@ -471,7 +472,7 @@ struct LocalStorageSecurityTests {
     @Test
     func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 13)
+        #expect(urls.count == 14)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
@@ -504,7 +505,15 @@ struct LocalStorageSecurityTests {
             // task the user started and did not finish — its steps, the paths they name, the draft
             // text they carry. A wipe that left it behind would leave the plan of every abandoned
             // task on disk, which is the same failure as leaving the plans of the finished ones.
-            "resumable-tasks.json"
+            "resumable-tasks.json",
+            // Fourteen since SONNY-333: `pending-server-deletions.json` is the queue of task
+            // deletions this Mac still owes the gateway. It is the one file in this set that holds
+            // nothing the user gave Sonny — opaque ids and the moment Delete was pressed — and it is
+            // wiped with the rest for the reason the `approved-apps.json` note above gives, since a
+            // record of *what somebody deleted* surviving a privacy wipe is the same failure in a
+            // smaller coat. What that costs is on `PendingServerDeletionStore`: a wipe with
+            // deliveries outstanding abandons them.
+            "pending-server-deletions.json"
         ])
     }
 
@@ -530,7 +539,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
     }
 
     /// **The words Settings uses to describe the wipe name every store the wipe reaches**
@@ -565,9 +574,9 @@ struct LocalStorageSecurityTests {
         // branch's own W4 mutant exposed for a duplicated name. It is not a hypothetical gap: the
         // reviewer's V1 changed `.visionSessionJournal`'s arm to "screen activity" and the whole
         // suite stayed green, while that exact phrase is the reason this branch rejected deriving
-        // the sentence from Memory rows instead. Fourteen literals against thirteen stores since
-        // SONNY-236, because `resumable-tasks.json` names two collections; it is otherwise the same
-        // shape `theWipeReachesEveryLocalStore` uses for the thirteen file names, for the same reason:
+        // the sentence from Memory rows instead. Fifteen literals against fourteen stores, because
+        // `resumable-tasks.json` names two collections (SONNY-236); it is otherwise the same
+        // shape `theWipeReachesEveryLocalStore` uses for the fourteen file names, for the same reason:
         // this is a destructive action's disclosure, and a copy pass over it should have to say so.
         #expect(items == [
             "records of what Sonny did on screen",
@@ -586,10 +595,15 @@ struct LocalStorageSecurityTests {
             // The fourteenth phrase and the thirteenth store, because `resumable-tasks.json` holds
             // two collections (SONNY-236). `theWipesOwnSentenceNamesEveryCollectionInEveryStore`
             // below is what stops a third arriving without one.
-            "watchers"
+            "watchers",
+            // The fifteenth phrase and the fourteenth store (SONNY-333). Named even though the user
+            // gave Sonny nothing that lands in it, because the wipe takes it and the consequence —
+            // deletions already asked for never reaching the account — is the one thing about this
+            // press a person could not guess.
+            "deletions Sonny hasn't finished"
         ])
 
-        // Structure, over the population rather than over the literals above — so a fourteenth store
+        // Structure, over the population rather than over the literals above — so a fifteenth store
         // fails here as well as in the table, and says which rule it broke.
         //
         // **That makes the table one more stop for a session adding a store**, alongside the file
@@ -694,8 +708,10 @@ struct LocalStorageSecurityTests {
         // question Sonny asked them, so withholding it would discard a consent decision and leave
         // Sonny asking the identical question on the next run with no way to say why.
         #expect(stores(.artifact) == [.routines, .workspaces, .snippets, .approvedApps])
-        // The one store the founder's own enumeration did not reach: no task writes it.
-        #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
+        // No task writes these. `clipboardHistorySettings` is the one the founder's own
+        // enumeration did not reach; `pendingServerDeletions` arrived later (SONNY-333) and is
+        // written by a *user pressing Delete* and by the delivery pass, never by a run.
+        #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings, .pendingServerDeletions])
 
         // Every kind is used, so none is a case nothing ever means.
         #expect(LocalStoreKind.allCases.allSatisfy { !stores($0).isEmpty })

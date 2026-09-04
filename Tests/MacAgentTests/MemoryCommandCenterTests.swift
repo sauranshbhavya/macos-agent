@@ -3997,6 +3997,7 @@ private func makeMemoryFixture(
         approvedAppStore: approvedAppStore,
         outputLocationStore: outputLocationStore,
         resumableTaskStore: resumableTaskStore,
+        pendingServerDeletionStore: UnreachableLocalStores.pendingServerDeletions(),
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: pasteboard,
