@@ -5,7 +5,7 @@ import Testing
 /// What the two caps actually do, pinned.
 ///
 /// `TaskHistoryStore.maxItems` had no test at all before this suite — verified at `36cef9e` by
-/// `grep -rn "maxItems\|10_000\|10000" Tests/MacAgentCoreTests/*.swift Tests/MacAgentTests/*.swift`,
+/// `grep -rn "maxItems\|10_000\|10000" --include='*.swift' Tests/MacAgentCoreTests Tests/MacAgentTests`,
 /// whose only `maxItems` hits were `ClipboardHistoryStore`'s and `RecentArtifactStore`'s. An
 /// eviction nothing asserts is an eviction that can quietly change, and row D's search is about to
 /// make a promise this cap bounds.
