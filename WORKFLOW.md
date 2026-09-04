@@ -974,6 +974,32 @@ f595efe -> 9f14eca   2026-07-12      fad0c82 -> 371f7af   2026-09-03
 3f3f872 -> fd346b1   2026-09-03
 ```
 
+**What the repointing changed under `Sources/`, `Tests/` and `server/`, and what nearly went unchecked.**
+Of the 79 files, 55 sit under those three trees, and the first account of this branch said all 79 changed
+only inside comments and prose. That was wrong by five lines, and both misses are the same shape: a filter
+for comment lines is the wrong instrument for "did this change any code".
+
+- **Four repointed tokens sat inside Swift string literals** — fixture-table labels in
+  `UntrustedContentBoundaryScalarMatchingTests.swift`. A string literal in `Tests/` is not a comment, so
+  the flagged suite was owed and was **re-run at the candidate rather than argued**: exit 0, 2842 tests in
+  193 suites, zero failed-after lines. (They are message-argument copy, but that reading is what made the
+  wrong claim feel safe.)
+- **Two are SQL migrations, changed only inside `--` comments, and this repository hashes migration
+  content.** The hash is unaffected **by construction**: `migrationContentHash` digests
+  `executableSql(up)` and `executableSql(down)`, and `executableSql` strips `--` comments — pinned by the
+  pure test at `executableSql("-- why this exists\nSELECT 1;")` being `"SELECT 1;"`. **The edge that
+  would have inverted it was checked rather than assumed**: `executableSql` deliberately *preserves*
+  comments inside dollar-quoted bodies, so a repointed comment inside a `$$ … $$` block would have moved
+  the hash. Counted rather than eyeballed — `0014`'s repointed line is 180 with zero `$$` before it (the
+  file's six all come later) and `0017` contains no `$$` at all.
+
+**"`npm test` was green" was the weaker half of that check and is corrected here rather than left to
+read as more than it was.** The 391 skipped in `780 passed / 391 skipped` are the `.db.test.ts` files
+without a database, and the migration-hash db test is among them — so that green is silent about the db
+half, and what actually exercised the stripping is the pure test. The load-bearing figure is a comparison
+rather than an absolute: 780 is **byte-identical** to the neighbouring lane's post-rebase figure, which is
+what says the repointing changed no server behaviour.
+
 **Sequencing was a constraint, not a preference.** The push waited until nothing was live: every open
 pull request merged, every review worktree torn down, no mutation battery running, and the branch
 carrying SONNY-406's guard merged **first**, on the pre-rewrite `main`, because that branch was rooted
