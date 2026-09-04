@@ -1,6 +1,7 @@
 import pg from "pg";
 import { describe, expect } from "vitest";
 import {
+  reachOfSelfHeal,
   readBillingDebts,
   readUnaccountedDeliveries,
   readUnresolvedTopUps,
@@ -48,10 +49,16 @@ const THIS_PERIOD = periodStart(NOW);
 const LAST_PERIOD = periodStart(new Date("2026-08-15T12:00:00Z"));
 const CONSENTED = new Date("2026-08-02T09:30:00Z");
 
-function claimOf(overrides: { readonly periodStart?: Date; readonly accountId?: string } = {}) {
+function claimOf(
+  overrides: {
+    readonly periodStart?: Date;
+    readonly accountId?: string;
+    readonly provider?: string;
+  } = {},
+) {
   return {
     accountId: overrides.accountId ?? ACCOUNT,
-    provider: PROVIDER,
+    provider: overrides.provider ?? PROVIDER,
     periodStart: overrides.periodStart ?? THIS_PERIOD,
     consentedAt: CONSENTED,
     runsLeftAtTrigger: 0,
@@ -85,6 +92,7 @@ describeDb("what the debt report selects out of a table holding every other outc
     readonly orderId?: string;
     readonly periodStart?: Date;
     readonly accountId?: string;
+    readonly provider?: string;
   }): Promise<string> {
     const attempt = await claimTopUpAttempt(client, claimOf(input));
     expect(attempt).toBeDefined();
@@ -210,6 +218,126 @@ describeDb("what the debt report selects out of a table holding every other outc
     const report = reportBillingDebts(await readBillingDebts(client), NOW);
     expect(report.exitCode).toBe(0);
     expect(report.text).toBe("no unresolved billing debt\n");
+  });
+
+  itUnderHangBackstop("reports a current-period row at a provider this deployment no longer runs", async () => {
+    // **The second boundary `readOutstandingTopUp` enforces** (PR #201's F3). The query scopes by
+    // provider as well as by period, and the report modelled the period alone — so this row printed
+    // `resolvable` while nothing would ever find it.
+    const OTHER = "an-old-provider";
+    await rowWith({ outcome: "unconfirmed", orderId: "order-old-provider", provider: OTHER });
+
+    // Asked exactly as `attemptTopUp` asks it, with the deployment's own provider: never found.
+    expect(
+      await readOutstandingTopUp(client, {
+        accountId: ACCOUNT,
+        provider: PROVIDER,
+        periodStart: THIS_PERIOD,
+      }),
+    ).toBeUndefined();
+    // The control: asked with the row's own provider the same query finds it, so the `undefined`
+    // above is the scoping and not a query that finds nothing.
+    expect(
+      await readOutstandingTopUp(client, {
+        accountId: ACCOUNT,
+        provider: OTHER,
+        periodStart: THIS_PERIOD,
+      }),
+    ).toEqual({ topUpId: expect.any(String), orderId: "order-old-provider" });
+
+    const rows = await readUnresolvedTopUps(client);
+    expect(rows).toHaveLength(1);
+    expect(strandedByPeriodRollover(rows[0]!, NOW)).toBe(false);
+    expect(reachOfSelfHeal(rows[0]!, NOW, PROVIDER)).toBe("stranded-provider");
+    const report = reportBillingDebts({ topUps: rows, deliveries: [] }, NOW, PROVIDER);
+    expect(report.exitCode).toBe(1);
+    expect(report.text).toContain("STRANDED (provider)");
+    expect(report.text).not.toContain("STRANDED (period)");
+  });
+
+  itUnderHangBackstop("still calls a same-provider current-period row resolvable, the control", async () => {
+    await rowWith({ outcome: "unconfirmed", orderId: "order-same-provider" });
+
+    const rows = await readUnresolvedTopUps(client);
+    expect(rows).toHaveLength(1);
+    expect(reachOfSelfHeal(rows[0]!, NOW, PROVIDER)).toBe("resolvable");
+    const report = reportBillingDebts({ topUps: rows, deliveries: [] }, NOW, PROVIDER);
+    expect(report.text).toContain("resolvable  account");
+    expect(report.text).not.toContain("STRANDED");
+  });
+
+  /** Runs `body` with `constraint` dropped from `table`, and puts it back whatever happens. */
+  async function withoutOutcomeConstraint(
+    table: string,
+    constraint: string,
+    body: () => Promise<void>,
+  ): Promise<void> {
+    const { rows } = await client.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = $1`,
+      [constraint],
+    );
+    // Refused on its own terms: a constraint that is not there means this test is asserting about a
+    // vocabulary nothing enforces, which is not the situation it exists to model.
+    const definition = rows[0]?.def;
+    expect(definition).toBeDefined();
+    await client.query(`ALTER TABLE ${table} DROP CONSTRAINT ${constraint}`);
+    try {
+      await body();
+    } finally {
+      // **The table is emptied before the constraint goes back**, and it has to be: the row this
+      // helper exists to plant is by construction one the constraint forbids, so re-adding it over
+      // that row fails with `is violated by some row` and leaves the schema without its constraint
+      // for every test after this one. `beforeEach` truncates anyway, so nothing is lost.
+      await client.query(`TRUNCATE ${table}`);
+      await client.query(`ALTER TABLE ${table} ADD CONSTRAINT ${constraint} ${definition!}`);
+    }
+    // And it really came back. A helper that drops a constraint and silently fails to restore it
+    // leaves every later test in this file running against a schema nobody chose, and the symptom
+    // would be a passing suite.
+    const { rows: after } = await client.query<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = $1`,
+      [constraint],
+    );
+    expect(after[0]?.def).toBe(definition);
+  }
+
+  itUnderHangBackstop("reports a top-up outcome a later migration added and this file does not know", async () => {
+    // **The inversion** (PR #201's F4), against the real constraint rather than a fake. Before it,
+    // an eighth outcome as the only row in the table answered `no unresolved billing debt` and
+    // exit 0 — a reassuring sentence over a row nobody had classified.
+    await withoutOutcomeConstraint("sonny.credit_topup", "credit_topup_outcome_known", async () => {
+      await client.query(
+        `INSERT INTO sonny.credit_topup
+             (account_id, provider, provider_order_id, period_start, attempt_no, outcome,
+              consented_at, runs_left_at_trigger, credits_remaining_at_trigger)
+         VALUES ($1, $2, 'order-future', $3, 1, 'uncredited', $4, 0, 0)`,
+        [ACCOUNT, PROVIDER, THIS_PERIOD, CONSENTED],
+      );
+
+      const rows = await readUnresolvedTopUps(client);
+      expect(rows.map((row) => row.outcome)).toEqual(["uncredited"]);
+      const report = reportBillingDebts({ topUps: rows, deliveries: [] }, NOW, PROVIDER);
+      expect(report.exitCode).toBe(1);
+      expect(report.text).toContain("UNKNOWN  account");
+      expect(report.text).toContain("uncredited");
+    });
+  });
+
+  itUnderHangBackstop("reports a delivery outcome a later migration added, and still hides the five that are not debt", async () => {
+    await withoutOutcomeConstraint("sonny.billing_event", "billing_event_outcome_known", async () => {
+      await deliveryWith("uncredited", "evt-future", ACCOUNT);
+      // The control in the same table: the five known non-debt states stay out, so the inversion
+      // did not simply start reporting everything.
+      for (const outcome of ["applied", "ignored", "stale", "unmapped", "unreadable"]) {
+        await deliveryWith(outcome, `evt-${outcome}`, ACCOUNT);
+      }
+
+      const rows = await readUnaccountedDeliveries(client);
+      expect(rows.map((row) => row.eventId)).toEqual(["evt-future"]);
+      const report = reportBillingDebts({ topUps: [], deliveries: rows }, NOW, PROVIDER);
+      expect(report.exitCode).toBe(1);
+      expect(report.text).toContain("UNKNOWN uncredited");
+    });
   });
 
   itUnderHangBackstop("puts both populations behind one non-zero exit", async () => {

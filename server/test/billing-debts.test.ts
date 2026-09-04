@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  reachOfSelfHeal,
   reportBillingDebts,
   strandedByPeriodRollover,
   type BillingDebts,
@@ -95,7 +96,7 @@ describe("what an operator is told about money nobody can account for", () => {
     // paragraph unconditionally would pass every positive assertion in this file while telling an
     // operator that a row which will very likely heal itself needs a manual refund.
     expect(report.text).not.toContain("STRANDED");
-    expect(report.text).toContain("may still resolve");
+    expect(report.text).toContain("in the account's CURRENT period, at this");
   });
 
   it("marks a row from an earlier period STRANDED and says why nothing will reach it", () => {
@@ -104,11 +105,11 @@ describe("what an operator is told about money nobody can account for", () => {
       NOW,
     );
     expect(report.exitCode).toBe(1);
-    expect(report.text).toContain("STRANDED  account");
-    expect(report.text).toContain("1 of those is STRANDED");
+    expect(report.text).toContain("STRANDED (period)  account");
+    expect(report.text).toContain("1 of those is STRANDED by a period rollover");
     expect(report.text).toContain("CHARGES a draft that was never charged");
     // And the resolvable paragraph is absent, for the mirror of the reason above.
-    expect(report.text).not.toContain("may still resolve");
+    expect(report.text).not.toContain("in the account's CURRENT period, at this");
   });
 
   it("separates the two when both are present, rather than counting them together", () => {
@@ -122,7 +123,115 @@ describe("what an operator is told about money nobody can account for", () => {
     expect(report.exitCode).toBe(1);
     expect(report.text).toContain("2 top-up order(s)");
     expect(report.text).toContain("1 of those is in the account's CURRENT period");
-    expect(report.text).toContain("1 of those is STRANDED");
+    expect(report.text).toContain("1 of those is STRANDED by a period rollover");
+  });
+});
+
+describe("what else puts a row out of the self-healing path's reach", () => {
+  // **The second of the two boundaries `readOutstandingTopUp` enforces** (PR #201's F3). That query
+  // scopes by account, provider, period and outcome; the report modelled the period alone, so a
+  // current-period row bought at a provider this deployment no longer runs printed `resolvable`
+  // while nothing would ever find it. Consent withdrawal is the reachable variant of the same shape
+  // and is named in the report rather than modelled — see `reachOfSelfHeal`.
+  const OTHER_PROVIDER = "an-old-provider";
+
+  it("marks a current-period row at another provider STRANDED, not resolvable", () => {
+    const report = reportBillingDebts(
+      { topUps: [topUp({ provider: OTHER_PROVIDER })], deliveries: [] },
+      NOW,
+      "polar",
+    );
+    expect(report.exitCode).toBe(1);
+    expect(report.text).toContain("STRANDED (provider)  account");
+    expect(report.text).toContain("1 of those is STRANDED at another PROVIDER");
+    expect(report.text).toContain('BILLING_PROVIDER is now\n"polar"');
+    // It is in the current period, so the period label must NOT be the one that fired.
+    expect(report.text).not.toContain("STRANDED (period)");
+  });
+
+  it("still calls a same-provider current-period row resolvable, which is the control", () => {
+    // Without this the fix above could be "call everything stranded", which passes the assertion
+    // that matters to F3 and destroys the only distinction the report makes.
+    const report = reportBillingDebts({ topUps: [topUp({ provider: "polar" })] , deliveries: [] }, NOW, "polar");
+    expect(report.text).toContain("resolvable  account");
+    expect(report.text).not.toContain("STRANDED");
+    expect(reachOfSelfHeal(topUp({ provider: "polar" }), NOW, "polar")).toBe("resolvable");
+    expect(reachOfSelfHeal(topUp({ provider: OTHER_PROVIDER }), NOW, "polar")).toBe("stranded-provider");
+  });
+
+  it("says which half it could not check when BILLING_PROVIDER is not set", () => {
+    // The honest third state. With no provider given the mismatch is unknowable, so the row keeps
+    // the label it had and the report names the gap rather than quietly leaving it.
+    const report = reportBillingDebts({ topUps: [topUp({ provider: OTHER_PROVIDER })], deliveries: [] }, NOW, undefined);
+    expect(report.text).toContain("resolvable  account");
+    expect(report.text).toContain("BILLING_PROVIDER was not set when this ran");
+    expect(reachOfSelfHeal(topUp({ provider: OTHER_PROVIDER }), NOW, undefined)).toBe("resolvable");
+    // And the note is absent when the provider IS known, or it would be permanent noise.
+    const known = reportBillingDebts({ topUps: [topUp({ provider: "polar" })], deliveries: [] }, NOW, "polar");
+    expect(known.text).not.toContain("BILLING_PROVIDER was not set");
+  });
+
+  it("puts the period ahead of the provider, so a row failing both reads as period", () => {
+    // Order matters for the operator: the period case carries this branch's whole argument about
+    // why widening the lookback is wrong, and a row that fails both should carry that reasoning.
+    const both = topUp({ provider: OTHER_PROVIDER, periodStart: LAST_PERIOD });
+    expect(reachOfSelfHeal(both, NOW, "polar")).toBe("stranded-period");
+  });
+});
+
+describe("an outcome this command has never heard of", () => {
+  // **The inversion** (PR #201's F4). Both vocabularies were closed `IN` lists with nothing tying
+  // them to the migrations' CHECKs, so an outcome added by a later migration fell silently on the
+  // not-debt side and a report over one such row alone printed "no unresolved billing debt" and
+  // exited 0 — the clean-zero family, on a money report.
+  it("is reported with its own label and a non-zero exit, never hidden", () => {
+    const report = reportBillingDebts(
+      { topUps: [topUp({ outcome: "uncredited" })], deliveries: [] },
+      NOW,
+      "polar",
+    );
+    expect(report.exitCode).toBe(1);
+    expect(report.text).toContain("UNKNOWN  account");
+    expect(report.text).toContain("uncredited");
+    expect(report.text).toContain("carrying an outcome this command has never heard");
+    // Checked before the period and provider rules, because a state nothing classifies cannot be
+    // reasoned about with rules written for the states that are classified.
+    expect(reachOfSelfHeal(topUp({ outcome: "uncredited", periodStart: LAST_PERIOD }), NOW, "polar")).toBe(
+      "unknown-outcome",
+    );
+  });
+
+  it("is reported on a delivery too, with its own label", () => {
+    const report = reportBillingDebts(
+      { topUps: [], deliveries: [delivery({ outcome: "uncredited" })] },
+      NOW,
+      "polar",
+    );
+    expect(report.exitCode).toBe(1);
+    expect(report.text).toContain("UNKNOWN uncredited  polar event evt-1");
+    expect(report.text).toContain("1 of those is marked UNKNOWN");
+  });
+
+  it("leaves a known debt outcome unmarked, which is the control", () => {
+    // Without this, labelling everything UNKNOWN would satisfy both assertions above.
+    const report = reportBillingDebts(
+      { topUps: [topUp()], deliveries: [delivery()] },
+      NOW,
+      "polar",
+    );
+    expect(report.text).not.toContain("UNKNOWN");
+    expect(report.text).toContain("resolvable  account");
+    expect(report.text).toContain("unmatched  polar event evt-1");
+  });
+
+  it("prints 'no order id' rather than null for an unknown outcome that carries none", () => {
+    const report = reportBillingDebts(
+      { topUps: [topUp({ outcome: "uncredited", providerOrderId: null })], deliveries: [] },
+      NOW,
+      "polar",
+    );
+    expect(report.text).toContain("polar no order id");
+    expect(report.text).not.toContain("null");
   });
 });
 

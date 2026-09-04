@@ -2111,18 +2111,25 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       offline. Everything Sonny does on this Mac still works."* rather than with an allowance
       message, because being offline and being out of allowance are different states and the app
       must not confuse them.
-- [ ] **(new 2026-09-04, SONNY-405) — billing's names reach the container, and this row runs before
-      the three below it.** Until this ticket `./scripts/deploy.sh local` forwarded none of billing's
-      seven variables, so the rows below started a container with no `POST /v1/billing/webhook` at
-      all and the provider's delivery got a 404 — which reads as a broken feature rather than as a
-      name that stopped at the container wall. Run `cd server && ./scripts/deploy.sh local` twice
-      from the same terminal. **First with no `BILLING_` variable exported at all**: the
-      `not set here, so not forwarded:` line must name all five of `BILLING_PROVIDER`,
-      `BILLING_WEBHOOK_SECRET`, `BILLING_CHECKOUT_URL`, `BILLING_PROVIDER_ACCESS_TOKEN` and
-      `BILLING_PLANS`, the run must still end `==> ok — serving <build>`, and
-      `curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/v1/billing/webhook` must answer
-      **404** — a deployment that takes no payments is a supported one and must start. **Then export
-      the five and run it again**, values of your own, no provider account needed:
+- [ ] **(new 2026-09-04, SONNY-405; row rewritten 2026-09-04 after PR #201's F1) — billing's names
+      reach the container, and this row runs before the three below it.** Until this ticket
+      `./scripts/deploy.sh local` forwarded none of billing's seven variables, so the rows below
+      started a container with no `POST /v1/billing/webhook` at all and the provider's delivery got a
+      404. **Check the container's environment, not a route** — the reason is the next row's note.
+      Run `cd server && ./scripts/deploy.sh local` twice from the same terminal.
+
+      **First with no `BILLING_` variable exported at all.** The `not set here, so not forwarded:`
+      line must name all five of `BILLING_PROVIDER`, `BILLING_WEBHOOK_SECRET`,
+      `BILLING_CHECKOUT_URL`, `BILLING_PROVIDER_ACCESS_TOKEN` and `BILLING_PLANS`; the run must end
+      `==> ok — serving <build>` — a deployment that takes no payments is a supported one and must
+      start — and:
+
+      ```
+      docker inspect sonny-gateway-local --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -c '^BILLING_'
+      ```
+
+      must answer **0**. **Then export the five and run it again**, values of your own, no provider
+      account needed:
 
       ```
       export BILLING_PROVIDER=polar
@@ -2134,9 +2141,23 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       ```
 
       None of the five may appear on the `not set here` line now, the run must end
-      `==> ok — serving <build>`, and the same `curl` must answer **anything but 404** (the signature
-      check refuses the empty body, which is the route existing). **A 404 on the second run is the
-      finding**, and it means the names did not travel.
+      `==> ok — serving <build>`, and the same `docker inspect` must answer **5** — and print the
+      five names, which is worth reading rather than trusting the count. **Anything but 5 on the
+      second run is the finding**, and it means the names did not travel. (`grep -c` answering 0 and
+      then 5 with nothing else changed is what makes the 5 a measurement; both were run on 2026-09-04
+      against a container started with `deploy.sh`'s own `-e NAME` form.)
+- [ ] **(new 2026-09-04, SONNY-405; added after PR #201's F1) — why the row above reads the
+      environment and not the webhook route, which is worth knowing before you debug a 404 here.**
+      Nothing to run; read it. `registerBillingRoutes` is gated on `billing && billingStore`, and
+      `billingStore` exists only when `auth` does — which needs the three `SUPABASE_` names,
+      `DATABASE_URL` and `RATE_LIMIT_SALT`. So **a container given all five billing names and no auth
+      names answers 404 on `POST /v1/billing/webhook` even when the passthrough is working
+      perfectly.** Measured on the built gateway on 2026-09-04: five billing names only → health `ok`
+      and webhook **404**; the identical five plus the auth prerequisites this section's setup block
+      already lists → webhook **401**. So a 404 here means "auth is not wired", and `deploy.sh`
+      prints that on its own line — `==> auth routes are NOT mounted`. If you want the route check as
+      well as the environment check, run it only with the section's container setup live, and read
+      that line first.
 - [ ] **(new 2026-09-04, SONNY-405) — a half-configured billing container says which name is
       missing, before you go looking.** From the row above, `unset BILLING_WEBHOOK_SECRET` and run
       `./scripts/deploy.sh local` again. Two things must happen and the first is the point of putting
@@ -2210,13 +2231,31 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       answer if somebody writes it down. If no new `billing_event` row appears at all within a
       minute, that is its own finding — the webhook endpoint is not subscribed to the event type the
       plan change produces.
-- [ ] **(new 2026-09-04, SONNY-408) — the command that tells somebody about a charge nobody can
-      account for, run against a database with nothing wrong in it.** With a container and a
-      `DATABASE_URL` (the same one the `test:db` block in `server/README.md` sets up is fine), run
-      `cd server && npm run build && npm run billing-debts`, then `echo $?` **on its own line, with
-      nothing between the two**. It must print `no unresolved billing debt` and exit **0**. Do this
-      before the row below, so that the non-zero exit there means something: a command that exits 1
-      on everything is not a signal.
+- [ ] **(new 2026-09-04, SONNY-408; precondition corrected 2026-09-04 after PR #201's F2) — the
+      command that tells somebody about a charge nobody can account for, run against a database with
+      nothing wrong in it.** With a container and a `DATABASE_URL` (the same one the `test:db` block
+      in `server/README.md` sets up is fine), **empty the two tables first** — this row said "with
+      nothing wrong in it" and did not make it so, and `npm run test:db` leaves rows behind, because
+      each database test truncates in `beforeEach` and nothing truncates after the last one, so
+      whatever the final test planted survives the run:
+
+      ```
+      psql "$DATABASE_URL" -c "DELETE FROM sonny.credit_topup; DELETE FROM sonny.billing_event;"
+      cd server && npm run build && npm run billing-debts
+      echo $?
+      ```
+
+      (`psql` is not on a stock Mac; the `docker exec` form is in the row below and works the same.)
+      `echo $?` goes **on its own line with nothing between it and the command**. It must print
+      `no unresolved billing debt` and exit **0**. Do this before the row below, so that the non-zero
+      exit there means something: a command that exits 1 on everything is not a signal. **What a test
+      run leaves in those two tables is not empty and is not stable**, which is why the delete is the
+      fix rather than "run it on a fresh database": measured on 2026-09-04 at this head,
+      `npx vitest run test/billing-debts.db.test.ts` alone leaves exactly one `unconfirmed` top-up
+      (`order-1`) and one `unmatched` delivery (`evt-1`), on which this row answers a full report and
+      exit 1 — while a whole `npm run test:db` happened to leave both tables empty, because a later
+      file's `beforeEach` truncated them. Which of the two you get depends on the run order, so the
+      row makes the state rather than assuming it.
 - [ ] **(new 2026-09-04, SONNY-408) — and it exits non-zero when there is something to say, with the
       order id you would go and look up.** Plant one row of each kind by hand, against the same
       database. (**If `psql` is not installed** — it is not on a stock Mac — reach it through the
@@ -2231,15 +2270,18 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       ```
 
       The output must name `order-planted-1` and `evt-planted-1`, must mark the top-up
-      **`resolvable`** rather than `STRANDED` (it is in the current period), and `echo $?` must print
-      **1**. **A zero exit here is the finding** — it would mean a check built on this command passes
-      while money is outstanding. Then delete the two planted rows.
+      **`resolvable`** rather than any `STRANDED` label (it is in the current period), and `echo $?`
+      must print **1**. **A zero exit here is the finding** — it would mean a check built on this
+      command passes while money is outstanding. With `BILLING_PROVIDER` unset the report also prints
+      a paragraph saying the provider half of the classification could not be checked; that is the
+      command being honest about what it did not do, not a finding. Then delete the two planted rows.
 - [ ] **(new 2026-09-04, SONNY-408) — the boundary case, which is the one nothing will ever fix on
       its own.** Plant the same top-up row again with `period_start` set to the **previous** month —
       change `date_trunc('month', now())` to `date_trunc('month', now() - interval '1 month')` and use
-      a new order id — and run `npm run billing-debts` again. That row must be marked **`STRANDED`**,
-      not `resolvable`, and the report must carry the paragraph explaining that the self-healing path
-      looks only inside the account's current period so no future attempt will reach it. **A row from
+      a new order id — and run `npm run billing-debts` again. That row must be marked
+      **`STRANDED (period)`**, not `resolvable`, and the report must carry the paragraph explaining
+      that the self-healing path looks only inside the account's current period so no future attempt
+      will reach it. **A row from
       a past month reported as `resolvable` is the finding**: it would tell an operator to wait for
       something that is never coming. Delete the planted row afterwards.
 - [ ] **(new 2026-08-31, SONNY-216) — the portal opens, and it opens for the right person.** Do this

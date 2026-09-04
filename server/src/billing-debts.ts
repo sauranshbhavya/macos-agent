@@ -39,26 +39,84 @@ import { periodStart } from "./entitlement/period.js";
  * that customer is, and a `conflict` needs somebody to decide which of two subscriptions is real.
  * None of the three is a decision a gateway can take.
  */
-export type TopUpDebtOutcome = "attempted" | "unconfirmed";
+/**
+ * The outcome vocabularies, and **which side of them is the default** (PR #201's F4).
+ *
+ * **Both queries below exclude the states known not to be debt and report everything else**, which
+ * is the opposite of how this file first shipped. The first version listed the debt states in a
+ * closed `IN (…)`, and nothing tied that list to the `CHECK` constraints that actually define the
+ * vocabulary — migration 0018 for deliveries, 0019 for top-ups. So a later migration adding an
+ * outcome put it silently on the *not-debt* side: measured by the reviewer, an eighth
+ * `billing_event` outcome as the only row in the table produced `no unresolved billing debt` and
+ * exit **0**. That is the clean-zero family `CLAUDE.md` records, arriving on a money report — the
+ * reassuring sentence printed over a row nobody had classified.
+ *
+ * Inverting it makes the failure direction the safe one: an outcome this file has never heard of is
+ * reported, labelled `UNKNOWN` so nobody mistakes it for a classified debt, and the exit code is
+ * non-zero. The cost is that a genuinely harmless future outcome shows up until somebody adds it to
+ * the non-debt list, which is a person being asked a question rather than a report keeping quiet.
+ */
+export const TOPUP_DEBT_OUTCOMES: readonly string[] = ["attempted", "unconfirmed"];
+
+/**
+ * The top-up outcomes that are **not** debt, and why each one is not.
+ *
+ * - `granted` — the provider charged the customer and this gateway credited the pack. Settled.
+ * - `declined` — the provider answered and did not charge. No money moved.
+ * - `provider_error` — the order could not be created at all, so there is nothing at the provider to
+ *   ask about. 0019 calls it the one outcome that never carries an order id.
+ */
+export const TOPUP_NON_DEBT_OUTCOMES: readonly string[] = ["granted", "declined", "provider_error"];
 
 export interface UnresolvedTopUp {
   readonly topUpId: string;
   readonly accountId: string;
   readonly provider: string;
-  /** Never null: the query selects only rows that carry one, which is what makes the row askable. */
-  readonly providerOrderId: string;
-  readonly outcome: TopUpDebtOutcome;
+  /**
+   * **Nullable now, and only ever null on an outcome this file does not know** (F4). A known
+   * resolvable row is selected only when it carries an order id, because that id is what makes the
+   * row askable at the provider; an unknown outcome is reported whether or not it carries one,
+   * since this file cannot know what invariants a future outcome keeps.
+   */
+  readonly providerOrderId: string | null;
+  /** The raw column. Not a union: an outcome added by a later migration must survive being read. */
+  readonly outcome: string;
   readonly periodStart: Date;
   readonly attemptedAt: Date;
 }
 
-export type DeliveryDebtOutcome = "conflict" | "unmatched";
+export const DELIVERY_DEBT_OUTCOMES: readonly string[] = ["conflict", "unmatched"];
+
+/**
+ * The delivery outcomes that are **not** debt, and why each one is not.
+ *
+ * - `applied` — the entitlement moved. That is the delivery working.
+ * - `ignored` — a type this gateway does not act on. Never ours.
+ * - `stale` — an older delivery than the state it met. A newer one already won.
+ * - `unmapped` — a product `BILLING_PLANS` does not name. Fail-closed by design and a configuration
+ *   mistake with a different fix and a different person.
+ * - `unreadable` — the signature passed and the payload did not parse. A bug report, not a debt.
+ *
+ * **`unmapped` is the one worth arguing about and it is excluded deliberately** (PR #201's F4, as a
+ * question rather than a finding): it is a customer who paid for a product nobody configured, which
+ * is the same user-facing fact as `unmatched`. It stays out because it is fail-closed and visible by
+ * configuration rather than unknown, and because the fix is a `BILLING_PLANS` entry. Recorded here
+ * so the next reader meets the argument rather than re-deriving it.
+ */
+export const DELIVERY_NON_DEBT_OUTCOMES: readonly string[] = [
+  "applied",
+  "ignored",
+  "stale",
+  "unmapped",
+  "unreadable",
+];
 
 export interface UnaccountedDelivery {
   readonly provider: string;
   readonly eventId: string;
   readonly eventType: string;
-  readonly outcome: DeliveryDebtOutcome;
+  /** The raw column, for `UnresolvedTopUp.outcome`'s reason. */
+  readonly outcome: string;
   /** `unmatched` carries none by definition; `conflict` names the account it could not move. */
   readonly accountId: string | null;
   readonly receivedAt: Date;
@@ -76,22 +134,28 @@ export interface BillingDebts {
  * difference between the two queries is the whole of this ticket's boundary decision. That one is a
  * resolution path and must not reach a period that has ended; this one is a report and must, or the
  * rows that can never be resolved automatically are the exact rows nobody is ever told about.
+ *
+ * **Two clauses, and the second is the inversion** (F4). The first takes the two known resolvable
+ * states when they name an order — the order id is what makes the row askable, and without one
+ * nothing was ever created at the provider. The second takes any outcome not in the known five at
+ * all, order id or not, because this file cannot know which invariants a future outcome keeps.
  */
 export async function readUnresolvedTopUps(client: pg.Client): Promise<readonly UnresolvedTopUp[]> {
   const { rows } = await client.query<{
     topup_id: string;
     account_id: string;
     provider: string;
-    provider_order_id: string;
-    outcome: TopUpDebtOutcome;
+    provider_order_id: string | null;
+    outcome: string;
     period_start: Date;
     attempted_at: Date;
   }>(
     `SELECT topup_id, account_id, provider, provider_order_id, outcome, period_start, attempted_at
        FROM sonny.credit_topup
-      WHERE provider_order_id IS NOT NULL
-        AND outcome IN ('attempted', 'unconfirmed')
+      WHERE (outcome = ANY($1) AND provider_order_id IS NOT NULL)
+         OR NOT (outcome = ANY($2))
       ORDER BY attempted_at, topup_id`,
+    [TOPUP_DEBT_OUTCOMES, [...TOPUP_DEBT_OUTCOMES, ...TOPUP_NON_DEBT_OUTCOMES]],
   );
   return rows.map((row) => ({
     topUpId: row.topup_id,
@@ -105,14 +169,13 @@ export async function readUnresolvedTopUps(client: pg.Client): Promise<readonly 
 }
 
 /**
- * Every subscription delivery this gateway accepted and could not act on.
+ * Every subscription delivery this gateway accepted and could not act on — **and every one whose
+ * outcome this file does not recognise** (F4).
  *
- * `stale`, `ignored` and `unmapped` are deliberately not here. A stale delivery lost to a newer one
- * and an ignored type was never ours to act on, so neither is owed anything; `unmapped` is a product
- * `BILLING_PLANS` does not name, which is a configuration mistake with a different fix and a
- * different person — and it is fail-closed by design rather than an unknown. `unreadable` is left
- * out on the same terms: it is a shape this gateway could not parse, which is a bug report, not a
- * debt. What is here is only what means somebody may have paid for something they do not have.
+ * The five states that are not debt are named in `DELIVERY_NON_DEBT_OUTCOMES` above, each with the
+ * reason it is not; everything else is reported. So `conflict` and `unmatched` arrive as they always
+ * did, and an outcome a later migration adds arrives too, labelled `UNKNOWN`, rather than falling
+ * silently on the harmless side of a closed list.
  */
 export async function readUnaccountedDeliveries(
   client: pg.Client,
@@ -121,14 +184,15 @@ export async function readUnaccountedDeliveries(
     provider: string;
     event_id: string;
     event_type: string;
-    outcome: DeliveryDebtOutcome;
+    outcome: string;
     account_id: string | null;
     received_at: Date;
   }>(
     `SELECT provider, event_id, event_type, outcome, account_id, received_at
        FROM sonny.billing_event
-      WHERE outcome IN ('conflict', 'unmatched')
+      WHERE NOT (outcome = ANY($1))
       ORDER BY received_at, event_id`,
+    [DELIVERY_NON_DEBT_OUTCOMES],
   );
   return rows.map((row) => ({
     provider: row.provider,
@@ -148,18 +212,68 @@ export async function readBillingDebts(client: pg.Client): Promise<BillingDebts>
 }
 
 /**
- * Is this row past the reach of the self-healing path in `credit/topup.ts`?
+ * Has the period rolled over past this row?
  *
- * **`attemptTopUp` resolves an outstanding order before it claims a new slot, and it looks only
- * inside the account's current period.** So a row whose `period_start` is an earlier period will
- * never be resolved by the account coming back — the next attempt looks in the new period and finds
- * nothing. That is the case SONNY-408 owns, and it is the reason this report separates the two
- * rather than printing one list: a row in the current period may yet heal itself and one in a past
- * period definitively will not.
+ * **This models ONE of the filters `readOutstandingTopUp` applies, and is named for exactly that**
+ * (PR #201's F3). It used to be documented as answering "is this row past the reach of the
+ * self-healing path", which is a claim about *all* of that query's scoping, and it is not: the query
+ * filters on account, provider, period and outcome, and `attemptTopUp` refuses on withdrawn consent
+ * before it ever reads it. `reachOfSelfHeal` below is the classification the report uses; this stays
+ * a separate predicate because the period boundary is the one this branch's decision is about and
+ * because it cannot be wrong in the dangerous direction — `<` against `periodStart(now)`, and the
+ * self-heal only ever asks for the current period, so a row this answers `true` for is genuinely
+ * unreachable.
  */
 export function strandedByPeriodRollover(topUp: UnresolvedTopUp, now: Date): boolean {
   return topUp.periodStart.getTime() < periodStart(now).getTime();
 }
+
+/**
+ * How far out of the self-healing path's reach a row is — the label the report prints.
+ *
+ * **The whole value this report adds over `SELECT *` is this split**, so it has to be honest about
+ * which rows it can actually say something about. Four answers, checked in this order:
+ *
+ * - `unknown-outcome` — the outcome is not one of the five 0019 declares, so nothing here knows what
+ *   the row means. Checked first: a state this file has never heard of cannot be reasoned about with
+ *   rules written for the states it has (F4).
+ * - `stranded-period` — the period rolled over. The self-heal looks only inside the account's
+ *   current period, so no future attempt finds it. This branch's boundary decision.
+ * - `stranded-provider` — the row names a provider this deployment no longer runs, so the self-heal's
+ *   `provider = $3` can never match it either (F3). Checkable only when the caller knows what this
+ *   deployment's provider is; `main` reads it from `BILLING_PROVIDER`, the same variable
+ *   `billingDepsFrom` turns into `deps.provider.name`.
+ * - `resolvable` — none of the above. **Still not a promise**, and the report's own paragraph says
+ *   what has to hold: `attemptTopUp` refuses before it reads the order at all if the account has
+ *   withdrawn consent (`opted_in_at` set to NULL by `setAutoTopUp(false)`), has no customer at the
+ *   provider, or the deployment offers no pack. Consent is the reachable one — turning auto-top-up
+ *   off is the likeliest reaction to a surprise charge, and it is exactly the account whose
+ *   `unconfirmed` row is outstanding. Those three are named rather than modelled: two of them are
+ *   configuration this command does not read, and the consent join is recorded on SONNY-408 rather
+ *   than built here.
+ */
+export type TopUpReach = "unknown-outcome" | "stranded-period" | "stranded-provider" | "resolvable";
+
+export function reachOfSelfHeal(
+  topUp: UnresolvedTopUp,
+  now: Date,
+  deploymentProvider: string | undefined,
+): TopUpReach {
+  if (!TOPUP_DEBT_OUTCOMES.includes(topUp.outcome)) return "unknown-outcome";
+  if (strandedByPeriodRollover(topUp, now)) return "stranded-period";
+  if (deploymentProvider !== undefined && topUp.provider !== deploymentProvider) {
+    return "stranded-provider";
+  }
+  return "resolvable";
+}
+
+/** What each reach prints in the row's first column. */
+const REACH_LABEL: Readonly<Record<TopUpReach, string>> = {
+  "unknown-outcome": "UNKNOWN",
+  "stranded-period": "STRANDED (period)",
+  "stranded-provider": "STRANDED (provider)",
+  resolvable: "resolvable",
+};
 
 /** Operator output is read by people; "1 of those are" is a sentence nobody wrote on purpose. */
 function were(n: number): string {
@@ -185,20 +299,31 @@ export interface BillingDebtReport {
  * while there is unresolved debt — is the thing most worth pinning, and a `process.exitCode` set
  * inside `main` is unreachable from the suite.
  */
-export function reportBillingDebts(debts: BillingDebts, now: Date): BillingDebtReport {
+export function reportBillingDebts(
+  debts: BillingDebts,
+  now: Date,
+  deploymentProvider?: string,
+): BillingDebtReport {
   if (debts.topUps.length === 0 && debts.deliveries.length === 0) {
     return { text: "no unresolved billing debt\n", exitCode: 0 };
   }
   const lines: string[] = [];
-  const stranded = debts.topUps.filter((topUp) => strandedByPeriodRollover(topUp, now));
-  const resolvable = debts.topUps.filter((topUp) => !strandedByPeriodRollover(topUp, now));
+  const reach = new Map<UnresolvedTopUp, TopUpReach>(
+    debts.topUps.map((topUp) => [topUp, reachOfSelfHeal(topUp, now, deploymentProvider)]),
+  );
+  const withReach = (want: TopUpReach): readonly UnresolvedTopUp[] =>
+    debts.topUps.filter((topUp) => reach.get(topUp) === want);
+  const strandedPeriod = withReach("stranded-period");
+  const strandedProvider = withReach("stranded-provider");
+  const unknownOutcome = withReach("unknown-outcome");
+  const resolvable = withReach("resolvable");
 
   if (debts.topUps.length > 0) {
     lines.push(`${debts.topUps.length} top-up order(s) this gateway granted nothing for:`);
     for (const topUp of debts.topUps) {
-      const mark = strandedByPeriodRollover(topUp, now) ? "STRANDED" : "resolvable";
+      const order = topUp.providerOrderId === null ? "no order id" : `order ${topUp.providerOrderId}`;
       lines.push(
-        `  ${mark}  account ${topUp.accountId}  ${topUp.provider} order ${topUp.providerOrderId}` +
+        `  ${REACH_LABEL[reach.get(topUp)!]}  account ${topUp.accountId}  ${topUp.provider} ${order}` +
           `  ${topUp.outcome}  period ${at(topUp.periodStart)}  attempted ${at(topUp.attemptedAt)}`,
       );
     }
@@ -213,17 +338,51 @@ export function reportBillingDebts(debts: BillingDebts, now: Date): BillingDebtR
   if (resolvable.length > 0) {
     lines.push("");
     lines.push(
-      `${resolvable.length} of those ${were(resolvable.length)} in the account's CURRENT period and may still resolve\n` +
-        "themselves: the next automatic top-up that account attempts asks the provider about the\n" +
-        "order it already has rather than buying a second pack. They are listed because 'may' is not\n" +
-        "'will' — an account that never comes back never resolves one.",
+      `${resolvable.length} of those ${were(resolvable.length)} in the account's CURRENT period, at this\n` +
+        "deployment's own provider, and the next automatic top-up that account attempts would ask the\n" +
+        "provider about the order it already has rather than buying a second pack. **That is a\n" +
+        "possibility and not a promise**, and three things this report does not check have to hold\n" +
+        "for it: the account must still be opted in to automatic top-ups, it must still have a\n" +
+        "customer at the provider, and this deployment must still offer a pack. Consent is the one to\n" +
+        "look at first — `attemptTopUp` refuses on a withdrawn consent before it reads the order at\n" +
+        "all, and turning auto-top-up off is the likeliest reaction to a surprise charge.",
     );
   }
-  if (stranded.length > 0) {
+  if (deploymentProvider === undefined && resolvable.length > 0) {
     lines.push("");
     lines.push(
-      `${stranded.length} of those ${were(stranded.length)} STRANDED and cannot resolve ` +
-        `${stranded.length === 1 ? "itself" : "themselves"} at all (SONNY-408).\n` +
+      "BILLING_PROVIDER was not set when this ran, so the provider half of that could not be\n" +
+        "checked: a row above marked resolvable may name a provider this deployment no longer runs,\n" +
+        "which the self-healing path would never match either. Re-run with BILLING_PROVIDER set to\n" +
+        "see those separated out.",
+    );
+  }
+  if (strandedProvider.length > 0) {
+    lines.push("");
+    lines.push(
+      `${strandedProvider.length} of those ${were(strandedProvider.length)} STRANDED at another PROVIDER (PR #201's F3):\n` +
+        `the order was bought at a provider this deployment no longer runs — BILLING_PROVIDER is now\n` +
+        `${JSON.stringify(deploymentProvider)} — and the self-healing path scopes its lookup by provider as well as by\n` +
+        "period, so no future attempt will match it whatever the period. Same remedy as the period\n" +
+        "case below: settle it at the provider it was bought at.",
+    );
+  }
+  if (unknownOutcome.length > 0) {
+    lines.push("");
+    lines.push(
+      `${unknownOutcome.length} of those ${were(unknownOutcome.length)} carrying an outcome this command has never heard\n` +
+        "of, so nothing above is known about them (PR #201's F4). A migration has added an outcome to\n" +
+        "sonny.credit_topup that src/billing-debts.ts does not classify. They are reported rather than\n" +
+        "hidden, and the exit code is non-zero, because the alternative is a report that answers 'no\n" +
+        "unresolved billing debt' over a row nobody has looked at. Classify it in\n" +
+        "TOPUP_DEBT_OUTCOMES or TOPUP_NON_DEBT_OUTCOMES and this line stops.",
+    );
+  }
+  if (strandedPeriod.length > 0) {
+    lines.push("");
+    lines.push(
+      `${strandedPeriod.length} of those ${were(strandedPeriod.length)} STRANDED by a period rollover and cannot resolve ` +
+        `${strandedPeriod.length === 1 ? "itself" : "themselves"} at all (SONNY-408).\n` +
         "The order was left outstanding when the period rolled over, and the self-healing path looks\n" +
         "only inside the account's current period, so no future attempt will ever find it. Widening\n" +
         "that lookback is deliberately not the fix: resolving an order means finalizing it, which\n" +
@@ -237,8 +396,11 @@ export function reportBillingDebts(debts: BillingDebts, now: Date): BillingDebtR
     lines.push(`${debts.deliveries.length} subscription delivery(s) that changed nothing:`);
     for (const delivery of debts.deliveries) {
       const scope = delivery.accountId === null ? "no account" : `account ${delivery.accountId}`;
+      const mark = DELIVERY_DEBT_OUTCOMES.includes(delivery.outcome)
+        ? delivery.outcome
+        : `UNKNOWN ${delivery.outcome}`;
       lines.push(
-        `  ${delivery.outcome}  ${delivery.provider} event ${delivery.eventId}` +
+        `  ${mark}  ${delivery.provider} event ${delivery.eventId}` +
           `  ${delivery.eventType}  ${scope}  received ${at(delivery.receivedAt)}`,
       );
     }
@@ -250,6 +412,18 @@ export function reportBillingDebts(debts: BillingDebts, now: Date): BillingDebtR
         "live on, which is refused rather than merged because merging is the direction that can cost\n" +
         "a customer their access. Both need somebody to decide who is paying for what.",
     );
+    const unknownDeliveries = debts.deliveries.filter(
+      (delivery) => !DELIVERY_DEBT_OUTCOMES.includes(delivery.outcome),
+    );
+    if (unknownDeliveries.length > 0) {
+      lines.push("");
+      lines.push(
+        `${unknownDeliveries.length} of those ${were(unknownDeliveries.length)} marked UNKNOWN: a migration has added an\n` +
+          "outcome to sonny.billing_event that src/billing-debts.ts does not classify (PR #201's F4).\n" +
+          "Reported rather than hidden, for the reason the top-up half gives. Classify it in\n" +
+          "DELIVERY_DEBT_OUTCOMES or DELIVERY_NON_DEBT_OUTCOMES and this line stops.",
+      );
+    }
   }
   return { text: `${lines.join("\n")}\n`, exitCode: 1 };
 }
@@ -263,7 +437,15 @@ async function main(): Promise<void> {
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   try {
-    const report = reportBillingDebts(await readBillingDebts(client), new Date());
+    // **`BILLING_PROVIDER`, the same variable `billingDepsFrom` turns into `deps.provider.name`**
+    // (F3). Optional here rather than required: this command must run on a deployment that does no
+    // billing at all, and when it is absent the report says which half of the classification it
+    // could not make rather than quietly making it wrong.
+    const report = reportBillingDebts(
+      await readBillingDebts(client),
+      new Date(),
+      process.env["BILLING_PROVIDER"],
+    );
     process.stdout.write(report.text);
     process.exitCode = report.exitCode;
   } finally {
