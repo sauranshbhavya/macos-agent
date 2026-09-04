@@ -216,11 +216,13 @@ Open questions (required, write "none" if true): none.
 
 Next branch: per the roadmap.
 
-### Branch: chore/attribution-rewrite
-Status: in progress
+### Branch: docs/what-the-comment-filter-could-not-see
+Status: complete
 Date: 2026-09-03
 Tickets: SONNY-407 — remove every Claude attribution from the commit history, repoint what the rewrite orphans, and record the map. The prevention half is SONNY-406, merged as PR #195 before this ran.
 Reviewed by: fresh session, per `WORKFLOW.md` step 7 — pending at the time this entry was written.
+
+**Why this heading names PR #197's branch rather than the branch the work was done on.** The rewrite landed as the force-pushed tip 356ad4d from chore/attribution-rewrite, which was never a pull request, and its correction clause merged as PR #197 from docs/what-the-comment-filter-could-not-see, which edited this entry and added no heading of its own. scripts/changelog-order resolves a heading only against a merge subject and exempts only the first entry, so the original heading passed exactly as long as this entry sat first and turned the tool red for every wave-5 lane that wrote an entry above it (found by SONNY-403, 2026-09-04). The heading was renamed so the tool's model holds; the record of the landing itself is WORKFLOW.md §8.
 
 **The record of the rewrite itself is `WORKFLOW.md` §8, beside the 2026-08-24 one**, because that section is what stops a future reader treating an orphaned stamp as a broken citation. This entry carries what a *branch* entry carries: what was decided, what was measured, and what would be got wrong by reading only the section.
 
