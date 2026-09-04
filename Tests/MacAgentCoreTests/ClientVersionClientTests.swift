@@ -113,6 +113,28 @@ struct ClientVersionClientTests {
         #expect(requests.recorded.count == 2)
     }
 
+    /// **The arm of the reentrancy guard a battery can reach.** Two callers at once make one
+    /// request, which is the same flag that keeps a `410` on the meta request itself from starting
+    /// another fetch — and unlike that arm, deleting this one produces a second request rather than
+    /// a hang, so it is a property a mutant can be measured against.
+    @Test
+    @MainActor
+    func twoCallersAtOnceMakeOneRequest() async throws {
+        let fixture = SignedInBackendFixture()
+        defer { fixture.unregister() }
+        let requests = RecordedRequests()
+        fixture.register { request in
+            requests.record(request)
+            return .reply(statusCode: 200, headers: [:], body: SonnyBackendFixtures.metaDocumentJSON())
+        }
+
+        async let first = fixture.client.refreshMetaDocument()
+        async let second = fixture.client.refreshMetaDocument()
+        _ = await (first, second)
+
+        #expect(requests.count(path: Self.metaPath) == 1)
+    }
+
     /// Ten concurrent refusals cause one meta fetch, not ten — the single-flight shape the token
     /// refresh already uses, and for the same reason: a walled-off client's requests all fail at
     /// once, and one fetch per failure would be a burst answering one question.

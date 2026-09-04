@@ -245,11 +245,24 @@ public actor SonnyBackendClient {
     /// route and one more for every route added later. `clientVersionUpdates()` is how it leaves.
     private var versionState: ClientVersionState = .current
     private var meta: SonnyMetaDocument?
-    /// One `/v1/meta` fetch across every concurrent caller, the same single-flight shape
-    /// `refreshTask` above uses and for the same reason: a walled-off client's requests all fail with
-    /// `410` at once, and one refresh per failure would be a burst of meta calls answering one
-    /// question.
-    private var metaFetch: Task<Void, Never>?
+    /// Whether a `/v1/meta` fetch is running right now — one across every caller, reentrant ones
+    /// included.
+    ///
+    /// **A flag rather than a `Task` handle to await, and the difference is a permanent hang.** The
+    /// obvious single-flight shape here is `refreshTask`'s above: hold the task and let a second
+    /// caller `await` it. That is right for a refresh nothing can re-enter, and wrong for this one,
+    /// because the *reentrant* caller is reachable — a build the gate refuses gets a `410` on the
+    /// meta request itself (§8.3 requires it), and a `410` is what starts a meta fetch. A task
+    /// awaiting itself does not error; it suspends forever. **Measured rather than reasoned**: the
+    /// mutant that flips `allowingMetaRefresh` to `true` in `performMetaFetch` deadlocked the test
+    /// process at **0.0% CPU for over three minutes** against a live battery, which is the worst
+    /// outcome available — a hung app, and a battery that never finishes.
+    ///
+    /// So a caller that arrives while a fetch is running is answered with the document already held
+    /// instead of joining the fetch. Nothing loses anything by that: the only caller that reads this
+    /// method's return is the launch call, which runs alone, and every other one wants the request
+    /// made rather than the answer.
+    private var isFetchingMeta = false
     private var versionObservers: [UUID: AsyncStream<ClientVersionState>.Continuation] = [:]
 
     /// The most recent instant a server reported, and the monotonic reading it arrived at.
@@ -861,16 +874,24 @@ public actor SonnyBackendClient {
     /// the `410` this fetch was started by, and that path has already recorded the wall and its link
     /// through `noteVersionSignals`; there is nothing for a cleared document to add and a real one
     /// to lose.
+    ///
+    /// **Two guards stand between §8.3's "on any `410`" and an unbounded regress, and keeping both
+    /// is deliberate.** `allowingMetaRefresh` is the explicit one, false at the one site that sends
+    /// this request, and it reads at that site as the rule it is. ``isFetchingMeta`` is the
+    /// structural one, and it is what makes losing the first a no-op rather than a hang. **Neither
+    /// is individually observable in a mutation battery, and that is a property of the thing rather
+    /// than a gap in the plan**: removing either one alone changes no behaviour, and removing both
+    /// produces a hang rather than a red suite — a deadlock with the first guard's mutant, unbounded
+    /// recursion with the second's. What holds the property is
+    /// `ClientVersionClientTests.aRefusalTriggersExactlyOneMetaCallAndTheMetaCallsOwnRefusalTriggersNone`,
+    /// which asserts two requests in total and no more, and
+    /// `twoCallersAtOnceMakeOneRequest`, which is the arm of this guard a battery *can* reach.
     @discardableResult
     public func refreshMetaDocument() async -> SonnyMetaDocument? {
-        if let existing = metaFetch {
-            await existing.value
-        } else {
-            let task = Task<Void, Never> { [self] in await performMetaFetch() }
-            metaFetch = task
-            await task.value
-            metaFetch = nil
-        }
+        guard !isFetchingMeta else { return meta }
+        isFetchingMeta = true
+        await performMetaFetch()
+        isFetchingMeta = false
         return meta
     }
 
