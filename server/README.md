@@ -25,6 +25,7 @@ Run from `server/`.
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. All three exit **65** when an applied migration's file has changed — see "An applied migration cannot change silently" below. |
 | `npm run revocations` | What provider-side revocation is still owed — on closed accounts, and on live ones whose provider-side user id was superseded. Exit 1 when any is. See "Owed revocations" below. |
+| `npm run billing-debts` | Money this gateway cannot account for: top-up orders it granted nothing for, and subscription deliveries it could not act on. Exit 1 when any exist. See "Money nobody can account for" below. |
 | `npm run usage -- sessions\|routes\|span` | What the calls this gateway served cost. Needs `DATABASE_URL` and a prior `npm run build`. See "Reading what a call cost" below. |
 | `npm run support -- account\|content\|accesses\|deletions` | Answer a support question. Account state and usage read freely; **content only with `--operator` and `--reason`, and the lookup is recorded.** See "Retention" below. |
 | `npm run snapshots -- build\|list\|trace\|sweep` | Build the documented corpus training reads from, see which snapshots hold a task's content, or run the content-expiry sweep by hand. |
@@ -163,6 +164,41 @@ that had been working: that is another lane, only reachable if one of you is usi
 port rather than the derived ones above. `docker logs "sonny-gw-db-$LANE"` and `docker ps` answer
 which. The quiet direction is worse and is not ruled out: two lanes on one live database can produce
 a *pass* that leaned on rows the other lane wrote.
+
+### Money nobody can account for
+
+Three kinds of row are written so that somebody can go and look, and until SONNY-408 nobody was told
+about any of them. `npm run billing-debts` is what tells them.
+
+```
+npm run billing-debts   # exit 0 when nothing is outstanding, 1 when something is
+```
+
+- **`sonny.credit_topup` reading `unconfirmed`** — the charge was sent to the provider and its answer
+  could not be read. Money may have moved and nothing was granted for it.
+- **`sonny.credit_topup` reading `attempted` and carrying a `provider_order_id`** — the order existed
+  at the provider and the process died before any answer was recorded. Same debt, same question. A
+  row with no order id is not reported: nothing was ever created, so nobody was charged.
+- **`sonny.billing_event` reading `unmatched` or `conflict`** — a delivery this gateway accepted,
+  verified, and then did nothing with. `unmatched` is a paying customer it could not attribute;
+  `conflict` is a delivery about a different subscription than the one that account is already live
+  on. `applied`, `ignored`, `stale`, `unmapped` and `unreadable` are not debt and are not reported —
+  the first three are correct outcomes and the last two are a configuration mistake and a bug report.
+
+It reports account ids, provider order ids and provider event ids, because the order id is the whole
+reason 0019 records one — a report you cannot act on is a count. It does **not** resolve anything,
+and that is deliberate for all three: resolving a top-up order means finalizing it, which *charges*
+a draft that was never charged, and an `unmatched` delivery needs a human to work out whose it is.
+
+**STRANDED is the word to look for.** `attemptTopUp` resolves an outstanding order before it claims a
+new slot, and it looks only inside the account's current period — so an order left outstanding when
+the period rolls over is never reached again by any future attempt. Those rows are marked STRANDED
+and they are the ones that definitively need a person. **Widening that lookback was considered and
+refused** (SONNY-408, from PR #196's G7): finalizing an order from a period that has ended would
+either write `granted` onto a row whose credits the balance no longer reads, or charge a draft that
+was never charged — for credits the user cannot spend. `src/credit/topup.ts`'s `readOutstandingTopUp`
+carries the full argument. Settling one is a refund at the provider or a manual grant, and which of
+the two is right is not something this gateway can decide.
 
 ## Retention: what is kept, for how long, and how it goes (SONNY-134)
 

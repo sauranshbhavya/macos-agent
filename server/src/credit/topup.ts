@@ -490,6 +490,28 @@ export async function recordTopUpOrder(
  * claims, so a second cannot be created while a first is outstanding — and the ordering is what
  * makes that true of the past as well as of the future, for rows a run of this code before the fix
  * could have left behind.
+ *
+ * **`period_start = $2` stays, and an order stranded by a period rollover is reported rather than
+ * resolved** (SONNY-408, from PR #196's G7). The reviewer's finding is real: an order left
+ * outstanding when the period rolls over is never reached by this query again, because the account's
+ * next attempt looks in the new period. The obvious fix — look back one period — is the wrong one,
+ * and the reason is what `finalizeTopUpOrder` does rather than what it is called. **It does not only
+ * ask; it charges a draft that was never charged.** So across a boundary it has two outcomes and
+ * both are bad. If the order was already paid, `settle` writes `granted` onto a row whose
+ * `period_start` is the *old* period — and `readToppedUpCredits` sums only
+ * `period_start = <the current period>`, so the user gets nothing for money that is already gone.
+ * If the order was still a draft, this would take their money **now** for credits that land on a
+ * period that has ended. Turning "may have been charged" into "certainly charged, certainly
+ * worthless" is not a direction to move a money path in.
+ *
+ * **Granting into the current period instead is a different design, not a wider filter.** 0019 says
+ * a top-up is spent against the period it was bought in, and `attempt_no` — and the unique index
+ * that makes the per-period bound exact — are per period. Moving a row's period would break both.
+ *
+ * So the boundary case gets its own record instead: `npm run billing-debts` (`src/billing-debts.ts`)
+ * reports every unresolved order across every period, marks the ones this query can no longer reach
+ * as STRANDED, and exits non-zero while any exist. Whether to refund at the provider or grant the
+ * pack by hand is a person's decision, and it is one this gateway has no way to take correctly.
  */
 export async function readOutstandingTopUp(
   client: pg.Client,

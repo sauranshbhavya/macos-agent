@@ -133,7 +133,13 @@ CREATE TABLE sonny.credit_topup (
   --                     Either way it keeps its slot, so a failing charge path cannot loop.
   --   unconfirmed    -- the charge was attempted and its answer could not be read. **Money may have
   --                     moved.** Nothing is granted for one of these; it is resolvable, so the
-  --                     account's next attempt asks the provider what happened to that order.
+  --                     account's next attempt asks the provider what happened to that order --
+  --                     PROVIDED that attempt falls in the same period. `readOutstandingTopUp`
+  --                     filters on `period_start`, so a row left outstanding when the period rolls
+  --                     over is resolvable in principle and unreachable in practice; SONNY-408
+  --                     decided to keep that filter (finalizing across a boundary would charge a
+  --                     draft for credits the balance no longer reads) and to report the row
+  --                     instead. `npm run billing-debts` is what reports it.
   --   granted        -- CLOSED. The provider charged the customer. `credits` is what it bought and
   --                     `charged_amount` is what it cost.
   --   declined       -- CLOSED. The provider answered and did not charge: card declined, no payment
