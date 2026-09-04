@@ -144,6 +144,13 @@ export interface TopUpAttemptStore {
    */
   readonly outstanding: (input: {
     readonly accountId: string;
+    /**
+     * **Scoped to the provider that created the order** (PR #196's G4). `finalizeTopUpOrder` takes
+     * an id and nothing else, so an order created at one provider would otherwise be finalized
+     * against another's API on a deployment that changed `BILLING_PROVIDER` mid-period. The column
+     * has always been written by `claim`; nothing was reading it.
+     */
+    readonly provider: string;
     readonly periodStart: Date;
   }) => Promise<OutstandingTopUp | undefined>;
   /** Record how the attempt ended, what it bought, and what it cost. */
@@ -333,12 +340,29 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
    * It consumes no new slot and creates no new order: this attempt *is* the resolution of that one.
    * A paid order answers `charged` and the account is granted what it already paid for; an order
    * still in draft is finalized, which is the ordinary charge arriving late; anything else keeps the
-   * row resolvable and refuses. **Until it resolves, this account buys nothing else** — which is the
-   * point rather than a side effect, because buying beside an order of unknown state is exactly the
-   * double charge this ordering exists to prevent.
+   * row resolvable and refuses.
+   *
+   * **What this ordering closes is the SEQUENTIAL window, which is F1's, and it closes nothing
+   * else** (PR #196's G2, measured by the reviewer rather than reasoned about). An account that
+   * comes *back* after a lost record — the user hits the wall again, a later session asks again —
+   * finds the outstanding order and buys nothing more. **Two attempts genuinely in flight together
+   * are a different case and are bounded by `maxPerPeriod`, not by this**: there is no lock between
+   * the read above and the `recordOrder` write below, and the gap contains a provider round trip, so
+   * a second attempt starting inside it sees nothing outstanding, claims the next slot and creates
+   * its own order. Measured at 400 ms of provider latency with the second attempt 100 ms behind:
+   * two orders created, two charged, **both credited** — which is two clients each legitimately
+   * asking, not a lost charge, and is what the per-period bound is for.
+   *
+   * **Closing that would mean holding `outstanding`, `claim` and `recordOrder` in one transaction
+   * with `SELECT … FOR UPDATE` over the account's period rows, and the lock would span a provider
+   * call.** That is the trade, and it is not taken: the sequential case is the one where money is
+   * lost, and the concurrent case costs a bounded number of packs that are all delivered. The
+   * sentence here used to promise the stronger property without qualification, which is worse than
+   * either — a reader who trusts it stops looking for the lock.
    */
   const outstanding = await deps.attempts.outstanding({
     accountId: input.accountId,
+    provider: deps.provider.name,
     periodStart: input.balance.periodStart,
   });
   if (outstanding !== undefined) {
@@ -438,12 +462,24 @@ export async function recordTopUpOrder(
   client: pg.Client,
   input: Parameters<TopUpAttemptStore["recordOrder"]>[0],
 ): Promise<void> {
-  await client.query(
+  const { rowCount } = await client.query(
     `UPDATE sonny.credit_topup
         SET provider_order_id = $2
       WHERE topup_id = $1 AND provider_order_id IS NULL`,
     [input.topUpId, input.providerOrderId],
   );
+  // **The line above is called the whole of F1, so it checks that it happened** (PR #196's G3). A
+  // statement that matched nothing leaves the row with no order id and the caller charges anyway,
+  // which is precisely the state F1 was — and `await client.query(…)` on its own cannot tell the two
+  // apart. Reachability is very low, since the row was created microseconds earlier by this same
+  // request; what the throw buys is that the guarantee is structural rather than probable. Throwing
+  // is also the fail-safe direction: nothing has been charged yet, so the attempt ends with an
+  // unpaid draft at the provider and a row that correctly names no order.
+  if (rowCount !== 1) {
+    throw new Error(
+      `credit_topup ${input.topUpId} did not take its provider order id (matched ${rowCount} rows)`,
+    );
+  }
 }
 
 /**
@@ -463,12 +499,13 @@ export async function readOutstandingTopUp(
     `SELECT topup_id, provider_order_id
        FROM sonny.credit_topup
       WHERE account_id = $1
+        AND provider = $3
         AND period_start = $2
         AND provider_order_id IS NOT NULL
         AND outcome IN ('attempted', 'unconfirmed')
       ORDER BY attempt_no
       LIMIT 1`,
-    [input.accountId, input.periodStart],
+    [input.accountId, input.periodStart, input.provider],
   );
   const row = rows[0];
   return row === undefined
