@@ -307,6 +307,10 @@ struct BackendOutageTests {
                     "access_token": "issued-access",
                     "token_type": "Bearer",
                     "expires_in": 3600,
+                    // SONNY-403: a key `SonnyTokenResponse` does not declare, so `JSONDecoder`
+                    // drops it and no clock ever meets it. The body mirrors the whole of
+                    // §3.2's shape rather than only the fields this client reads; expiry is
+                    // scheduled from `expires_in`, which that type's own doc comment states.
                     "expires_at": "2026-08-28T10:41:07Z",
                     "refresh_token": "issued-refresh",
                     "user": ["id": "acct_7f3c"],

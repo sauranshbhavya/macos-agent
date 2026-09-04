@@ -142,6 +142,9 @@ import Testing
             // instead would still open a URL and still pass a test that only read the result.
             #expect(request.url?.path == "/v1/billing/portal")
             #expect(request.httpMethod == "POST")
+            // SONNY-403: `expires_at` is a key `WireBillingPortal` does not declare, and that
+            // decoder's own doc says why it never will — the link is fetched per press and
+            // opened at once, so nothing here caches on it. Contract shape, not a bound.
             return Self.portalReply(#"{"portal_url":"https://portal.example.test/s/abc","expires_at":"2026-08-31T13:00:00Z"}"#)
         }
         defer { surface.fixture.unregister() }
@@ -192,6 +195,8 @@ import Testing
 
     @Test func aBodyWithNoURLOpensNothing() async {
         let surface = Self.surface()
+        // The one field the decoder reads is absent and the one it ignores is present, which is
+        // what makes this a body with no URL rather than an empty one (SONNY-403).
         surface.fixture.register { _ in Self.portalReply(#"{"expires_at":"2026-08-31T13:00:00Z"}"#) }
         defer { surface.fixture.unregister() }
 
