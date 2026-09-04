@@ -161,6 +161,13 @@
               "null"
             ]
           },
+          "newName" : {
+            "description" : "For rename: what the user wants the file or folder called instead, as a bare name with no slashes — \"invoice-march\", \"Notes.md\". The item keeps its folder. Null for every other operation.",
+            "type" : [
+              "string",
+              "null"
+            ]
+          },
           "operation" : {
             "enum" : [
               "scan_select_largest_files",
@@ -190,6 +197,7 @@
               "invoke_shortcut",
               "vision_session",
               "start_watching",
+              "rename",
               "clarify",
               "unsupported"
             ],
@@ -306,6 +314,13 @@
                     "null"
                   ]
                 },
+                "newName" : {
+                  "description" : "For rename: what the user wants the file or folder called instead, as a bare name with no slashes — \"invoice-march\", \"Notes.md\". The item keeps its folder. Null for every other operation.",
+                  "type" : [
+                    "string",
+                    "null"
+                  ]
+                },
                 "operation" : {
                   "enum" : [
                     "scan_select_largest_files",
@@ -335,6 +350,7 @@
                     "invoke_shortcut",
                     "vision_session",
                     "start_watching",
+                    "rename",
                     "clarify",
                     "unsupported"
                   ],
@@ -516,7 +532,8 @@
                 "shortcutInput",
                 "visionGoal",
                 "browserName",
-                "watchSubject"
+                "watchSubject",
+                "newName"
               ],
               "type" : "object"
             },
@@ -676,7 +693,8 @@
           "shortcutInput",
           "visionGoal",
           "browserName",
-          "watchSubject"
+          "watchSubject",
+          "newName"
         ],
         "type" : "object"
       },

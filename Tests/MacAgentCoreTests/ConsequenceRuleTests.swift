@@ -788,6 +788,45 @@ struct ConsequenceRuleTests {
         }
     }
 
+    /// **The rename site, which is the only one that escalates unconditionally** (SONNY-385).
+    ///
+    /// Every other destructive site in this section is *conditional* — a routine name already taken,
+    /// an output path already occupied — and each of them has an ordinary case that replaces
+    /// nothing. A rename has no such case: the name a file is filed under is something the user
+    /// chose, and renaming replaces it every single time. So the escalation is raised whether or not
+    /// anything is in the way, and the control below is a folder holding nothing but the file being
+    /// renamed, where a collision-keyed escalation would have produced `.autoRun` and no prompt at
+    /// all.
+    ///
+    /// The second case is the same rename with a *taken* destination, and it does not reach an
+    /// approval at all — `RenameCapabilityAdapter` refuses a collision at `prepare`, so the value
+    /// asserted there is the refusal rather than a second escalation.
+    @Test
+    func theRenameEscalationIsDestructiveAndAsksEvenWhenNothingWouldBeOverwritten() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("scan1.pdf")
+        try "bytes".write(to: source, atomically: true, encoding: .utf8)
+        let runner = AgentRunner(planner: UnusedPlanner(), executor: makeExecutor(root: root))
+
+        let prepared = try runner.prepare(plan: renamePlan(source: source, to: "invoice-march.pdf"), source: .instantResolver)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
+        )
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(
+            request.assessment.escalations.map(\.reason)
+                == ["Renaming scan1.pdf to invoice-march.pdf replaces the name it is filed under, and Sonny cannot undo it."]
+        )
+        #expect(request.assessment.escalations.map(\.consequence) == [.destructive])
+        #expect(request.requirement == .explicitApproval)
+
+        // Nothing was in the way, which is the control: the folder holds exactly one file.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["scan1.pdf"])
+    }
+
     /// Both removal wordings — one-of-several and dimension-emptying — are advisory and auto-run.
     /// The sentences themselves are unchanged from row B, exactly: they are what the trace names,
     /// and the dimension-emptying variant in particular still states the real consent (the
@@ -1158,6 +1197,22 @@ struct ConsequenceRuleTests {
             requiresConfirmation: false,
             steps: [
                 AgentStep(id: "open-app", operation: .openApp, description: "Open Safari.", appName: "Safari")
+            ]
+        )
+    }
+
+    private func renamePlan(source: URL, to newName: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Rename it.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "rename",
+                    operation: .rename,
+                    description: "Rename the file.",
+                    inputPath: source.path,
+                    newName: newName
+                )
             ]
         )
     }

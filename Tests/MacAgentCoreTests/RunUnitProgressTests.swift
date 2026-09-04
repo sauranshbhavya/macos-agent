@@ -449,7 +449,13 @@ struct ResumeRepeatSafetyTests {
             .saveRoutine, .createWorkspace, .editWorkspace, .openWorkspace,
             .openGeneratedArtifact, .createLocalDraft, .calculateUtility,
             .lookupClipboardHistory, .expandSnippet, .saveSnippet,
-            .switchRunningApp, .lookupRecentArtifacts, .clarify
+            .switchRunningApp, .lookupRecentArtifacts, .clarify,
+            // SONNY-385. Safe by this classification's bar — a repeat reaches nobody but the user —
+            // and safe in the stronger sense a reader will want: it cannot destroy anything either,
+            // because a rename onto an occupied name is refused by name and a rename of a source
+            // that is already gone fails. It is also never *silent*, since every rename carries an
+            // unconditional destructive escalation and therefore asks.
+            .rename
         ])
 
         // And the two sets are the whole population, so an operation cannot be absent from both by

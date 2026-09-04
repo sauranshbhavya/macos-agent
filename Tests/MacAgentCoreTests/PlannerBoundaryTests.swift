@@ -144,7 +144,8 @@ struct PlannerBoundaryTests {
             "shortcutInput",
             "visionGoal",
             "browserName",
-            "watchSubject"
+            "watchSubject",
+            "newName"
         ])
 
         let stepProperties = try #require(stepItems["properties"] as? [String: Any])
@@ -671,6 +672,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: open Finder
   dry run: Show the path that would be revealed.
   examples: Reveal the zip in Finder | Show the generated Markdown in Finder
+- rename: Rename file or folder
+  description: Rename one whitelisted file or folder. inputPath is the item to rename and newName is what to call it — a bare name with no slashes, since the item keeps its folder. Renaming one item at a time only: if the user asks to rename several items, ask a clarification question for the new names instead.
+  required fields: inputPath, newName
+  side effects: rename file
+  dry run: Show the current path and the name it would be given.
+  examples: Rename ~/Documents/scan1.pdf to invoice-march | Rename that folder to Archive
 - show_permission_readiness: Show permission readiness
   description: Show readiness for the Sonny account, microphone, hotkey, Finder/Word automation, Desktop/Documents access, Accessibility, and Screen Recording.
   required fields: none

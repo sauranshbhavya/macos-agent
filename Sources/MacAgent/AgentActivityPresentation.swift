@@ -68,6 +68,12 @@ enum AgentActivityPresentation {
             // line is read while the step runs, and what the step is doing at that moment is
             // fetching this URL once. The subject is what the notification says, days later.
             return "Watch \(step.targetURL ?? "page")"
+        case .rename:
+            // Names what it will be called rather than what it is called now. The widget line is
+            // read while the step runs, and by then the old name is the part that is going away —
+            // the same reasoning `startWatching` above gives for naming the page and not the
+            // subject.
+            return "Rename to \(step.newName ?? "a new name")"
         case .saveRoutine:
             return "Save routine"
         case .runRoutine:

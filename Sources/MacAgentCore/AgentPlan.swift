@@ -212,6 +212,25 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// `StandingWatcher.maxSubjectCharacters`.
     public var watchSubject: String?
 
+    /// What the user wants a file or folder called instead — a **name**, never a path (SONNY-385).
+    ///
+    /// **Planner-visible, for `visionGoal`'s and `watchSubject`'s reason.** Only the model reads the
+    /// command text, so only the model can pull `invoice-march` out of "rename this to
+    /// invoice-march". So this key is in `AgentPlanDecoder.stepKeys` and in the schema.
+    ///
+    /// **A leaf name, and the refusal of anything else is the operation's definition rather than a
+    /// validation nicety.** `RenameCapabilityAdapter` refuses a value containing a path separator,
+    /// and refuses `.` and `..`, because a rename that could name a path would be a *move* — a
+    /// different action, with a different destination folder for the user to have been shown and a
+    /// different thing to be asked about. Sonny has no move operation, and a rename quietly becoming
+    /// one is the way it would arrive without anybody deciding it. The destination is always
+    /// `inputPath`'s own parent directory with this name in it.
+    ///
+    /// `outputPath` was the field this could have reused and deliberately does not, for the same
+    /// reason: that field holds a *destination path* everywhere else in this enum, and a rename
+    /// given one is a move.
+    public var newName: String?
+
 
     public init(
         id: String,
@@ -248,7 +267,8 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         resolvedFromFinderSelection: Bool? = nil,
         itemIndex: Int? = nil,
         visionGoal: String? = nil,
-        watchSubject: String? = nil
+        watchSubject: String? = nil,
+        newName: String? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -285,6 +305,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.itemIndex = itemIndex
         self.visionGoal = visionGoal
         self.watchSubject = watchSubject
+        self.newName = newName
     }
 }
 
@@ -343,6 +364,23 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// to name a watcher in words and guess which one they meant. The founders' rule for this
     /// ticket is that starting and stopping ship together; they do, through two different doors.
     case startWatching = "start_watching"
+    /// Sonny gives one file or folder a different name, in the folder it already sits in
+    /// (SONNY-385).
+    ///
+    /// **Destructive by the consequence rule (2026-08-13), so every one of these asks.** The name a
+    /// file is filed under is user data: renaming replaces it, nothing in the product undoes it, and
+    /// `RenameCapabilityAdapter.assessRisk` therefore raises an unconditional `.destructive`
+    /// escalation rather than a conditional one. That is the difference from `create_local_draft`,
+    /// which only escalates when its output path is already taken — there, not overwriting is the
+    /// ordinary case; here, replacing a name the user chose *is* the operation.
+    ///
+    /// **One item, and a batch is refused rather than guessed at** (founder decision 2026-09-03).
+    /// "Rename all of these" needs a *rule* — a pattern, a sequence, a substitution — and each of
+    /// the three was priced and rejected for v1, because a wrong bulk rename cannot be undone
+    /// through the product and a question is cheap. `jobTemplateRefusal` is the door, and it asks
+    /// rather than merely refusing. Substitution is the named first candidate if the question turns
+    /// out to annoy people; a sequence is not to be built until somebody asks for one.
+    case rename
     case clarify
     case unsupported
 
@@ -493,7 +531,9 @@ public enum AgentPlanDecoder {
         "visionGoal",
         // SONNY-382. Planner-visible for the same reason as `visionGoal`: it is a phrase from the
         // user's own sentence, and nothing but the model reads that sentence.
-        "watchSubject"
+        "watchSubject",
+        // SONNY-385. Same reason again: the new name is a word out of the user's own sentence.
+        "newName"
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
@@ -609,7 +649,8 @@ public enum AgentPlanSchema {
         "shortcutInput",
         "visionGoal",
         "browserName",
-        "watchSubject"
+        "watchSubject",
+        "newName"
     ]
 
     /// The schema's own name, as `docs/sonny-backend-api-contract.md` §4.2's
@@ -860,6 +901,10 @@ public enum AgentPlanSchema {
             "watchSubject": [
                 "type": ["string", "null"],
                 "description": "For start_watching: what the user asked to be told about, in their own words and as a short noun phrase — \"the price on that page\", \"the status of my order\". Null for every other operation."
+            ],
+            "newName": [
+                "type": ["string", "null"],
+                "description": "For rename: what the user wants the file or folder called instead, as a bare name with no slashes — \"invoice-march\", \"Notes.md\". The item keeps its folder. Null for every other operation."
             ]
         ]
     }

@@ -3491,6 +3491,44 @@ about the whole account.
       windows now. **Report the count you saw, even if it is zero**, because a zero somebody
       watched for is worth more than a zero nobody looked at.
 
+### Renaming one file, and being asked first (new 2026-09-04, SONNY-385)
+
+**Why these rows exist.** Renaming is destructive — it replaces a name the user chose, and nothing in
+Sonny puts it back — so the consequence rule says Sonny asks, and an approval prompt is the one thing
+no agent can see. The other two rows are decisions rather than plumbing: a rename onto a name already
+in use **fails and says which file is in the way** rather than overwriting it, and "rename all of
+these" **asks what the new names should be** rather than inventing a rule for a bulk rename that
+cannot be undone (founder decision, 2026-09-03).
+
+**Set up (under a minute).** In `~/Desktop`, make a folder called `rename-check`. Put three files in
+it: `scan1.pdf`, `scan2.pdf` and `invoice-march.pdf` — any files will do, and the extensions matter
+only so the third one collides with what row 2 asks for. Open the packaged app.
+
+- [ ] **(SONNY-385)** **A single rename, and the ask.** Say or type: *"rename
+      ~/Desktop/rename-check/scan1.pdf to march-scan"*. **Sonny must ask before doing it** — an
+      approval prompt, not a run that has already happened. Read the reason it gives: it should say
+      that renaming replaces the name the file is filed under and that Sonny cannot undo it, and it
+      should name **both** the old name and the new one. Approve it. `scan1.pdf` is now
+      `march-scan` in the same folder, with its contents intact, and nothing else in the folder has
+      moved. **What would be a finding:** no prompt at all; a prompt that names neither name; the
+      file landing in a different folder; or the file arriving empty.
+- [ ] **(SONNY-385)** **A collision, which must not overwrite.** Say or type: *"rename
+      ~/Desktop/rename-check/scan2.pdf to invoice-march.pdf"* — a name that folder already has.
+      Sonny must **refuse**, and the message must name `invoice-march.pdf` as the thing already
+      there and say it will not replace it. Then open `invoice-march.pdf` and confirm its contents
+      are unchanged, and that `scan2.pdf` is still called `scan2.pdf`. **What would be a finding:**
+      the original `invoice-march.pdf` being replaced by the other file's contents; a refusal whose
+      message names no file; or a refusal that arrives only *after* an approval prompt, since there
+      is nothing here to approve.
+- [ ] **(SONNY-385)** **"Rename all of these" asks rather than guessing.** Say or type: *"rename all
+      the files in ~/Desktop/rename-check"*. Sonny must come back with a **question you can answer**
+      — the clarification panel, with a field to type into — asking what each one should be called
+      and saying it renames one at a time. Confirm **nothing in the folder has been renamed**, and
+      that the field really is there and typeable. Then answer it with a single rename ("rename
+      scan2.pdf to scan-two") and confirm that goes through the ordinary approval above. **What
+      would be a finding:** the files being renamed to anything at all; a plain red error instead of
+      a question; or a question with no way to answer it.
+
 ## 8. How to report back
 
 For each real finding, give me:

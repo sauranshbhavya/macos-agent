@@ -210,7 +210,12 @@ struct SpokenPathTests {
         "browserName": false,
         // SONNY-382. A phrase describing what the user wants to be told about, never a folder — and
         // a watcher's own location is a URL, in `targetURL`, which is already `false` above.
-        "watchSubject": false
+        "watchSubject": false,
+        // SONNY-385. A leaf name and never a path — `RenameCapabilityAdapter` refuses one carrying a
+        // separator, so expanding a spoken folder phrase into it would turn a name the user said
+        // into a rename Sonny then refuses. The folder half of a rename is `inputPath`, already
+        // `true` above, and that is where a spoken phrase belongs.
+        "newName": false
     ]
 
     /// Every property the table above calls a path is normalised, and every property it does not is
@@ -254,7 +259,8 @@ struct SpokenPathTests {
             resolvedFromFinderSelection: true,
             itemIndex: 7,
             visionGoal: phrase,
-            watchSubject: phrase
+            watchSubject: phrase,
+            newName: phrase
         )
 
         let after = SpokenPath.normalizingFolderPhrases(in: before)

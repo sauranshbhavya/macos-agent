@@ -109,6 +109,18 @@ extension AgentOperation {
             // right and the reason given for it was describing a stronger effect than the code has.)
             return .safeToRepeat
 
+        case .rename:
+            // **Safe, and the reasoning is the collision rule rather than a judgement about how bad
+            // a second rename would be** (SONNY-385). Repeating a rename that already finished finds
+            // no source and fails; repeating one where the user has since put a new file at the old
+            // path finds the destination occupied and is refused by name. Neither outcome destroys
+            // anything, and neither reaches anyone but the user, which is this classification's bar.
+            //
+            // It is also never a *silent* repeat, which is what this property is actually about:
+            // `RenameCapabilityAdapter.assessRisk` raises an unconditional `.destructive`
+            // escalation, so every rename asks — on a resume exactly as on a first run.
+            return .safeToRepeat
+
         case .saveRoutine, .saveSnippet, .createWorkspace, .editWorkspace:
             // Writes to Sonny's own stores, with the same content the interrupted attempt carried —
             // so a repeat is idempotent in content rather than destructive. They stay

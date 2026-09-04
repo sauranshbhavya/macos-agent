@@ -77,7 +77,10 @@ struct AgentPlanSchemaFixtureTests {
         // **two** rather than one for exactly the reason the paragraph above gives: a step property
         // is serialized once under `steps` and again under `routineSteps`. A reader tempted to write
         // 59 here is reading `baseStepProperties` and not the wire.
+        //
+        // **62 since SONNY-385**, which added one more nullable step property (`newName`), and it is
+        // two for the same reason again.
         let unions = text.components(separatedBy: "\"type\" : [").count - 1
-        #expect(unions == 60, "expected 60 serialized type-union nodes, found \(unions)")
+        #expect(unions == 62, "expected 62 serialized type-union nodes, found \(unions)")
     }
 }

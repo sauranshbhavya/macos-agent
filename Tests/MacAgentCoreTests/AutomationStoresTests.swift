@@ -236,7 +236,13 @@ struct AutomationStoresTests {
             "draftContent", "shortcutName", "shortcutInput", "visionGoal", "browserName",
             // SONNY-382. Planner-writable for `visionGoal`'s reason — it is a phrase out of the
             // user's own sentence — so it is in `stepKeys`, in the schema, and not stripped.
-            "watchSubject"
+            "watchSubject",
+            // SONNY-385. Same reason again: the new name is a word out of the user's own sentence,
+            // and nothing but the model reads that sentence. In `stepKeys`, in the schema, not
+            // stripped — a saved routine that renames a named file to a named name is a routine a
+            // user can legitimately author, and the tier-3 destructive escalation is what stops a
+            // *scheduled* run of one from renaming anything unattended.
+            "newName"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door — each one held by a behavioural test
