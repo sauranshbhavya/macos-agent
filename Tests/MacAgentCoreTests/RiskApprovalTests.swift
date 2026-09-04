@@ -380,7 +380,7 @@ struct RiskApprovalTests {
     @Test
     func defaultExecutableCapabilityTiersMatchSpec() throws {
         let metadataByID = Dictionary(
-            uniqueKeysWithValues: CapabilityRegistry.default.metadata.map { ($0.id, $0.defaultRiskTier) }
+            uniqueKeysWithValues: CapabilityRegistry.revealingNowhere.metadata.map { ($0.id, $0.defaultRiskTier) }
         )
         let expected: [String: CapabilityRiskTier] = [
             "local.permissions.readiness": .tier0,

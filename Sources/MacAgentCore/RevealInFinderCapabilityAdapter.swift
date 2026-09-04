@@ -1,8 +1,90 @@
-import AppKit
 import Foundation
 
 public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
-    public init() {}
+    /// What revealing a path actually does.
+    ///
+    /// The live implementation is `NSWorkspace.activateFileViewerSelecting`, and after SONNY-395 it
+    /// exists at exactly one place in the repository — the `finderRevealer:` argument
+    /// `AgentViewModel.atItsRealStoreLocations()` passes, which
+    /// `LocalStoreInjectionScanTests.theRealStoreFactoryHandsTheAppTheLiveFinderReveal` holds.
+    /// No line under `Sources/MacAgentCore` names that call, which is what
+    /// `noLineInTheCoreNamesTheFinderRevealCall` asserts.
+    ///
+    /// **That is the narrow claim, and the wider one this used to make was false** (PR #193 review,
+    /// F3). It read "`MacAgentCore` names no way to reach Finder at all", and
+    /// `FinderContextService.swift:43` is `tell application id "com.apple.finder"` run through
+    /// `osascript` — which is precisely a way to reach Finder, sitting in this package the whole
+    /// time the sentence claimed otherwise. It is behind the `finderContextReader` seam on
+    /// `CapabilityExecutionContext`, so it was never a defect; the sentence was a negative
+    /// established from one token, which is `CLAUDE.md`'s *enumerate before you subtract* shape,
+    /// and a scan searching one literal can only ever support a claim about that literal.
+    /// `NSWorkspace.shared.open(folderURL)` opens a Finder window too, and the core names that
+    /// single-argument overload **three** times — `WorkspaceFileOpener`, `NativeMediaOpener` and
+    /// `WorkspaceBrowserOpener`'s default `openURL` — all seamed, none searched
+    /// (`git grep -nE 'NSWorkspace\.shared\.open\([^,)]*\)' HEAD -- Sources/MacAgentCore |
+    /// grep -vE ':[0-9]+: *//'` → 3 at this branch's head, unchanged by this correction, since it adds only comment lines
+    /// correction adds only comment lines; the stage is load-bearing and its control fires, because
+    /// without it the answer is 4 at both heads and the extra line is this sentence).
+    /// `WorkspaceBrowserOpener`'s other call is `open(_:withApplicationAt:configuration:)`, a
+    /// different overload that opens with a named application, and is fairly excluded.
+    ///
+    /// **This said "twice" until PR #193's cycle-3 re-check (N1), and it was a wrong number rather
+    /// than a loose one.** The third site is named eight lines away in this branch's own changelog
+    /// census, so the population was already fully enumerated in the same document. It was written
+    /// inside the correction of a finding about a quantified claim — `CLAUDE.md`'s "attention is at
+    /// its lowest, because the writer has just proved to themselves that they are the careful one"
+    /// — and it is the third time that position has produced one.
+    ///
+    /// The package deliberately ships no live revealer of its own to pass here. One would be a
+    /// constant nothing in the package calls, and a caller reaching for it by name is the shape a
+    /// default is — the thing this seam exists to remove.
+    public typealias Reveal = @MainActor @Sendable ([URL]) -> Void
+
+    private let reveal: Reveal
+
+    /// **Undefaulted, and that is the whole of SONNY-395** — SONNY-350's rule applied to the one
+    /// adapter that had no seam at all.
+    ///
+    /// This adapter used to call `NSWorkspace.shared.activateFileViewerSelecting` inline, which made
+    /// it the only capability adapter reaching the machine directly:
+    /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
+    /// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'`
+    /// answers **1** at `619ba62` — the line at `:53` — and **0** at this branch's head.
+    ///
+    /// **The comment stage earns its place, and the control has to be read at the head you are
+    /// standing on** (PR #193 review, F5). Dropping that stage answers **2** at `619ba62`, the
+    /// extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open` — and
+    /// **5** at this branch's head, because four of the five are this very doc comment. The sentence used to
+    /// give the 2 with no head beside it, two clauses after naming two different heads, which is
+    /// `CLAUDE.md`'s ninth write-the-command defect exactly: a citation greping a population its
+    /// own file belongs to needs a comment stage *and* a control that fires, and the control here
+    /// goes up by the citations written since. It went up by four and the prose said one.
+    ///
+    /// **The file filter is a pipe rather than the pathspec you would reach for first**, and that
+    /// is not style. A `pathspec` naming the adapter glob puts the two characters that open a
+    /// block comment into this doc comment, and `MacAgentSource.read` strips block comments
+    /// *before* it drops `//` lines — so every line below would vanish from every source scan that
+    /// reads this file, silently. `CLAUDE.md` records that arriving from this exact glob once
+    /// already (SONNY-220), from a session obeying the write-the-command-beside-the-number rule,
+    /// which is why it keeps arriving from sessions doing the right thing.
+    ///
+    /// Every other door — `WorkspaceFileOpener`, `NativeMediaOpener`, `MacAppService`,
+    /// `WorkspaceBrowserOpener` — was already behind an injected seam, which is why a probe on all
+    /// six recorded **4** reveals across a full suite run and **0** of anything else: a fixture
+    /// could opt out of the others and could not opt out of this one.
+    ///
+    /// Those four were `ProductShellTests.aJobOverManyItemsPublishesHowFarItHasGot` (three files)
+    /// and `anOrdinaryRunPublishesNoJobProgress` (one), and both fixtures were already passing
+    /// `hermeticFinderRevealer` to the view model — the reveal went around it, through the
+    /// executor's registry. A battery re-runs the suite once per mutant, so four windows a run is
+    /// how the founder met dozens of them in one working session.
+    ///
+    /// A default here would put every one of those back at the first call site that predates the
+    /// parameter, which is SONNY-240's argument and does not care that this parameter opens a
+    /// window rather than writing a file.
+    public init(reveal: @escaping Reveal) {
+        self.reveal = reveal
+    }
 
     public var metadata: CapabilityMetadata {
         Self.metadata
@@ -50,7 +132,7 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let url = try revealSpec(in: plan, context: context, requiresExistingPath: true)
         log(.act, "Revealing \(url.path) in Finder")
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        reveal([url])
         log(.summarize, "Revealed in Finder")
         let summary = "Revealed \(url.path) in Finder."
         return AgentRunResult(plan: plan, previews: previews, summary: summary)

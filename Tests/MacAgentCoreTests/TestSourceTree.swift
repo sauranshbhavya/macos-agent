@@ -76,6 +76,20 @@ enum TestSourceTree {
         try files(in: root.appendingPathComponent(target), withExtension: "swift", labelledBy: target)
     }
 
+    /// Every `.swift` file compiled into a `Sources/` target, at any depth, in a stable order.
+    ///
+    /// The `Tests/`-side twin of ``swiftFiles(in:)``, added by SONNY-395 because a new sweep over
+    /// `Sources/MacAgentCore` had hand-rolled `contentsOfDirectory` and inherited the exact hole
+    /// this type's header describes — one level deep against a `path:` SwiftPM compiles
+    /// recursively. Same walker, so a `Sources/` scan cannot drift from a `Tests/` one.
+    static func sourceFiles(in target: String) throws -> [SourceFile] {
+        try files(
+            in: repositoryRoot.appendingPathComponent("Sources").appendingPathComponent(target),
+            withExtension: "swift",
+            labelledBy: target
+        )
+    }
+
     /// Every `.ts` file under ``serverTestDirectory``, at any depth, in a stable order.
     ///
     /// `.ts` only: vitest's `include` in `server/vitest.config.ts` is `test/**/*.test.ts`, and the

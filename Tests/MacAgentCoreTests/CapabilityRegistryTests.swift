@@ -6,7 +6,7 @@ import Testing
 struct CapabilityRegistryTests {
     @Test
     func defaultRegistryCoversAllExecutableOperations() throws {
-        let actual = CapabilityRegistry.default.metadata
+        let actual = CapabilityRegistry.revealingNowhere.metadata
             .flatMap(\.operations)
             .map(\.rawValue)
             .sorted()
@@ -20,7 +20,7 @@ struct CapabilityRegistryTests {
 
     @Test
     func defaultRegistryRoutesOperationsToStableCapabilityIDs() throws {
-        let registry = CapabilityRegistry.default
+        let registry = CapabilityRegistry.revealingNowhere
 
         #expect(try registry.adapter(for: .scanSelectLargestFiles).metadata.id == "local.files.largest-files-zip")
         #expect(try registry.adapter(for: .createZip).metadata.id == "local.files.largest-files-zip")
@@ -86,7 +86,7 @@ struct CapabilityRegistryTests {
 
     @Test
     func defaultRegistryMetadataIsComplete() {
-        for metadata in CapabilityRegistry.default.metadata {
+        for metadata in CapabilityRegistry.revealingNowhere.metadata {
             #expect(metadata.id.hasPrefix("local."))
             #expect(!metadata.displayName.isEmpty)
             #expect(!metadata.description.isEmpty)
@@ -114,15 +114,15 @@ struct CapabilityRegistryTests {
 
     @Test
     func permissionsMetadataIsDescriptiveOnlyForNow() throws {
-        for metadata in CapabilityRegistry.default.metadata {
+        for metadata in CapabilityRegistry.revealingNowhere.metadata {
             #expect(metadata.requiredPermissions.allSatisfy { $0.enforcement == .descriptiveOnly })
         }
 
-        let docx = try #require(CapabilityRegistry.default.metadata.first { $0.id == "local.documents.docx-to-pdf" })
+        let docx = try #require(CapabilityRegistry.revealingNowhere.metadata.first { $0.id == "local.documents.docx-to-pdf" })
         #expect(docx.requiredPermissions.map(\.requirement).contains(.desktopDocumentsAccess))
         #expect(docx.requiredPermissions.map(\.requirement).contains(.wordAutomation))
 
-        let readiness = try #require(CapabilityRegistry.default.metadata.first { $0.id == "local.permissions.readiness" })
+        let readiness = try #require(CapabilityRegistry.revealingNowhere.metadata.first { $0.id == "local.permissions.readiness" })
         #expect(readiness.defaultRiskTier == .tier0)
         #expect(readiness.requiredPermissions.isEmpty)
     }

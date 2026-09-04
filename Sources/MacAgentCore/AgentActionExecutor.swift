@@ -179,7 +179,9 @@ public final class AgentActionExecutor {
         // here would be the real `~/Library` file, and a fixture that never heard of watchers would
         // be writing into the developer's own unfinished runs.
         resumableTaskStore: ResumableTaskStore,
-        capabilityRegistry: CapabilityRegistry = .default,
+        // **The default reveals nowhere** (SONNY-395). `.revealingNowhere`'s own doc comment has
+        // the reasoning and the reason the usual remove-the-default remedy was not available here.
+        capabilityRegistry: CapabilityRegistry = .revealingNowhere,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },

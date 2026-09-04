@@ -1,7 +1,14 @@
 import Foundation
 
 public enum DefaultCapabilityAdapters {
-    public static func all() -> [any CapabilityAdapter] {
+    /// **`finderRevealer` is undefaulted for the reason the adapter's own initializer gives.**
+    ///
+    /// A default here would be a default one level out — every caller of `all()` that predates the
+    /// parameter would keep whatever this line chose, which is the exact shape SONNY-350 removed
+    /// from the store vendors.
+    public static func all(
+        finderRevealer: @escaping RevealInFinderCapabilityAdapter.Reveal
+    ) -> [any CapabilityAdapter] {
         [
             LargestFilesZipCapabilityAdapter(),
             DocxConversionCapabilityAdapter(),
@@ -19,7 +26,7 @@ public enum DefaultCapabilityAdapters {
             RecentArtifactsCapabilityAdapter(),
             OpenMediaResultCapabilityAdapter(),
             FinderSelectionCapabilityAdapter(),
-            RevealInFinderCapabilityAdapter(),
+            RevealInFinderCapabilityAdapter(reveal: finderRevealer),
             PermissionReadinessCapabilityAdapter(),
             SaveRoutineCapabilityAdapter(),
             RunRoutineCapabilityAdapter(),

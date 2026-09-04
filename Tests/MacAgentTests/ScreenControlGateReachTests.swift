@@ -162,11 +162,14 @@ struct ScreenControlGateReachTests {
             }
         }
 
-        // The floor is a real count of a real population: `DefaultCapabilityAdapters.all()` is what
-        // the executor dispatches through, and every one of its members is one of these files.
+        // The floor is a real count of a real population: `DefaultCapabilityAdapters.all(_:)` is
+        // what the executor dispatches through, and every one of its members is one of these
+        // files. The revealer is `{ _ in }` because this test counts the list and executes none of
+        // it — the argument exists at all because SONNY-395 removed its default.
+        let registered = DefaultCapabilityAdapters.all(finderRevealer: { _ in }).count
         #expect(
-            adapters.count >= DefaultCapabilityAdapters.all().count,
-            "the scan saw \(adapters.count) adapter files against \(DefaultCapabilityAdapters.all().count) registered adapters"
+            adapters.count >= registered,
+            "the scan saw \(adapters.count) adapter files against \(registered) registered adapters"
         )
         #expect(adapters.contains("VisionSessionCapabilityAdapter.swift"))
         #expect(
