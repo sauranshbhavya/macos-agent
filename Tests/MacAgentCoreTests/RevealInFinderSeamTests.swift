@@ -156,7 +156,7 @@ struct RevealInFinderSeamTests {
     /// `MediaPlaybackService.swift` (`NativeMediaOpener`) and `WorkspaceBrowserOpener.swift`'s
     /// default `openURL`, all behind injected seams. (`git grep -nE
     /// 'NSWorkspace\.shared\.open\([^,)]*\)' HEAD -- Sources/MacAgentCore | grep -vE
-    /// ':[0-9]+: *//'` → 3 at `70ba8af`, and 4 without the comment stage — the extra being the
+    /// ':[0-9]+: *//'` → 3 at this branch's head, and 4 without the comment stage — the extra being the
     /// adapter's own prose, which is why the stage is there. This said "twice" until PR #193's
     /// cycle-3 re-check, N1.)
     ///
@@ -168,7 +168,7 @@ struct RevealInFinderSeamTests {
     /// **The hole was latent rather than live**: no subdirectory exists under that target today, so
     /// nothing was being missed — `find Sources/MacAgentCore -mindepth 1 -type d` prints nothing, and
     /// `find Sources/MacAgentCore -name '*.swift' | wc -l` and the same with `-maxdepth 1` both
-    /// answer 147 at `3c0a481`. (Written with `find` twice rather than a `ls` glob because the
+    /// answer 149 at this branch's head. (Written with `find` twice rather than a `ls` glob because the
     /// glob spells slash-star, which opens a block comment inside a line comment — the defect this
     /// branch already shipped and removed once, arriving again in the round that documents it.)
     /// "This scan was missing files" and "this scan would miss
