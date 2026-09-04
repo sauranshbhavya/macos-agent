@@ -301,4 +301,106 @@ struct LineCommentMayNotOpenABlockTests {
             #expect(count > 0, "\(treePath) yielded no Swift files")
         }
     }
+
+    // MARK: - The stripping order itself (SONNY-417)
+
+    /// `MacAgentSource.read` over a fixture written to a temporary file, which is the only way to
+    /// reach the `URL` overload — the ordering being pinned lives inside it, not inside
+    /// `strippingBlockComments`, so nothing short of the real `read` measures it.
+    private static func readingFixture(_ contents: String) throws -> String {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SONNY409-\(UUID().uuidString).swift")
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try MacAgentSource.read(url)
+    }
+
+    /// **The control every absence assertion below depends on.** `read` returning an empty string
+    /// would satisfy all three of them, which is this repository's clean-zero family arriving inside
+    /// the test written to close one. So real code must survive first.
+    @Test
+    func readKeepsRealCodeSoTheAbsenceAssertionsAreNotVacuous() throws {
+        let text = try Self.readingFixture(
+            """
+            struct Thing {
+                let survivingCode = 1
+            }
+            """
+        )
+        #expect(text.contains("survivingCode"))
+        #expect(text.contains("struct Thing"))
+    }
+
+    /// A line-comment-shaped line inside a block comment does not reach the text a scan reads.
+    ///
+    /// **This is the fixture SONNY-417's description names, and on its own it does not pin the
+    /// order** — measured rather than assumed, by running both orderings over it: the line is
+    /// comment-prefixed, so the line filter drops it whichever half runs first, and the mutant
+    /// reversing the order passes this test. It is kept because it is a true property of `read` and
+    /// the one a reader expects to find here; the arm below is the one that fails when the order
+    /// moves.
+    @Test
+    func aLineCommentInsideABlockCommentDoesNotReachTheScannedText() throws {
+        let text = try Self.readingFixture(
+            """
+            struct Thing {
+                \(Self.spanOpen) opening
+                // let hidden = "insideTheBlock"
+                \(Self.spanClose)
+                let survivingCode = 1
+            }
+            """
+        )
+        #expect(!text.contains("insideTheBlock"))
+        #expect(text.contains("survivingCode"), "the fixture must still carry code, or this proves nothing")
+    }
+
+    /// **The order is load-bearing here, and this is the arm that says so.** A line comment that
+    /// only *becomes* comment-prefixed once the block span in front of it is removed is dropped by
+    /// the shipped order and survives under the reversed one.
+    ///
+    /// That is not a contrived shape. It is PR #80's mutant class exactly: a comment naming
+    /// `cancelCurrentRun()` reaching the text a scan searches, so the scan reads the sentence
+    /// describing the code instead of the code. `MacAgentSourceScan`'s header records that mutant
+    /// surviving twice before both comment syntaxes were stripped.
+    ///
+    /// Measured at `1ffd52ae` by running both orderings over all four candidate fixtures: this is
+    /// the only one whose result differs between them, which is why W4 survived a battery whose
+    /// other five mutants died.
+    @Test
+    func aLineCommentUncoveredByTheBlockStripIsStillDropped() throws {
+        let text = try Self.readingFixture(
+            """
+            struct Thing {
+                \(Self.spanOpen) note \(Self.spanClose) // was viewModel.cancelCurrentRun()
+                let survivingCode = 1
+            }
+            """
+        )
+        #expect(
+            !text.contains("cancelCurrentRun"),
+            """
+            A comment survived into the text a scan reads. `MacAgentSource.read` must strip block \
+            spans BEFORE it drops comment-prefixed lines: reversing those two steps leaves a line \
+            comment that sat behind a block comment in the scanned text, and a scan searching for a \
+            symbol then matches the sentence about it. That is the mutant PR #80's reviewer used.
+            """
+        )
+        #expect(text.contains("survivingCode"), "the fixture must still carry code, or this proves nothing")
+    }
+
+    /// The mirror SONNY-417 asks for: an ordinary line comment, behind no block at all, still drops.
+    @Test
+    func aLineCommentOutsideAnyBlockStillDrops() throws {
+        let text = try Self.readingFixture(
+            """
+            struct Thing {
+                // let dropped = "outsideAnyBlock"
+                let survivingCode = 1
+            }
+            """
+        )
+        #expect(!text.contains("outsideAnyBlock"))
+        #expect(text.contains("survivingCode"), "the fixture must still carry code, or this proves nothing")
+    }
 }
