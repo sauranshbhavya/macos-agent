@@ -822,12 +822,21 @@ private struct UsageFixture {
     ///
     /// **`date(from:)` does not refuse components its calendar has no room for, which is what made
     /// the old fallback unreachable rather than merely unlikely** — the intuition it was written
-    /// against, that no lunar month has a 31st, is not how Foundation behaves. Measured over the
-    /// eleven identifiers it ships: every one resolves these components and none answers `nil`, with
+    /// against, that no lunar month has a 31st, is not how Foundation behaves. Measured over all
+    /// **27** identifiers it ships: every one resolves these components and none answers `nil`, with
     /// the non-Gregorian ones landing somewhere else entirely (`.islamic` at 2587-11-23, `.hebrew`
-    /// at 1735-04-25). Harmless here, and worth knowing rather than assuming: every instant in this
-    /// fixture derives from this one and `RoutineScheduler` defaults to `Calendar.current` too, so
-    /// on any of them the routine is still due an hour before `tenAM()`.
+    /// at 1735-04-25). The population is the compiler's rather than a list somebody remembered — a
+    /// `switch` over `Calendar.Identifier` naming 16 cases with no `default` does not build, and the
+    /// 11 it names in the error are the rest.
+    ///
+    /// **What this fixture actually depends on is the time zone, not the identifier** (PR #198's
+    /// review, F2). `RoutineScheduler` reads `Calendar.current`, whose *zone* is what decides which
+    /// instant 9am names; its arithmetic is `date(byAdding: .day, value:)` and `date(bySettingHour:)`,
+    /// neither identifier-sensitive for a solar day. Replicating those calls against the 3-hour
+    /// daily catch-up window: an explicit Gregorian at the machine's zone is due at 3600s exactly as
+    /// the shipped form is, and so is a non-Gregorian scheduler; the same explicit Gregorian pinned
+    /// to UTC resolves yesterday's 9am instead and is missed at 75600s. So `Calendar.current` here
+    /// is right for its zone, and a fixture that pins a zone is the shape that breaks off that zone.
     ///
     /// `try #require` rather than a fixed sentinel, because nothing should quietly stand in for this
     /// instant — a refusal names the fixture, where a substitute fails an assertion further down.
