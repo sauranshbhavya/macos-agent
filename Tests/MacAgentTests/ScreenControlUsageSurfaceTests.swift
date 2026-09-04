@@ -127,7 +127,7 @@ struct ScreenControlUsageSurfaceTests {
         try await fixture.waitForIdle()
         #expect(fixture.viewModel.plan?.steps.first?.operation == .visionSession)
 
-        fixture.viewModel.checkScheduledRoutines(now: UsageFixture.tenAM)
+        fixture.viewModel.checkScheduledRoutines(now: try UsageFixture.tenAM())
 
         // The routine really did start — without this the two expectations below are the empty
         // state again, which is the shape F2 was filed for.
@@ -812,24 +812,55 @@ private struct UsageFixture {
     let root: URL
     let defaultsSuiteName: String
 
-    static var nineAM: Date {
+    /// 2026-08-31 09:00 in the local calendar, and never the clock (SONNY-403).
+    ///
+    /// **The clock read this used to fall back to could not fire, and it is gone anyway.** A fixed
+    /// instant with a clock standing behind it is the shape SONNY-396's sweep looks for, and a file
+    /// carrying one is re-read from scratch every time that sweep runs — this was the only such
+    /// fallback in the whole of `Tests/`. Removing it takes this file out of the sweep's population,
+    /// so the answer belongs to the grep rather than to whoever reads the file next.
+    ///
+    /// **`date(from:)` does not refuse components its calendar has no room for, which is what made
+    /// the old fallback unreachable rather than merely unlikely** — the intuition it was written
+    /// against, that no lunar month has a 31st, is not how Foundation behaves. Measured over all
+    /// **27** identifiers it ships: every one resolves these components and none answers `nil`, with
+    /// the non-Gregorian ones landing somewhere else entirely (`.islamic` at 2587-11-23, `.hebrew`
+    /// at 1735-04-25). The population is the compiler's rather than a list somebody remembered — a
+    /// `switch` over `Calendar.Identifier` naming 16 cases with no `default` does not build, and the
+    /// 11 it names in the error are the rest.
+    ///
+    /// **What this fixture actually depends on is the time zone, not the identifier** (PR #198's
+    /// review, F2). `RoutineScheduler` reads `Calendar.current`, whose *zone* is what decides which
+    /// instant 9am names; its arithmetic is `date(byAdding: .day, value:)` and `date(bySettingHour:)`,
+    /// neither identifier-sensitive for a solar day. Replicating those calls against the 3-hour
+    /// daily catch-up window: an explicit Gregorian at the machine's zone is due at 3600s exactly as
+    /// the shipped form is, and so is a non-Gregorian scheduler; the same explicit Gregorian pinned
+    /// to UTC resolves yesterday's 9am instead and is missed at 75600s. So `Calendar.current` here
+    /// is right for its zone, and a fixture that pins a zone is the shape that breaks off that zone.
+    ///
+    /// `try #require` rather than a fixed sentinel, because nothing should quietly stand in for this
+    /// instant — a refusal names the fixture, where a substitute fails an assertion further down.
+    static func nineAM() throws -> Date {
         var components = DateComponents()
         components.year = 2026
         components.month = 8
         components.day = 31
         components.hour = 9
-        return Calendar.current.date(from: components) ?? Date()
+        return try #require(
+            Calendar.current.date(from: components),
+            "the fixture's fixed instant did not resolve; it must not silently become another one"
+        )
     }
 
-    static var tenAM: Date { nineAM.addingTimeInterval(3_600) }
+    static func tenAM() throws -> Date { try nineAM().addingTimeInterval(3_600) }
 
-    /// A daily 9am routine, enabled a day earlier so `checkScheduledRoutines(now: tenAM)` finds an
+    /// A daily 9am routine, enabled a day earlier so `checkScheduledRoutines(now: tenAM())` finds an
     /// occurrence, and unattended-trusted so the run is not paused for an approval nobody is there
     /// to give. Its one step is a calculation: this fixture wires no vision environment, and the
     /// subject here is which task the gate answers about rather than what the routine does.
     func saveScheduledRoutine() throws {
         var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
-        schedule.setEnabled(true, now: Self.nineAM.addingTimeInterval(-24 * 60 * 60))
+        schedule.setEnabled(true, now: try Self.nineAM().addingTimeInterval(-24 * 60 * 60))
         try routineStore.save(
             StoredRoutine(
                 name: "Morning",
