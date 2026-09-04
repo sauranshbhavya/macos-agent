@@ -22,7 +22,7 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// single-argument overload **three** times — `WorkspaceFileOpener`, `NativeMediaOpener` and
     /// `WorkspaceBrowserOpener`'s default `openURL` — all seamed, none searched
     /// (`git grep -nE 'NSWorkspace\.shared\.open\([^,)]*\)' HEAD -- Sources/MacAgentCore |
-    /// grep -vE ':[0-9]+: *//'` → 3 at `70ba8af` and 3 with this correction in the tree, since the
+    /// grep -vE ':[0-9]+: *//'` → 3 at this branch's head, unchanged by this correction, since it adds only comment lines
     /// correction adds only comment lines; the stage is load-bearing and its control fires, because
     /// without it the answer is 4 at both heads and the extra line is this sentence).
     /// `WorkspaceBrowserOpener`'s other call is `open(_:withApplicationAt:configuration:)`, a
@@ -49,12 +49,12 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     /// it the only capability adapter reaching the machine directly:
     /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
     /// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'`
-    /// answers **1** at `619ba62` — the line at `:53` — and **0** at `3c0a481`.
+    /// answers **1** at `619ba62` — the line at `:53` — and **0** at this branch's head.
     ///
     /// **The comment stage earns its place, and the control has to be read at the head you are
     /// standing on** (PR #193 review, F5). Dropping that stage answers **2** at `619ba62`, the
     /// extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open` — and
-    /// **5** at `3c0a481`, because four of the five are this very doc comment. The sentence used to
+    /// **5** at this branch's head, because four of the five are this very doc comment. The sentence used to
     /// give the 2 with no head beside it, two clauses after naming two different heads, which is
     /// `CLAUDE.md`'s ninth write-the-command defect exactly: a citation greping a population its
     /// own file belongs to needs a comment stage *and* a control that fires, and the control here
