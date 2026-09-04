@@ -397,10 +397,117 @@ struct ClientVersionClientTests {
         #expect(await fixture.client.clientVersionState() == .updateAvailable(link: nil))
     }
 
-    /// **A warning cannot lower a wall.** The gate returns before setting those headers for an
-    /// unsupported client, so this pairing cannot come from the gateway — but a proxy in front of it
-    /// can produce very nearly anything, and turning "nothing works" into "update when you can" is
-    /// the one direction that must not be reachable.
+    /// **§8.4's own rollback: the minimum lowered to at or below this build, the recommendation left
+    /// above it — so every response is served *and* carries the header, and the wall comes down to
+    /// the warning without the app being quit** (PR #202's review, F1).
+    ///
+    /// This is the sequence the ladder prescribes for a minimum armed too aggressively, and it is
+    /// what the two manual rows walk through. Before the fix the deprecation branch returned on any
+    /// response carrying the header while the state was `.tooOld`, so the served-`2xx` rule beneath
+    /// it was never reached and there was no header-free `2xx` in this configuration for it to fire
+    /// on: a running client stayed walled off, with no dismiss control, until it was quit.
+    ///
+    /// **Not `.current`, and that is the point of landing on the warning rather than clearing.** The
+    /// served response says this build is at or above the minimum; the header says it is still below
+    /// the recommendation. Both facts are true at once and the state has to carry both.
+    @Test
+    @MainActor
+    func aServedResponseCarryingTheHeaderTakesTheWallDownToTheWarning() async throws {
+        let fixture = SignedInBackendFixture()
+        defer { fixture.unregister() }
+        let refuses = ResettableSwitch(isOn: true)
+        fixture.register { [self] _ in
+            refuses.isOn
+                ? walledOff(upgradeURL: "https://sonny.example.com/download")
+                : .reply(
+                    statusCode: 200,
+                    headers: [
+                        "Sonny-Deprecation": "true",
+                        "Sonny-Deprecation-Info": "https://sonny.example.com/upgrade"
+                    ],
+                    body: Data("{}".utf8)
+                )
+        }
+
+        _ = try? await fixture.client.send(planRequest())
+        #expect(
+            await fixture.client.clientVersionState()
+                == .tooOld(link: URL(string: "https://sonny.example.com/download")),
+            "precondition: the wall has to be up before this test says anything"
+        )
+
+        // The operator lowers the minimum to at or below this build and leaves the recommendation
+        // above it. Nothing relaunches; the next request is simply served.
+        refuses.isOn = false
+        _ = try await fixture.client.send(planRequest())
+
+        #expect(
+            await fixture.client.clientVersionState()
+                == .updateAvailable(link: URL(string: "https://sonny.example.com/upgrade"))
+        )
+    }
+
+    /// **The four cases the status code and the header make between them, in one table.**
+    ///
+    /// Written as one parameterized test rather than four because the property is the *pair*: what
+    /// decides is the status code, and the header only says which of the two served states it is.
+    /// Four separate tests would each pass against a rule that got the pairing wrong in the other
+    /// direction, which is how the defect above survived — three of these four were covered and the
+    /// fourth was the one the ladder needs.
+    @Test(arguments: [
+        // Served, header present: the wall comes down to the warning. §8.4's rollback.
+        (200, true, ClientVersionState.updateAvailable(link: URL(string: "https://sonny.example.com/upgrade"))),
+        // Served, no header: the wall comes down completely.
+        (200, false, ClientVersionState.current),
+        // Failing, header present: a proxy must not be able to lower the wall, so nothing moves.
+        (503, true, ClientVersionState.tooOld(link: URL(string: "https://sonny.example.com/download"))),
+        // Failing, no header: says nothing about which builds this deployment serves.
+        (503, false, ClientVersionState.tooOld(link: URL(string: "https://sonny.example.com/download")))
+    ])
+    @MainActor
+    func whatOneResponseDoesToAStandingWall(
+        statusCode: Int,
+        carriesHeader: Bool,
+        expected: ClientVersionState
+    ) async throws {
+        let fixture = SignedInBackendFixture()
+        defer { fixture.unregister() }
+        let refuses = ResettableSwitch(isOn: true)
+        fixture.register { [self] _ in
+            guard !refuses.isOn else { return walledOff(upgradeURL: "https://sonny.example.com/download") }
+            let headers = carriesHeader
+                ? [
+                    "Sonny-Deprecation": "true",
+                    "Sonny-Deprecation-Info": "https://sonny.example.com/upgrade"
+                  ]
+                : [:]
+            let body = (200..<300).contains(statusCode)
+                ? Data("{}".utf8)
+                : SonnyBackendFixtures.errorEnvelopeJSON(code: "server.unavailable")
+            return .reply(statusCode: statusCode, headers: headers, body: body)
+        }
+
+        _ = try? await fixture.client.send(planRequest())
+        let wall = await fixture.client.clientVersionState()
+        #expect(
+            wall == .tooOld(link: URL(string: "https://sonny.example.com/download")),
+            "precondition: the wall has to be up, and it is \(wall)"
+        )
+
+        refuses.isOn = false
+        _ = try? await fixture.client.send(planRequest())
+
+        #expect(await fixture.client.clientVersionState() == expected)
+    }
+
+    /// **A warning cannot lower a wall — on a response that failed.** The gate returns before setting
+    /// those headers for an unsupported client, so this pairing cannot come from the gateway; a proxy
+    /// in front of it can produce very nearly anything, and turning "nothing works" into "update when
+    /// you can" on the strength of a header alone is the direction that must not be reachable.
+    ///
+    /// **What bounds the proxy is the status code, which is why a served `2xx` carrying the same
+    /// header does lower it** — see the test above. Forging a `2xx` is forging the gateway's answer,
+    /// and a client that will not believe a served response has no way to be told anything at all.
     @Test
     @MainActor
     func aDeprecationHeaderCannotTakeTheWallDown() async throws {

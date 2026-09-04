@@ -45,7 +45,82 @@ struct ClientVersionSurfaceTests {
         }
         #expect(prompt.title == ClientVersionCopy.tooOldTitle)
         #expect(prompt.link == Self.link)
+        // **This does not pin the wall's own term in `hasVisibleWidgetPanel`, and it used to read as
+        // though it did** (PR #202's review, F2). `errorMessage` is set two statements above, so the
+        // predicate is already true from the failure branch below the wall's — the shared-anchor
+        // class in assertion form, and deleting the wall's term left this green.
+        // `theWallAloneMakesTheWidgetPanelVisible` is what pins it.
         #expect(viewModel.hasVisibleWidgetPanel)
+    }
+
+    /// **The wall's own term in `hasVisibleWidgetPanel`, with nothing else set that could satisfy
+    /// it** (PR #202's review, F2).
+    ///
+    /// **Why the term matters in the product rather than only in the predicate.**
+    /// `FloatingWidgetView.showsPanel` *is* this value, and it also gates the mic-hover-hint slot.
+    /// With the term gone, `state` still resolves to `.tooOld` and the panel that draws it is never
+    /// on screen: the widget renders nothing at all for the wall while every backend call fails —
+    /// SONNY-299's shape verbatim, on the one state whose entire purpose is to be the sentence a
+    /// user with nothing else working can read.
+    ///
+    /// **Both directions, because one alone is not a pin.** The mirror is what says the wall is what
+    /// made the predicate true rather than something the fixture happened to carry, and the
+    /// enumeration beneath it is what says no other branch is standing in for it.
+    @Test
+    func theWallAloneMakesTheWidgetPanelVisible() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeVersionSurfaceViewModel(root: root)
+
+        #expect(!viewModel.hasVisibleWidgetPanel, "the mirror: nothing is set, so nothing shows")
+
+        viewModel.clientVersionDidChange(.tooOld(link: Self.link))
+
+        // Every other branch of the predicate, ruled out by name rather than by assumption — this is
+        // the check the assertion above lacked.
+        #expect(viewModel.errorMessage == nil)
+        #expect(!viewModel.isRunning)
+        #expect(viewModel.clarificationQuestion == nil)
+        #expect(viewModel.approvalRequest == nil)
+        #expect(viewModel.visionCapturePreview == nil)
+        #expect(viewModel.visionDelegationRequest == nil)
+        #expect(viewModel.visionSessionPause == nil)
+        #expect(viewModel.visionSessionProgress == nil)
+        #expect(viewModel.resumeOffer == nil)
+        #expect(viewModel.finalSummary.isEmpty)
+        #expect(!viewModel.showsUpdateAvailablePrompt)
+
+        #expect(viewModel.hasVisibleWidgetPanel)
+
+        // And it goes away with the wall, which is the other half of "the wall is what did it".
+        viewModel.clientVersionDidChange(.current)
+        #expect(!viewModel.hasVisibleWidgetPanel)
+    }
+
+    /// The warning's mirror of the test above — its term is separately reachable, with nothing else
+    /// set, and it goes away when the prompt is dismissed.
+    @Test
+    func theWarningAloneMakesTheWidgetPanelVisible() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeVersionSurfaceViewModel(root: root)
+
+        #expect(!viewModel.hasVisibleWidgetPanel)
+
+        viewModel.clientVersionDidChange(.updateAvailable(link: Self.link))
+
+        #expect(viewModel.errorMessage == nil)
+        #expect(!viewModel.isRunning)
+        #expect(viewModel.clarificationQuestion == nil)
+        #expect(viewModel.approvalRequest == nil)
+        #expect(viewModel.resumeOffer == nil)
+        #expect(viewModel.finalSummary.isEmpty)
+        #expect(!viewModel.isTooOldForThisBackend)
+
+        #expect(viewModel.hasVisibleWidgetPanel)
+
+        viewModel.dismissUpdateAvailablePrompt()
+        #expect(!viewModel.hasVisibleWidgetPanel)
     }
 
     /// **And it yields to every parked question, all six of them.** Each is a continuation nothing

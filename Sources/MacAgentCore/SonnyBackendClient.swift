@@ -779,27 +779,41 @@ public actor SonnyBackendClient {
 
     /// What one response says about this build's version.
     ///
-    /// **Three rules, in this order, and the order is the whole of it.**
+    /// **What decides is the status code; the header only says which of the two served states it
+    /// is.** That is the whole model, and it is worth stating that way because the first version of
+    /// this comment stated a different one and was wrong in the sequence that matters most
+    /// (PR #202's review, F1).
     ///
     /// 1. **`410 version.unsupported` is the wall**, whatever else the response carried. Its
     ///    `upgrade_url` is the link, because §8.3 puts one there precisely so a client too old to
     ///    parse `/v1/meta` still has somewhere to send the user; the kept document answers only when
     ///    the refusal carried nothing usable.
-    /// 2. **`Sonny-Deprecation: true` is the warning**, and it cannot lower the wall. The gate
-    ///    returns before setting those headers for an unsupported client, so a deprecated header can
-    ///    never accompany a `410` — but a *proxy* in front of the gateway can produce very nearly
-    ///    anything, and a warning that could overwrite a wall would turn "nothing works" into
-    ///    "everything works, update when you can".
-    /// 3. **A `2xx` with no deprecation header clears everything**, and it is the only thing that
-    ///    clears the wall. A served response is proof from the deciding party that this build is at
-    ///    or above the minimum and at or above the recommended version, which is exactly the two
-    ///    facts this state is about — so an operator who lowers either bound is believed on the next
-    ///    successful request rather than at the next launch.
+    /// 2. **A served `2xx` is proof this build is at or above the minimum**, so it takes the wall
+    ///    down whatever headers ride on it — to the warning when `Sonny-Deprecation: true` is
+    ///    present, and to nothing at all when it is not. Both are the same fact read at two
+    ///    resolutions: the gateway served this build, and it did or did not also ask it to update.
+    /// 3. **A non-`2xx` cannot lower the wall, and its header can only raise the warning.** A `500`,
+    ///    a `503` from a load balancer, or a header from a proxy in front of the gateway says
+    ///    nothing about which builds this deployment serves, so a header alone must never turn
+    ///    "nothing works" into "update when you can". Carrying no header, such a response changes
+    ///    nothing at all.
     ///
-    /// **A non-`2xx` carrying no deprecation header changes nothing**, deliberately: a `500`, a `503`
-    /// from a load balancer, or a transport failure says nothing at all about which builds this
-    /// deployment serves, and reading silence there as "current" would clear a wall on a bad gateway
-    /// day.
+    /// **The rule this replaces refused to lower the wall on *any* response carrying the header,
+    /// and that made §8.4's own rollback unreachable.** The ladder's prescribed way back from a
+    /// minimum armed too aggressively is to lower it to at or below the shipped build while leaving
+    /// `recommended_client` above it — which is precisely the band where every response is served
+    /// *and* carries the header, so there was no header-free `2xx` for rule 2 to fire on. A running
+    /// client stayed walled off, and the wall has no dismiss control, so quitting the app was the
+    /// only way out. Measured against the real gateway in that exact configuration, and by a mutant
+    /// that narrowed this guard and survived all 2888 tests, so nothing pinned either direction.
+    ///
+    /// **The threat model survives the narrowing, and the old comment's version of it did not
+    /// survive its own rule 3.** It argued that a proxy must not be able to lower the wall with a
+    /// header — while rule 3 already let that same proxy lower it *completely* with a bare `2xx`, so
+    /// the stricter handling was being applied to the response carrying **more** information. What
+    /// actually bounds a proxy is the status code, which is why that is what rule 3 turns on now:
+    /// forging a `2xx` is forging the gateway's answer, and a client that will not believe a served
+    /// response has no way to be told anything at all.
     private func noteVersionSignals(
         statusCode: Int,
         deprecation: DeprecationHeaders,
@@ -811,7 +825,8 @@ public actor SonnyBackendClient {
             return
         }
         if deprecation.isDeprecated {
-            if case .tooOld = versionState { return }
+            // A served response is what lets this lower the wall; a failing one never can.
+            if case .tooOld = versionState, !(200..<300).contains(statusCode) { return }
             setVersionState(.updateAvailable(
                 link: deprecation.infoLink ?? ClientUpgradeLink.openable(meta?.upgradeURL)
             ))
