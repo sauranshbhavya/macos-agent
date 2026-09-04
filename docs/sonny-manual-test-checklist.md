@@ -2159,38 +2159,6 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       the finding**, and the outcome column says which of the five other things it was —
       `unmatched` most likely, which means the account id did not survive the round trip through the
       checkout link.
-- [ ] **(new 2026-09-04, SONNY-408) — the command that tells somebody about a charge nobody can
-      account for, run against a database with nothing wrong in it.** With a container and a
-      `DATABASE_URL` (the same one the `test:db` block in `server/README.md` sets up is fine), run
-      `cd server && npm run build && npm run billing-debts`, then `echo $?` **on its own line, with
-      nothing between the two**. It must print `no unresolved billing debt` and exit **0**. Do this
-      before the row below, so that the non-zero exit there means something: a command that exits 1
-      on everything is not a signal.
-- [ ] **(new 2026-09-04, SONNY-408) — and it exits non-zero when there is something to say, with the
-      order id you would go and look up.** Plant one row of each kind by hand, against the same
-      database. (**If `psql` is not installed** — it is not on a stock Mac — reach it through the
-      container instead: `docker exec -e PGPASSWORD=postgres "sonny-gw-db-$LANE" psql -U postgres -c
-      "<the same SQL>"`. Both were run this way on 2026-09-04 and the SQL below is verbatim what
-      worked.)
-
-      ```
-      psql "$DATABASE_URL" -c "INSERT INTO sonny.credit_topup (account_id, provider, provider_order_id, period_start, attempt_no, outcome, consented_at, runs_left_at_trigger, credits_remaining_at_trigger) VALUES (gen_random_uuid(), 'polar', 'order-planted-1', date_trunc('month', now()), 1, 'unconfirmed', now(), 0, 0);"
-      psql "$DATABASE_URL" -c "INSERT INTO sonny.billing_event (provider, event_id, event_type, outcome) VALUES ('polar', 'evt-planted-1', 'subscription.active', 'unmatched');"
-      npm run billing-debts
-      ```
-
-      The output must name `order-planted-1` and `evt-planted-1`, must mark the top-up
-      **`resolvable`** rather than `STRANDED` (it is in the current period), and `echo $?` must print
-      **1**. **A zero exit here is the finding** — it would mean a check built on this command passes
-      while money is outstanding. Then delete the two planted rows.
-- [ ] **(new 2026-09-04, SONNY-408) — the boundary case, which is the one nothing will ever fix on
-      its own.** Plant the same top-up row again with `period_start` set to the **previous** month —
-      change `date_trunc('month', now())` to `date_trunc('month', now() - interval '1 month')` and use
-      a new order id — and run `npm run billing-debts` again. That row must be marked **`STRANDED`**,
-      not `resolvable`, and the report must carry the paragraph explaining that the self-healing path
-      looks only inside the account's current period so no future attempt will reach it. **A row from
-      a past month reported as `resolvable` is the finding**: it would tell an operator to wait for
-      something that is never coming. Delete the planted row afterwards.
 - [ ] **(new 2026-08-30, SONNY-211) — the cancellation half, immediately after the row above.** In
       the Polar dashboard, **cancel** the test subscription. `sonny.billing_event` gains a row; the
       entitlement's `revoked_at` is set; and the next `GET /v1/account/entitlements` the app makes
@@ -2242,6 +2210,38 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       answer if somebody writes it down. If no new `billing_event` row appears at all within a
       minute, that is its own finding — the webhook endpoint is not subscribed to the event type the
       plan change produces.
+- [ ] **(new 2026-09-04, SONNY-408) — the command that tells somebody about a charge nobody can
+      account for, run against a database with nothing wrong in it.** With a container and a
+      `DATABASE_URL` (the same one the `test:db` block in `server/README.md` sets up is fine), run
+      `cd server && npm run build && npm run billing-debts`, then `echo $?` **on its own line, with
+      nothing between the two**. It must print `no unresolved billing debt` and exit **0**. Do this
+      before the row below, so that the non-zero exit there means something: a command that exits 1
+      on everything is not a signal.
+- [ ] **(new 2026-09-04, SONNY-408) — and it exits non-zero when there is something to say, with the
+      order id you would go and look up.** Plant one row of each kind by hand, against the same
+      database. (**If `psql` is not installed** — it is not on a stock Mac — reach it through the
+      container instead: `docker exec -e PGPASSWORD=postgres "sonny-gw-db-$LANE" psql -U postgres -c
+      "<the same SQL>"`. Both were run this way on 2026-09-04 and the SQL below is verbatim what
+      worked.)
+
+      ```
+      psql "$DATABASE_URL" -c "INSERT INTO sonny.credit_topup (account_id, provider, provider_order_id, period_start, attempt_no, outcome, consented_at, runs_left_at_trigger, credits_remaining_at_trigger) VALUES (gen_random_uuid(), 'polar', 'order-planted-1', date_trunc('month', now()), 1, 'unconfirmed', now(), 0, 0);"
+      psql "$DATABASE_URL" -c "INSERT INTO sonny.billing_event (provider, event_id, event_type, outcome) VALUES ('polar', 'evt-planted-1', 'subscription.active', 'unmatched');"
+      npm run billing-debts
+      ```
+
+      The output must name `order-planted-1` and `evt-planted-1`, must mark the top-up
+      **`resolvable`** rather than `STRANDED` (it is in the current period), and `echo $?` must print
+      **1**. **A zero exit here is the finding** — it would mean a check built on this command passes
+      while money is outstanding. Then delete the two planted rows.
+- [ ] **(new 2026-09-04, SONNY-408) — the boundary case, which is the one nothing will ever fix on
+      its own.** Plant the same top-up row again with `period_start` set to the **previous** month —
+      change `date_trunc('month', now())` to `date_trunc('month', now() - interval '1 month')` and use
+      a new order id — and run `npm run billing-debts` again. That row must be marked **`STRANDED`**,
+      not `resolvable`, and the report must carry the paragraph explaining that the self-healing path
+      looks only inside the account's current period so no future attempt will reach it. **A row from
+      a past month reported as `resolvable` is the finding**: it would tell an operator to wait for
+      something that is never coming. Delete the planted row afterwards.
 - [ ] **(new 2026-08-31, SONNY-216) — the portal opens, and it opens for the right person.** Do this
       immediately after SONNY-211's end-to-end subscription row, on the same test account, with
       `BILLING_PROVIDER_ACCESS_TOKEN` set to an Organization Access Token carrying
