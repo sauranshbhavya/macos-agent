@@ -445,14 +445,35 @@ struct ClientVersionClientTests {
 
         _ = try? await fixture.client.send(planRequest())
 
-        var iterator = await fixture.client.clientVersionUpdates().makeAsyncIterator()
-        let first = await iterator.next()
+        // Collected under a backstop rather than read with a bare `await next()`, for the reason the
+        // test below now carries: a stream that stops yielding does not end, so an unbounded read is
+        // a test whose failure signal is a hang. Nothing in this plan makes the first element go
+        // missing, and it is written this way anyway — the point of that rule is that the next
+        // mutant is the one nobody predicted.
+        let collected = CollectedVersionStates()
+        let stream = await fixture.client.clientVersionUpdates()
+        let collector = Task { for await state in stream { collected.record(state) } }
+        defer { collector.cancel() }
 
-        #expect(first == .tooOld(link: URL(string: "https://sonny.example.com/download")))
+        try await HangBackstop.waitOrAbandon(for: "the stream to open with the state already held") {
+            !collected.recorded.isEmpty
+        }
+        #expect(collected.recorded.first == .tooOld(link: URL(string: "https://sonny.example.com/download")))
     }
 
     /// And then every change, once — a repeat of the same state yields nothing, or a surface
     /// observing a healthy deployment would be woken on every single response.
+    ///
+    /// **Collected by a task under a backstop rather than read with a bare `await next()`, and that
+    /// is a correction rather than a style** (found by this branch's own battery). An `AsyncStream`
+    /// that stops yielding does not end, so `await iterator.next()` on a tree where the change never
+    /// happens suspends forever: the mutant that stops the deprecation header being read hung this
+    /// test, and with it the whole battery, at 0.0% CPU. A test whose failure signal is a hang
+    /// cannot be measured — `CLAUDE.md` records that class, and this is an instance of it.
+    ///
+    /// The mutant is still caught, by the four tests above that read `clientVersionState()`
+    /// directly, so the backstop here is a precondition rather than the assertion — which is the
+    /// shape SONNY-259's rule asks for.
     @Test
     @MainActor
     func theStreamCarriesEachChangeOnceAndRepeatsNothing() async throws {
@@ -465,8 +486,10 @@ struct ClientVersionClientTests {
                 : .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
         }
 
-        var iterator = await fixture.client.clientVersionUpdates().makeAsyncIterator()
-        #expect(await iterator.next() == .current)
+        let collected = CollectedVersionStates()
+        let stream = await fixture.client.clientVersionUpdates()
+        let collector = Task { for await state in stream { collected.record(state) } }
+        defer { collector.cancel() }
 
         // Two identical healthy responses, then two identical deprecated ones. The stream should
         // carry exactly one element for the change, and nothing for the repeats.
@@ -476,7 +499,29 @@ struct ClientVersionClientTests {
         _ = try await fixture.client.send(planRequest())
         _ = try await fixture.client.send(planRequest())
 
-        #expect(await iterator.next() == .updateAvailable(link: nil))
+        try await HangBackstop.waitOrAbandon(for: "the stream to carry the change") {
+            collected.recorded.count >= 2
+        }
+        #expect(collected.recorded == [.current, .updateAvailable(link: nil)])
+    }
+}
+
+/// Every state the stream carried, in order. Lock-guarded because the collecting task and the
+/// asserting body are different tasks.
+private final class CollectedVersionStates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ClientVersionState] = []
+
+    var recorded: [ClientVersionState] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+
+    func record(_ state: ClientVersionState) {
+        lock.lock()
+        values.append(state)
+        lock.unlock()
     }
 }
 
