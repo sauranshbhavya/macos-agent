@@ -235,6 +235,23 @@ public actor SonnyBackendClient {
     /// settable clock.
     private var serverClockOffset: TimeInterval = 0
 
+    /// What this deployment has said about this build's version, and the `/v1/meta` document behind
+    /// it (contract §8, SONNY-402).
+    ///
+    /// **Held on the client because the client is the only thing every request passes through.**
+    /// §8.4's two headers arrive on *every* response — a plan, a transcription, a `401` from the auth
+    /// gate — and §8.3's `410` can arrive on any route as well, so a surface that wanted to learn
+    /// this would otherwise have to ask after each of five routes' calls, which is a call site per
+    /// route and one more for every route added later. `clientVersionUpdates()` is how it leaves.
+    private var versionState: ClientVersionState = .current
+    private var meta: SonnyMetaDocument?
+    /// One `/v1/meta` fetch across every concurrent caller, the same single-flight shape
+    /// `refreshTask` above uses and for the same reason: a walled-off client's requests all fail with
+    /// `410` at once, and one refresh per failure would be a burst of meta calls answering one
+    /// question.
+    private var metaFetch: Task<Void, Never>?
+    private var versionObservers: [UUID: AsyncStream<ClientVersionState>.Continuation] = [:]
+
     /// The most recent instant a server reported, and the monotonic reading it arrived at.
     ///
     /// Written only from a `Date` header this client actually received, so it is the one time source
@@ -362,9 +379,17 @@ public actor SonnyBackendClient {
         try await send(request, allowingRefresh: true)
     }
 
+    /// `allowingMetaRefresh` is what stops §8.3's "on any `410`" from recursing.
+    ///
+    /// **A `410` on the meta request itself is the reachable case, not a theoretical one** — §8.3
+    /// requires the gate to refuse `/v1/meta` too, "including `/v1/meta` itself answering honestly",
+    /// so a build below the minimum gets one there every single time. Without this flag the first
+    /// `410` anywhere would start a meta fetch whose own `410` would start another, for as long as
+    /// the process lived.
     private func send(
         _ request: SonnyBackendRequest,
-        allowingRefresh: Bool
+        allowingRefresh: Bool,
+        allowingMetaRefresh: Bool = true
     ) async throws -> SonnyBackendResponse {
         guard let environment else { throw SonnyBackendError.backendNotConfigured }
         var attempt = 1
@@ -395,6 +420,20 @@ public actor SonnyBackendClient {
                     hasRefreshed = true
                     _ = try await refreshedSnapshot(newerThan: snapshot?.generation ?? 0)
                     continue
+                }
+
+                // §8.3: "The client calls `GET /v1/meta` on launch and on any `410`." Here rather
+                // than at the five call sites above this client, because this is the one place every
+                // route's `410` passes through. Awaited rather than detached: the refusal is not
+                // retryable, so nothing is waiting on this request any more, and the meta call is the
+                // cheapest request the gateway serves a walled-off client — it is refused at the
+                // version gate, before authentication and before any provider. Awaiting also makes
+                // the sequence observable, which a detached task would not be.
+                if allowingMetaRefresh,
+                   case .api(let api) = error,
+                   api.code == .versionUnsupported {
+                    await refreshMetaDocument()
+                    throw error
                 }
 
                 // §7.2 case 1b: a revoked or reused token means the family is gone. The client's
@@ -622,15 +661,20 @@ public actor SonnyBackendClient {
         }
         recordServerClock(from: http)
 
+        let deprecation = Self.deprecationHeaders(from: http)
+
         let requestID = http.value(forHTTPHeaderField: "Sonny-Request-Id")
         guard (200..<300).contains(http.statusCode) else {
-            throw SonnyBackendError.api(Self.errorEnvelope(
+            let api = Self.errorEnvelope(
                 data,
                 statusCode: http.statusCode,
                 headerRequestID: requestID,
                 retryAfterHeader: http.value(forHTTPHeaderField: "Retry-After")
-            ))
+            )
+            noteVersionSignals(statusCode: http.statusCode, deprecation: deprecation, api: api)
+            throw SonnyBackendError.api(api)
         }
+        noteVersionSignals(statusCode: http.statusCode, deprecation: deprecation, api: nil)
         return SonnyBackendResponse(statusCode: http.statusCode, data: data, requestID: requestID)
     }
 
@@ -678,7 +722,8 @@ public actor SonnyBackendClient {
             message: envelope.error.message,
             requestID: envelope.error.request_id ?? headerRequestID,
             retryAfter: envelope.error.retry_after_seconds ?? headerRetryAfter,
-            envelopeSaysRetryable: envelope.error.retryable ?? false
+            envelopeSaysRetryable: envelope.error.retryable ?? false,
+            upgradeURL: envelope.error.upgrade_url
         )
     }
 
@@ -689,6 +734,171 @@ public actor SonnyBackendClient {
             : base.absoluteString
         let trimmedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
         return URL(string: "\(trimmedBase)/\(trimmedPath)") ?? base
+    }
+
+    // MARK: - Version (contract §8)
+
+    /// §8.4's two headers, as this client reads them.
+    ///
+    /// `Sonny-Deprecation` is compared case-insensitively against `true` and nothing else is
+    /// believed — a header this client cannot read is a header that says nothing, which is the same
+    /// direction the gateway takes with an unreadable `Sonny-Client-Version` (§8.3, "a request
+    /// carrying no version, an unreadable one, or the header twice is served").
+    struct DeprecationHeaders: Equatable, Sendable {
+        let isDeprecated: Bool
+        /// `Sonny-Deprecation-Info`, already through ``ClientUpgradeLink``. `nil` for absent, and
+        /// equally for a link this app will not open.
+        let infoLink: URL?
+
+        static let none = DeprecationHeaders(isDeprecated: false, infoLink: nil)
+    }
+
+    static func deprecationHeaders(from response: HTTPURLResponse) -> DeprecationHeaders {
+        let flag = response.value(forHTTPHeaderField: "Sonny-Deprecation")?
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        guard flag == "true" else { return .none }
+        return DeprecationHeaders(
+            isDeprecated: true,
+            infoLink: ClientUpgradeLink.openable(response.value(forHTTPHeaderField: "Sonny-Deprecation-Info"))
+        )
+    }
+
+    /// What one response says about this build's version.
+    ///
+    /// **Three rules, in this order, and the order is the whole of it.**
+    ///
+    /// 1. **`410 version.unsupported` is the wall**, whatever else the response carried. Its
+    ///    `upgrade_url` is the link, because §8.3 puts one there precisely so a client too old to
+    ///    parse `/v1/meta` still has somewhere to send the user; the kept document answers only when
+    ///    the refusal carried nothing usable.
+    /// 2. **`Sonny-Deprecation: true` is the warning**, and it cannot lower the wall. The gate
+    ///    returns before setting those headers for an unsupported client, so a deprecated header can
+    ///    never accompany a `410` — but a *proxy* in front of the gateway can produce very nearly
+    ///    anything, and a warning that could overwrite a wall would turn "nothing works" into
+    ///    "everything works, update when you can".
+    /// 3. **A `2xx` with no deprecation header clears everything**, and it is the only thing that
+    ///    clears the wall. A served response is proof from the deciding party that this build is at
+    ///    or above the minimum and at or above the recommended version, which is exactly the two
+    ///    facts this state is about — so an operator who lowers either bound is believed on the next
+    ///    successful request rather than at the next launch.
+    ///
+    /// **A non-`2xx` carrying no deprecation header changes nothing**, deliberately: a `500`, a `503`
+    /// from a load balancer, or a transport failure says nothing at all about which builds this
+    /// deployment serves, and reading silence there as "current" would clear a wall on a bad gateway
+    /// day.
+    private func noteVersionSignals(
+        statusCode: Int,
+        deprecation: DeprecationHeaders,
+        api: SonnyBackendAPIError?
+    ) {
+        if let api, api.code == .versionUnsupported {
+            setVersionState(.tooOld(link: ClientUpgradeLink.openable(api.upgradeURL)
+                ?? ClientUpgradeLink.openable(meta?.upgradeURL)))
+            return
+        }
+        if deprecation.isDeprecated {
+            if case .tooOld = versionState { return }
+            setVersionState(.updateAvailable(
+                link: deprecation.infoLink ?? ClientUpgradeLink.openable(meta?.upgradeURL)
+            ))
+            return
+        }
+        if (200..<300).contains(statusCode) {
+            setVersionState(.current)
+        }
+    }
+
+    private func setVersionState(_ state: ClientVersionState) {
+        guard state != versionState else { return }
+        versionState = state
+        for continuation in versionObservers.values {
+            continuation.yield(state)
+        }
+    }
+
+    /// What this deployment last said about this build's version.
+    public func clientVersionState() -> ClientVersionState { versionState }
+
+    /// The `/v1/meta` document this client is keeping, or `nil` before one has been read.
+    public func metaDocument() -> SonnyMetaDocument? { meta }
+
+    /// Every change to ``clientVersionState()``, beginning with what it says right now.
+    ///
+    /// **The current value first, so an observer that starts late is not wrong until something
+    /// moves.** The launch fetch and the first surface appearing are separately scheduled, and a
+    /// stream that only carried changes would leave a widget rendering `.current` over a build the
+    /// client had already been told is too old.
+    ///
+    /// **A stream rather than a callback, and that is a language constraint rather than a
+    /// preference.** This is an actor and every surface that wants this is `@MainActor`; a stored
+    /// `@Sendable` closure capturing one of those does not compile under this package's language
+    /// mode. `ClientVersionState` is `Sendable`, so a stream crosses the boundary with nothing to
+    /// argue about.
+    public func clientVersionUpdates() -> AsyncStream<ClientVersionState> {
+        AsyncStream { continuation in
+            let id = UUID()
+            continuation.yield(versionState)
+            versionObservers[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeVersionObserver(id) }
+            }
+        }
+    }
+
+    private func removeVersionObserver(_ id: UUID) {
+        versionObservers.removeValue(forKey: id)
+    }
+
+    /// §8.3's `GET /v1/meta`, at most one at a time.
+    ///
+    /// **Called on launch and on any `410`, and from nowhere else** — §8.3 says so in as many words,
+    /// and says why: "It does not call it per request." A client that asked before each request
+    /// would double every route's traffic to re-read a document that changes when a founder edits a
+    /// deployment variable.
+    ///
+    /// **A failure keeps the document already held.** The refusal that most often ends this call is
+    /// the `410` this fetch was started by, and that path has already recorded the wall and its link
+    /// through `noteVersionSignals`; there is nothing for a cleared document to add and a real one
+    /// to lose.
+    @discardableResult
+    public func refreshMetaDocument() async -> SonnyMetaDocument? {
+        if let existing = metaFetch {
+            await existing.value
+        } else {
+            let task = Task<Void, Never> { [self] in await performMetaFetch() }
+            metaFetch = task
+            await task.value
+            metaFetch = nil
+        }
+        return meta
+    }
+
+    private func performMetaFetch() async {
+        let request = SonnyBackendRequest(
+            method: "GET",
+            path: "/v1/meta",
+            body: nil,
+            // §2.2's public route list and `auth/gate.ts`'s `PUBLIC_ROUTES` both carry this one: a
+            // client that had to sign in before it could be told its build is too old to sign in
+            // with is a client in a loop.
+            authentication: .none,
+            // §9.1 puts a key on every `POST`. This is a `GET` and there is no operation to make
+            // at-most-once.
+            idempotencyKey: nil,
+            // §12's "auth, account, meta, health, delete" row.
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        )
+        guard let response = try? await send(
+            request,
+            allowingRefresh: false,
+            allowingMetaRefresh: false
+        ) else {
+            return
+        }
+        guard let document = SonnyMetaDocument.decode(response.data) else { return }
+        meta = document
     }
 
     // MARK: - Clock
@@ -896,6 +1106,11 @@ private struct WireErrorEnvelope: Decodable {
         let retryable: Bool?
         let retry_after_seconds: TimeInterval?
         let request_id: String?
+        /// §7.1's one conditional field, on `version.unsupported` alone (SONNY-204). Optional here
+        /// rather than absent, because §8.1 makes a response field an additive change and §2.1 makes
+        /// ignoring an unknown one the client's job — so a code that starts carrying it later needs
+        /// no change on this side.
+        let upgrade_url: String?
     }
 
     let error: Body

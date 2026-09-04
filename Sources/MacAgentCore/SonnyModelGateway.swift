@@ -310,6 +310,12 @@ public enum SonnyBackendCopy {
             return "This build has no Sonny account service."
         case .signedOut:
             return "Sign in to Sonny to run this."
+        case .updateRequired:
+            // §8.3's wall, and the four model routes are refused by it exactly as the sign-in routes
+            // are — `version/gate.ts` covers every route and runs before authentication. The
+            // sentence is `ClientVersionCopy`'s for the reason the two entitlement arms above take
+            // `EntitlementCopy`'s: one condition, one set of words, whichever surface meets it.
+            return ClientVersionCopy.tooOldMessage
         }
     }
 }

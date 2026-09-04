@@ -1160,7 +1160,21 @@ struct ProductShellTests {
             // assigns it. Same category as `visionSessionEnvironment` in group 5: it lets a test
             // describe the world rather than inherit it, and it holds no user data for a wipe to
             // find. (SONNY-173.)
-            "voiceConfigurationBlockerOverride"
+            "voiceConfigurationBlockerOverride",
+
+            // 7. Contract §8's version state (SONNY-402). What a *deployment* has said about this
+            // build, the observation reading it, whether the user has waved the warning away, and
+            // the seam that opens the upgrade link. None of it is the user's data, none of it is
+            // task state, and clearing any of it would be wrong in the same direction: a wipe would
+            // hide the fact that this build is too old to reach Sonny at all, which is the one
+            // sentence a user whose backend calls are all failing needs. It also comes back on its
+            // own — the next response re-derives it — so a clear would be a flicker rather than a
+            // change. The dismissal is per-launch by construction and a wipe is not the press that
+            // should re-raise a warning the user answered a minute ago.
+            "clientVersionState",
+            "clientVersionObservation",
+            "hasDismissedUpdateAvailablePrompt",
+            "openUpgradeLink"
         ]
 
         let fixture = try makeProductShellFixture()

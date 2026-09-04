@@ -33,6 +33,103 @@ final class AgentViewModel: ObservableObject {
     /// Starts `.undetermined` and is answered by `refreshModelAccessReadiness()`. It is not derived
     /// on demand because the read is an actor hop and every reader of it is synchronous.
     @Published private(set) var modelAccessReadiness: ModelAccessReadiness = .undetermined
+
+    // MARK: - Version (contract §8, SONNY-402)
+
+    /// What the deployment has said about this build — §8.3's wall, §8.4's warning, or neither.
+    ///
+    /// **One value on the shared view model, because both surfaces render it and they must not be
+    /// able to disagree.** `.claude/rules/macagent-ui-conventions.md` makes that the rule for every
+    /// attention state; this one has a sharper reason than most, since a build that is too old fails
+    /// every backend call and a user looking at the wrong surface would see only the failures.
+    ///
+    /// Written by ``clientVersionDidChange(_:)`` alone, from the client's own stream.
+    @Published private(set) var clientVersionState: ClientVersionState = .current
+    /// Whether §8.4's warning has been waved away for this state.
+    ///
+    /// **The warning is dismissible and the wall is not**, which `ClientVersionCopy.dismissLabel`
+    /// argues at the copy: a band a user sits in for weeks would otherwise park a banner on the
+    /// widget over every idle moment and hold the resume offer off screen for the whole time.
+    /// Cleared whenever the state changes, so the next thing the deployment says is heard.
+    @Published private(set) var hasDismissedUpdateAvailablePrompt = false
+    /// Injected so a test can assert the URL that would have opened without a browser launching on
+    /// the machine running the suite — `SonnyAccountModel.openPortalURL`'s pattern exactly, and for
+    /// the same reason. `main.swift` leaves it at the default.
+    ///
+    /// **Nothing reaches this without passing ``ClientUpgradeLink``** — the state's `link` is `nil`
+    /// unless the server-supplied string parsed as `http` or `https`, which is the founder's
+    /// decision of 2026-09-04 and the reason there is no scheme check at the press.
+    var openUpgradeLink: @MainActor @Sendable (URL) -> Void = { NSWorkspace.shared.open($0) }
+    private var clientVersionObservation: Task<Void, Never>?
+
+    /// §8.3's wall: nothing that needs the gateway can succeed until the app is updated.
+    var isTooOldForThisBackend: Bool {
+        if case .tooOld = clientVersionState { return true }
+        return false
+    }
+
+    /// §8.4's warning, as a surface should ask it — the state *and* whether it has been waved away.
+    var showsUpdateAvailablePrompt: Bool {
+        if case .updateAvailable = clientVersionState { return !hasDismissedUpdateAvailablePrompt }
+        return false
+    }
+
+    /// Start reading the client's version stream, then make §8.3's launch call.
+    ///
+    /// **The observation is installed before the fetch, and the order is deliberate**: the stream
+    /// yields the state it already holds as its first element, so an observer that arrives late is
+    /// merely late rather than wrong — but installing it first means the launch fetch's own result
+    /// cannot fall between the two.
+    ///
+    /// Called once, from `AppDelegate.applicationDidFinishLaunching`. §8.3's "on any `410`" half
+    /// needs no call site at all: it lives inside `SonnyBackendClient.send`, which is the one place
+    /// every route's refusal passes through.
+    func beginWatchingClientVersion() async {
+        clientVersionObservation?.cancel()
+        let client = backendClient
+        clientVersionObservation = Task { [weak self] in
+            for await state in await client.clientVersionUpdates() {
+                guard let self else { return }
+                self.clientVersionDidChange(state)
+            }
+        }
+        await backendClient.refreshMetaDocument()
+    }
+
+    /// Stops the observation. For a test fixture, which is discarded while the shipping app's view
+    /// model lives as long as the process does.
+    func stopWatchingClientVersion() {
+        clientVersionObservation?.cancel()
+        clientVersionObservation = nil
+    }
+
+    /// Internal rather than `private` so a surface test can put the view model into either state
+    /// without a stub gateway — the same reason `AppDelegate.decideFirstRunAfterRestoringTheSession`
+    /// is internal. What the *client* derives from real responses is
+    /// `ClientVersionClientTests`' subject; what the two surfaces do with the result is this one's,
+    /// and driving the second through the first would make every precedence assertion depend on a
+    /// round trip it is not about.
+    func clientVersionDidChange(_ state: ClientVersionState) {
+        guard state != clientVersionState else { return }
+        clientVersionState = state
+        // A dismissal answers the state it was pressed on. When the deployment says something
+        // different — a new link, or the wall after the warning — the user has not seen it yet.
+        hasDismissedUpdateAvailablePrompt = false
+    }
+
+    func dismissUpdateAvailablePrompt() {
+        hasDismissedUpdateAvailablePrompt = true
+    }
+
+    /// Opens the upgrade link in the default browser, and does nothing when there is none.
+    ///
+    /// Both surfaces call this and neither renders a control unless `clientVersionState.link` is
+    /// non-`nil`, so the guard here is the belt: a link that did not parse as `http` or `https`
+    /// never became a `URL` in the first place.
+    func openClientVersionLink() {
+        guard let link = clientVersionState.link else { return }
+        openUpgradeLink(link)
+    }
     @Published var savedRoutines: [StoredRoutine] = []
     /// What Sonny is currently waiting on — the Routines page's Watching list (SONNY-382).
     ///
@@ -1837,6 +1934,16 @@ final class AgentViewModel: ObservableObject {
         if clarificationQuestion != nil {
             return true
         }
+        // **§8.3's wall, above the failure branch and below every parked question** (SONNY-402).
+        // Above `.failure` because a build the gateway refuses cannot succeed at anything that needs
+        // it, so the sentence a failed run shows — "try again" — is an invitation to repeat a
+        // refusal that is defined as permanent. Below the four parked questions, `.controlling` and
+        // the clarification for the reason those are unconditional in the first place: each is a
+        // continuation nothing but the user resolves, a local capability parks them without touching
+        // the gateway at all, and a widget that declined to render one would simply hang the run.
+        if isTooOldForThisBackend {
+            return true
+        }
         if errorMessage != nil && !isRunning {
             return true
         }
@@ -1860,6 +1967,13 @@ final class AgentViewModel: ObservableObject {
         // which failed partway shows *why* it failed rather than an offer to try again with the
         // reason hidden. The offer is still there the moment that outcome clears.
         if resumeOffer != nil {
+            return true
+        }
+        // **§8.4's warning, last of all, above nothing but the idle state** (SONNY-402). Everything
+        // still works in this band, so this must not take the surface from anything that reports the
+        // task the user is doing — nor from the resume offer, which is already the lowest thing here
+        // and would otherwise be held off screen for as long as the band lasts.
+        if showsUpdateAvailablePrompt {
             return true
         }
         return false

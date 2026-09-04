@@ -145,6 +145,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `decideFirstRunAfterRestoringTheSession()` for why they are one method.
         Task { await decideFirstRunAfterRestoringTheSession() }
 
+        // Contract §8.3's launch half: "The client calls `GET /v1/meta` on launch and on any `410`.
+        // It does not call it per request." (SONNY-402.)
+        //
+        // **Its own task rather than a line inside the one above, because the two must not wait on
+        // each other.** That one reads the Keychain and decides first run, and this one makes a
+        // network call; sequencing them would put a launch decision the user sees immediately behind
+        // a request that can take this route's whole twenty-second budget on a bad connection. They
+        // share nothing — the meta route is unauthenticated, so it needs no session — and neither
+        // reads what the other writes.
+        //
+        // The "on any `410`" half needs no call site at all: it lives inside
+        // `SonnyBackendClient.send`, the one place every route's refusal passes through.
+        Task { await viewModel.beginWatchingClientVersion() }
+
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
         // Starts the schedule tick and the wake observer. Deliberately after the notification and

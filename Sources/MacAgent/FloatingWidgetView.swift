@@ -74,6 +74,28 @@ enum WidgetState {
     case controlling(VisionSessionProgress)
     case result(String, RunSuggestion?)
     case failure(String)
+    /// §8.3's wall: this deployment refuses this build, so nothing that needs the gateway can work
+    /// (SONNY-402).
+    ///
+    /// **Above `.failure` and below every parked question.** Above, because a failure panel offers
+    /// Retry and a `410 version.unsupported` is the one refusal the contract defines as permanent —
+    /// §9.3 makes it non-retryable and `SonnyBackendErrorCode.maximumAttempts` answers 1 — so the
+    /// state that says "try again" must not be what the user is looking at. Below, because the four
+    /// parked continuations, the live session's HUD and an unanswered clarification are all things
+    /// a *local* capability can produce with the gateway never touched, and every one of them hangs
+    /// a run if the widget declines to draw it. That is `WidgetState`'s standing rule — a parked
+    /// continuation outranks everything that is merely a report — and this is a report about the
+    /// app rather than a question waiting on the user.
+    case tooOld(ClientVersionPrompt)
+    /// §8.4's warning: below `recommended_client`, and everything still works (SONNY-402).
+    ///
+    /// **Last of all, above nothing but `.idle`, and that placement is the whole of this state's
+    /// design.** It is not about a task at all, and the band it reports lasts until the user
+    /// updates — days or weeks. Placed anywhere above `.resumeOffer` it would hold every other panel
+    /// off screen for that whole time, which is the failure `.resumeOffer`'s own placement argument
+    /// spells out one case further down: a fifth competitor for this surface must not be able to
+    /// displace a thing from now, and this is not even a thing from before.
+    case updateAvailable(ClientVersionPrompt)
     /// Sonny is offering to carry on with a task an earlier run began and did not finish (row 13,
     /// SONNY-210).
     ///
@@ -377,6 +399,18 @@ struct FloatingWidgetView: View {
             return !viewModel.outcomeWasNotified
         case .working:
             return viewModel.activeTaskOrigin != .widget
+        case .tooOld, .updateAvailable:
+            // **Collapses on exactly the rule `.idle` and `.resumeOffer` collapse on, and that is
+            // the decision rather than the default** (SONNY-402). Neither state is a parked
+            // continuation: nothing hangs while they are on screen, and §16.3's free local
+            // capabilities keep working through both — a build the gateway refuses still opens an
+            // app, expands a snippet and does arithmetic. So a widget held permanently expanded
+            // would sit over the user's screen for as long as the condition lasts, which is until
+            // they update, and the wall in particular has no Dismiss to end it with. Collapsing
+            // loses nothing: neither state is cleared by the dismiss timer
+            // (`shouldClearOutcomeOnDismiss` answers `false` for both through its `default`), so the
+            // panel is there again the next time the widget is opened.
+            return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused, .controlling:
             return false
         }
@@ -544,6 +578,12 @@ struct FloatingWidgetView: View {
         if let question = viewModel.clarificationQuestion {
             return .clarification(question)
         }
+        // §8.3's wall, above `.failure` — see `WidgetState.tooOld` for why it sits exactly here.
+        // `AgentViewModel.hasVisibleWidgetPanel` mirrors this branch in the same position.
+        if viewModel.isTooOldForThisBackend,
+           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
+            return .tooOld(prompt)
+        }
         if let error = viewModel.errorMessage, !viewModel.isRunning {
             return .failure(error)
         }
@@ -558,6 +598,12 @@ struct FloatingWidgetView: View {
         // two must not drift — its own doc comment is where the shared rule lives.
         if let offer = viewModel.resumeOffer {
             return .resumeOffer(offer)
+        }
+        // §8.4's warning, last — see `WidgetState.updateAvailable`. `hasVisibleWidgetPanel` mirrors
+        // this branch in the same position.
+        if viewModel.showsUpdateAvailablePrompt,
+           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
+            return .updateAvailable(prompt)
         }
         return .idle
     }
@@ -577,6 +623,8 @@ struct FloatingWidgetView: View {
         case .result: return 4
         case .failure: return 5
         case .resumeOffer: return 10
+        case .tooOld: return 11
+        case .updateAvailable: return 12
         }
     }
 
@@ -1169,6 +1217,15 @@ private extension FloatingWidgetView {
                 message: message,
                 canRetry: viewModel.hasRetryableCommand,
                 onRetry: { viewModel.retryLastCommand() }
+            )
+        case .tooOld(let prompt), .updateAvailable(let prompt):
+            // One panel for both states, and the states differ only in the value they carry — which
+            // is what makes it impossible for the wall and the warning to drift apart visually. What
+            // separates them is the precedence above, not the drawing.
+            WidgetVersionPanel(
+                prompt: prompt,
+                onUpdate: { viewModel.openClientVersionLink() },
+                onDismiss: { viewModel.dismissUpdateAvailablePrompt() }
             )
         }
     }
@@ -2260,6 +2317,76 @@ private struct WidgetNoticeStrip: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(WidgetTheme.hairline.opacity(0.25), lineWidth: 1)
         )
+    }
+}
+
+/// §8's two version states, in System B (SONNY-402).
+///
+/// **Both words come from `ClientVersionCopy.prompt(for:)` and none is written here**, which is the
+/// same rule `ScreenControlSessionPresentation` holds for the session's own sentence and for the same
+/// reason: this panel's System A counterpart is `CommandCenterAttentionPanel`'s `versionContent`, the
+/// two cannot share a view because neither token set may cross into the other's surface, and a
+/// hand-written literal on either side is one condition described two ways.
+///
+/// **The Update control is offered only when the prompt carries a label**, which is only when the
+/// state carries a link this app will open. The founder's decision of 2026-09-04: an Update Sonny
+/// button that opens the URL, or the message with no button, and never a visible URL or a Copy.
+///
+/// The two controls are `WidgetCaptureReviewPanel`'s text buttons, token for token — 23 high on the
+/// circular fill, `captionMedium`, the affirmative tinted and the other neutral. No new component and
+/// no new System B token.
+private struct WidgetVersionPanel: View {
+    let prompt: ClientVersionPrompt
+    let onUpdate: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(WidgetTheme.primaryAction)
+
+                Text(prompt.title)
+                    .font(WidgetType.captionMedium)
+                    .foregroundStyle(WidgetTheme.textFull)
+
+                Spacer(minLength: 8)
+            }
+
+            Text(prompt.message)
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                if let dismissLabel = prompt.dismissLabel {
+                    Button(action: onDismiss) {
+                        Text(dismissLabel)
+                            .font(WidgetType.captionMedium)
+                            .foregroundStyle(WidgetTheme.textFull)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .frame(height: 23)
+                    .widgetCircularBackground()
+                }
+
+                if let updateLabel = prompt.updateLabel {
+                    Button(action: onUpdate) {
+                        Text(updateLabel)
+                            .font(WidgetType.captionMedium)
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .frame(height: 23)
+                    .widgetCircularBackground(tint: WidgetTheme.primaryAction)
+                }
+            }
+        }
     }
 }
 
