@@ -513,6 +513,9 @@ here only so nobody adds a second one.
 | `POST /v1/auth/refresh` | refresh token in body | Rotate tokens | SONNY-127 |
 | `POST /v1/auth/signout` | yes | Revoke this session's family | SONNY-127 |
 | `GET /v1/account/entitlements` | yes | Fetch the signed entitlement claim | SONNY-135 |
+| `GET /v1/account/credits` | yes | How many screen-control runs are left this period | SONNY-212 |
+| `PUT /v1/account/credits/auto-top-up` | yes | Turn automatic top-ups on or off | SONNY-215 |
+| `POST /v1/account/credits/top-up` | yes | Buy one more pack of screen-control runs | SONNY-215 |
 | `DELETE /v1/account` | yes | Delete the account and everything under it | SONNY-127, SONNY-134 |
 | `POST /v1/plan` | yes | Planner | SONNY-130 |
 | `POST /v1/research/synthesize` | yes | Web-research synthesis | SONNY-130 |
@@ -523,6 +526,15 @@ here only so nobody adds a second one.
 | `POST /v1/billing/checkout` | yes | Where to send this account to subscribe | SONNY-211 |
 | `POST /v1/billing/webhook` | HMAC signature over the raw body, not a Bearer token | Subscription lifecycle from the payment provider | SONNY-211 |
 | `POST /v1/billing/portal` | yes | Where to send this account to manage an existing subscription | SONNY-216 |
+
+**`GET /v1/account/credits` was served from SONNY-212 and was missing from this table until
+2026-09-03** (SONNY-215). It is listed now, beside the two routes that would otherwise have
+documented a feature whose read half was undocumented. The omission is worth a sentence rather than
+a silent fix, because this table is not a convenience: §2.2 names its `Auth` column the single
+source of truth for which endpoints carry a Bearer token, and `server/src/auth/gate.ts`'s
+deny-by-default list is derived from it — so a served route absent here is the same invariant the
+paragraph below states, failing in the other direction. Nothing about the route changed; it has been
+authenticated and challenged since it shipped, which `gate.test.ts`'s population scan asserts.
 
 **`POST /v1/billing/webhook` is the one row in this table no client ever calls, and its `Auth` cell
 says a mechanism rather than `yes` or `none` for that reason** (added 2026-08-30, SONNY-211). Every
@@ -951,7 +963,8 @@ number SONNY-17 says a user tracks, added by SONNY-212.
   "period_end": "2026-09-01T00:00:00.000Z",
   "screen_control_runs_left": 97,
   "screen_control_runs_included": 100,
-  "credits": { "allowance": 1000, "drawn": 30, "remaining": 970, "per_run": 10 }
+  "credits": { "allowance": 1000, "drawn": 30, "remaining": 970, "per_run": 10, "topped_up": 0 },
+  "auto_top_up": { "offered": true, "opted_in": false, "attempts_left": 3 }
 }
 ```
 
@@ -975,10 +988,46 @@ number SONNY-17 says a user tracks, added by SONNY-212.
   tier *count* is configuration too: the product decision today is free plus one paid tier, and
   `plans` is a list of any length so a third is not a code change.
 - **`credits` is diagnostic and is not a second number for a user.** It exists so the derivation can
-  be sanity-checked against a measured cost; the Mac reads the run count and ignores it.
+  be sanity-checked against a measured cost, and `topped_up` is the one figure in it that is **not**
+  derived from metering — it is what SONNY-215's purchases added to this period, carried separately
+  so a founder checking a run count against a measured cost can subtract it. **One of the five is
+  read by the Mac**: `remaining`, and only since SONNY-213, whose step boundary asks whether the
+  account has actually run out — a question `screen_control_runs_left` cannot answer for a session
+  whose own iterations have already been subtracted from it. (This bullet read *"the Mac reads the
+  run count and ignores it"* until 2026-09-03; it stopped being true at SONNY-213 rather than here.)
+  None of the five is rendered.
+- **`auto_top_up` is a setting and not a number** (SONNY-215). `offered` is the deployment's answer —
+  a top-up pack is configured and this gateway can charge — and `opted_in` is the user's. They are
+  separate because the app does opposite things with them: nothing offered renders no control at all,
+  and offered-but-not-opted-in renders one that is off. `attempts_left` is what the period's bound
+  has not spent; the client reads it so a session does not ask for a purchase the gateway would
+  refuse, and it is rendered nowhere. **A client that receives no `auto_top_up` object reads all
+  three as off/zero**, which is the fail-closed direction on the axis that matters: a field lost in a
+  rewrite must not be able to make a user look as though they consented to a charge.
+- **Buying more runs is `POST /v1/account/credits/top-up`, and its first refusal is the consent**
+  (SONNY-215). It recomputes the balance from the account's own metering rows, so "I am low" is not
+  something a caller declares; it refuses unless the account has opted in, unless the deployment
+  sells a pack, unless `screen_control_runs_left` is zero, unless the period has an attempt left, and
+  unless there is a customer at the provider to charge. It answers this same body, so a caller needs
+  no second read to see what it bought. It carries §9's idempotency guarantees like every other
+  `POST`, and is the one route in this contract where they are about money — **with the exception
+  §9.2's own release list creates, which is worth stating here because this is the route it would
+  cost the most** (PR #196's F5): a repeat on one key replays a stored `topup.declined` or
+  `topup.unconfirmed`, and does **not** replay a `500 server.error`, because that code is released
+  rather than stored. What stops that being a second charge is not idempotency at all — an order this
+  gateway created and has not resolved is resolved by the next attempt rather than replaced (PR
+  #196's F1), so the charge is made once whatever the key does.
+- **Turning the setting on or off is `PUT /v1/account/credits/auto-top-up`**, body
+  `{"enabled": true|false}` with no default — a request that omits it is `400 request.invalid` rather
+  than being read as either value. It answers this same body too, so the surface showing the switch
+  and the number beside it cannot be one request apart.
 - Authenticated, not metered, not charged against the spend cap, and rate limited like every other
   authenticated route — charging a user for asking how much is left would make the question spend the
-  answer.
+  answer. **That covers the two top-up routes as well, and for the purchase it is worth saying out
+  loud**: the charge is at the payment provider and against a plan's allowance, and §9's cap is an
+  operator's anti-abuse ceiling on calls. SONNY-212 and SONNY-213 each declined to merge the two.
+  Metering a purchase would also write it into the very table the balance is derived from, so a
+  top-up would draw down the allowance it had just bought.
 
 ---
 
@@ -1157,6 +1206,9 @@ Also part of the taxonomy:
 | Idempotency key reused with a different body | 409 | `idempotency.conflict` | Section 9 |
 | Account already holds a live subscription | 409 | `entitlement.already_subscribed` | `POST /v1/billing/checkout` only (SONNY-211). A server-side guard against a second subscription on one account, not a state an ordinary client should reach — the app knows its own entitlement and should not offer Subscribe. Client copy is SONNY-136's |
 | Account holds no subscription to manage | 409 | `entitlement.no_subscription` | `POST /v1/billing/portal` only (SONNY-216). The mirror of the row above, and like it a state an ordinary client should not reach — the app knows its own entitlement and should not offer Manage subscription. **Not an error at the provider**: it is what a signed-in user who never subscribed looks like, which is most accounts. Client copy is SONNY-136's |
+| No top-up was made for this account | 409 | `topup.not_permitted` | `POST /v1/account/credits/top-up` only (SONNY-215). **One code for five refusals** — the deployment sells no pack, the account has not opted in, it is not actually low, the period's attempts are spent, or there is no customer at the provider to charge — because a client does the same thing about all five: do not retry, and let the gate refuse as it would have. Which one it was is logged and never sent. The one this code exists to guarantee is the consent, and it is checked before anything else is read |
+| The provider did not complete the charge | 402 | `topup.declined` | `POST /v1/account/credits/top-up` only (SONNY-215). The provider answered and did not charge — a declined card, no payment method on file, or an authentication challenge an off-session charge cannot answer. Its own status because the fix is the user's payment method rather than their settings, and collapsing it into the row above is a distinction a later surface could not recover |
+| The provider's answer could not be read | 502 | `topup.unconfirmed` | `POST /v1/account/credits/top-up` only (SONNY-215). The charge was attempted and its answer could not be read, so **money may have moved and nothing was granted for it**. **Not retryable, which is why it is not `provider.unavailable`**: a client told to retry would buy a second pack to recover from a first one it cannot see. The provider's order id is recorded server-side for an operator to resolve |
 | Client below the minimum supported version | 410 | `version.unsupported` | Section 8.3 |
 | Sign-in code wrong, expired or already used | 400 | `auth.code_invalid`, `auth.code_expired`, `auth.code_used` | Three distinct codes because SONNY-127 and SONNY-128 both need to tell them apart |
 
@@ -1898,3 +1950,5 @@ record rather than a tidy list.
 | 2026-08-31 | **4.1 gains `POST /v1/billing/portal`, 7.2 gains `entitlement.no_subscription`, and the gateway makes its first outbound call to a payment provider.** An authenticated route that mints a hosted customer-portal session and returns its URL, so a subscriber can change a payment method, read invoices or cancel. **The outbound call is a deliberate reversal of a property SONNY-211 established** — its record states the hosted checkout "needs no provider API credential and makes no outbound request", and both halves of that stop being true here. The reason is identity, not convenience: the provider's *static* portal authenticates the human by emailing a one-time code to the address on their **provider** record, and `docs/sonny-identity-linking-rule.md:14` states that Sonny's identity key "is never the email address" — §2 of that document records Sign in with Apple returning `abc123@privaterelay.appleid.com`. So a Hide My Email user, or anyone whose Sonny sign-in and provider checkout used different addresses, could not reach their own billing portal at all, with no error this gateway can surface and no recovery the app can offer. A credential is a cost the founders manage by rotating it; that one is a cost the user pays and nobody can fix. **The lookup needs no new state**: `checkoutUrlFor` already sends the account id as `customer_external_id`, so the provider's customer carries it as `external_id` and `external_customer_id` resolves it — no read of `sonny.entitlement`, no column, no migration. **`entitlement.no_subscription` is the mirror of `entitlement.already_subscribed`** and is deliberately not an error condition: it is what a signed-in user who never subscribed looks like, which is most accounts, and the app is expected to know its own entitlement and not offer the control. The other three failures reuse 7.2's existing `provider.timeout`, `provider.unavailable` and `provider.rejected` unchanged. **No existing shape moved**: no endpoint, request body, response body, header, size limit or timeout in this document changed, no existing `code` changed meaning, 5.3's claim is byte-identical, and both new rows are additive. The portal route is **absent from 2.2's convenience list** and challenged by the gate — `gate.test.ts` and `billing.test.ts` each assert it. | SONNY-216 |
 | 2026-09-02 | **No shape moved, and one clause of the row above needs its scope read.** `POST /v1/billing/portal` now reads `sonny.entitlement` before it calls the provider, answering an account this gateway has recorded no subscription for with the existing `entitlement.no_subscription` and no outbound call (SONNY-387). **Nothing in this document changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout moved, both 409 paths return byte-identical bodies — same status, same `code`, same `message`, same `retryable`, which `billing.test.ts` asserts rather than this row asserting it — and 7.2's row for that code is untouched, since the code's meaning is the same fact about the same account whichever side learned it. This row exists for the sentence in the 2026-08-31 row reading *"**The lookup needs no new state**: … no read of `sonny.entitlement`, no column, no migration."* That remains true of what it describes — the *provider-side customer lookup*, which still resolves by `external_customer_id` and still needs no stored state — but it is the sentence a reader greps to answer "does the portal route touch the entitlement table", and read that way it now answers wrongly: the route does, on every request, and no column or migration was added. The 2026-08-31 row stays verbatim as the dated record it is; this is the correction, at the end of the log where the next reader meets it. | SONNY-387 |
 | 2026-09-03 | **Section 8 is built, and it gains three paragraphs recording what building it decided; 7.1 gains one field on one code.** `GET /v1/meta`, the `410 version.unsupported` gate on every route, and 8.4's `Sonny-Deprecation` / `Sonny-Deprecation-Info` headers all exist (SONNY-204) — 4.1's owner note, 5.3's key-set bullet and 13's row each said they did not, and each is corrected where it lives. **The one wire change is additive**: `version.unsupported`'s error body carries `upgrade_url`, which 8.3 already required "an `upgrade_url` in the error body" and 7.1 did not show; the key is absent on every other error rather than present and null, so no existing response moved. **No endpoint, request body, header, size limit, timeout or existing `code` changed meaning**, and `GET /v1/meta` was already in 4.1's table, in 2.2's unauthenticated list and in `auth/gate.ts`'s `PUBLIC_ROUTES` — its entry needed no edit when the handler landed, which is the property that list claims. **Three things 8 left implicit are now stated in 8.3, because the implementation had to choose them**: only the marketing version is compared and one-to-three components are accepted, since the shipping bundle sends `1.0+1`; a request with no version, an unreadable one, or the header twice is **served** and never treated as too old, because every non-app caller sends none and this gate is a courtesy rather than a boundary; and both bounds default to `0.0.0`, which disarms the gate, because 8.4 makes a minimum that had no deprecation period a breach and a default carries none. **What is still not built**: the Mac calls none of this (**SONNY-402**), and the published key set holds one key rather than a rotation overlap (**SONNY-401**), both recorded at 5.3 and 13. | SONNY-204 |
+| 2026-09-03 | **4.1 gains three routes — two new and one that was missing — 5.4 grows two fields, and 7.2 gains three codes.** `PUT /v1/account/credits/auto-top-up` records a user's consent to automatic charges and changes nothing else; `POST /v1/account/credits/top-up` is the one route in this contract that **moves money**, and it refuses on the absence of that consent before it reads anything else. **The third row is a correction rather than an addition**: `GET /v1/account/credits` has been served since SONNY-212 and was never listed in 4.1, which is a gap in the one table 2.2 names as the single source of truth for which endpoints carry a Bearer token and from which `server/src/auth/gate.ts`'s deny-by-default list is derived — the same invariant the 2026-08-30 row states, failing quietly in the other direction. It is listed now, beside the two routes that would otherwise have documented a feature whose read half was undocumented. **5.4's body grows `credits.topped_up` and an `auto_top_up` object**, both additive under 2.1, and the section's bullet reading *"the Mac reads the run count and ignores it"* is corrected: it stopped being true at SONNY-213, whose step boundary reads `credits.remaining` because the run count cannot answer whether a session already spending its own run has actually run out. **7.2 gains `topup.not_permitted` (409), `topup.declined` (402) and `topup.unconfirmed` (502, not retryable).** The first is one code for five refusals — no pack configured, no consent, not actually low, the period's attempts spent, no customer at the provider — because a client does nothing different about any of them and what separates them is what an operator needs, which the route logs. The second is its own status because "your card" and "your settings" are different problems with different fixes, and a later surface could not recover the distinction if they were collapsed here. The third is **not** `provider.unavailable`, and the difference is the whole of why it exists: the charge may have gone through, so a client told to retry would buy a second pack to recover from a first one it cannot see. **No existing shape moved**: no endpoint, request body, response body, header, size limit or timeout changed, no existing `code` changed meaning, and 5.3's claim is byte-identical — the allowance is not on it, for the reason 5.4 already gives. | SONNY-215 |
+| 2026-09-04 | **5.4 grows `auto_top_up.price` and `last_top_up`, and one sentence about §9 is corrected.** Both fields are additive under 2.1 and carry the founders' decision of 2026-09-03: the switch that authorises a standing charge names what it costs, and the account section carries a record of the last charge — a price and a date, with no per-charge confirmation and nothing explaining why either is there. Money crosses as **minor units and an ISO 4217 code**, never a formatted string, because a symbol and a decimal separator are locale decisions and §7.1 makes the words the client's. **The correction is to the top-up route's idempotency sentence**, which said a retry "replays the stored answer rather than buying a second pack" without qualification (PR #196's F5): that is true of the codes §9.2 stores and false of `server.error`, which `idempotency/hook.ts` releases. What actually stops a second charge is not the key — an order this gateway created and has not resolved is resolved by the account's next attempt rather than replaced (PR #196's F1) — and the sentence now says so. **No existing shape moved**: no endpoint, request body, header, size limit or timeout changed, no existing `code` changed meaning, and 5.3's claim is byte-identical. | SONNY-215 |

@@ -70,6 +70,29 @@ export const TEST_CREDIT_PLANS = JSON.stringify({
 });
 
 /**
+ * The same catalogue with a top-up pack on it (SONNY-215).
+ *
+ * **Separate from `TEST_CREDIT_PLANS` rather than added to it**, because a deployment that sells no
+ * pack is the default this repository ships and every suite that says nothing about top-ups should
+ * get one — `offered: false`, and a charge route that refuses. A fixture where every app could
+ * charge would make "this deployment sells none" a case nothing exercised.
+ *
+ * One pack is 500 credits — 50 runs at this catalogue's ten per run, half a tier-A month — and three
+ * attempts a period, so a test about the bound has two failures to make before it reaches it.
+ */
+export const TEST_CREDIT_PLANS_WITH_TOP_UP = JSON.stringify({
+  ...(JSON.parse(TEST_CREDIT_PLANS) as Record<string, unknown>),
+  topUp: {
+    credits: 500,
+    productId: "test-product-topup",
+    maxPerPeriod: 3,
+    // A fixture price, not a plan's — `TEST_CREDIT_PLANS`' own comment carries that distinction, and
+    // SONNY-215's F6 put a price on the wire without putting one in this repository's source.
+    price: { amount: 500, currency: "usd" },
+  },
+});
+
+/**
  * An in-memory `CreditStore`.
  *
  * **It is not a model of the draw and must never become one.** It returns whatever a test told it
@@ -81,8 +104,23 @@ export const TEST_CREDIT_PLANS = JSON.stringify({
 export function fakeCreditStore(facts: {
   planKey?: string | undefined;
   draw?: { sessions: number; iterations: number; pixels: number };
+  /** What this period's granted top-ups added (SONNY-215). */
+  toppedUpCredits?: number;
+  /** How many attempts this period has already carried, granted or not. */
+  topUpAttemptsThisPeriod?: number;
+  /**
+   * When this account opted in, or `null` (SONNY-215). **`null` is the default and it is the
+   * fixture half of "off by default"**: a suite whose fake consented by omission could never
+   * notice a route that stopped checking.
+   */
+  autoTopUpOptedInAt?: Date | null;
+  /** What this account was last charged, or nothing — the default (SONNY-215's F6). */
+  lastTopUp?: { amount: number; currency: string; at: Date };
 }): {
   factsFor: (accountId: string, now: Date) => Promise<CreditFacts>;
+  setAutoTopUp: (accountId: string, enabled: boolean, now: Date) => Promise<Date | null>;
+  /** Every `setAutoTopUp` this store was asked to make, in order. */
+  settings: { accountId: string; enabled: boolean }[];
   asked: Date[];
   /**
    * Every account id the store was asked about, in order.
@@ -98,16 +136,30 @@ export function fakeCreditStore(facts: {
 } {
   const asked: Date[] = [];
   const askedAbout: string[] = [];
+  const settings: { accountId: string; enabled: boolean }[] = [];
+  let optedInAt = facts.autoTopUpOptedInAt ?? null;
   return {
     asked,
     askedAbout,
+    settings,
     factsFor: (accountId, now) => {
       asked.push(now);
       askedAbout.push(accountId);
       return Promise.resolve({
         planKey: facts.planKey,
         draw: facts.draw ?? { sessions: 0, iterations: 0, pixels: 0 },
+        toppedUpCredits: facts.toppedUpCredits ?? 0,
+        topUpAttemptsThisPeriod: facts.topUpAttemptsThisPeriod ?? 0,
+        autoTopUpOptedInAt: optedInAt,
+        lastTopUp: facts.lastTopUp,
       });
+    },
+    setAutoTopUp: (accountId, enabled, now) => {
+      settings.push({ accountId, enabled });
+      // The real store's rule, kept here because a test that reads the setting back after writing
+      // it is reading this: on does not refresh an instant that is already set, off clears it.
+      optedInAt = enabled ? (optedInAt ?? now) : null;
+      return Promise.resolve(optedInAt);
     },
   };
 }

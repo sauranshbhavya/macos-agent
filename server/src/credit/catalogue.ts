@@ -106,6 +106,71 @@ const weightsSchema = z.object({
   perMegapixel: z.number().nonnegative(),
 });
 
+/**
+ * What one automatic top-up buys, and how many a period may carry (SONNY-215).
+ *
+ * **Optional, and its absence is what "this deployment does not offer top-ups" means.** There is no
+ * default here for `weightsSchema`'s reason and one of its own: an invented pack size would be an
+ * allowance this repository decided, and an invented `productId` would name a product at the
+ * provider that does not exist. So a deployment that has not configured a pack cannot charge
+ * anybody — the route refuses, the app does not render the control, and that is the second
+ * structural fail-closed beside the consent itself.
+ *
+ * **The credits and the product id are one fact and live together for that reason.** `BILLING_PLANS`
+ * maps a *subscription* product onto a plan key and a capability list; this is a one-time product
+ * whose only meaning is how much credit it grants, and splitting the two across two variables would
+ * let a deployment sell a pack whose size nothing agrees on.
+ *
+ * **A price is here now, and the line this file has always held is unmoved** (SONNY-215's F6,
+ * founder decision option B). What that line forbids is *this repository* naming an amount, and it
+ * still names none: `price` has no default, no example value in any source file, and startup refuses
+ * a catalogue without it. What changed is that the product **shows** the price on the switch that
+ * authorises the charge — a price is what a purchase always carries — so the number has to reach the
+ * client, and configuration is the only place it can come from.
+ *
+ * **It is the deployment's job to keep this in step with the provider's product**, and nothing here
+ * can check it: this gateway never reads the product, so a `price` that disagrees with what the card
+ * is charged would show one number and take another. Two things bound that. The *record* the product
+ * shows after a charge is the provider's own figure whenever the provider gives one — see
+ * `credit/topup.ts` — so only the pre-purchase label can be wrong; and SONNY-215's manual rows check
+ * the two against each other on the first real order.
+ */
+const priceSchema = z.object({
+  /**
+   * **In the currency's smallest unit**, as every payment provider counts money — 500 for $5.00.
+   * An integer, because a fractional cent is not a price anybody can be charged, and **strictly
+   * positive** for `credits`' reason one field up (PR #196's G6): a configured `0` would render
+   * "($0.00)" on a switch that then charges whatever the provider's product really costs, which is
+   * the pre-purchase label being wrong in the one way a user would act on.
+   */
+  amount: z.number().int().positive(),
+  /** ISO 4217, lowercase, as the provider writes it. Three letters, checked so a typo is a startup
+   * failure rather than a currency symbol the app cannot format. */
+  currency: z.string().trim().toLowerCase().regex(/^[a-z]{3}$/),
+});
+
+const topUpSchema = z.object({
+  /**
+   * Credits one top-up grants. **Strictly positive**: a pack worth nothing is a charge that buys
+   * nothing, and `credit_topup`'s own CHECK refuses to record one.
+   */
+  credits: z.number().positive(),
+  /**
+   * The provider's id for the one-time product a top-up buys. Opaque here, exactly as a plan key is.
+   */
+  productId: z.string().trim().min(1),
+  /**
+   * How many top-up **attempts** one account may make in one period. At least one.
+   *
+   * Attempts rather than grants, which is 0019's decision and is recorded there: a declined card
+   * costs the user nothing and costs the founders their standing with the provider, so a run of
+   * declines is a reason to stop rather than a reason to keep going for free.
+   */
+  maxPerPeriod: z.number().int().min(1),
+  /** What one pack costs, as the switch that authorises it says out loud. See `priceSchema`. */
+  price: priceSchema,
+});
+
 /** One tier. An opaque key and what a month of it includes. */
 const planSchema = z.object({
   /**
@@ -141,10 +206,13 @@ const catalogueSchema = z.object({
   weights: weightsSchema,
   /** Every tier, in the order a deployment listed them. At least one; no upper bound. */
   plans: z.array(planSchema).min(1),
+  /** What an automatic top-up buys, or nothing — see `topUpSchema` (SONNY-215). */
+  topUp: topUpSchema.optional(),
 });
 
 export type CreditWeights = z.infer<typeof weightsSchema>;
 export type CreditPlan = z.infer<typeof planSchema>;
+export type CreditTopUpPack = z.infer<typeof topUpSchema>;
 export type CreditCatalogue = z.infer<typeof catalogueSchema>;
 
 /** A catalogue that could not be read, named for the operator who has to fix it. */
@@ -180,6 +248,28 @@ export function parseCreditCatalogue(raw: string): CreditCatalogue {
     throw new CreditCatalogueError(`CREDIT_PLANS is not a valid credit catalogue: ${detail}`);
   }
   const catalogue = parsed.data;
+
+  /**
+   * **A pack that cannot buy a single run is refused at startup** (PR #196's F4).
+   *
+   * `credits` and `runCredits` are two independent numbers in one document, and a pack smaller than
+   * one run is a legal-looking configuration whose every purchase is a charge that cannot help: the
+   * gate triggers on being unable to afford a run, buys, is still unable to afford one, and refuses
+   * — after the card was charged, once per session start up to `maxPerPeriod`. The refusal is
+   * correct in the product (`aPurchaseThatDoesNotClearTheDebtStillRefuses` holds it); what was
+   * missing was anything stopping the charge that provably could not help.
+   *
+   * Refused here rather than defended against at the charge, for this file's standing reason: an
+   * unsafe configuration should be a deployment that will not start, named, rather than a behaviour
+   * a user pays to discover.
+   */
+  if (catalogue.topUp !== undefined && catalogue.topUp.credits < catalogue.runCredits) {
+    throw new CreditCatalogueError(
+      `CREDIT_PLANS gives topUp ${catalogue.topUp.credits} credits and prices one run at ` +
+        `${catalogue.runCredits}, so a top-up could not buy a single run. Every purchase would be ` +
+        "a charge that leaves the account exactly as unable to run as it was.",
+    );
+  }
 
   const seen = new Set<string>();
   for (const plan of catalogue.plans) {

@@ -2505,6 +2505,100 @@ MINIMUM_SUPPORTED_CLIENT=2.0.0 RECOMMENDED_CLIENT=3.0.0 \
       any of those is the finding — (c) especially, because it would tell users to update and give
       them nowhere to go. **The message is what to report if one of them fails differently**: a
       generic crash with no variable named is still a finding even though the container did stop.
+### Buying more runs when they run out (new 2026-09-03, SONNY-215)
+
+**What changed:** an **opt-in** setting, **off by default**, in Command Center's Account section
+under the runs-left line: *"Buy more runs when these run out"*. With it **on**, a session that would
+have hit SONNY-213's wall buys one more pack through the payment provider and carries on. With it
+**off** — which is every account until somebody presses it — nothing is bought and SONNY-213's halt
+happens exactly as it did before this branch.
+
+**The one thing worth checking hardest is the negative**: *no charge occurs without the explicit
+opt-in.* Every row below that says "nothing was charged" is checkable in the database
+(`SELECT * FROM sonny.credit_topup`) and at the provider's own dashboard, and those two are the
+evidence — not the absence of a sentence in the app.
+
+**Setup.** These rows need everything the SONNY-213 section needs (the container, the debug
+entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
+
+- a `topUp` block on `CREDIT_PLANS` — `"topUp": {"credits": 500, "productId": "<a real one-time
+  product at the provider>", "maxPerPeriod": 3}`. Without it the control does not render at all,
+  which is the first row below.
+- a Polar **one-time product** for the pack, a customer with a saved payment method, and
+  `BILLING_PROVIDER_ACCESS_TOKEN` carrying the `orders:write` scope. **Nobody on this project has
+  run an order against real Polar yet**, which is why the two rows marked ⚠️ are the ones to run
+  first and record verbatim.
+
+- [ ] **(SONNY-215) — off by default, and this is the row that matters most.** On a fresh account
+      with `topUp` configured, open Command Center › the account row › Account. The runs-left line is
+      there and **the switch below it is off**. Do not touch it. Now drive the account to zero
+      (`"monthlyCredits":0`, restart the container) and ask for a screen-control session. **It is
+      refused with the same sentence as before — "You've used your screen-control allowance — top up
+      or wait."** Then check `SELECT count(*) FROM sonny.credit_topup;` → **0**, and the provider's
+      orders list → **nothing**. The finding is any row, any order, or any charge on the card.
+- [ ] **(SONNY-215)** With `topUp` **absent** from `CREDIT_PLANS`, open Account. **There is no
+      switch at all** — not a disabled one, not a greyed one. The runs-left line is unchanged. The
+      finding is a control that appears and then fails when pressed.
+- [ ] **(SONNY-215)** Press the switch on. It **stays on after the dialog is closed and reopened**,
+      and after the app is relaunched — the setting lives on the gateway, not on this Mac, so it
+      should also be on when you sign in to the same account on a second build.
+      `SELECT opted_in_at FROM sonny.auto_topup_consent;` names the instant you pressed it.
+- [ ] **(SONNY-215) ⚠️ the charge.** With the switch on and the account at zero runs, ask for a
+      screen-control session. **It runs** rather than being refused, and the runs-left line afterwards
+      shows the pack that was bought (e.g. *"50 of 50 runs left this month"* on a 500-credit pack at
+      10 credits a run). `SELECT outcome, credits, provider_order_id FROM sonny.credit_topup;` shows
+      one `granted` row. **Record the provider's order object verbatim on the ticket** — its
+      `status` field is what `polar.ts` reads, and this is the first time anybody has seen one.
+- [ ] **(SONNY-215) ⚠️ the mid-run purchase.** Set the weights so a session exhausts partway (the
+      SONNY-213 section's shape), switch on, and start a multi-step screen-control task. **It does
+      not stop between steps** — it buys and carries on. The finding is a halt with the allowance
+      sentence while the switch was on and the period had purchases left.
+- [ ] **(SONNY-215) — the bound.** With `"maxPerPeriod": 1`, drive the account to zero twice in one
+      month. The **first** exhaustion buys; the **second** is refused with the ordinary allowance
+      sentence and **no second order exists at the provider**. The finding is a second charge.
+- [ ] **(SONNY-215) — a card that fails.** Put a declining test card on the customer, switch on, and
+      run out. **The session is refused with the ordinary allowance sentence** — not a new sentence,
+      not a raw error — and `sonny.credit_topup` holds a `declined` row. The finding is the app
+      saying anything about cards, or a session running anyway.
+- [ ] **(SONNY-215)** Switch it **off** again while the account has runs. Then run out. **Refused,
+      nothing charged.** `opted_in_at` is `NULL` and `updated_at` names when you turned it off.
+- [ ] **(SONNY-215) — the setting when the gateway is down.** Kill the container, then press the
+      switch. **A line appears under it saying Sonny couldn't change that setting** and the switch
+      goes back to what the server last said — it does not sit in the position you pressed. The
+      finding is a switch that shows "on" when nothing agreed to it.
+- [ ] **(SONNY-215) — the price is on the switch, and it is the right one.** With `topUp.price` set
+      (e.g. `{"amount": 500, "currency": "usd"}`), open Account. **The switch reads "Buy more runs
+      when these run out ($5.00)"** — the price in parentheses, no sentence beside it. Then open the
+      Polar product the `productId` names and **check the two amounts are the same**. Nothing in the
+      gateway can check this for you: it never reads the product, so a `price` that disagrees shows
+      one number on the switch and takes another off the card. The finding is a mismatch, or a
+      sentence appearing under the switch explaining what it costs.
+- [ ] **(SONNY-215) — a currency with no minor unit.** Set `{"amount": 500, "currency": "jpy"}` and
+      reopen Account. **The switch reads ¥500, not ¥5.** The finding is a hundredfold error, which is
+      what dividing every currency by a hundred produces.
+- [ ] **(SONNY-215) ⚠️ the record of a charge.** After the successful top-up above, reopen Account.
+      **A "Last top-up" row sits under the switch showing the amount and the date** — and the amount
+      is what Polar's order says, which is the figure to compare against the invoice rather than
+      against `CREDIT_PLANS`. Then **turn the switch off** and reopen: **the record is still there.**
+      A user who was charged is owed the record whatever the switch says now; the finding is a
+      receipt that disappears.
+- [ ] **(SONNY-215) — no record before a charge, and none for a decline.** On a fresh account there
+      is **no "Last top-up" row at all**. After the declining-card row above, there is still none —
+      a declined attempt took no money and must not appear as a charge.
+- [ ] **(SONNY-215) ⚠️ the lost record, which is the one worth engineering for.** With the switch on
+      and the account at zero, start a top-up and **kill the gateway container the moment the charge
+      is placed** (watch `docker logs` for the finalize). Bring it back and ask for a screen-control
+      session again. **No second order appears at Polar** and the account is granted the pack it
+      already paid for — `SELECT outcome, provider_order_id FROM sonny.credit_topup` shows **one**
+      row, moving from `attempted` or `unconfirmed` to `granted`. The finding is two paid orders, or
+      an `attempted` row with a NULL order id after a charge that reached Polar.
+- [ ] **(SONNY-215) — a pack that cannot buy a run does not deploy.** Set `topUp.credits` below
+      `runCredits` and restart the container. **It refuses to start**, naming the pack. The finding
+      is a gateway that boots and then charges for a pack that leaves the account exactly as unable
+      to run as it was.
+- [ ] **(SONNY-215) — nothing else moved.** With the switch **on** and the account **not** low, run
+      the everyday free things and an ordinary screen-control session. **No purchase happens**
+      (`sonny.credit_topup` stays empty) and nothing about the run changes.
 
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 

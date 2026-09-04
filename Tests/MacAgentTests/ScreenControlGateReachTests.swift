@@ -52,7 +52,20 @@ struct ScreenControlGateReachTests {
     /// reading a number a user is shown is not gating on it. This is the same reasoning the token
     /// list already gives for excluding the terminal ban: a rule many files legitimately consult
     /// makes a scan fail for reasons that have nothing to do with billing.
-    static let allowanceTokens = ["ScreenControlAllowance"]
+    static let allowanceTokens = ["ScreenControlAllowance", "ScreenControlAutoTopUp"]
+
+    /// **The narrowest of the three vocabularies: who can spend the user's money** (SONNY-215).
+    ///
+    /// A third list rather than a widening of either above it, for exactly the reason the split
+    /// between the first two is argued: the sets protect different properties, and merging them
+    /// licenses the wrong files. `permittedAllowanceFiles` is nine files wide because reading a
+    /// number a user is shown is harmless; a file on that list acquiring `purchaseTopUp` would then
+    /// pass unremarked, and what it would be doing is charging a card from a view.
+    ///
+    /// **The setting is not in here, deliberately.** `ScreenControlAutoTopUp` says whether a purchase
+    /// *may* happen and is rendered as a control, so it belongs with the figure; these two tokens are
+    /// the act itself.
+    static let topUpTokens = ["ScreenControlTopUpPurchasing", "purchaseTopUp"]
 
     /// The files in `Sources/` allowed to name any of the above, and **why each one is on the list**.
     /// Exact equality below, so this fails in both directions: a tenth file acquiring the dependency
@@ -93,10 +106,24 @@ struct ScreenControlGateReachTests {
         "FirstRunSequence.swift"
     ]
 
+    /// The files that may name the purchase. **Two**, and the smallness is the point: the seam and
+    /// its one implementation, plus the gate's own exhaustion branch which is inside the first of
+    /// them.
+    ///
+    /// `main.swift` is deliberately absent — it wires the purchaser in by parameter label and names
+    /// neither token — and the one line that does that is held by
+    /// `theLiveWiringHandsOneServiceToBothOfTheGatesReadingAndChargingSeams` below rather than by
+    /// this set, which is SONNY-213's F2 answered before it could happen again.
+    static let permittedTopUpFiles: Set<String> = [
+        "ScreenControlGate.swift",
+        "ScreenControlAllowance.swift"
+    ]
+
     @Test
     func onlyTheVisionPathAndItsWiringCanNameTheGate() throws {
         var namingTheGate: Set<String> = []
         var namingTheFigure: Set<String> = []
+        var namingThePurchase: Set<String> = []
         var scanned = 0
 
         for url in try MacAgentSource.coreSourceFiles() + MacAgentSource.appSourceFiles() {
@@ -107,6 +134,9 @@ struct ScreenControlGateReachTests {
             }
             if Self.allowanceTokens.contains(where: source.contains) {
                 namingTheFigure.insert(url.lastPathComponent)
+            }
+            if Self.topUpTokens.contains(where: source.contains) {
+                namingThePurchase.insert(url.lastPathComponent)
             }
         }
 
@@ -133,7 +163,21 @@ struct ScreenControlGateReachTests {
         // appeared in both lists, the wider permitted set would silently license the narrower one's
         // files — the exact weakening the header argues against — so the disjointness is asserted
         // rather than maintained by care.
+        #expect(
+            namingThePurchase == Self.permittedTopUpFiles,
+            Comment(rawValue: """
+            The set of files that can buy screen-control runs is not the permitted set.
+            Unexpected: \(namingThePurchase.subtracting(Self.permittedTopUpFiles).sorted())
+            Missing:    \(Self.permittedTopUpFiles.subtracting(namingThePurchase).sorted())
+            """)
+        )
+        // **The split is only safe while the vocabularies stay distinct.** If a token ever appeared
+        // in two lists, the wider permitted set would silently license the narrower one's files —
+        // the exact weakening the header argues against — so the disjointness is asserted rather
+        // than maintained by care. Three lists now, so all three pairs.
         #expect(Set(Self.gateTokens).isDisjoint(with: Set(Self.allowanceTokens)))
+        #expect(Set(Self.gateTokens).isDisjoint(with: Set(Self.topUpTokens)))
+        #expect(Set(Self.allowanceTokens).isDisjoint(with: Set(Self.topUpTokens)))
     }
 
     /// **No capability adapter but the vision one names the gate**, stated over the adapters as a
@@ -157,7 +201,12 @@ struct ScreenControlGateReachTests {
             // should reach the gate *or* the figure: reading a run count is how an adapter would
             // build a second gate under another name, and SONNY-214's readers are surfaces rather
             // than adapters, so nothing legitimate is caught by widening this one.
-            for token in Self.gateTokens + Self.allowanceTokens where source.contains(token) {
+            // **All three vocabularies here.** No capability adapter should reach the gate, the
+            // figure *or* the purchase: reading a run count is how an adapter would build a second
+            // gate under another name, and buying one is how a free capability would start spending
+            // somebody's money.
+            for token in Self.gateTokens + Self.allowanceTokens + Self.topUpTokens
+            where source.contains(token) {
                 offenders.append("\(url.lastPathComponent) names \(token)")
             }
         }
@@ -219,6 +268,65 @@ struct ScreenControlGateReachTests {
         #expect(!door.contains("screenControlGate.decide(at: .stepBoundary)"))
         #expect(loop.contains("screenControlGate.decide(at: .stepBoundary)"))
         #expect(!loop.contains("screenControlGate.decide(at: .sessionStart)"))
+    }
+
+    /// **There is exactly one site that buys anything, and it is inside the gate** (SONNY-215).
+    ///
+    /// The sharpest version of the same criterion the two-consult-site test above holds, applied to
+    /// the one call in this product that spends money. A count rather than a presence check, for
+    /// `MacAgentSource`'s recorded reason: a trailing comment can add a token and cannot remove one,
+    /// so counts survive what presence does not.
+    ///
+    /// **`ScreenControlAllowance.swift` holds the two declarations and no call.** The seam's
+    /// requirement and the service's implementation both spell the name, and neither invokes it —
+    /// so the file-level count there is the pair of declarations, and the invocation is the gate's
+    /// alone.
+    @Test
+    func theOnlySiteThatBuysRunsIsTheGatesOwnExhaustionBranch() throws {
+        var callsByFile: [String: Int] = [:]
+
+        for url in try MacAgentSource.coreSourceFiles() + MacAgentSource.appSourceFiles() {
+            let source = try MacAgentSource.read(url)
+            let count = source.components(separatedBy: ".purchaseTopUp()").count - 1
+            if count > 0 {
+                callsByFile[url.lastPathComponent] = count
+            }
+        }
+
+        #expect(callsByFile == ["ScreenControlGate.swift": 1], "purchase sites: \(callsByFile)")
+
+        // And it is reached from the exhaustion branch, not from the door's or the boundary's
+        // ordinary path: the gate refuses first and buys second, which is what stops a comfortable
+        // account, an unconfirmed claim or an unreadable allowance from ever costing anybody money.
+        let gate = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("ScreenControlGate.swift")
+        )
+        #expect(gate.contains("guard reading.autoTopUp.mayPurchase else { return nil }"))
+    }
+
+    /// **The one line that carries the live purchaser into the shipping gate, held by a test**
+    /// (SONNY-215; SONNY-213's F2 is why this exists before it can go wrong).
+    ///
+    /// F2 was exactly this shape one seam earlier: `screenControlGate: screenControlGate` in
+    /// `makeLiveVisionEnvironment` was the sole path from `main.swift`'s gate to a real session, and
+    /// replacing it with a closed gate left the whole suite green. `main.swift` is top-level code
+    /// with no seam a test can drive, so what is held here is its *text* — which is what the two
+    /// consult-site tests above already do for the same reason.
+    ///
+    /// **Both parameters, and the same value in each.** Reading the allowance and buying more of it
+    /// are two capabilities of one object; building two services here would be two clients, two
+    /// sessions and two answers to one question, and passing only one would not compile.
+    @Test
+    func theLiveWiringHandsOneServiceToBothOfTheGatesReadingAndChargingSeams() throws {
+        let main = try MacAgentSource.read(
+            MacAgentSource.appSourceDirectory.appendingPathComponent("main.swift")
+        )
+
+        #expect(main.contains("allowance: screenControlAllowanceService"))
+        #expect(main.contains("topUp: screenControlAllowanceService"))
+        // One construction, so the two labels above cannot be describing two different gates.
+        #expect(main.components(separatedBy: "SonnyScreenControlGate(").count - 1 == 1)
+        #expect(main.components(separatedBy: "ScreenControlAllowanceService(").count - 1 == 1)
     }
 
     /// **The boundary's figure reaches no surface, so the gate and SONNY-214's usage line cannot

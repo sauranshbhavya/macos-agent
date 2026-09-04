@@ -12,15 +12,23 @@ import Testing
 /// if it is got backwards, so neither is left to follow from the other.
 @Suite
 struct ScreenControlGateTests {
+    /// **`autoTopUp` defaults to `.none`, so every test in this suite describes an account that has
+    /// not opted in** (SONNY-215) — which is the state SONNY-213's refusals were written about, and
+    /// is what keeps every one of them meaning what it meant. `purchaser` defaults to one that must
+    /// never be called, so a gate that started buying runs fails these tests on a count rather than
+    /// on a puzzling allowance.
     private func gate(
         entitlement: EntitlementDecision,
-        allowance: StubAllowanceReading.Answer
+        allowance: StubAllowanceReading.Answer,
+        autoTopUp: ScreenControlAutoTopUp = .none,
+        purchaser: StubTopUpPurchasing = .neverCalled()
     ) -> (SonnyScreenControlGate, StubAllowanceReading) {
-        let reader = StubAllowanceReading(allowance)
+        let reader = StubAllowanceReading(allowance, autoTopUp: autoTopUp)
         return (
             SonnyScreenControlGate(
                 entitlements: StubEntitlementConfirmation(entitlement),
-                allowance: reader
+                allowance: reader,
+                topUp: purchaser
             ),
             reader
         )
@@ -170,6 +178,201 @@ struct ScreenControlGateTests {
                 )
             }
         }
+    }
+
+    // MARK: - Topping up, and the one thing it may never do (SONNY-215)
+
+    /// **The ticket's hard requirement, at the decision level: no charge without the explicit
+    /// opt-in.**
+    ///
+    /// Parameterized over both moments and over every way of not having opted in, because a refusal
+    /// that held at one moment and not the other would be exactly the shape SONNY-213's F1 was. The
+    /// assertion that carries it is `purchaseCount == 0`: the verdict alone passes just as well
+    /// against a gate that buys a pack, discards it, and refuses anyway.
+    @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
+    func anAccountThatDidNotAskIsNeverCharged(moment: ScreenControlGateMoment) async {
+        // Offered by the deployment and with purchases left — so the *only* thing standing between
+        // this account and a charge is that it did not ask for one.
+        let notOptedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: false, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: notOptedIn,
+            purchaser: purchaser
+        )
+
+        #expect(await subject.decide(at: moment) == .refused(.allowanceExhausted))
+        #expect(purchaser.purchaseCount == 0, "\(moment) asked for a charge nobody consented to")
+    }
+
+    /// The other two halves of `mayPurchase`, each alone enough to stop a request being made.
+    ///
+    /// **`notOffered` is the deployment's answer and `spent` is the period's**, and neither is the
+    /// consent — so this is the population the test above leaves out rather than a restatement of
+    /// it. All three are refused by the gateway independently; what these hold is that the client
+    /// does not even ask.
+    @Test(arguments: [
+        ScreenControlAutoTopUp(isOffered: false, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE),
+        ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 0, price: TEST_PACK_PRICE)
+    ])
+    func aPurchaseIsNotAskedForWhenThereIsNothingToBuy(setting: ScreenControlAutoTopUp) async {
+        let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: setting,
+            purchaser: purchaser
+        )
+
+        #expect(await subject.decide(at: .sessionStart) == .refused(.allowanceExhausted))
+        #expect(purchaser.purchaseCount == 0)
+    }
+
+    /// An opted-in account that has run out buys more and is allowed through, at both moments.
+    ///
+    /// This is the ticket's positive criterion — *on → a low user tops up automatically* — and the
+    /// two moments are asserted separately because they read different fields on the reading the
+    /// purchase hands back.
+    @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
+    func anOptedInAccountThatRanOutBuysMoreAndCarriesOn(moment: ScreenControlGateMoment) async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: optedIn,
+            purchaser: purchaser
+        )
+
+        #expect(await subject.decide(at: moment) == .allowed)
+        #expect(purchaser.purchaseCount == 1)
+    }
+
+    /// **A purchase that fails changes nothing: SONNY-213's halt applies unchanged.**
+    ///
+    /// The ticket's own non-goal is that the default halt behaviour does not move, and this is it:
+    /// a declined card, a provider outage and a gateway refusal all arrive as a throw and all end at
+    /// the same refusal, with the same sentence and the same reason code.
+    @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
+    func aPurchaseThatFailsLeavesTheHaltExactlyAsItWas(moment: ScreenControlGateMoment) async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        let purchaser = StubTopUpPurchasing(.failure)
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: optedIn,
+            purchaser: purchaser
+        )
+
+        let decision = await subject.decide(at: moment)
+        #expect(decision == .refused(.allowanceExhausted))
+        #expect(purchaser.purchaseCount == 1, "the purchase was not even attempted")
+    }
+
+    /// A purchase that lands and is still not enough refuses, rather than allowing on the strength
+    /// of having bought something.
+    @Test
+    func aPurchaseThatDoesNotClearTheDebtStillRefuses() async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        // A pack that granted nothing measurable — the shape a mis-configured pack of zero credits
+        // would produce, and the one where "a purchase happened" and "the account can run" come
+        // apart.
+        let purchaser = StubTopUpPurchasing(.granted(runsLeft: 0, creditsRemaining: 0))
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: optedIn,
+            purchaser: purchaser
+        )
+
+        #expect(await subject.decide(at: .sessionStart) == .refused(.allowanceExhausted))
+        #expect(purchaser.purchaseCount == 1)
+    }
+
+    /// **The two moments keep their two questions after a purchase, and this is the pair that says
+    /// so.**
+    ///
+    /// One reading, two opposite answers — the same shape SONNY-213's own gate tests use, applied to
+    /// the post-purchase re-check. A pack that lands on 82% of a run leaves `runsLeft` at zero and
+    /// real credit unspent: a *new* session still cannot be afforded, and a *running* one may carry
+    /// on. Either assertion alone passes on a gate that collapsed the two, which is exactly what PR
+    /// #190's F1 was.
+    @Test
+    func theMomentsOwnQuestionIsWhatIsReAskedAfterAPurchase() async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        func subject() -> (SonnyScreenControlGate, StubTopUpPurchasing) {
+            let purchaser = StubTopUpPurchasing(.granted(runsLeft: 0, creditsRemaining: 0.82))
+            let (gate, _) = gate(
+                entitlement: .entitled,
+                allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+                autoTopUp: optedIn,
+                purchaser: purchaser
+            )
+            return (gate, purchaser)
+        }
+
+        let (door, doorPurchaser) = subject()
+        #expect(await door.decide(at: .sessionStart) == .refused(.allowanceExhausted))
+        #expect(doorPurchaser.purchaseCount == 1)
+
+        let (boundary, boundaryPurchaser) = subject()
+        #expect(await boundary.decide(at: .stepBoundary) == .allowed)
+        #expect(boundaryPurchaser.purchaseCount == 1)
+    }
+
+    /// Nothing is bought for an account that has not run out.
+    ///
+    /// **The condition the purchase hangs off is exhaustion and nothing else**, so a comfortable
+    /// account never triggers one however enthusiastically it opted in. The gateway refuses this too
+    /// — it recomputes the balance and answers `not_needed` — and this is the client half.
+    @Test(arguments: [ScreenControlGateMoment.sessionStart, .stepBoundary])
+    func anAccountWithRunsInHandBuysNothing(moment: ScreenControlGateMoment) async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+        let purchaser = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (subject, _) = gate(
+            entitlement: .entitled,
+            allowance: .runsAndCredits(runsLeft: 9, creditsRemaining: 90),
+            autoTopUp: optedIn,
+            purchaser: purchaser
+        )
+
+        #expect(await subject.decide(at: moment) == .allowed)
+        #expect(purchaser.purchaseCount == 0)
+    }
+
+    /// **Nothing is bought on the strength of a read that failed, or a claim that will not confirm.**
+    ///
+    /// The two refusals that are not exhaustion pass through untouched. The read-failure case is the
+    /// sharper of the two: a failed read is evidence of nothing, so treating it as a reason to charge
+    /// somebody would be spending money to answer a question nobody asked.
+    @Test
+    func neitherAnUnreadableAllowanceNorAnUnconfirmedClaimBuysAnything() async {
+        let optedIn = ScreenControlAutoTopUp(isOffered: true, isOptedIn: true, attemptsLeft: 3, price: TEST_PACK_PRICE)
+
+        let onFailedRead = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (readFailed, _) = gate(
+            entitlement: .entitled,
+            allowance: .failure,
+            autoTopUp: optedIn,
+            purchaser: onFailedRead
+        )
+        #expect(await readFailed.decide(at: .sessionStart) == .refused(.allowanceUnknown))
+        #expect(await readFailed.decide(at: .stepBoundary) == .allowed)
+        #expect(onFailedRead.purchaseCount == 0)
+
+        let onUnconfirmedClaim = StubTopUpPurchasing(.granted(runsLeft: 50, creditsRemaining: 500))
+        let (unconfirmed, _) = gate(
+            entitlement: .refused(.notSignedIn),
+            allowance: .runsAndCredits(runsLeft: 0, creditsRemaining: 0),
+            autoTopUp: optedIn,
+            purchaser: onUnconfirmedClaim
+        )
+        #expect(
+            await unconfirmed.decide(at: .sessionStart)
+                == .refused(.entitlementUnconfirmed(.notSignedIn))
+        )
+        #expect(onUnconfirmedClaim.purchaseCount == 0)
     }
 
     // MARK: - The unwired gate

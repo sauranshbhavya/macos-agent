@@ -117,7 +117,14 @@ struct CommandCenterView: View {
                 // The allowance beside the plan (SONNY-214). This is Command Center's one door to
                 // the figure; Insights deliberately has none.
                 screenControlAllowance: viewModel.screenControlAllowance,
-                refreshScreenControlAllowance: { await viewModel.refreshScreenControlAllowance() }
+                refreshScreenControlAllowance: { await viewModel.refreshScreenControlAllowance() },
+                // And whether Sonny may buy more of them (SONNY-215). The read half is on the
+                // allowance above; this is only what it cannot say.
+                screenControlAutoTopUp: ScreenControlAutoTopUpControl(
+                    isBusy: viewModel.isSettingScreenControlAutoTopUp,
+                    failure: viewModel.screenControlAutoTopUpFailure,
+                    set: { await viewModel.setScreenControlAutoTopUp($0) }
+                )
             )
         }
         // First run (SONNY-137). Presented here because Command Center is shown unconditionally on
@@ -6518,7 +6525,11 @@ private struct SettingsToggleRow: View {
     }
 }
 
-private struct SonnySettingsToggle: View {
+/// Not `private`: `SignInView.swift` uses it too (SONNY-215), for the reason
+/// `SettingsAdaptiveControlRow` above gives — a label-plus-control row uses the shared component
+/// rather than a hand-rolled one, and a shared component the rest of the target cannot name is not a
+/// shared component.
+struct SonnySettingsToggle: View {
     @Binding var isOn: Bool
 
     var body: some View {

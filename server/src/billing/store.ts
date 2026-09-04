@@ -351,6 +351,28 @@ export async function hasSubscriptionRecord(
 }
 
 /**
+ * The provider's own customer id for this account (SONNY-215).
+ *
+ * **Not narrowed to a live subscription**, and the omission is the decision: a cancelled subscriber
+ * still has a customer at the provider and a card on file, and a top-up is a one-time purchase
+ * rather than a subscription benefit. Whether they are *allowed* one is the credit route's question
+ * — it reads the plan's allowance, which a revoked entitlement has already lost — and answering it
+ * twice, once here on a different rule, is how two paths come to disagree about who may buy.
+ */
+export async function billingCustomerFor(
+  client: pg.Client,
+  provider: string,
+  accountId: string,
+): Promise<string | undefined> {
+  const { rows } = await client.query<{ billing_customer_id: string | null }>(
+    `SELECT billing_customer_id FROM sonny.entitlement
+      WHERE account_id = $1 AND billing_provider = $2`,
+    [accountId, provider],
+  );
+  return rows[0]?.billing_customer_id ?? undefined;
+}
+
+/**
  * The account this delivery is about: the one the provider echoed back, or the one that owns this
  * subscription already.
  *
@@ -461,8 +483,9 @@ export async function applyBillingDelivery(
     const moved = await client.query<{ account_id: string }>(
       `INSERT INTO sonny.entitlement (
               account_id, plan, capabilities, revoked_at, past_due_since, grace_until,
-              billing_provider, billing_subscription_id, billing_event_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+              billing_provider, billing_subscription_id, billing_customer_id, billing_event_at,
+              updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10, $9, now())
        ON CONFLICT (account_id) DO UPDATE
               SET plan = EXCLUDED.plan,
                   capabilities = EXCLUDED.capabilities,
@@ -485,6 +508,14 @@ export async function applyBillingDelivery(
                                                    EXCLUDED.grace_until) END,
                   billing_provider = EXCLUDED.billing_provider,
                   billing_subscription_id = EXCLUDED.billing_subscription_id,
+                  -- **COALESCE, unlike every column above it** (SONNY-215). The others are this
+                  -- delivery's statement about the subscription and replace what was there. A
+                  -- customer id is a durable identifier that a payload may simply omit, and
+                  -- overwriting a known one with NULL would leave an account that cannot be charged
+                  -- until some later delivery happened to carry it again. New value wins; absence
+                  -- keeps what is known.
+                  billing_customer_id = COALESCE(EXCLUDED.billing_customer_id,
+                                                 sonny.entitlement.billing_customer_id),
                   billing_event_at = EXCLUDED.billing_event_at,
                   updated_at = now()
             WHERE sonny.entitlement.billing_event_at IS NULL
@@ -500,6 +531,7 @@ export async function applyBillingDelivery(
         input.provider,
         event.subscriptionId,
         event.occurredAt,
+        event.customerId ?? null,
       ],
     );
     // No row means the `WHERE` refused: this delivery is not newer than the state it met.
@@ -547,6 +579,21 @@ export interface BillingStore {
    * the one above, and for the gap between what this answers and what is true at the provider.
    */
   readonly hasSubscriptionRecord: (provider: string, accountId: string) => Promise<boolean>;
+  /**
+   * The provider's own customer id for this account, or `undefined` (SONNY-215).
+   *
+   * **A third question about the same row, and it is deliberately not either of the two above.** A
+   * top-up asks "is there something at the provider I can charge", which is neither "is a
+   * subscription live" (`hasLiveSubscription`, which excludes a cancelled subscriber) nor "has one
+   * ever existed" (`hasSubscriptionRecord`, which is true for a customer whose id nothing kept —
+   * every account provisioned before 0019). Answering with the id itself rather than with a boolean
+   * is what makes the difference impossible to lose: the caller cannot get as far as a charge
+   * without holding the thing the charge is addressed to.
+   */
+  readonly billingCustomerFor: (
+    provider: string,
+    accountId: string,
+  ) => Promise<string | undefined>;
 }
 
 export function postgresBillingStore(withConnection: WithConnection): BillingStore {
@@ -556,5 +603,7 @@ export function postgresBillingStore(withConnection: WithConnection): BillingSto
       withConnection((client) => hasLiveSubscription(client, provider, accountId)),
     hasSubscriptionRecord: (provider, accountId) =>
       withConnection((client) => hasSubscriptionRecord(client, provider, accountId)),
+    billingCustomerFor: (provider, accountId) =>
+      withConnection((client) => billingCustomerFor(client, provider, accountId)),
   };
 }

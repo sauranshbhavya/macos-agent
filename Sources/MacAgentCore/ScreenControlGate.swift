@@ -162,8 +162,24 @@ public protocol ScreenControlAllowanceReading: Sendable {
     func fetch() async throws -> ScreenControlAllowance
 }
 
+/// Buying more runs when they run out (SONNY-215).
+///
+/// **A second protocol beside ``ScreenControlAllowanceReading`` rather than a method on it, and the
+/// separation is the point.** Reading an allowance is free and repeatable; this spends the user's
+/// money. One protocol carrying both would let a later reader believe `fetch()` might charge, or —
+/// worse — let a caller reach for the charging method while thinking about the reading one. The two
+/// are the same object at run time and are two capabilities in the type system.
+///
+/// `ScreenControlAllowanceService` conforms. Like `fetch()`, **a throw is a throw and never a
+/// number**: every way a purchase does not happen arrives here as an error, and the gate's answer to
+/// all of them is the refusal it would have given anyway.
+public protocol ScreenControlTopUpPurchasing: Sendable {
+    func purchaseTopUp() async throws -> ScreenControlAllowance
+}
+
 extension EntitlementService: ScreenControlEntitlementConfirming {}
 extension ScreenControlAllowanceService: ScreenControlAllowanceReading {}
+extension ScreenControlAllowanceService: ScreenControlTopUpPurchasing {}
 
 // MARK: - The live gate
 
@@ -234,19 +250,82 @@ extension ScreenControlAllowanceService: ScreenControlAllowanceReading {}
 /// and an operator's ceiling. That separation is also what makes a *client-side* gate honest rather
 /// than decorative: a modified client that skips this check does not get free runs, it gets
 /// `SPEND_CAP_UNITS` calls and then a `429`, exactly as it would today.
+/// ## Running out is where a top-up happens, and only if the user asked (SONNY-215)
+///
+/// §16.4 names auto top-up as the mechanism serving its own mid-task-lapse principle: a user running
+/// low tops up rather than hitting a wall. So the purchase sits at exactly the two points this gate
+/// would otherwise refuse for `allowanceExhausted`, and **nowhere else** — a session with runs in
+/// hand never triggers one, and neither does an unconfirmable claim or an allowance that could not
+/// be read.
+///
+/// **The two moments keep their two questions, and the purchase does not collapse them.** That is
+/// PR #190's F1 restated as a constraint on this ticket: `runsLeft` answers the door's question and
+/// `creditsRemaining` answers the boundary's, and a purchase re-asks **the moment's own** question
+/// against the new reading rather than a shared one. `isExhausted(_:at:)` below is one function
+/// because the moment is a *parameter* of it — which is the opposite of the defect, where one
+/// predicate ignored the moment entirely.
+///
+/// **The client's own check is an optimisation and never the enforcement.** `mayPurchase` stops a
+/// request being made on behalf of a user who did not ask; what makes the guarantee is that the
+/// gateway refuses independently, before it reads anything else and before any row is written
+/// (`server/src/credit/topup.ts`). A modified client that asks anyway is refused there.
 public struct SonnyScreenControlGate: ScreenControlGating {
     private let entitlements: any ScreenControlEntitlementConfirming
     private let allowance: any ScreenControlAllowanceReading
+    private let topUp: any ScreenControlTopUpPurchasing
 
-    /// Neither parameter has a default, for `EntitlementService`'s own recorded hazard: every
-    /// packaged build on a Mac shares one Keychain, so a fixture that inherited a default would read
-    /// the founder's real session.
+    /// No parameter has a default, for `EntitlementService`'s own recorded hazard: every packaged
+    /// build on a Mac shares one Keychain, so a fixture that inherited a default would read the
+    /// founder's real session — and for `topUp` there is a second reason of the same shape, since a
+    /// defaulted purchaser is a defaulted way to spend somebody's money.
     public init(
         entitlements: any ScreenControlEntitlementConfirming,
-        allowance: any ScreenControlAllowanceReading
+        allowance: any ScreenControlAllowanceReading,
+        topUp: any ScreenControlTopUpPurchasing
     ) {
         self.entitlements = entitlements
         self.allowance = allowance
+        self.topUp = topUp
+    }
+
+    /// Has this account run out, **as this moment measures it**?
+    ///
+    /// One function, and the moment is what it switches on — which is the shape PR #190's F1
+    /// produced by not having. The two questions are different and neither is a rounding of the
+    /// other: `runsLeft` is `floor(remaining / runCredits)` over a `remaining` an in-flight session's
+    /// own iterations have already been subtracted from, so it asks "can a whole further run be
+    /// afforded", which is the door's question and never the boundary's.
+    private func isExhausted(
+        _ reading: ScreenControlAllowance,
+        at moment: ScreenControlGateMoment
+    ) -> Bool {
+        switch moment {
+        case .sessionStart:
+            // May a *new* run start? The user is about to spend a run, so the question is whether
+            // they have one — and this is the same field the product shows them, so the door can
+            // never refuse someone reading "1 left" or admit someone reading "0 left".
+            return reading.runsLeft <= 0
+        case .stepBoundary:
+            // May the run already admitted *continue*? Not whether another one could start — the
+            // door granted this one, and a run the user was granted is theirs to finish. So the only
+            // thing that halts here is the account having actually run out, which is the remainder
+            // reaching zero. The server floors it at zero, so this is a confirmed exhaustion and not
+            // a sign error.
+            return reading.creditsRemaining <= 0
+        }
+    }
+
+    /// Buy more runs, or answer `nil` — **and answer `nil` without asking anybody when the user did
+    /// not ask for this** (SONNY-215).
+    ///
+    /// Every failure is one answer here on purpose. A declined card, a provider outage, a period
+    /// whose purchases are spent and an account that never opted in all end in the same place: the
+    /// refusal this gate was about to give anyway, in the sentence SONNY-213 wrote for it. That is
+    /// the ticket's own non-goal — the default halt behaviour does not change — and it is also the
+    /// honest reading, since "top up or wait" is still what a user whose card just failed should do.
+    private func toppedUp(after reading: ScreenControlAllowance) async -> ScreenControlAllowance? {
+        guard reading.autoTopUp.mayPurchase else { return nil }
+        return try? await topUp.purchaseTopUp()
     }
 
     public func decide(at moment: ScreenControlGateMoment) async -> ScreenControlGateDecision {
@@ -311,30 +390,28 @@ public struct SonnyScreenControlGate: ScreenControlGating {
         // subtracted — `balance.ts` derives the whole balance from the metering rows, this session's
         // included. So `runsLeft` answers *"can this account afford a whole further run?"*, which is
         // exactly the door's question and never the boundary's.
-        switch moment {
-        case .sessionStart:
-            // May a *new* run start? The user is about to spend a run, so the question is whether
-            // they have one — and this is the same field the product shows them, so the door can
-            // never refuse someone reading "1 left" or admit someone reading "0 left".
-            guard reading.runsLeft > 0 else {
-                return .refused(.allowanceExhausted)
-            }
-        case .stepBoundary:
-            // May the run already admitted *continue*? Not whether another one could start — the
-            // door granted this one, and a run the user was granted is theirs to finish. So the only
-            // thing that halts here is the account having actually run out, which is the remainder
-            // reaching zero. The server floors it at zero, so this is a confirmed exhaustion and not
-            // a sign error.
-            //
-            // This is also what makes the ticket's own acceptance criterion mean something: the halt
-            // now fires when the allowance genuinely runs out mid-session, rather than one step into
-            // every period's last run. And it is what the gateway already expects — `balance.ts`
-            // says in as many words that "a session already in flight when the allowance runs out
-            // finishes and is metered", so permitting that overdraw is the server's stated design
-            // and not this client conceding something.
-            guard reading.creditsRemaining > 0 else {
-                return .refused(.allowanceExhausted)
-            }
+        //
+        // The step-boundary half is also what makes the ticket's own acceptance criterion mean
+        // something: the halt fires when the allowance genuinely runs out mid-session, rather than
+        // one step into every period's last run. And it is what the gateway already expects —
+        // `balance.ts` says in as many words that "a session already in flight when the allowance
+        // runs out finishes and is metered", so permitting that overdraw is the server's stated
+        // design and not this client conceding something.
+        guard isExhausted(reading, at: moment) else { return .allowed }
+
+        // **Running out is where a top-up happens** (SONNY-215), and this is the only place it can:
+        // the two refusals above — an unconfirmable claim and an allowance nobody could read — pass
+        // through untouched, so nothing buys runs for a signed-out Mac or on the strength of a
+        // request that failed.
+        guard let toppedUp = await toppedUp(after: reading) else {
+            return .refused(.allowanceExhausted)
+        }
+        // **The same moment's own question, re-asked against the new reading.** Not the other
+        // moment's, and not a shared "is there anything left" — a purchase that landed on the very
+        // last credit should still refuse a *new* session while letting a running one continue,
+        // which is the whole distinction the two fields carry.
+        guard !isExhausted(toppedUp, at: moment) else {
+            return .refused(.allowanceExhausted)
         }
         return .allowed
     }

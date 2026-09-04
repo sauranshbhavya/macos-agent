@@ -412,6 +412,19 @@ final class SonnyAccountModel: ObservableObject {
 /// twice, months apart). They slot in above `emailForm` inside `addressStep`: the step is already
 /// a vertical stack of independent blocks, and neither the model's state machine nor the code step
 /// changes, because both providers return the same §3.2 token response this already adopts.
+/// The write half of the auto-top-up control (SONNY-215).
+///
+/// **Three fields and not four: there is no `isOn` here.** Whether the setting is on is a property of
+/// the allowance the row above renders, so reading it from the same object is what keeps the switch
+/// and the number it is about from being one request apart. What this carries is only what the
+/// allowance cannot say — whether a write is in flight, why the last one failed, and how to make the
+/// next one.
+struct ScreenControlAutoTopUpControl {
+    let isBusy: Bool
+    let failure: BillingSettingFailure?
+    let set: (Bool) async -> Void
+}
+
 struct SignInDialogView: View {
     @ObservedObject var model: SonnyAccountModel
     @Binding var isPresented: Bool
@@ -429,6 +442,13 @@ struct SignInDialogView: View {
     /// decision worth being able to read at the call site.
     let screenControlAllowance: ScreenControlAllowance?
     let refreshScreenControlAllowance: (() async -> Void)?
+    /// The auto-top-up control's write half, or `nil` where the control does not belong (SONNY-215).
+    ///
+    /// **Its *read* half is deliberately absent from this type**: whether the setting is on comes off
+    /// `screenControlAllowance.autoTopUp`, which is the same object the row above renders, so the
+    /// switch and the number beside it can never be one request apart. A `Bool` here would be a
+    /// second copy of a fact the view already holds.
+    let screenControlAutoTopUp: ScreenControlAutoTopUpControl?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -601,8 +621,104 @@ struct SignInDialogView: View {
 
             subscriptionRow
             screenControlUsageRow
+            screenControlAutoTopUpRow
+            screenControlLastTopUpRow
         }
         .padding(.top, 12)
+    }
+
+    /// Whether Sonny may buy more runs when these run out (SONNY-215).
+    ///
+    /// **Directly under the usage row, and that placement is what the label leans on.** The control's
+    /// name says "when *these* run out", and "these" is the figure on the line above — the same
+    /// device that lets "Delete what Sonny did on screen" name its object by sitting beside the
+    /// section it deletes. Moved anywhere else the name stops being self-contained and would want the
+    /// explanatory sentence the no-explanatory-copy rule forbids.
+    ///
+    /// **Absent, not disabled, when this deployment sells nothing** — the same founder direction of
+    /// 2026-08-31 the subscription row follows: a control that only fails when pressed is a broken
+    /// control, and a gateway with no top-up pack configured refuses every purchase. The absence also
+    /// covers every state where there is no figure at all, because the row has nothing to attach
+    /// "these" to.
+    ///
+    /// System A throughout, like everything else in this dialog: `SettingsAdaptiveControlRow`,
+    /// `SonnyToggle`, flat opaque fills and no shadow. Nothing here is borrowed from the widget's
+    /// material.
+    @ViewBuilder
+    private var screenControlAutoTopUpRow: some View {
+        if let allowance = screenControlAllowance,
+           let control = screenControlAutoTopUp,
+           allowance.autoTopUp.isOffered {
+            // **The price is on the control itself** (SONNY-215's F6, founder decision option B). A
+            // switch that authorises a standing charge names the amount; nothing beside it explains
+            // why, which is the line the no-explanatory-copy rule draws and the founder held.
+            let label = ScreenControlUsagePresentation.autoTopUpLabel(price: allowance.autoTopUp.price)
+            SettingsAdaptiveControlRow {
+                Text(label)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } trailing: {
+                // **The Settings dialog's own toggle, not a second one.** This ticket's contract is
+                // the same one `SettingsAdaptiveControlRow` carries: a label-plus-control row uses
+                // the shared component, and a shared component the rest of the target cannot name is
+                // not a shared component.
+                //
+                // **The binding's setter is where the asymmetry lives.** Reading is synchronous and
+                // comes off the allowance the row above renders; writing is a network call whose
+                // answer replaces that allowance, so the set arm starts a task and the *server's*
+                // reply is what moves the switch. A binding that wrote a local `@State` first would
+                // show a user their card was about to be charged before anything had agreed to it.
+                SonnySettingsToggle(
+                    isOn: Binding(
+                        get: { allowance.autoTopUp.isOptedIn },
+                        set: { next in Task { await control.set(next) } }
+                    )
+                )
+                .disabled(control.isBusy)
+                .accessibilityLabel(label)
+            }
+
+            // **Rendered here rather than in `messages`**, for the reason the portal's failure line
+            // is: this sentence is about the control directly above it, and a setting failure
+            // appearing under the sign-in form would read as a statement about signing in.
+            if let failure = control.failure {
+                Text(BillingSettingCopy.message(for: failure))
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// What this account was last charged for a top-up (SONNY-215's F6, founder decision option B).
+    ///
+    /// **A record, not a setting**, which is why it is its own row below the switch rather than a
+    /// second line inside it: it stays true after the switch is turned off, and it is about money
+    /// rather than about runs.
+    ///
+    /// **Rendered whenever there is a charge to show, including when the setting is off and even
+    /// when this deployment stopped offering top-ups.** A user who was charged is owed the record
+    /// whatever the switch says now — hiding it behind `isOffered`, as the switch above is, would
+    /// make a receipt disappear because a configuration changed.
+    @ViewBuilder
+    private var screenControlLastTopUpRow: some View {
+        if let charge = screenControlAllowance?.lastTopUp,
+           let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+            SettingsAdaptiveControlRow {
+                Text(ScreenControlUsagePresentation.lastTopUpLabel)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } trailing: {
+                Text(line)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
+            }
+        }
     }
 
     /// How many screen-control runs the plan has left, beside the plan itself (SONNY-214).

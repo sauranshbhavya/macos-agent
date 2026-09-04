@@ -1632,8 +1632,16 @@ final class AgentViewModel: ObservableObject {
     /// from inside the run path would also land in the middle of every scripted backend fixture that
     /// counts what a session put on the wire.
     func refreshScreenControlAllowance() async {
+        // **A successful read clears the setting's failure sentence** (PR #196's F10). That sentence
+        // is about a write that did not land, and a read that lands says the gateway is answering
+        // again — leaving it up means a user who pressed the switch during an outage, closed the
+        // dialog and reopened it reads a complaint about a request made minutes ago, under a row
+        // that is now correct. It is cleared on success only: a read that *fails* clears the whole
+        // allowance and the row goes with it, so there is nothing left for the sentence to sit
+        // under either way.
         do {
             screenControlAllowance = try await screenControlAllowanceService.fetch()
+            screenControlAutoTopUpFailure = nil
         } catch {
             // Swallowed on purpose, and this is the one place that decision lives. A usage line is
             // ambient: the user did not press anything to get it, so a failure to read it is not an
@@ -1659,6 +1667,46 @@ final class AgentViewModel: ObservableObject {
     /// the session changes, and the next one to appear asks for the new account's number.
     func forgetScreenControlAllowance() {
         screenControlAllowance = nil
+        screenControlAutoTopUpFailure = nil
+    }
+
+    // MARK: - Auto top-up (SONNY-215)
+
+    /// Why the auto-top-up setting could not be changed, or `nil`.
+    ///
+    /// **Its own channel, and not `errorMessage`.** That property means *the task failed*, and the
+    /// widget picks `.failure` ahead of `.result` — so a setting that would not save, routed there,
+    /// would replace the result of a task that ran and succeeded. This is the same distinction
+    /// `recordLocalStorageWriteFailure` draws for a bookkeeping write, applied to a network one:
+    /// what the user pressed did not happen, so they are owed a sentence, and it belongs beside the
+    /// control they pressed. `SonnyAccountModel.portalFailure` is the shape this follows.
+    @Published private(set) var screenControlAutoTopUpFailure: BillingSettingFailure?
+
+    /// Whether the setting is being written right now, so the control can be held while it is.
+    @Published private(set) var isSettingScreenControlAutoTopUp = false
+
+    /// Turn automatic top-ups on or off (SONNY-215).
+    ///
+    /// **The gateway is the one that holds this**, so the published figure is replaced with whatever
+    /// it answers rather than with what was asked for — a control that showed the requested state
+    /// before the server agreed would be a switch that lies about whether a charge can happen.
+    ///
+    /// **A failure leaves the previous figure in place**, which is deliberately not what
+    /// `refreshScreenControlAllowance` does with a failed read. That method is reading an ambient
+    /// number and `nil` means "no line"; this is a write the user pressed for, and clearing the row
+    /// they were looking at would take the setting off screen instead of telling them it did not
+    /// change.
+    func setScreenControlAutoTopUp(_ enabled: Bool) async {
+        isSettingScreenControlAutoTopUp = true
+        screenControlAutoTopUpFailure = nil
+        defer { isSettingScreenControlAutoTopUp = false }
+        do {
+            screenControlAllowance = try await screenControlAllowanceService.setAutoTopUp(enabled)
+        } catch let error as SonnyBackendError {
+            screenControlAutoTopUpFailure = BillingSettingFailure(error)
+        } catch {
+            screenControlAutoTopUpFailure = .cannotBeChanged
+        }
     }
 
     /// Whether the task in flight — or the one waiting on an approval — is a screen-control run.

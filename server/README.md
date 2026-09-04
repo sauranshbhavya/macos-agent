@@ -884,9 +884,9 @@ before you revoke.**
 
 | step | where | what |
 |---|---|---|
-| 1 | Polar dashboard | Create a **second** token with `customer_sessions:write`. Both now work. |
+| 1 | Polar dashboard | Create a **second** token with `customer_sessions:write` **and `orders:write`** (SONNY-215 — the same token places an automatic top-up's off-session order). Both now work. |
 | 2 | this gateway | Deploy with `BILLING_PROVIDER_ACCESS_TOKEN` set to the new one. |
-| 2a | **verify** | `curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/billing/portal" -H "Authorization: Bearer $TOKEN"` for a real subscriber's session — or press **Manage subscription** in the app. **Require a `200`.** |
+| 2a | **verify** | `curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/billing/portal" -H "Authorization: Bearer $TOKEN"` for a real subscriber's session — or press **Manage subscription** in the app. **Require a `200`.** **This exercises `customer_sessions:write` and nothing else**, so a token missing `orders:write` passes it and fails on the first automatic top-up; the only check for that scope is a real purchase, which SONNY-215's manual rows are. |
 | 3 | Polar dashboard | Revoke the old one, **only after 2a passed**. |
 
 **Step 2a is not optional and it is not the deploy check** (PR #183, F11). Nothing in this gateway

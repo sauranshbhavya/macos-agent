@@ -47,9 +47,15 @@ accountModel.sessionDidChange = { [weak agentViewModel] in
 // backend client, which is what the allowance read authenticates with. This is the only file that
 // holds both objects. Without this line the view model keeps its `ClosedScreenControlGate` and
 // screen control refuses, which is the fail-closed direction a missing wiring should take.
+// **One service, handed to the gate twice under two protocols** (SONNY-215). Reading the allowance
+// and buying more of it are two capabilities of the same object, and the gate names them separately
+// so that nothing can reach the charging one while thinking about the reading one. Building two
+// services here would be two clients, two sessions and two answers to one question.
+let screenControlAllowanceService = ScreenControlAllowanceService(client: accountModel.backendClient)
 agentViewModel.screenControlGate = SonnyScreenControlGate(
     entitlements: accountModel.entitlements,
-    allowance: ScreenControlAllowanceService(client: accountModel.backendClient)
+    allowance: screenControlAllowanceService,
+    topUp: screenControlAllowanceService
 )
 let delegate = AppDelegate(
     viewModel: agentViewModel,

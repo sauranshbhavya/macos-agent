@@ -39,6 +39,17 @@ public struct ScreenControlAllowance: Sendable, Equatable {
     /// The period this figure is about. `periodEnd` is exclusive.
     public let periodStart: Date
     public let periodEnd: Date
+    /// Whether more runs can be bought when these run out, and whether the user asked for that
+    /// (SONNY-215).
+    public let autoTopUp: ScreenControlAutoTopUp
+    /// **What this account was last charged for a top-up, and when** — `nil` when it never has been
+    /// (SONNY-215's F6, founder decision option B).
+    ///
+    /// **Not part of ``autoTopUp``, because it is not the setting.** It is a record of something
+    /// that happened, and it stays true after the switch is turned off. It is not part of the
+    /// credits block either, for the mirror of that reason: every figure there is a credit in this
+    /// period's pool, and this is money in a currency at an instant that may be months old.
+    public let lastTopUp: ScreenControlTopUpCharge?
 
     public init(
         plan: String,
@@ -46,7 +57,9 @@ public struct ScreenControlAllowance: Sendable, Equatable {
         runsIncluded: Int,
         creditsRemaining: Double,
         periodStart: Date,
-        periodEnd: Date
+        periodEnd: Date,
+        autoTopUp: ScreenControlAutoTopUp,
+        lastTopUp: ScreenControlTopUpCharge?
     ) {
         self.plan = plan
         self.runsLeft = runsLeft
@@ -54,6 +67,93 @@ public struct ScreenControlAllowance: Sendable, Equatable {
         self.creditsRemaining = creditsRemaining
         self.periodStart = periodStart
         self.periodEnd = periodEnd
+        self.autoTopUp = autoTopUp
+        self.lastTopUp = lastTopUp
+    }
+}
+
+/// A sum of money, as a payment provider counts one (SONNY-215's F6).
+///
+/// **Minor units and a currency code, never a formatted string.** §7.1's rule is that the words are
+/// this repository's rather than the server's, and a price is words the moment it is written down —
+/// a currency symbol, a separator and a decimal place are all locale decisions. The gateway sends
+/// the number and the code; `ScreenControlUsagePresentation` is where they become something to read.
+public struct ScreenControlMoney: Sendable, Equatable {
+    /// In the currency's smallest unit — 500 for $5.00. Never fractional.
+    public let amount: Int
+    /// ISO 4217, as the provider writes it. Case is not normalised here; the formatter uppercases.
+    public let currency: String
+
+    public init(amount: Int, currency: String) {
+        self.amount = amount
+        self.currency = currency
+    }
+}
+
+/// One charge that happened: what it cost, and when the session that triggered it asked.
+public struct ScreenControlTopUpCharge: Sendable, Equatable {
+    public let price: ScreenControlMoney
+    public let at: Date
+
+    public init(price: ScreenControlMoney, at: Date) {
+        self.price = price
+        self.at = at
+    }
+}
+
+/// The auto-top-up setting, as the gateway reports it (SONNY-215).
+///
+/// **Two booleans and not one, because they are different facts with different owners.**
+/// ``isOffered`` is the deployment's — a pack is configured and this gateway can charge — and
+/// ``isOptedIn`` is the user's. Collapsing them would make "nothing to sell" and "you said no" the
+/// same state, and the product does opposite things with them: the first renders no control at all,
+/// and the second renders one that is off.
+public struct ScreenControlAutoTopUp: Sendable, Equatable {
+    /// Whether this deployment sells more runs at all. `false` renders no control — a control that
+    /// only fails when pressed is a broken control (founder direction, 2026-08-31).
+    public let isOffered: Bool
+    /// Whether this account asked for automatic purchases. **`false` is the default and the
+    /// gateway's absence of a consent row is what produces it.**
+    public let isOptedIn: Bool
+    /// How many purchases this period may still make. `0` once the gateway's bound is spent.
+    ///
+    /// **Read by the gate and never rendered.** It is what lets a session skip a request the server
+    /// would refuse anyway; putting it on a surface would be a second number beside the run count,
+    /// which is what the one-paid-line decision exists to prevent.
+    public let attemptsLeft: Int
+    /// **What one pack costs, so the switch that authorises the charge can say it** (SONNY-215's F6,
+    /// founder decision option B). `nil` when this deployment sells none.
+    ///
+    /// This is the *configured* price, which is the only one available before a purchase has
+    /// happened. The record of a charge that did happen is ``ScreenControlAllowance/lastTopUp``, and
+    /// that one carries the provider's own figure.
+    public let price: ScreenControlMoney?
+
+    /// The state a build gets before it has read anything. **Nothing offered, nothing agreed and no
+    /// price** — fail-closed in every direction, so a decoding path that lost these fields could not
+    /// turn the feature on or put a number on a control.
+    public static let none = ScreenControlAutoTopUp(
+        isOffered: false,
+        isOptedIn: false,
+        attemptsLeft: 0,
+        price: nil
+    )
+
+    public init(isOffered: Bool, isOptedIn: Bool, attemptsLeft: Int, price: ScreenControlMoney?) {
+        self.isOffered = isOffered
+        self.isOptedIn = isOptedIn
+        self.attemptsLeft = attemptsLeft
+        self.price = price
+    }
+
+    /// Whether a session that has just run out should ask the gateway to buy more.
+    ///
+    /// **All three, and the first one is the whole of this ticket's hard requirement.** The gateway
+    /// refuses independently on every one of them — this is the client half, and it exists so a
+    /// user who has not opted in never has a request made on their behalf at all, not because the
+    /// refusal needs help.
+    public var mayPurchase: Bool {
+        isOffered && isOptedIn && attemptsLeft > 0
     }
 }
 
@@ -90,7 +190,7 @@ public actor ScreenControlAllowanceService {
     public func fetch() async throws -> ScreenControlAllowance {
         let response = try await client.send(SonnyBackendRequest(
             method: "GET",
-            path: "/v1/account/credits",
+            path: Self.creditsPath,
             body: nil,
             authentication: .bearer,
             idempotencyKey: nil,
@@ -101,7 +201,72 @@ public actor ScreenControlAllowanceService {
             // there is nothing for one to be about. §9.3's own reading of what is safe to send again.
             isRetrySafe: true
         ))
-        guard let wire = try? Self.decoder.decode(WireScreenControlAllowance.self, from: response.data) else {
+        return try Self.decode(response.data)
+    }
+
+    /// Turn automatic top-ups on or off, and read back the position that follows (SONNY-215).
+    ///
+    /// **The setting lives on the gateway and not in a local default**, which is the decision this
+    /// method is. The charge happens server-side, so the consent the charge is authorised by has to
+    /// be a fact the gateway holds: a `UserDefaults` flag would be a consent the thing doing the
+    /// charging could not read, and the negative requirement — no charge without the opt-in — would
+    /// then rest on a client being honest about it.
+    ///
+    /// **A `PUT` and not a `POST`, so it carries no idempotency key and needs none**: sending it
+    /// twice leaves the same setting, which is what idempotent means, and §9.1 asks for a key on a
+    /// `POST` that changes something precisely because those are the ones a repeat can double.
+    public func setAutoTopUp(_ enabled: Bool) async throws -> ScreenControlAllowance {
+        let body = try JSONSerialization.data(withJSONObject: ["enabled": enabled])
+        let response = try await client.send(SonnyBackendRequest(
+            method: "PUT",
+            path: "/v1/account/credits/auto-top-up",
+            body: body,
+            authentication: .bearer,
+            idempotencyKey: nil,
+            timeout: SonnyBackendTimeouts.auth,
+            // Setting a switch to a value is safe to send again: the second send reaches the same
+            // state as the first.
+            isRetrySafe: true
+        ))
+        return try Self.decode(response.data)
+    }
+
+    /// Ask the gateway to buy one more pack of runs, and read back the allowance it bought
+    /// (SONNY-215).
+    ///
+    /// **Every guard that matters is the gateway's**, and this method takes no argument for that
+    /// reason: there is nothing here for a caller to declare. Whether the account opted in, whether
+    /// it is actually out, how many purchases the period has left and what a pack costs are all
+    /// facts the server holds, and a request that carried any of them would be a client asserting
+    /// something the server would have to check anyway.
+    ///
+    /// **An idempotency key per attempt, and not retry-safe.** §9.1 asks for a key on a `POST` that
+    /// changes something, and this one moves money — so a key is what stops a repeat buying a second
+    /// pack, and `isRetrySafe: false` is `verifyEmailCode`'s pairing for its reason: a call that
+    /// spends something the user cannot get back is made once.
+    public func purchaseTopUp() async throws -> ScreenControlAllowance {
+        let response = try await client.send(SonnyBackendRequest(
+            method: "POST",
+            path: "/v1/account/credits/top-up",
+            body: nil,
+            authentication: .bearer,
+            idempotencyKey: UUID(),
+            // Its own budget, because this is the one call on this type that opens two outbound
+            // provider requests behind it rather than reading a table.
+            timeout: SonnyBackendTimeouts.topUp,
+            isRetrySafe: false
+        ))
+        return try Self.decode(response.data)
+    }
+
+    /// The one route every method here reads, and the one body all three answer with.
+    static let creditsPath = "/v1/account/credits"
+
+    /// **One decode for three calls.** The `GET`, the setting and the purchase answer the same shape
+    /// deliberately, so an answer is the account's whole position rather than a fragment a caller
+    /// has to merge — and a second decoder here would be a second place for the three to disagree.
+    private static func decode(_ data: Data) throws -> ScreenControlAllowance {
+        guard let wire = try? decoder.decode(WireScreenControlAllowance.self, from: data) else {
             throw SonnyBackendError.undecodableResponse("screen-control allowance response")
         }
         return ScreenControlAllowance(
@@ -110,7 +275,24 @@ public actor ScreenControlAllowanceService {
             runsIncluded: wire.screen_control_runs_included,
             creditsRemaining: wire.credits.remaining,
             periodStart: wire.period_start,
-            periodEnd: wire.period_end
+            periodEnd: wire.period_end,
+            // **Absent decodes to nothing offered and nothing agreed**, which is the fail-closed
+            // direction on both axes: a gateway too old to send this block cannot turn the feature
+            // on, and cannot make a user look opted in.
+            autoTopUp: ScreenControlAutoTopUp(
+                isOffered: wire.auto_top_up?.offered ?? false,
+                isOptedIn: wire.auto_top_up?.opted_in ?? false,
+                attemptsLeft: wire.auto_top_up?.attempts_left ?? 0,
+                price: wire.auto_top_up?.price.map {
+                    ScreenControlMoney(amount: $0.amount, currency: $0.currency)
+                }
+            ),
+            lastTopUp: wire.last_top_up.map {
+                ScreenControlTopUpCharge(
+                    price: ScreenControlMoney(amount: $0.amount, currency: $0.currency),
+                    at: $0.at
+                )
+            }
         )
     }
 
@@ -138,8 +320,40 @@ public actor ScreenControlAllowanceService {
 private struct WireScreenControlAllowance: Decodable {
     /// The derivation the gateway publishes beside the run count so a founder can sanity-check the
     /// weights against a measured cost. Only `remaining` is consumed; see the note above.
+    ///
+    /// `topped_up` is the fifth figure and is not read here for the reason the other three are not:
+    /// no decision in this client needs it. It is on the wire so a founder can subtract what was
+    /// bought from what the plan included.
     struct Credits: Decodable {
         let remaining: Double
+    }
+
+    /// The auto-top-up block (SONNY-215).
+    ///
+    /// **Optional, and its absence is read as nothing offered and nothing agreed.** §2.1 makes the
+    /// client tolerant of fields it does not know; the mirror of that is that a field it *does* know
+    /// and did not receive has to have a safe reading, and for a switch that authorises a charge the
+    /// only safe reading is off.
+    struct AutoTopUp: Decodable {
+        let offered: Bool
+        let opted_in: Bool
+        let attempts_left: Int
+        /// `null` on a deployment that sells no pack, and absent on a gateway too old to send it.
+        /// Both decode to `nil`, which renders no price rather than a wrong one.
+        let price: Money?
+    }
+
+    /// A sum of money on the wire — minor units and a code, never a formatted string.
+    struct Money: Decodable {
+        let amount: Int
+        let currency: String
+    }
+
+    /// One charge that happened (SONNY-215's F6).
+    struct LastTopUp: Decodable {
+        let amount: Int
+        let currency: String
+        let at: Date
     }
 
     let plan: String
@@ -148,4 +362,6 @@ private struct WireScreenControlAllowance: Decodable {
     let credits: Credits
     let period_start: Date
     let period_end: Date
+    let auto_top_up: AutoTopUp?
+    let last_top_up: LastTopUp?
 }

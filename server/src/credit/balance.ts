@@ -45,6 +45,25 @@ import { planFor, type CreditCatalogue, type CreditWeights } from "./catalogue.j
  * missing snapshot seen from two ends, and one option closes both. (PR #182's cycle 3, which also
  * withdrew the stronger version of this: a top-up is a payment-provider charge with its own amount
  * and record, so what would be missing there is the justification for the trigger, not the charge.)
+ *
+ * ## A top-up is a grant, and it is not the ledger this file refuses (SONNY-215)
+ *
+ * `toppedUpCredits` below is a sum of `sonny.credit_topup` rows and it is the one input here that is
+ * not derived from metering. That is not the second writer the section above rejects: what a ledger
+ * would duplicate is the **draw**, which stays exactly what the metering rows say, and a top-up is a
+ * *grant* — money that moved at the payment provider — which no metering row could carry and nothing
+ * else records. It raises the allowance, so `runsIncluded` moves with it and a user who bought a
+ * pack reads "3 of 30 left" rather than watching an extra ten arrive from nowhere.
+ *
+ * **A top-up is spent against the period it was bought in and does not carry over, and that is a
+ * consequence of having no ledger rather than a preference.** Carrying credits forward means
+ * tracking which credits a later period's draw consumed — the plan's, which reset, or the bought
+ * ones, which do not — and that distinction cannot be derived from a metering row, so it would need
+ * exactly the ledger this file exists without. What bounds the cost is when a top-up is bought: the
+ * only thing that triggers one is a user hitting their limit mid-task, so a pack is bought to be
+ * spent immediately rather than banked. The residual case — a top-up bought in the last hours of a
+ * period — is real, is a founder call if it ever needs to change, and is recorded rather than
+ * papered over.
  */
 
 /**
@@ -147,10 +166,21 @@ export interface CreditBalance {
   readonly runsIncluded: number;
   /** The derivation, so a founder can sanity-check the runs figure against the measured cost. */
   readonly credits: {
+    /** The plan's own credits **plus** whatever this period's top-ups granted. */
     readonly allowance: number;
     readonly drawn: number;
     readonly remaining: number;
     readonly perRun: number;
+    /**
+     * What top-ups added to this period, and **the one figure here that is not derived from
+     * metering** (SONNY-215).
+     *
+     * It is carried separately from `allowance` rather than folded silently into it because the two
+     * answer different questions: `allowance` is what this account may spend, and this is how much
+     * of it was bought after the fact. A founder sanity-checking a run count against a measured cost
+     * needs to be able to subtract it.
+     */
+    readonly toppedUp: number;
   };
 }
 
@@ -168,11 +198,21 @@ export function creditBalance(input: {
   readonly catalogue: CreditCatalogue;
   readonly planKey: string | undefined;
   readonly draw: ScreenControlDraw;
+  /**
+   * What this period's granted top-ups added, in credits (SONNY-215). `0` for every account that
+   * has bought none, which is every account by default.
+   */
+  readonly toppedUpCredits: number;
   readonly now: Date;
 }): CreditBalance {
   const plan = planFor(input.catalogue, input.planKey);
   const perRun = input.catalogue.runCredits;
-  const allowance = round(plan.monthlyCredits);
+  // **A top-up raises the allowance rather than lowering the draw**, and the difference is visible
+  // in `runsIncluded`: an account that bought a pack now reads "3 of 30 left" rather than "3 of 20
+  // left" with an extra ten arriving from nowhere. The draw stays exactly what metering measured,
+  // which is `balance.ts`'s whole design — the audit row is the charge, and this is a grant.
+  const toppedUp = round(Math.max(0, input.toppedUpCredits));
+  const allowance = round(plan.monthlyCredits + toppedUp);
   const drawn = creditsForDraw(input.catalogue.weights, input.draw);
   const remaining = round(Math.max(0, allowance - drawn));
   return {
@@ -181,6 +221,6 @@ export function creditBalance(input: {
     periodEnd: periodEnd(input.now),
     runsLeft: runsFrom(remaining, perRun),
     runsIncluded: runsFrom(allowance, perRun),
-    credits: { allowance, drawn, remaining, perRun },
+    credits: { allowance, drawn, remaining, perRun, toppedUp },
   };
 }
