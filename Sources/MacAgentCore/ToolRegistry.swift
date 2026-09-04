@@ -35,7 +35,9 @@ public struct ToolRegistry: Equatable, Sendable {
         self.tools = tools
     }
 
-    public static let `default` = ToolRegistry(tools: CapabilityRegistry.default.tools)
+    /// Tools are metadata: no registry's revealer is called to produce them, so this takes the one
+    /// that cannot reach the desktop (SONNY-395). Both registries answer the same tools.
+    public static let `default` = ToolRegistry(tools: CapabilityRegistry.revealingNowhere.tools)
 
     public var plannerDescription: String {
         tools.map { tool in
