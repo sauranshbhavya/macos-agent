@@ -138,9 +138,12 @@ const weightsSchema = z.object({
 const priceSchema = z.object({
   /**
    * **In the currency's smallest unit**, as every payment provider counts money — 500 for $5.00.
-   * An integer, because a fractional cent is not a price anybody can be charged.
+   * An integer, because a fractional cent is not a price anybody can be charged, and **strictly
+   * positive** for `credits`' reason one field up (PR #196's G6): a configured `0` would render
+   * "($0.00)" on a switch that then charges whatever the provider's product really costs, which is
+   * the pre-purchase label being wrong in the one way a user would act on.
    */
-  amount: z.number().int().nonnegative(),
+  amount: z.number().int().positive(),
   /** ISO 4217, lowercase, as the provider writes it. Three letters, checked so a typo is a startup
    * failure rather than a currency symbol the app cannot format. */
   currency: z.string().trim().toLowerCase().regex(/^[a-z]{3}$/),

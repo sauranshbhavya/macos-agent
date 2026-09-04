@@ -247,7 +247,8 @@ describeDb("an order this gateway made and did not resolve (PR #196's F1)", () =
     if (attempt === undefined) throw new Error("the fixture's claim was refused");
     return attempt.topUpId;
   };
-  const outstanding = () => readOutstandingTopUp(client, { accountId: ACCOUNT, periodStart: PERIOD });
+  const outstanding = (provider: string = PROVIDER) =>
+    readOutstandingTopUp(client, { accountId: ACCOUNT, provider, periodStart: PERIOD });
 
   itUnderHangBackstop("is not outstanding until an order id is on it", async () => {
     // **The distinction the whole recovery rests on.** A claimed row with no order id is a process
@@ -304,21 +305,47 @@ describeDb("an order this gateway made and did not resolve (PR #196's F1)", () =
     }
   });
 
-  itUnderHangBackstop("never replaces an order id that is already there", async () => {
-    // The id names the object a resolution is about, so overwriting one would lose it. The guard is
-    // in the statement's own `WHERE`, and this is what says so.
-    const topUpId = await claim();
-    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-first" });
-    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-second" });
-
-    expect(await outstanding()).toEqual({ topUpId, orderId: "order-first" });
-  });
-
   itUnderHangBackstop("does not reach across a period boundary", async () => {
     const topUpId = await claim(new Date("2026-07-01T00:00:00Z"));
     await recordTopUpOrder(client, { topUpId, providerOrderId: "order-july" });
 
     expect(await outstanding()).toBeUndefined();
+  });
+
+  itUnderHangBackstop("does not reach across a provider boundary either", async () => {
+    // **PR #196's G4.** `finalizeTopUpOrder` takes an order id and nothing else, so an order created
+    // at one provider would be finalized against another's API on a deployment that changed
+    // `BILLING_PROVIDER` mid-period. The column has always been written by `claim`; nothing read it.
+    const topUpId = await claim();
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-1" });
+
+    expect(await outstanding("some-other-provider")).toBeUndefined();
+    // The control: the same row is found under the provider that really created it, so the
+    // `undefined` above is a scoping and not a query that finds nothing.
+    expect(await outstanding()).toEqual({ topUpId, orderId: "order-1" });
+  });
+
+  itUnderHangBackstop("refuses to write an order id onto a row that already carries one", async () => {
+    // **PR #196's G3.** The line this guards is called the whole of F1, and it now says so by
+    // failing rather than by passing silently: a statement that matched nothing would leave the row
+    // with no order id while the caller charged anyway, which is the state F1 was.
+    const topUpId = await claim();
+    await recordTopUpOrder(client, { topUpId, providerOrderId: "order-first" });
+
+    await expect(
+      recordTopUpOrder(client, { topUpId, providerOrderId: "order-second" }),
+    ).rejects.toThrow(/did not take its provider order id \(matched 0 rows\)/);
+    // And the first id is still there — the throw is a refusal to overwrite, not a failed write.
+    expect(await outstanding()).toEqual({ topUpId, orderId: "order-first" });
+  });
+
+  itUnderHangBackstop("refuses to write an order id onto a row that does not exist", async () => {
+    await expect(
+      recordTopUpOrder(client, {
+        topUpId: "00000000-0000-4000-8000-000000000000",
+        providerOrderId: "order-nowhere",
+      }),
+    ).rejects.toThrow(/matched 0 rows/);
   });
 
   itUnderHangBackstop("refuses to record a charge on a row that granted nothing", async () => {

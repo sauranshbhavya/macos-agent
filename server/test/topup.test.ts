@@ -113,15 +113,18 @@ function recordingAttempts(
   readonly claims: Parameters<TopUpAttemptStore["claim"]>[0][];
   readonly settlements: Parameters<TopUpAttemptStore["settle"]>[0][];
   readonly recorded: Parameters<TopUpAttemptStore["recordOrder"]>[0][];
+  readonly asked: Parameters<TopUpAttemptStore["outstanding"]>[0][];
 } {
   const claims: Parameters<TopUpAttemptStore["claim"]>[0][] = [];
   const settlements: Parameters<TopUpAttemptStore["settle"]>[0][] = [];
   const recorded: Parameters<TopUpAttemptStore["recordOrder"]>[0][] = [];
+  const asked: Parameters<TopUpAttemptStore["outstanding"]>[0][] = [];
   let settleThrowsLeft = options.settleThrowsOnce === true ? 1 : 0;
   return {
     claims,
     settlements,
     recorded,
+    asked,
     claim: async (input): Promise<TopUpAttempt | undefined> => {
       claims.push(input);
       // `undefined` is what a full period answers, which is the only thing a fake can honestly model
@@ -131,7 +134,10 @@ function recordingAttempts(
     recordOrder: async (input) => {
       recorded.push(input);
     },
-    outstanding: async () => options.outstanding,
+    outstanding: async (input) => {
+      asked.push(input);
+      return options.outstanding;
+    },
     settle: async (input) => {
       if (settleThrowsLeft > 0) {
         settleThrowsLeft -= 1;
@@ -229,6 +235,9 @@ describe("a pack that cannot buy a run is a deployment that will not start (PR #
       { amount: 4.5, currency: "usd" },
       { amount: 500, currency: "dollars" },
       { amount: -1, currency: "usd" },
+      // **Zero is refused too** (PR #196's G6): it would render "($0.00)" on a switch that then
+      // charges whatever the provider's product really costs.
+      { amount: 0, currency: "usd" },
     ]) {
       expect(() =>
         parseCreditCatalogue(withPack({ credits: 100, productId: "p", maxPerPeriod: 1, price })),
@@ -603,6 +612,12 @@ describe("a charge whose record is lost is resolved, not paid for twice (PR #196
     });
 
     expect(result).toEqual({ kind: "granted", credits: 500 });
+    // **The order is looked for under the provider that created it** (PR #196's G4). An order made
+    // at one provider must not be finalized against another's API, and `finalizeTopUpOrder` takes an
+    // id and nothing else — so the scoping has to happen here or nowhere.
+    expect(attempts.asked).toEqual([
+      { accountId: ACCOUNT, provider: "test-provider", periodStart: exhausted().periodStart },
+    ]);
     // **Nothing was created and no slot was claimed** — this attempt *is* the resolution of the
     // first one, not a second purchase.
     expect(provider.charges).toEqual([]);
@@ -1196,8 +1211,16 @@ describe("the routes a user reaches the setting and the charge through", () => {
     const second = await send();
 
     expect(first.statusCode).toBe(500);
-    // **Not a replay**: the claim was released, so the second request ran the handler again.
+    // **Not a replay**: the claim was released, so the second request ran the handler again. The two
+    // statuses are what carry that — a replay would return the *stored* response and could not have
+    // re-entered the handler at all.
     expect(second.statusCode).toBe(500);
+    // **This count is the fixture's shape, not the system's** (PR #196's G6). `recordingAttempts`
+    // answers `undefined` to `outstanding` unless a test says otherwise, so the second run creates a
+    // second order here; against the real store it would find the first order and resolve it, and
+    // the count would be 1. It is kept as evidence that the handler really re-ran — which is the
+    // release — and named so that nobody reads it as "a released key buys twice", because since
+    // PR #196's F1 it does not.
     expect(provider.charges).toHaveLength(2);
     await app.close();
   });

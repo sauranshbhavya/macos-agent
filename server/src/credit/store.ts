@@ -196,6 +196,17 @@ export async function readTopUpAttempts(
  * `attempted_at` rather than `settled_at` is the instant, because it is when the user's session
  * asked — the moment they would recognise — and because a charge resolved a day later by a retry is
  * still the charge that happened when it happened.
+ *
+ * **Dropping `outcome = 'granted'` from the `WHERE` below is an equivalent mutant, exactly as it is
+ * on `readToppedUpCredits` above** (PR #196's G5; the reviewer's own V7 survived on it, and this
+ * branch's S6 survived on the neighbour). 0019's `credit_topup_only_a_grant_was_charged` makes
+ * `charged_amount IS NOT NULL` imply `outcome = 'granted'`, so the two predicates select the same
+ * rows and no test can separate them — proved against a real database rather than argued, by
+ * inserting a `declined` row carrying an amount and watching the constraint refuse it while the same
+ * insert without the amount succeeds. **What is *not* equivalent is dropping `charged_amount IS NOT
+ * NULL`**: a later declined attempt then wins the ordering, carries no amount, and this answers
+ * `undefined` for an account that really was charged. That direction is held by a test, and the
+ * clause here stays because it names the fact rather than a proxy for it.
  */
 export async function readLastTopUpCharge(
   client: pg.Client,
