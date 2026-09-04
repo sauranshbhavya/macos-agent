@@ -1082,8 +1082,11 @@ it feels confusing in practice, not just whether it's "technically correct."
       the wipe. Both now read one sentence built from the store list itself, and the four that had
       gone missing are in it: **what past tasks planned**, **allowed apps**, **unfinished tasks**
       and (in the dialog) **common output locations**. Check that the page and the dialog say the
-      same thing, and **say whether the sentence is too long to read** — it is thirteen items now,
-      and the alternative considered and rejected was pointing at the Memory page instead, which
+      same thing, and **say whether the sentence is too long to read** — it is **fifteen** items now
+      (corrected 2026-09-03, PR #194's F8: it said thirteen, which was already one behind when this
+      row was written and two behind once SONNY-333 added *deletions Sonny hasn't finished*, and the
+      whole row is a judgement about length so the number is load-bearing to it), and the
+      alternative considered and rejected was pointing at the Memory page instead, which
       would have stopped the sentence naming *records of what Sonny did on screen*
 - [ ] **(new 2026-08-28, SONNY-233)** Then press it, as the row above says — confirm the wipe still
       does what it always did, and that nothing in the new wording promises something the press does
@@ -1865,12 +1868,13 @@ behind, and its section above carries the detail that matters (the Supabase proj
 string, and the JWT key mode is the first thing to check). Nothing here needs a provider credential
 beyond what those rows already need.
 
-**One thing this branch deliberately did not build, so a row below does not ask you to look for it.**
-The app's own delete button still deletes only the Mac's copy: `AgentViewModel.deleteTask` does not
-call the new endpoint, because SONNY-134 was scoped server-only for parallel-lane disjointness
-(`docs/sonny-row-12-plan.md` §8.2). The endpoint is real and reachable; wiring the button to it is a
-separate ticket. The row below therefore calls the endpoint with `curl`, which is what actually
-exists to test.
+**One thing this branch deliberately did not build — and SONNY-333 has since built it (2026-09-03).**
+When these rows were written the app's own delete button deleted only the Mac's copy, because
+SONNY-134 was scoped server-only for parallel-lane disjointness (`docs/sonny-row-12-plan.md` §8.2),
+so the headline row below called the endpoint with `curl`. It no longer has to: Sonny's own Delete
+now reaches the server. **The row keeps the `curl` as its fallback and presses the button first** —
+see the dated amendment inside it — and the app-driven rows of their own are in *Delete a task and
+the server's copy goes with it* (SONNY-333), near the end of this section.
 
 - [ ] **(new 2026-08-28, SONNY-134) — Terminal, needs only a Postgres. This one is runnable today.**
       With a database and `npm run build` done, rehearse the migration both ways:
@@ -1888,13 +1892,16 @@ exists to test.
       task from Command Center. Then, in a terminal with the same `DATABASE_URL` the container uses:
       `npm run support -- account <your account id>`. It must show `content` with **at least one
       call retained**, a `next expiry` about thirty days out, and your usage beside it. Then delete
-      that task's server copy — the app cannot do this yet, see the note above — with
+      that task's server copy. **Amended 2026-09-03 (SONNY-333): press the app's own Delete first.**
+      In Command Center &rsaquo; Tasks, right-click that task and choose *Delete task*, confirm, and
+      wait a few seconds. Then re-run the account report: `content` must be back to **0 call(s)
+      retained**, and `npm run support -- deletions` must show a `task` row naming that task. If it
+      does not, fall back to the original form of this row —
       `curl -X DELETE -H "Authorization: Bearer <an access token>"
-      http://localhost:8080/v1/tasks/<task id>`; it must answer `200` with `requests_deleted` at
-      least 1. Re-run the account report: `content` must be back to **0 call(s) retained**, and
-      `npm run support -- deletions` must show a `task` row naming that task. **What would be a
-      finding:** a `404` from the delete, a `requests_deleted` of 0 for a task you just ran, or
-      content still showing after the delete.
+      http://localhost:8080/v1/tasks/<task id>`, which must answer `200` with `requests_deleted` at
+      least 1 — and **tell us that the button did not do it**, because that is the finding rather
+      than the `curl` succeeding. **What would also be a finding:** a `404` from the `curl`, a
+      `requests_deleted` of 0 for a task you just ran, or content still showing after either.
 
 - [ ] **(new 2026-08-28, SONNY-134; command widened 2026-08-28 after PR #148's review) — after
       SONNY-280's resume steps (1)–(5).** Run one task with **"Don't save this task"** on. Then check
@@ -3097,6 +3104,69 @@ a founder watching one commit be refused is the only evidence of it there is.
       CLAUDE.md, Claude Code sessions, or this very rule must commit without complaint. If an
       ordinary commit is ever refused, say so immediately: a guard that cries wolf is one that gets
       switched off, which is how this rule failed the first time.
+
+### Delete a task and the server's copy goes with it (new 2026-09-03, SONNY-333)
+
+**What changed:** pressing *Delete task* used to remove the task from this Mac and leave the copy the
+backend had kept. It now removes both. The founder rule of 2026-08-16 is that delete means deleted
+everywhere; the endpoint has existed since SONNY-134 and nothing pressed it, so the rule was true of
+the endpoint and not of the button.
+
+**How it works, because two of the rows below only make sense with it.** The button never waits on
+the network. Sonny writes the task's id to a small queue on disk *before* it deletes anything local,
+deletes the local records, and then tries to send the delete in the background. If that fails — you
+are offline, or signed out — the id stays in the queue and Sonny tries again the next time it
+launches. **So a row below asks you to quit and reopen the app; that relaunch is the mechanism, not
+a workaround.**
+
+**Three of these four rows need a signed-in build against a running gateway**, which is the same gate
+SONNY-134's rows above sit behind (SONNY-280's resume checklist, steps (1)–(5)). The first row needs
+nothing but the app.
+
+- [ ] **(new 2026-09-03, SONNY-333) — needs only the app. Do this one first.** In Command Center
+      &rsaquo; Tasks, right-click any finished task and choose *Delete task*, then confirm. The row
+      must disappear **immediately** — no spinner, no pause, no "deleting…" — and **no red error and
+      no storage banner may appear anywhere**, in Command Center or on the floating widget. Do it
+      again on a task that has a *What Sonny did on screen* section, using the delete inside the task
+      detail sheet. **What would be a finding:** any delay you can feel between the press and the row
+      going, or any message appearing that you did not press for. This row is the founders' own
+      decision of 2026-08-30 being kept: the button is never blocked on the network, and a delete
+      that could not reach the server is never reported as an error, because there is nothing you
+      could do about it.
+
+- [ ] **(new 2026-09-03, SONNY-333) — after SONNY-280's resume steps (1)–(5). The headline row.**
+      Signed in, with the gateway running, run **one ordinary task** (a typed command that reaches
+      the planner). Confirm the backend kept it: `npm run support -- account <your account id>` must
+      show `content` with **at least one call retained**. Now delete that task from Command Center
+      &rsaquo; Tasks and wait about five seconds. Re-run the account report: `content` must be back
+      to **0 call(s) retained**, and `npm run support -- deletions` must show a `task` row naming
+      that task. **What would be a finding:** content still retained a minute later, or no row in
+      `deletions`.
+
+- [ ] **(new 2026-09-03, SONNY-333) — after SONNY-280's resume steps (1)–(5). The offline row, and
+      the one that tests the part you cannot see.** Run a task while signed in, as above, and check
+      the account report shows it retained. Then **turn Wi-Fi off**, delete that task from Command
+      Center, and watch what happens: the row must still disappear at once and there must still be
+      no error and no banner. **Quit Sonny completely** (menu bar &rsaquo; Quit Sonny), **turn Wi-Fi
+      back on**, and open Sonny again. Wait about ten seconds, then re-run
+      `npm run support -- account <your account id>`. `content` must now be back to **0 call(s)
+      retained** — the delete you made with no network reached the server at the next launch.
+      **What would be a finding:** an error at any point, or content still retained after the
+      relaunch.
+
+- [ ] **(new 2026-09-03, SONNY-333) — after SONNY-280's resume steps (1)–(5). Signed out.** Sign out
+      from the menu bar, then delete a task that ran **while you were signed in**. It must delete
+      exactly as smoothly as the rows above — no error, no banner, no prompt to sign in. Sign back in
+      as the same person, quit and reopen Sonny, wait about ten seconds, and re-run the account
+      report: that task's content must be gone. **What would be a finding:** anything asking you to
+      sign in in order to delete something, or content still retained after signing back in and
+      relaunching.
+
+**One thing deliberately not built, so no row asks you to look for it.** *Delete Sonny local data* in
+Settings, the *Delete* on Command Center &rsaquo; Memory &rsaquo; Task history, and *Delete what
+Sonny did on screen* all still stop at this Mac. They are SONNY-404's, and the first of them needs a
+founder decision before it is even implementable — whether that wipe is a promise about this Mac or
+about the whole account.
 
 ## 8. How to report back
 

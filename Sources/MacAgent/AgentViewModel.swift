@@ -114,7 +114,7 @@ final class AgentViewModel: ObservableObject {
     /// `localStorageLoadFailures` — what something had *happened* to load and fail on — while the
     /// delete came from a probe. They disagreed in both directions: a confirmation promising to
     /// delete a file the press then kept, and the mirror case. Worse, that dictionary has eleven
-    /// sources against thirteen stores, so the Task history row could never report damage from the
+    /// sources against fourteen stores, so the Task history row could never report damage from the
     /// vision journal or Shortcut run history, `canDelete` collapsed to `count > 0`, and an empty
     /// task history beside an unreadable `shortcuts-run-history.json` was the founder's original
     /// dead end reproduced inside the fix for it.
@@ -155,7 +155,7 @@ final class AgentViewModel: ObservableObject {
     var setAsideFilesFromLastDelete: [URL] {
         lastPerRowDelete?.keptFileURLs ?? []
     }
-    /// How many files are set aside across the thirteen stores and how much space they hold — the
+    /// How many files are set aside across the fourteen stores and how much space they hold — the
     /// line Settings' Data page shows, with the control that removes them (SONNY-266, founder
     /// decision 2026-08-24).
     ///
@@ -475,6 +475,40 @@ final class AgentViewModel: ObservableObject {
     /// Ids rather than a count, so two different watchers stuck at once still get one sentence each.
     private var notifiedWatcherIDs: Set<String> = []
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
+    /// The fourteenth store, and the one this view model never reads for a surface (SONNY-333):
+    /// task deletions this Mac owes the gateway. Held so `refreshStoreReadability()` has a read door
+    /// for it and so the wipe's population and this initializer's population stay the same list.
+    private let pendingServerDeletionStore: PendingServerDeletionStore
+    /// The other half of "delete means deleted everywhere" (SONNY-333, founder 2026-08-16 via
+    /// SONNY-14). Built here from the store above and the one `backendClient`, the same way
+    /// `screenControlAllowanceService` is built from that client — a second `SonnyBackendClient`
+    /// would be a second token cache and a second refresh guard, which contract §3.3 reads as theft.
+    private let taskDeletionService: SonnyTaskDeletionService
+    /// The delivery pass in flight, if one is.
+    ///
+    /// **Chained rather than replaced, and what that buys is narrower than this comment used to
+    /// claim** (PR #194 review, F2). Two passes running at once would each load the queue and each
+    /// send a DELETE for the same entry; the chain makes a pass load *after* the previous one has
+    /// finished removing what it delivered, so an entry is sent once. What the chain does **not**
+    /// close is press-versus-pass: `enqueue` runs synchronously on this actor while a pass, being a
+    /// nonisolated `async` method, has released it — so a press landing inside a pass's `remove`
+    /// window used to lose its own entry outright. That is the file's problem rather than the
+    /// scheduler's, and it is closed where it belongs, by the per-file lock inside
+    /// `PendingServerDeletionStore`. The chain and the lock are both load-bearing and neither
+    /// substitutes for the other.
+    ///
+    /// Held rather than fire-and-forgotten so a test can await the pass instead of racing it, the
+    /// same reason `standingWatcherCheck` is a stored handle.
+    ///
+    /// **What the chain costs, since it is N passes for N presses rather than one.** Online, each
+    /// pass finishes in well under a second and the queue is empty after the first, so a burst
+    /// costs a file read apiece. Offline it costs one *attempt* per press, not one per queued
+    /// entry — the pass stops at its first transport failure — which is a retry per press, roughly
+    /// the shape a burst of deletes should have anyway. Coalescing later presses onto a single
+    /// follow-up pass was the alternative and was not taken: it needs two more pieces of scheduling
+    /// state and leaves a test unable to await the pass its own press produced, to save background
+    /// work that is already serialized and bounded.
+    private var pendingServerDeletionDelivery: Task<Void, Never>?
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
     /// Row 19's seam. `UnmanagedMemoryPolicyProvider` is the only implementation that ships, so this
@@ -798,7 +832,7 @@ final class AgentViewModel: ObservableObject {
         /// `canDelete` collapsed to `count > 0`, so an empty task history beside an unreadable
         /// `shortcuts-run-history.json` reproduced the founder's original dead end exactly, inside
         /// the branch whose whole outcome is that an unreadable memory is clearable. The row and its
-        /// Delete now both read `unreadableStores`, which is probed over all thirteen.
+        /// Delete now both read `unreadableStores`, which is probed over all fourteen.
         ///
         /// **What this comment used to say, and why it was wrong twice over.** It said "Neither is
         /// loaded by this view model at all", which is false: `deleteTask` and `deleteScreenRecord`
@@ -936,7 +970,7 @@ final class AgentViewModel: ObservableObject {
             workspaceStore: WorkspaceStore(fileURL: WorkspaceStore.realFileURL()),
             snippetStore: SnippetStore(fileURL: SnippetStore.realFileURL()),
             recentArtifactStore: RecentArtifactStore(fileURL: RecentArtifactStore.realFileURL()),
-            // The real thing, named here for the same reason the thirteen store locations are: this
+            // The real thing, named here for the same reason the fourteen store locations are: this
             // is the one place the shipping app asks for something that reaches the machine
             // (SONNY-239). It sits in this list rather than defaulting on the initializer because a
             // default nobody writes is a default nobody can see — SONNY-240's whole argument,
@@ -953,6 +987,9 @@ final class AgentViewModel: ObservableObject {
                 whitelist: whitelist
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: ResumableTaskStore.realFileURL()),
+            pendingServerDeletionStore: PendingServerDeletionStore(
+                fileURL: PendingServerDeletionStore.realFileURL()
+            ),
             // The real page fetch, named here for the same reason `finderRevealer` is: this is the
             // one place the shipping app asks for something that reaches outside the process.
             standingWatcherObserver: LiveStandingWatcherObserver(),
@@ -1001,7 +1038,7 @@ final class AgentViewModel: ObservableObject {
     /// **What this does not prevent**, stated rather than left to be discovered: a call site is now
     /// forced to *pass* a store, not to pass a sensible one. That used to mean `taskHistoryStore:
     /// TaskHistoryStore()` — a store that named no location and silently resolved the real one.
-    /// **SONNY-350 closed that spelling**: `fileURL` is a required parameter of all thirteen store
+    /// **SONNY-350 closed that spelling**: `fileURL` is a required parameter of all fourteen store
     /// initializers, so the only way to reach `~/Library/Application Support/Sonny/` is to write
     /// `TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL())`, in words, where a reader and a
     /// sweep can both see it. The residue is now that sentence rather than silence, and
@@ -1059,13 +1096,19 @@ final class AgentViewModel: ObservableObject {
         // hands it to both.
         outputLocationStore: OutputLocationStore,
         resumableTaskStore: ResumableTaskStore,
+        // **The fourteenth store, undefaulted like the thirteen above it** (SONNY-333, SONNY-240's
+        // rule). Its file is the only thing that remembers a deleted task's id after the row is
+        // gone, so a fixture that inherited a default would write the test process's deletions into
+        // the developer's own queue — and the delivery pass would then send them to whatever
+        // session that Mac holds.
+        pendingServerDeletionStore: PendingServerDeletionStore,
         // **How a standing watcher reads its page, and undefaulted for SONNY-240's reason applied to
         // a network call** (SONNY-236). This is driven by a 30-second timer rather than by anything
         // the user pressed, so a fixture that has never heard of watchers must not be one tick away
         // from the real internet — and "a test that predates the parameter cannot know to pass it"
         // does not care that this one fetches rather than writes. `UnreachableStandingWatcherObserver`
         // is what a fixture with no interest in watchers passes; the shipping app's live one is named
-        // in `atItsRealStoreLocations()` beside the thirteen store locations.
+        // in `atItsRealStoreLocations()` beside the fourteen store locations.
         standingWatcherObserver: any StandingWatcherObserving,
         // **The thirteenth store arrives inside this**, which is why it is required too even though
         // it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are the real
@@ -1130,6 +1173,11 @@ final class AgentViewModel: ObservableObject {
         self.approvedAppStore = approvedAppStore
         self.outputLocationStore = outputLocationStore
         self.resumableTaskStore = resumableTaskStore
+        self.pendingServerDeletionStore = pendingServerDeletionStore
+        self.taskDeletionService = SonnyTaskDeletionService(
+            client: backendClient,
+            store: pendingServerDeletionStore
+        )
         self.standingWatcherObserver = standingWatcherObserver
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
         self.localDataDeletionService = localDataDeletionService
@@ -3495,12 +3543,95 @@ final class AgentViewModel: ObservableObject {
     /// cap, same eviction, deleted together, suppressed together — so when it lands its delete goes
     /// **in the dependents block below, above the row**: not after the row, and not in a second
     /// method a caller could forget to call.
+    ///
+    /// ## The fourth step, and why it goes first (SONNY-333)
+    ///
+    /// The three deletes above are local. The backend holds a copy too — the requests this task
+    /// made, and every training-snapshot member copied from them — and the founder decision of
+    /// 2026-08-16 is that delete means deleted everywhere. `DELETE /v1/tasks/{task_id}` has existed
+    /// since SONNY-134 and nothing pressed it, so that rule was true of the endpoint and not of this
+    /// button.
+    ///
+    /// **The id is the thing that cannot survive a half-failure, and everything below follows from
+    /// that.** A dependent and a row are both on this Mac, so whichever survives is still reachable
+    /// and the user can press Delete again. The id is not: it is carried by the row and by nothing
+    /// else, so once the row is gone there is no way left to name the server's copy. That gives one
+    /// outcome that must be unreachable — *local records gone, nothing queued* — which is permanent,
+    /// unrecoverable and silent.
+    ///
+    /// **Ordering alone does not make it unreachable, and this comment claimed that it did**
+    /// (PR #194 review, F1). The enqueue went first and its `catch` published a notice and then
+    /// *fell through* to the deletes below, so the forbidden outcome shipped: byte-for-byte the one
+    /// the paragraph above rejects. Putting the enqueue first buys exactly one real property, which
+    /// this comment never stated — protection against a **crash** between the two steps, where
+    /// there is nobody left to correct anything and erring towards deleting is right. Against a
+    /// `throw` the ordering is decorative, because a throw has somewhere to put the correction.
+    ///
+    /// **So the two throws are handled rather than ordered around**, and together they make this
+    /// method all-or-nothing **between the Mac and the server** — the obligation and the local
+    /// records move together, or neither does. **Not all-or-nothing among the three local deletes,
+    /// which are three files written in sequence with no transaction** (PR #194 cycle-3, R3, and the
+    /// distinction matters because the last version of this comment claiming a property the code did
+    /// not have is what F1 was): a throw at the plan-detail delete after the screen record has gone
+    /// leaves a task whose *What Sonny did on screen* section is missing and whose row is still
+    /// there. That residue is recoverable — both per-entry deletes are no-ops for an id that is
+    /// already absent, so a second press finishes the job — and a dangling `visionSessionID` is a
+    /// designed state that row I already ships. The bullets below are exact; this sentence is the
+    /// one that used to overreach:
+    ///
+    /// - *the enqueue throws* → **abort**. Nothing local has been touched yet, so this returns with
+    ///   the row intact and says the delete did not happen. The user can press again, and the queue
+    ///   is keyed on the id so a later success holds one entry rather than two.
+    /// - *a local delete throws* → **withdraw the obligation**. The row is still standing (each of
+    ///   these deletes is atomic and the row's own is last), so an entry left queued would have the
+    ///   next launch remove the server's copy of a task the user can still see, after being told the
+    ///   delete failed.
+    /// - *a crash between them* → the entry is owed for a row that still exists, the sweep delivers
+    ///   it, and the user's history keeps a task whose server copy is gone. Over-deletion, chosen
+    ///   deliberately, and the only outcome the ordering itself decides.
+    ///
+    /// **`setError`, not the storage-notice channel, and the earlier reading of CLAUDE.md's rule was
+    /// argued from the behaviour this fix removed.** It said a failed enqueue is bookkeeping because
+    /// the row was already gone by the time anything rendered — true only while the method fell
+    /// through. It aborts now, so nothing at all has been deleted, which is `errorMessage`'s own
+    /// meaning: the thing you asked for did not happen. It is also the same sentence the local
+    /// failure below reports, which is right, because to the user they are the same event.
+    ///
+    /// **The systemic form of this failure is closed in the store rather than here.** `enqueue`
+    /// loads before it writes, so an undecodable queue file would make *every* future Delete abort;
+    /// `PendingServerDeletionStore.loadKeyed()` sets such a file aside and starts fresh, and says
+    /// why that is right for this store and for no other.
+    ///
+    /// **The delivery itself is fired and not awaited**, so the button is never blocked on the
+    /// network — the whole point of the 2026-08-30 decision. A pass that cannot reach the gateway
+    /// leaves the entry where it is and `sweepPendingServerDeletions()` tries again at the next
+    /// launch.
     func deleteTask(_ record: CompletedTaskRecord) {
-        guard let id = record.id else {
+        guard let id = record.id, !id.isEmpty else {
             // Unreachable in practice — every record `loadAll()` hands out has an id, backfilled if
             // the file predates them. Reachable only if that backfill's rewrite failed, so the
             // message points at the retry that fixes it rather than at the missing field.
+            //
+            // **The emptiness half is new** (PR #194 review, residuals). An empty id builds
+            // `/v1/tasks/`, which is a different route, and the store's own doc argues that this
+            // queue is a file outliving the version that wrote it — the same argument that earned
+            // the percent-encoding one layer down.
             setError("Could not delete this task: its saved copy has no identifier yet. Try again in a moment.")
+            return
+        }
+
+        do {
+            // The backend's copy, owed before anything local goes — see this method's doc comment
+            // for why this one step is not in the dependents-first ordering below.
+            try taskDeletionService.recordDeletedTask(id: id)
+        } catch {
+            // **Aborts, and this `return` is the whole of PR #194's F1.** Falling through to the
+            // local deletes here produced exactly the outcome the doc comment above calls permanent,
+            // unrecoverable and silent: the id gone from the Mac, nothing queued, the server's copy
+            // orphaned with no remaining name. Nothing has been deleted at the moment this runs, so
+            // this really is the user's ask not happening — the same thing the block below reports,
+            // in the same words and on the same channel.
+            setError("Could not delete this task: \(error.localizedDescription)")
             return
         }
 
@@ -3514,6 +3645,15 @@ final class AgentViewModel: ObservableObject {
             // The row, last.
             try taskHistoryStore.delete(id: id)
         } catch {
+            // **The obligation is withdrawn, which is F1's other half.** Every delete above is
+            // load-modify-write with an atomic write and the row's own is last, so a throw here
+            // leaves the row standing — and an entry left queued for it would have the next launch
+            // delete the server's copy of a task the user can still see, after being told the delete
+            // failed. `try?` because the user is already being told the delete did not happen and a
+            // second sentence about bookkeeping is not something they could act on separately; the
+            // residue if it fails is over-deletion, which is the direction this method chooses
+            // everywhere else.
+            try? taskDeletionService.withdrawDeletedTask(id: id)
             // A delete is a write, so this gets its own accurate wording and never
             // `recordLocalStorageLoadFailure`, whose banner is hardcoded to "could not be decrypted
             // or decoded" and would be simply wrong here.
@@ -3522,6 +3662,65 @@ final class AgentViewModel: ObservableObject {
         }
 
         refreshTaskHistory()
+        deliverPendingServerDeletions()
+    }
+
+    /// Tries to deliver everything the queue owes, off the caller's path.
+    ///
+    /// Chained onto whatever pass is already running, for the reason on
+    /// `pendingServerDeletionDelivery`: two passes over one file is a lost-update race, and the
+    /// chain also guarantees the new pass loads after this delete's enqueue.
+    private func deliverPendingServerDeletions() {
+        let previous = pendingServerDeletionDelivery
+        let service = taskDeletionService
+        pendingServerDeletionDelivery = Task { @MainActor in
+            await previous?.value
+            await service.deliverPendingDeletions()
+            completedServerDeletionPasses += 1
+        }
+    }
+
+    /// How many delivery passes have finished since launch. Test-only, and it exists because the
+    /// property it makes observable cannot be waited for through the handle.
+    ///
+    /// **A test of the chain cannot await `pendingServerDeletionDelivery`** (PR #194 cycle-3's own
+    /// battery): that handle is the *last* pass, and without the chain the last pass does not cover
+    /// the first — so awaiting it can return while an earlier pass is still issuing requests, and an
+    /// assertion on how many were issued measures whatever had landed by then. That made the chain's
+    /// only test kill the mutant twice and miss it the third time, which is the same shape as the
+    /// racy lock tests one round earlier: a test that finds a defect only when the timing suits it.
+    /// A count of *finished* passes is monotone and reaches its final value in both directions, so a
+    /// test waits on it and then asserts, and the failing direction is an assertion rather than a
+    /// timeout.
+    private(set) var completedServerDeletionPasses = 0
+
+    /// The launch sweep (SONNY-333): everything a previous run could not deliver, tried again.
+    ///
+    /// **Needs no session restore to have happened first.** `SonnyBackendClient` reads the Keychain
+    /// the first time it is asked for a token, so this authenticates itself rather than depending on
+    /// `AppDelegate.decideFirstRunAfterRestoringTheSession()` having finished — which matters,
+    /// because that method is asynchronous and everything after its `Task` in
+    /// `applicationDidFinishLaunching` runs before it.
+    ///
+    /// Awaitable through the same handle a delete's pass uses, so a test drives one door rather than
+    /// two.
+    func sweepPendingServerDeletions() {
+        deliverPendingServerDeletions()
+    }
+
+    /// The pass in flight, for tests. `nil` when none has been started.
+    ///
+    /// Internal rather than private for the reason `activeTaskScope` is `private(set)`: the
+    /// scheduling *is* the behaviour here — that passes chain rather than overlap — so it has to be
+    /// assertable, and there is no surface to observe it through.
+    var pendingServerDeletionDeliveryForTests: Task<Void, Never>? {
+        pendingServerDeletionDelivery
+    }
+
+    /// What the queue still owes, for tests and for nothing else. The queue has no surface, and
+    /// `PendingServerDeletionStore` says why.
+    func pendingServerDeletionsForTests() throws -> [PendingServerDeletion] {
+        try taskDeletionService.pendingDeletions()
     }
 
     /// Deletes only the screen record, leaving the task row and its `visionSessionID` in place.
@@ -3913,7 +4112,7 @@ final class AgentViewModel: ObservableObject {
         // this row is named *Unfinished tasks* and `resumable-tasks.json` also holds the user's
         // standing watchers, so the file-level door would destroy something the row never mentions,
         // silently and with nothing failing. `LocalStoreRowDeletionScope` carries the reasoning and
-        // is exhaustive, so a fourteenth store has to answer the same question.
+        // is exhaustive, so a fifteenth store has to answer the same question.
         //
         // **The unreadable half is deliberately not split the same way** and goes to quarantine at
         // file level below, whatever a store's scope says: rewriting a file means decoding it, which
@@ -3988,9 +4187,9 @@ final class AgentViewModel: ObservableObject {
     /// Removes one row's own collection from a file it shares, leaving everything else in that file
     /// alone (SONNY-236).
     ///
-    /// **Exhaustive with no `default`, and the twelve `.wholeFile` stores are listed rather than
-    /// swept up.** `rowDeletionScope` is what routes a store here, so those twelve are unreachable —
-    /// but a `default:` would let a fourteenth store arrive classified as sharing a file and be
+    /// **Exhaustive with no `default`, and every `.wholeFile` store is listed rather than swept
+    /// up.** `rowDeletionScope` is what routes a store here, so all of those are unreachable —
+    /// but a `default:` would let a fifteenth store arrive classified as sharing a file and be
     /// silently deleted by nothing at all, which is the same invisible failure the split exists to
     /// prevent, one door along. Listing them means the classification and the door have to be
     /// changed together.
@@ -4011,7 +4210,8 @@ final class AgentViewModel: ObservableObject {
              .taskHistory,
              .taskPlanDetails,
              .approvedApps,
-             .outputLocations:
+             .outputLocations,
+             .pendingServerDeletions:
             break
         }
     }
@@ -4035,7 +4235,7 @@ final class AgentViewModel: ObservableObject {
 
     /// Whether this store's file can be read right now.
     ///
-    /// Exhaustive over `LocalStore` with no `default`, so a fourteenth store cannot be added without
+    /// Exhaustive over `LocalStore` with no `default`, so a fifteenth store cannot be added without
     /// somebody naming its read door — and a store with no read door named here is a store the
     /// delete would destroy unreadable.
     ///
@@ -4070,6 +4270,23 @@ final class AgentViewModel: ObservableObject {
                 _ = try outputLocationStore.loadAll()
             case .resumableTasks:
                 _ = try resumableTaskStore.loadAll()
+            case .pendingServerDeletions:
+                // **Here because this switch is exhaustive over `LocalStore` with no `default`, and
+                // for no other reason** (PR #194 review, F6). The sentence that stood here said the
+                // whole wipe "splits on readability for every store at once"; it does not —
+                // `LocalDataDeletionService.delete(reaching:)` unlinks every file unconditionally,
+                // and the door that splits is `deleteMemory(in:)`, per `MemoryCategory`. This
+                // store's category is `nil`, so it is in no category, and its answer here is
+                // consumed by nothing: `unreadableStores` is read only through `category.stores`.
+                //
+                // **Kept rather than shortcut to `true`**, at the cost of one file read and decrypt
+                // on this refresh, because a set named `unreadableStores` that quietly excluded a
+                // store would be a worse thing to leave behind than the read. The store heals an
+                // undecodable file itself now, so the answer this returns is also true for longer
+                // than it used to be — **and this read can therefore move a file**, which is worth
+                // knowing about a method named for a question (PR #194 cycle-3's residuals). It is
+                // the same heal any other door would perform and it happens once.
+                _ = try pendingServerDeletionStore.loadAll()
             }
             return true
         } catch {
@@ -4093,7 +4310,7 @@ final class AgentViewModel: ObservableObject {
 
     /// One store's file, resolved through the instance this view model was constructed with.
     ///
-    /// The switch is exhaustive over `LocalStore` with no `default`, so a fourteenth store
+    /// The switch is exhaustive over `LocalStore` with no `default`, so a fifteenth store
     /// cannot be added without someone deciding which injected instance answers for it here.
     private func storeFileURL(for store: LocalStore) -> URL {
         switch store {
@@ -4123,6 +4340,8 @@ final class AgentViewModel: ObservableObject {
             return outputLocationStore.fileURL
         case .resumableTasks:
             return resumableTaskStore.fileURL
+        case .pendingServerDeletions:
+            return pendingServerDeletionStore.fileURL
         }
     }
 
@@ -6214,7 +6433,7 @@ final class AgentViewModel: ObservableObject {
         // **The probe re-reads eleven files the other two calls just read, and that duplication is
         // bought deliberately** (PR #110 fix-round review). Readability has to come from one place
         // or the row's words and its Delete disagree, which they did — and the loaders cannot supply
-        // it, because two of the thirteen stores have no load-failure source and so were invisible
+        // it, because three of the fourteen stores have no load-failure source and so were invisible
         // to anything derived from those. 12 ms of the 18 is that decision.
         //
         // **No ratio against task history, and the missing one is the point.** The obvious

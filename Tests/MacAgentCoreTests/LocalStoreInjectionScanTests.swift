@@ -43,7 +43,7 @@ import Testing
 ///   `everyStoresRealLocationIsUnderTheDevelopersApplicationSupport` below, which walks
 ///   `LocalStore.allCases` instead of listing thirteen constructions by hand.
 ///
-/// All six are subsumed because `fileURL` is now a required parameter of all thirteen store
+/// All six are subsumed because `fileURL` is now a required parameter of all fourteen store
 /// initializers and `RoutineStore()` does not compile. A scan that re-proves what will not build is
 /// not a second line of defence; it is a second thing to maintain that can only ever agree with the
 /// compiler, and it costs a reader the time to work out which of the two is actually load-bearing.
@@ -79,7 +79,7 @@ import Testing
 /// argument for moving the guarantee into the type system rather than sharpening the matcher again.
 ///
 /// **The population is `LocalStore.allCases`**, which already refuses a new store file without a
-/// case, so a fourteenth store cannot reach the tree without being mapped here — and being mapped
+/// case, so a fifteenth store cannot reach the tree without being mapped here — and being mapped
 /// here is what puts it on the initializer without a default.
 ///
 /// **This replaced `OutputLocationFixtureWiringScanTests`**, which checked the same two things for
@@ -97,7 +97,7 @@ import Testing
 struct LocalStoreInjectionScanTests {
     /// How each local store reaches an `AgentViewModel`.
     ///
-    /// A `switch` with no `default`, so a fourteenth `LocalStore` case does not compile until
+    /// A `switch` with no `default`, so a fifteenth `LocalStore` case does not compile until
     /// somebody answers this question for it — the same device `LocalStore.kind` and
     /// `LocalStore.memoryCategory` already use, and the reason a new store cannot slip past them.
     struct Injection {
@@ -149,6 +149,11 @@ struct LocalStoreInjectionScanTests {
             return Injection(parameterLabel: "outputLocationStore", typeName: "OutputLocationStore")
         case .resumableTasks:
             return Injection(parameterLabel: "resumableTaskStore", typeName: "ResumableTaskStore")
+        case .pendingServerDeletions:
+            return Injection(
+                parameterLabel: "pendingServerDeletionStore",
+                typeName: "PendingServerDeletionStore"
+            )
         }
     }
 
@@ -368,7 +373,7 @@ struct LocalStoreInjectionScanTests {
 
         // `LocalStore.fileURL()` resolves through each store's own `realFileURL`, so this is the
         // whole population by construction rather than by a list that can go one store stale.
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
         for store in LocalStore.allCases {
             let path = store.fileURL().path
             #expect(path.hasPrefix(applicationSupport + "/"), "\(path) is not under Application Support")
@@ -885,7 +890,7 @@ struct LocalStoreInjectionScanTests {
     /// it — so a scan is the only instrument left, which is the same answer
     /// `onlyMainAsksForTheRealStoreLocations` reaches for the same reason.
     ///
-    /// **The same gap covers the thirteen store constructions beside it and is not closed here.**
+    /// **The same gap covers the fourteen store constructions beside it and is not closed here.**
     /// `routineStore: RoutineStore()` could become a temp store with the whole suite green, for
     /// exactly this reason. Generalising this check to every argument of that one call is available
     /// and belongs to whoever owns that suite; recording the gap is better than quietly benefiting
@@ -1089,7 +1094,7 @@ struct LocalStoreInjectionScanTests {
             // the narrow needle could not see — so they are disclosure rather than new reach.
             //
             // That `LocalStore.allCases`' file URLs and `defaultStoreFileURLs()` are one population,
-            // which is how a fourteenth store is refused until it is classified.
+            // which is how a fifteenth store is refused until it is classified.
             "MacAgentCoreTests/LocalStorageSecurityTests.swift",
             // The stored-property classifier, which reads each store's *filename* off its URL.
             "MacAgentTests/ProductShellTests.swift",

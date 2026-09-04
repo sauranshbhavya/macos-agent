@@ -8,14 +8,23 @@ import Testing
 /// **The enumeration this ticket owed comes first.** The ticket said the read-before-write pattern
 /// meant "almost certainly every local store, not just this one", and asked for that to be
 /// established rather than assumed. `everyLocalStoreIsUnreadableWhenItsFileWasWrittenUnderAnotherKey`
-/// walks `LocalStore.allCases` and proves it for all thirteen, and the switch inside `probe(_:at:)`
-/// is exhaustive with no `default`, so a fourteenth store joins the population by failing to compile
-/// rather than by being remembered.
+/// walks `LocalStore.allCases` and proves it for every store that does not recover on its own, and
+/// the switch inside `probe(_:at:)` is exhaustive with no `default`, so a fifteenth store joins the
+/// population by failing to compile rather than by being remembered.
+///
+/// **One store recovers on its own, and it is enumerated rather than excused** (SONNY-333, PR #194
+/// review F1). `pending-server-deletions.json` is an outbox: its contents are opaque ids of tasks
+/// already deleted locally, so an unreadable queue's obligations cannot be reconstructed by
+/// anything, while *propagating* the failure would make every future Delete fail to record one —
+/// the store's own `loadKeyed()` carries the whole argument. It sets the file aside through the
+/// very mechanism this suite is about and starts fresh, so it reads again rather than throwing.
+/// `theOnlySelfHealingStoreIsTheOutbox` below holds that this is exactly one store, by value, so a
+/// second one cannot join the exemption by being added to a list.
 ///
 /// **The failure is reproduced the way the founder's Mac produced it**, not with random bytes: each
 /// file is written as a valid `SONNYENC1` blob under one key and read back under another. That is
 /// what SONNY-240's fixtures did to `output-locations.json` and `resumable-tasks.json`, and it is
-/// also what a Keychain item replaced by a restore or a migration would do to all thirteen at once.
+/// also what a Keychain item replaced by a restore or a migration would do to all fourteen at once.
 /// Bytes that merely fail to parse would exercise the JSON half of `decode` and say nothing about
 /// the decrypt half, which is the half that actually happened.
 @Suite(.serialized)
@@ -27,7 +36,7 @@ struct LocalDataQuarantineTests {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        for store in LocalStore.allCases {
+        for store in LocalStore.allCases where !Self.selfHealingStores.contains(store) {
             let probe = Self.probe(store, at: root)
             try Self.writeUnreadableFile(at: probe.fileURL)
 
@@ -38,8 +47,39 @@ struct LocalDataQuarantineTests {
 
         // The population, so a broken enumerator cannot pass this vacuously — and so the number
         // lives in exactly one assertion rather than in a test name that goes stale.
-        #expect(LocalStore.allCases.count == 13)
+        #expect(LocalStore.allCases.count == 14)
+        #expect(Self.selfHealingStores.count == 1)
     }
+
+    /// **The exemption above is one store and stays one store** (SONNY-333, PR #194 review F1).
+    ///
+    /// Held by value rather than by a `contains` check, because a set is the shape a second store
+    /// joins silently — and the property that earns the exemption is narrow: the file's contents are
+    /// unrecoverable by anything, so keeping it preserves nothing, while propagating the failure
+    /// disables the feature it belongs to for good. Every other store holds bytes a person made or a
+    /// run produced, and SONNY-253's device-bound key may hand them back.
+    ///
+    /// Both directions, so the exemption cannot be widened *or* quietly emptied: the outbox really
+    /// does read again after a wrong-key write, and every other store really does still throw.
+    @Test
+    func theOnlySelfHealingStoreIsTheOutbox() throws {
+        #expect(Self.selfHealingStores == [.pendingServerDeletions])
+
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let probe = Self.probe(.pendingServerDeletions, at: root)
+        try Self.writeUnreadableFile(at: probe.fileURL)
+
+        // Reads again rather than throwing…
+        try probe.read()
+        // …and the bytes it could not read are set aside rather than destroyed, which is what makes
+        // this compatible with SONNY-253 handing a key back later.
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: probe.fileURL).count == 1)
+    }
+
+    /// The stores that recover from an unreadable file instead of reporting one. See the suite's
+    /// header for why this is a list of exactly one and what would have to be true of a second.
+    private static let selfHealingStores: Set<LocalStore> = [.pendingServerDeletions]
 
     /// The same walk, one step further: the mechanism clears every one of them.
     ///
@@ -402,7 +442,7 @@ struct LocalDataQuarantineTests {
 
     /// One store, built at `root`, plus the read door a load failure surfaces through.
     ///
-    /// Exhaustive over `LocalStore` with no `default`, which is the point: a fourteenth store cannot
+    /// Exhaustive over `LocalStore` with no `default`, which is the point: a fifteenth store cannot
     /// be added without somebody deciding how this suite reads it, and the two walks above then
     /// cover it for free.
     private static func probe(_ store: LocalStore, at root: URL) -> (fileURL: URL, read: () throws -> Void) {
@@ -445,6 +485,9 @@ struct LocalDataQuarantineTests {
             return (store.fileURL, { _ = try store.loadAll() })
         case .resumableTasks:
             let store = ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json"), encryption: readerEncryption)
+            return (store.fileURL, { _ = try store.loadAll() })
+        case .pendingServerDeletions:
+            let store = PendingServerDeletionStore(fileURL: root.appendingPathComponent("pending-server-deletions.json"), encryption: readerEncryption)
             return (store.fileURL, { _ = try store.loadAll() })
         }
     }

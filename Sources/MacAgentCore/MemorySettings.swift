@@ -253,6 +253,18 @@ extension LocalStore {
             return .approvedApps
         case .resumableTasks:
             return .resumableTasks
+        case .pendingServerDeletions:
+            // **Not memory — an obligation** (SONNY-333). This file holds the ids of tasks the user
+            // has already deleted, kept only until the gateway confirms their retained copy is gone.
+            // It is the one store here that records nothing Sonny remembers *about* the user, so
+            // there is no memory type for it to be, and its entries have no meaning a row could
+            // show: an opaque key and the moment a delete was pressed.
+            //
+            // **A row would also carry a Delete, and that press would cancel a deletion the user
+            // asked for** — leaving their content on the server while the button that was supposed
+            // to remove it reports success. That is a worse failure than the absence of a row, and
+            // it is the reason this is `nil` rather than a row with the button hidden.
+            return nil
         case .clipboardHistorySettings:
             // **Not memory — the clipboard switch itself.** This file holds whether clipboard
             // history runs and whether its first-run notice was answered. Deleting it would reset a

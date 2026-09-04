@@ -211,6 +211,9 @@ private func makeStopFixture() throws -> StopFixture {
         approvedAppStore: UnreachableLocalStores.approvedApps(),
         outputLocationStore: UnreachableLocalStores.outputLocations(),
         resumableTaskStore: store,
+        pendingServerDeletionStore: PendingServerDeletionStore(
+            fileURL: root.appendingPathComponent("pending-server-deletions.json")
+        ),
         standingWatcherObserver: UnreachableStandingWatcherObserver(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             store: UnreachableLocalStores.clipboardHistory(),

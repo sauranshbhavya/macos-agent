@@ -608,6 +608,10 @@ struct BackendOutageTests {
                 fileURL: root.appendingPathComponent("resumable-tasks.json"),
                 encryption: encryption
             ),
+            pendingServerDeletionStore: PendingServerDeletionStore(
+                fileURL: root.appendingPathComponent("pending-server-deletions.json"),
+                encryption: encryption
+            ),
             standingWatcherObserver: UnreachableStandingWatcherObserver(),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: HermeticPasteboardReader(),
