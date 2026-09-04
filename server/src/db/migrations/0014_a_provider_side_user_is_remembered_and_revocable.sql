@@ -177,7 +177,7 @@ SELECT id, supabase_user_id, linked_at, linked_at,
 -- founder to be fixed here rather than split): close → drain → an operator reopens the account
 -- (`UPDATE sonny.account SET deleted_at = NULL`, which 0005's `mark_identities_closed` un-flags the
 -- identities for) → the user signs in again as the same id → they close again → nothing is owed.
--- That route needs no supersession at all, and the reviewer measured it against `main` at `def8c3a`
+-- That route needs no supersession at all, and the reviewer measured it against `main` at `2f36250`
 -- (`owed = 1` after the first close, `owed = 0` after the reopen and the second). It is the same
 -- root cause reached without this table, and it is closed here **for a user who returns by signing
 -- in**: rule 1's refresh names `supabase_user_id` unconditionally, so their next sign-in lands in

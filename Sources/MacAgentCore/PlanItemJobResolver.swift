@@ -219,7 +219,7 @@ public enum PlanItemJobResolver {
     /// not `expanding`'s deliberately: `expanding` is a pure rewrite that several tests drive
     /// directly, and a guard placed there would be one every caller could skip. `resolving` is the
     /// single door in `Sources/` — `git grep -n 'PlanItemJobResolver.resolving(' -- Sources | grep -vE ':[0-9]+: *[/][/]'`
-    /// → 1 at `0a12ed8`, `AgentActionExecutor.prepare`. Dropping the comment stage answers **3** at
+    /// → 1 at `85d2c97`, `AgentActionExecutor.prepare`. Dropping the comment stage answers **3** at
     /// that same head — the one call plus the two doc comments citing it, `PlanItemJob.swift`'s and
     /// this one — which is the control that shows the stage rather than the pattern is doing the
     /// excluding. This sentence first shipped stamped at a commit that predated it and saying 2,

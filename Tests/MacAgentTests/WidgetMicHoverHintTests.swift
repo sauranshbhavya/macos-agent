@@ -57,7 +57,7 @@ struct WidgetMicHoverHintTests {
     /// second one, and then assert the *second* hint is still up. At five seconds that second
     /// countdown was a live wall-clock deadline racing the rest of the test, and under sustained
     /// CPU load it won: 2 failures in 12 full-suite runs during PR #89's mutation batteries, at
-    /// `7d164df` and `dccf45c`, both `visibleHint` nil where a hint was expected. This suite is
+    /// `c2cf973` and `55cb7d2`, both `visibleHint` nil where a hint was expected. This suite is
     /// `@MainActor` and Swift Testing interleaves suites on that one actor, so an `await` here
     /// yields to whatever else is queued on it — the gap between arming and asserting is bounded by
     /// the machine, not by this file.
@@ -258,7 +258,7 @@ struct WidgetMicHoverHintTests {
 /// one test pinning "a repeat arrival is still an arrival" routed around the very function this
 /// branch created to be the arrival's one entry point — and a mutant that swallowed the repeat
 /// *inside* `pointerArrived`, which is the shipped bug re-expressed one layer down, survived the
-/// whole suite. Measured at `5cac908`, found by PR #75's review as F1, and the reason a test's
+/// whole suite. Measured at `7e68354`, found by PR #75's review as F1, and the reason a test's
 /// wiring is now a thing this file states rather than a detail.
 ///
 /// **What is still out of reach**, since this suite gets closer to the view than its neighbour

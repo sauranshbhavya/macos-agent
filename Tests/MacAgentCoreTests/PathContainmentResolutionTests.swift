@@ -197,7 +197,7 @@ struct PathContainmentResolutionTests {
     /// taken out of it. `validateInsideWhitelist` then judged that, and the kernel's own
     /// `SYMLOOP_MAX` budget started again from the shortened path, so it had plenty left to finish
     /// the walk. Chains of 34 to 63 links read as inside and the bytes landed outside. At
-    /// `98c50c8` — before any of this — those same chains were refused by the kernel with `ELOOP`,
+    /// `94afca1` — before any of this — those same chains were refused by the kernel with `ELOOP`,
     /// so the branch that closed the one-link escape opened a longer one.
     ///
     /// A longer budget does not fix it; every finite number has the same cliff. What fixes it is

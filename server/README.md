@@ -658,7 +658,7 @@ and an index larger than `maintenance_work_mem` is built with an external merge 
 in-memory one — a regime change, not a steeper line. On this repository's container (64 MB) the
 boundary falls between 1,000,000 rows (56 MB index, 1299 ms) and 2,000,000 (113 MB, 2274 ms), and at
 ten million the measurement is **11.1 s** (PR #171's reviewer's; every other figure here is this
-repository's own container at `9cea6cf`). A number extrapolated from points on the near side of that
+repository's own container at `a767c6e`). A number extrapolated from points on the near side of that
 boundary is not an extrapolation, which is how an earlier draft of 0017's header came to say "near
 eight seconds". `CREATE INDEX CONCURRENTLY` and a batched backfill are the standard escapes and
 **neither is available in this runner**, because both must run outside a transaction. So before

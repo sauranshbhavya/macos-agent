@@ -159,7 +159,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// field decode-*excluded* — absent from `AgentPlanDecoder.stepKeys` and from the planner schema
     /// — because that ticket's never-touch list assigned the goldens to SONNY-93. SONNY-93 then made
     /// `visionSession` planner-visible and moved the goal into both, three commits later on the same
-    /// branch. This comment still described the SONNY-92 state at `6c3e4ad`, telling a reader
+    /// branch. This comment still described the SONNY-92 state at `0e892c0`, telling a reader
     /// auditing the single-sourcing guarantee the opposite of the truth about a security-relevant key
     /// set (PR #50 review, F10).
     ///

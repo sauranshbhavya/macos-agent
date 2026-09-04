@@ -790,7 +790,7 @@ struct ProductShellTests {
     ///
     /// The two tests directly above are where the founder's Finder windows came from. Both pass
     /// `hermeticFinderRevealer` into the view model, both were correct to, and both still opened
-    /// real windows — four per suite run, measured with a probe at `619ba62` — because
+    /// real windows — four per suite run, measured with a probe at `15c7bd9` — because
     /// `AgentActionExecutor` took `CapabilityRegistry.default`, whose reveal adapter called
     /// `NSWorkspace.shared.activateFileViewerSelecting` inline. The seam was one level above the
     /// code that ignored it.

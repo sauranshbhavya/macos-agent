@@ -12,7 +12,7 @@
 # session that reads `Build complete!` off such a build and writes "zero compiler warnings" has not
 # made a weak claim; it has made a claim about nothing, and it reads identically to a true one.
 #
-# That is not a hypothetical. Measured at 59d66a9 while SONNY-169 was being implemented, with five
+# That is not a hypothetical. Measured at bb4a3de while SONNY-169 was being implemented, with five
 # warnings still live in the tree: one test file was edited, and the incremental rebuild recompiled
 # exactly that file and printed `Build complete!` with zero warnings in its output. Five, reported
 # as none, by a build that did nothing wrong.
@@ -270,7 +270,7 @@ What this does and does not prevent
   It does not check the release configuration, and no single build could. The test targets use
   `@testable import`, which needs `-enable-testing`; release does not pass it, so
   `swift build -c release --build-tests` fails outright with "module 'MacAgent' was not compiled
-  for testing" (measured at 59d66a9). Debug is therefore the only configuration that can cover
+  for testing" (measured at bb4a3de). Debug is therefore the only configuration that can cover
   Sources/ and Tests/ at once, and it is the configuration every session builds and tests in.
   Warnings that only whole-module optimisation would raise are outside what this reports.
 

@@ -47,12 +47,12 @@ public struct RevealInFinderCapabilityAdapter: CapabilityAdapter {
     ///
     /// This adapter used to call `NSWorkspace.shared.activateFileViewerSelecting` inline, which made
     /// it the only capability adapter reaching the machine directly:
-    /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 619ba62 --
+    /// `git grep -nE 'NSWorkspace|NSAppleScript|Process\(|CGEvent|AXUIElement|NSSound' 15c7bd9 --
     /// Sources/MacAgentCore | grep -E 'CapabilityAdapter[.]swift' | grep -vE ':[0-9]+: *//'`
-    /// answers **1** at `619ba62` — the line at `:53` — and **0** at this branch's head.
+    /// answers **1** at `15c7bd9` — the line at `:53` — and **0** at this branch's head.
     ///
     /// **The comment stage earns its place, and the control has to be read at the head you are
-    /// standing on** (PR #193 review, F5). Dropping that stage answers **2** at `619ba62`, the
+    /// standing on** (PR #193 review, F5). Dropping that stage answers **2** at `15c7bd9`, the
     /// extra line being `RunRoutineCapabilityAdapter`'s prose about `NSWorkspace.shared.open` — and
     /// **5** at this branch's head, because four of the five are this very doc comment. The sentence used to
     /// give the 2 with no head beside it, two clauses after naming two different heads, which is

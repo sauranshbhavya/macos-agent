@@ -3,7 +3,7 @@
 # or a ticket, and installs the git-level hook that catches what a command line cannot show
 # (SONNY-406).
 #
-# WHY THIS EXISTS. `CLAUDE.md` has forbidden this in plain terms since 527d5390, and on 2026-09-03
+# WHY THIS EXISTS. `CLAUDE.md` has forbidden this in plain terms since 9f95d7c0, and on 2026-09-03
 # eight commits carrying a co-author trailer and a claude.ai session URL reached `main` in one PR,
 # written by a lane that had followed dozens of rules from that same file with unusual care. The
 # finding was not that the rule is unfindable — three of four lanes in that wave got it right. It

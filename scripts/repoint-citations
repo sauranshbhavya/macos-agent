@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""SONNY-407: repoint every citation of a rewritten commit, at the abbreviation length it was
+written with.
+
+    repoint_citations.py <repo> <map-file> [--apply]
+
+Without --apply it reports and changes nothing.
+
+WHY A REPOINT AND NOT A RE-MEASUREMENT. CLAUDE.md's rule: a history rewrite that replaces a commit
+with one holding a byte-identical tree is a RENAME of the same tree, so a citation is repointed and
+the figure beside it stands. That is the opposite of a rebase, which replays onto a moved base and
+whose figures must be re-measured. This rewrite changes commit messages only — every pair holds the
+same tree object, by construction and then by proof — so every figure in the changelog remains a
+true measurement of the tree it names, under a new name.
+
+ABBREVIATION LENGTH IS PRESERVED. A citation written as seven characters is replaced by the first
+seven of the new SHA, not by the full one, because the prose around it is often laid out in a table
+or a command and because changing the shape of a citation makes the diff unreadable.
+
+WHAT IT WILL NOT TOUCH. A token is replaced only when it is a prefix of an old SHA in the map AND
+unambiguous within the map at that length. Anything else is left exactly as it is: a tree hash, a
+blob hash, a hex string that is not a commit, and any commit below the rewritten range.
+"""
+import os, re, subprocess, sys
+
+def main():
+    repo, mapfile = sys.argv[1], sys.argv[2]
+    apply_changes = "--apply" in sys.argv[3:]
+
+    old_to_new = {}
+    for line in open(mapfile):
+        if not line.strip():
+            continue
+        o, n = line.split()
+        old_to_new[o] = n
+
+    # A token of length L is resolvable only if exactly one old SHA starts with it.
+    by_prefix = {}
+    for o in old_to_new:
+        for L in range(7, 41):
+            by_prefix.setdefault(o[:L], set()).add(o)
+
+    token = re.compile(r'\b[0-9a-f]{7,40}\b')
+    files = subprocess.run(("git", "-C", repo, "ls-files", "-z"),
+                           capture_output=True, text=True, check=True).stdout.split("\0")
+
+    changed_files = 0
+    changed_lines = 0
+    changed_tokens = 0
+    ambiguous = []
+
+    for rel in files:
+        if not rel:
+            continue
+        path = os.path.join(repo, rel)
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            if b"\0" in raw:
+                continue                      # binary
+            text = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        out_lines = []
+        file_touched = False
+        for line in text.split("\n"):
+            def sub(m):
+                nonlocal changed_tokens
+                t = m.group(0)
+                cands = by_prefix.get(t)
+                if not cands:
+                    return t
+                if len(cands) > 1:
+                    ambiguous.append((rel, t))
+                    return t
+                old = next(iter(cands))
+                changed_tokens += 1
+                return old_to_new[old][:len(t)]
+            new_line = token.sub(sub, line)
+            if new_line != line:
+                changed_lines += 1
+                file_touched = True
+            out_lines.append(new_line)
+
+        if file_touched:
+            changed_files += 1
+            if apply_changes:
+                with open(path, "w") as fh:
+                    fh.write("\n".join(out_lines))
+
+    verb = "repointed" if apply_changes else "would repoint"
+    print(f"{verb} {changed_tokens} citation token(s) on {changed_lines} line(s) "
+          f"across {changed_files} file(s)")
+    if ambiguous:
+        print(f"AMBIGUOUS, left untouched: {len(ambiguous)}")
+        for rel, t in ambiguous[:20]:
+            print(f"  {rel}: {t}")
+        sys.exit(2)
+
+main()

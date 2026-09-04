@@ -151,7 +151,7 @@ fi
 # directory both sit in .build/, which every other build in this checkout also writes. Single quotes are deliberate — $MUTATE_SCRATCH is expanded by the subshell that runs
 # the command, not now.
 #
-# Isolation does not change what is measured, which was checked rather than assumed: at c3b8166
+# Isolation does not change what is measured, which was checked rather than assumed: at ee9f650
 # the flagged command and this one each reported 1410 tests in 111 suites, and a cold build of
 # each carried the same six compiler-warning sites.
 readonly DEFAULT_TEST_CMD='env CLANG_MODULE_CACHE_PATH="$MUTATE_SCRATCH/clang-module-cache" swift test --scratch-path "$MUTATE_SCRATCH" --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib'
@@ -1486,7 +1486,7 @@ issue_re = re.compile(r"Test (.+?) recorded an issue\b.*? at \S+:\d+:\d+: (.*)$"
 # truncation this replaces was the other one.
 #
 # The verb is `recorded`, not `recorded an issue`, and that one word is SONNY-315 (found in PR #139's
-# cycle-2 battery at 157ef03). A KNOWN issue's record line — `Test <name> recorded a known issue at
+# cycle-2 battery at 29d6f2d). A KNOWN issue's record line — `Test <name> recorded a known issue at
 # File.swift:174:55: Issue recorded`, which swift-testing prints for every `withKnownIssue` — carries
 # none of the four old verbs, so it did not end a block. HangBackstopTests emits one on every single
 # run by design, and when it landed between a killing test's issue line and that test's failure line,
@@ -2129,13 +2129,13 @@ st_absent() {
 # Measured rather than reasoned about: of the checks that existed before this cut, **10 of 68**
 # `st_contains … "$ST_OUT"` inside an st_run arm carried a needle that also appears in the stand-in
 # that arm ran, and that set is every "the test is named" check in the classifier's arms (scanned
-# over this file at 6f604d0, the base this branch sits on; the script is in SONNY-305's closing
-# comment, and at c2932b3, with this branch's two new arms, the same scan answers 13 of 75). Both
-# figures were re-measured after the rebase onto 6f604d0 rather than translated across it, and both
+# over this file at a85fd08, the base this branch sits on; the script is in SONNY-305's closing
+# comment, and at b08136d, with this branch's two new arms, the same scan answers 13 of 75). Both
+# figures were re-measured after the rebase onto a85fd08 rather than translated across it, and both
 # came back unchanged. **The figure was first written as 11 of 70 and that was wrong** in the way
 # this repository has recorded before: it was taken on a working tree that already carried this
 # branch's own first arm, so it counted that arm's own check among the pre-existing ones and
-# stamped a working-tree reading with a commit that did not contain it. Commit 7b2b9d0's message
+# stamped a working-tree reading with a commit that did not contain it. Commit b9eebdb's message
 # still says 11 of 70 and is left as written — this repository restamps rather than rewriting a
 # commit message, and the correction lives here and in the changelog. (That commit was d1648a2
 # before the rebase; renaming the citation is right here because a rebase preserves a commit
@@ -3132,7 +3132,7 @@ printf "◇  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
               "did not become idle before timeout"
   st_absent "the first line of the message did not end the block" "$ST_OUT" "KILLED"
 
-  # SONNY-315, found in PR #139's cycle-2 battery at 157ef03. A KNOWN issue is not a failure, and
+  # SONNY-315, found in PR #139's cycle-2 battery at 29d6f2d. A KNOWN issue is not a failure, and
   # its detail lines are not the message of whatever test was mid-issue when it arrived.
   # HangBackstopTests records one on every run by design, so the ingredient is always present and
   # only the interleaving varies — which is why the battery that reported this saw it once, named

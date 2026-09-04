@@ -18,7 +18,7 @@ import Testing
 /// lap is seconds to tens of seconds long. The waiter is not slow and the machine is not
 /// overloaded; the waiter simply is not being asked whether it is done.
 ///
-/// **Measured on `fix/starvation-is-not-a-deadlock`, with `f65e72e` (the branch point) checked out
+/// **Measured on `fix/starvation-is-not-a-deadlock`, with `6b72909` (the branch point) checked out
 /// plus a probe patch that only counted — it recorded each wait's observations and gaps to a file
 /// and changed no behaviour — while five other sessions built and tested on the same Mac, which is
 /// the load this is written for.** Five runs: one `--filter VisionSessionRunTests` and four full
@@ -56,9 +56,9 @@ import Testing
 /// it went: the old numbers were close enough to real running time that they fired on a busy
 /// machine. Their measurements are kept here because they are the record of how this deadline got
 /// its length, and deleting them along with the wall-clock rule would lose it. On `main` at
-/// `89e317b`, twelve consecutive full-suite runs at ordinary load produced eleven passes and one
+/// `f8ad4f3`, twelve consecutive full-suite runs at ordinary load produced eleven passes and one
 /// failure — 42 issues in the failing run, 7.656 s against a 5.2–5.5 s norm. SONNY-159 measured the
-/// same rate more carefully on a quiet machine: 17 of 18 on `main` at `7b9fec9`, and 15 of 16 on
+/// same rate more carefully on a quiet machine: 17 of 18 on `main` at `d1cea05`, and 15 of 16 on
 /// `feature/terminal-screen-check` at `315419e`, indistinguishable at that sample size; its worst
 /// observed run produced 88 issues. SONNY-161 measured the other direction: two legitimately heavy
 /// task-history tests took the failure rate from zero in four runs to one in three, and it rejected

@@ -83,8 +83,8 @@ back, or behaves differently than described here.
 | 27 | Branch 9 checkpoint 8 (first-run approval moment) — split 2026-07-24 per your "C" decision | ✅ **Confirmed working by you** — first-time explainer line rendered correctly on a genuinely fresh approval, the underlying routine-save flow (approve → execute → persist) worked end-to-end (new routine "X" showed up on the Routines page), and the widget correctly returned to a clean idle state afterward (no lingering banner). ⚠️ One nuance not yet directly confirmed: a genuinely *second* tier-2 approval's own permission panel actually lacking the line (what's confirmed so far is the widget returning to idle after the first one, which is related but not the same check) — low-risk given the flag is a simple one-way flip, not chased further unless you want to. Curated-example half remains explicitly deferred — see `docs/sonny-founder-design-decisions.md` | §3c |
 | 28 | Cross-surface shared-state automated test coverage (tasks #24/#25) — retry-origin tracking, concurrent-submission guard, cross-surface cancel reflection | ✅ Implemented — 3 new tests in `Tests/MacAgentTests/ProductShellTests.swift`, all passing (259/259 full suite). The 4th originally-scoped item (the "New routine"/"Create workspace" widget hand-off) was **not** given an automated test — `beginNewRoutine`/`beginNewWorkspace` are private, trivial 2-line View methods; a real test would need either loosening that access control for marginal gain or a bigger `AppDelegate`/widget-controller refactor to make it injectable, neither of which seemed proportionate to what's genuinely a low-complexity action. Stays manual-only, same as other real-AppKit-window behavior in this codebase (see §5's own checklist item) | §5 |
 | 29 | Routine detail view (`RoutineDetailView.swift`) has no way to close it — found by you 2026-07-24 while retesting the detail view | ✅ **Confirmed fixed by you** — genuinely never had a close button/dismiss action/Escape handler at all (not the Task dialog's "needs multiple clicks" issue). Added a close button matching `TaskLogDetailDialog`'s exact pattern (`Environment(\.dismiss)`) plus `.keyboardShortcut(.cancelAction)` | §7 (Routines) |
-| 30 | Insights layout is a plain stacked `VStack` (3 equal stat cards + 3 full-width panels) — confirmed via code read to be exactly the pattern `docs/sonny-founder-design-decisions.md` explicitly rejects ("asymmetric bento grid, uneven tile sizes... explicitly not uniform/symmetrical"), despite an old commit (`986c98d`) claiming to have built the asymmetric version | ⚠️ **Explicitly deferred to the last review/final-updates branch before v1 release (your call, 2026-07-24)** — not fixed on this branch, not a silent gap either. Full reasoning + code pointer in `docs/sonny-founder-design-decisions.md`'s Insights section. Do NOT mark this "done" based on the old commit message — it overclaimed | §7 (Insights) |
-| 31 | Real crash, caught by the pre-stop test hook, not manual QA: `AsyncProcessRunner` (backs Shortcuts subprocess invocation) had a genuine race — cancelling the wrapping Task could call `Process.terminate()` before `Process.run()` had actually launched it, which throws an **uncatchable** NSException (`-[NSConcreteTask terminate]: task not launched`) and crashes the whole app, not just the one task. Rare/timing-dependent (needs cancellation to land in a narrow window), which is why it only showed up in 1 of 3 back-to-back identical test runs | ✅ Fixed and root-caused — `AsyncProcessRunner` now brackets `process.run()` with a `ProcessBox` that holds the process, a launch phase and the cancelled flag under one `NSLock`: `register(_:)` before the launch refuses to start at all if cancellation already arrived, and `confirmLaunched()` immediately after it hands the terminate to whichever of the two got there second, so `terminate()` is only ever called on a process that finished launching. **`run()` itself is deliberately *not* inside the lock** — this row said it was, and named `launchIfNotCancelled`, `AsyncProcessRunnerTests` and `rapidCancellationNeverCrashesRegardlessOfTiming`, none of which exist (`git grep` over `Sources` and `Tests` at `126507c` → 0 each); corrected 2026-08-26 by SONNY-290. The 200-iteration cancellation stress test is `AgentActionExecutorTests.asyncProcessRunnerCancelledBeforeLaunchDoesNotCrash` (`Tests/MacAgentCoreTests/AgentActionExecutorTests.swift:134` at `126507c`), and `asyncProcessRunnerCancelsRunningProcess` beside it covers the other half. Real-world equivalent worth a spot-check: invoke a Shortcut from the widget/a Routine, cancel it immediately/repeatedly while it's running — should never crash the app | not easily manual — covered by the automated stress test; a real-world spot-check is cancelling a Shortcut-invoking task repeatedly right after starting it |
+| 30 | Insights layout is a plain stacked `VStack` (3 equal stat cards + 3 full-width panels) — confirmed via code read to be exactly the pattern `docs/sonny-founder-design-decisions.md` explicitly rejects ("asymmetric bento grid, uneven tile sizes... explicitly not uniform/symmetrical"), despite an old commit (`470f61f`) claiming to have built the asymmetric version | ⚠️ **Explicitly deferred to the last review/final-updates branch before v1 release (your call, 2026-07-24)** — not fixed on this branch, not a silent gap either. Full reasoning + code pointer in `docs/sonny-founder-design-decisions.md`'s Insights section. Do NOT mark this "done" based on the old commit message — it overclaimed | §7 (Insights) |
+| 31 | Real crash, caught by the pre-stop test hook, not manual QA: `AsyncProcessRunner` (backs Shortcuts subprocess invocation) had a genuine race — cancelling the wrapping Task could call `Process.terminate()` before `Process.run()` had actually launched it, which throws an **uncatchable** NSException (`-[NSConcreteTask terminate]: task not launched`) and crashes the whole app, not just the one task. Rare/timing-dependent (needs cancellation to land in a narrow window), which is why it only showed up in 1 of 3 back-to-back identical test runs | ✅ Fixed and root-caused — `AsyncProcessRunner` now brackets `process.run()` with a `ProcessBox` that holds the process, a launch phase and the cancelled flag under one `NSLock`: `register(_:)` before the launch refuses to start at all if cancellation already arrived, and `confirmLaunched()` immediately after it hands the terminate to whichever of the two got there second, so `terminate()` is only ever called on a process that finished launching. **`run()` itself is deliberately *not* inside the lock** — this row said it was, and named `launchIfNotCancelled`, `AsyncProcessRunnerTests` and `rapidCancellationNeverCrashesRegardlessOfTiming`, none of which exist (`git grep` over `Sources` and `Tests` at `1b67b29` → 0 each); corrected 2026-08-26 by SONNY-290. The 200-iteration cancellation stress test is `AgentActionExecutorTests.asyncProcessRunnerCancelledBeforeLaunchDoesNotCrash` (`Tests/MacAgentCoreTests/AgentActionExecutorTests.swift:134` at `1b67b29`), and `asyncProcessRunnerCancelsRunningProcess` beside it covers the other half. Real-world equivalent worth a spot-check: invoke a Shortcut from the widget/a Routine, cancel it immediately/repeatedly while it's running — should never crash the app | not easily manual — covered by the automated stress test; a real-world spot-check is cancelling a Shortcut-invoking task repeatedly right after starting it |
 
 **Row numbering corrected 2026-08-26 (SONNY-290).** The last row of the table above was numbered 27
 a second time, after 30. It is 31 now; nothing else in this file referenced either number.
@@ -118,11 +118,11 @@ actually run yet (it wipes exactly that data). Left unchecked rather than assume
 irreversible action in this whole checklist — confirm explicitly, whenever you're ready to lose your
 current test data doing it.
 
-**2026-08-26 — the batch this file gained since `140829b` (PR #116).** You ran the twenty-one rows
+**2026-08-26 — the batch this file gained since `dd4ebae` (PR #116).** You ran the twenty-one rows
 added to this file since that merge — §3d's thirteen SONNY-281 rows and four SONNY-283 ones, and
-§3d-bis's four SONNY-282 ones (`git diff 140829b 5339640 -- docs/sonny-manual-test-checklist.md |
-grep -E '^\+- \[ \]' | grep -oE 'SONNY-28[123]' | sort | uniq -c` → 13, 4 and 4 at `5339640`) — on
-the packaged app at `main` `5339640`, and reported them working. It came back as a batch — "yeah the
+§3d-bis's four SONNY-282 ones (`git diff dd4ebae 368ab85 -- docs/sonny-manual-test-checklist.md |
+grep -E '^\+- \[ \]' | grep -oE 'SONNY-28[123]' | sort | uniq -c` → 13, 4 and 4 at `368ab85`) — on
+the packaged app at `main` `368ab85`, and reported them working. It came back as a batch — "yeah the
 manual checklist works" — not line by line, exactly like the 2026-07-24 sweep above. The rows carry
 **(batch)** beside the date so that reading one row is enough to know it: it means backed by that
 batch confidence, not independently re-verified one at a time.
@@ -138,8 +138,8 @@ confirmation broken. The source comments that recorded the doubt were outside th
 
 **What this pass did not cover, said plainly so the new ticks are not read wider than they are.**
 Forty-eight rows were unchecked before it (`grep -cE '^- \[ \]'
-docs/sonny-manual-test-checklist.md` → 48 at `5339640`); twenty-one of those are this batch, so
-twenty-seven are left. Every one of them predates `140829b`, none of them was in front of you on
+docs/sonny-manual-test-checklist.md` → 48 at `368ab85`); twenty-one of those are this batch, so
+twenty-seven are left. Every one of them predates `dd4ebae`, none of them was in front of you on
 2026-08-26, and they are SONNY-293's triage rather than this pass's evidence. An unchecked row here
 still means nobody has said anything about it.
 
@@ -726,7 +726,7 @@ case. Relaunch and open the widget.
       that a tooltip appears on each is what was
       observed; *what* the two say is not a manual finding but the code's own constants,
       `ResumeOfferPresentation.continueLabel` and `declineLabel`, "Continue" and "Don't ask again"
-      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What was
+      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `368ab85`). What was
       stale was the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
       still said the tooltip "may simply not fire" and that "the plain reading is that a sighted
       user loses the words". That file was outside what SONNY-294 could touch; **SONNY-295 corrected
@@ -1164,7 +1164,7 @@ bottom-left account row → **Sign in**.
       right when this row was written and went stale as SONNY-130, SONNY-131 and SONNY-132 each
       added provider keys to the same array —
       `sed -n '/^PASSTHROUGH=(/,/^)/p' server/scripts/deploy.sh | grep -cE '^  [A-Z_]+$'` → 11 at
-      `55f4c9b`. Corrected by SONNY-330. The six the paragraph above names are still the gateway's
+      `d5020b0`. Corrected by SONNY-330. The six the paragraph above names are still the gateway's
       own; the script's count is over all eleven.) **No run may print a credential's value anywhere** —
       that is the row's real subject, so read the output rather than skimming it. The first run ends
       with `auth routes are NOT mounted`; the second ends with `auth routes are mounted` if you
@@ -1409,7 +1409,7 @@ could exist. Each section below now states only what it *adds* to this.
 above describes it — one command, no second hand-run step. It forwards, by name, whichever of
 **eleven** credentials you exported in that shell
 (`sed -n '/^PASSTHROUGH=(/,/^)/p' server/scripts/deploy.sh | grep -cE '^  [A-Z_]+$'` → 11 at
-`55f4c9b`): the six gateway ones that section lists, plus `OPENAI_API_KEY`, `TAVILY_API_KEY`,
+`d5020b0`): the six gateway ones that section lists, plus `OPENAI_API_KEY`, `TAVILY_API_KEY`,
 `VISION_API_KEY`, `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY`. Export whichever ones a section names
 *before* that command, and nowhere else.
 
@@ -1421,7 +1421,7 @@ launched from.** A Finder launch inherits no shell environment, which is the who
 passes only because a key happened to be exported has proved nothing.
 
 **SONNY-307 landed, so nothing below blocks on it.** `src/server.ts` supplies `AuthDeps` now — PR
-#137, `f8f5c75` (`git merge-base --is-ancestor f8f5c75 origin/main` exits 0) — and the container's
+#137, `554d85a` (`git merge-base --is-ancestor 554d85a origin/main` exits 0) — and the container's
 own probe reports what that produced: given `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER` and
 `SUPABASE_ANON_KEY` (the three trigger names) together with `DATABASE_URL` and `RATE_LIMIT_SALT`,
 `./scripts/deploy.sh local` ends `==> auth routes are mounted`. Given none of the three it ends
@@ -1445,7 +1445,7 @@ sitting, not during it.
 
 **Two migrations landed after that record, so the resume runs `npm run migrate -- up` again first.**
 SONNY-280 recorded ten applied to the real project; the repository carries twelve
-(`ls server/src/db/migrations/*.sql | wc -l` → 12 at `55f4c9b`), and `0011` and `0012` were both
+(`ls server/src/db/migrations/*.sql | wc -l` → 12 at `d5020b0`), and `0011` and `0012` were both
 authored after the deferral comment
 (`git log --diff-filter=A --format='%ad' --date=iso -- 'server/src/db/migrations/001[12]*.sql'` →
 two lines, `2026-08-27 22:06:51 -0400` and `2026-08-27 18:11:32 -0400`, against a deferral comment
@@ -1455,20 +1455,20 @@ migration.
 
 **None of this was established by running it, and that is deliberate.** The credentials are the
 founders' and the sign-in happens in the app, which no agent tests; what is above is the tree as it
-stands at `55f4c9b` plus what SONNY-280's deferral recorded. **Resume step (4) is where a founder
+stands at `d5020b0` plus what SONNY-280's deferral recorded. **Resume step (4) is where a founder
 finds out** whether steps (1) to (3) actually landed — export the real names, run the one command,
 read the `auth routes are mounted` line.
 
 **What can be run before that resume**, so these sections are not one flat wall:
 
 - **SONNY-132's `model routing` row.** That line is printed at startup by every container, signed in
-  or not (`server/src/app.ts:343` at `55f4c9b`), so it needs step 1 and nothing else.
+  or not (`server/src/app.ts:343` at `d5020b0`), so it needs step 1 and nothing else.
 - **SONNY-130's three-minute recording row.** The refusal is the Mac's, checked before the file is
-  even read (`Sources/MacAgentCore/OpenAITranscriber.swift:155` at `55f4c9b`) — no container, no
+  even read (`Sources/MacAgentCore/OpenAITranscriber.swift:155` at `d5020b0`) — no container, no
   sign-in.
 - **SONNY-130's signed-out row.** A build that has never signed in is in the same state as one that
   signed out: with no tokens stored the request is refused before it is sent
-  (`Sources/MacAgentCore/SonnyBackendClient.swift:436` at `55f4c9b`), which is the sentence that row
+  (`Sources/MacAgentCore/SonnyBackendClient.swift:436` at `d5020b0`), which is the sentence that row
   asks for.
 - **The rows that say "Terminal, not the app" on their own face** — the two in the sign-in section
   above, and the migration rehearsal in "What every call cost". Those need a Postgres, not a
@@ -1782,7 +1782,7 @@ needs a caller signed in *through the app*, which is the email-code flow. What t
   the `auth routes are mounted` probe has fired only against placeholders, which is resume step (4)
   and is where a founder finds out whether (a) and (b) actually landed.
 - **What is emphatically *not* the blocker: SONNY-280's step 1.** That is the collective manual
-  pass and it finished on 2026-08-25, 27 of 27 items at `140829b`. An earlier draft of this section
+  pass and it finished on 2026-08-25, 27 of 27 items at `dd4ebae`. An earlier draft of this section
   named it, and named SONNY-307's "no Supabase project exists" — a statement true when written on
   2026-08-27 at 17:52 and superseded by the deferral comment at 21:39 the same day. Corrected
   2026-08-28 (PR #147's review, F1). The failure that correction prevents is specific: a founder

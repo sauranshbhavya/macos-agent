@@ -126,7 +126,7 @@ fi
 # edge of it: step 7 has the entry written AND committed before the PR opens, so on the last turn
 # of the branch whose entry is at issue the tree is clean and a dirty-file trigger fires never.
 #
-# WHY ABOVE THE SUITE: about a tenth of a second, and no build. Measured 2026-08-30 at `cdb9f39`
+# WHY ABOVE THE SUITE: about a tenth of a second, and no build. Measured 2026-08-30 at `7f67e53`
 # over a 140-entry changelog, `/usr/bin/time -p scripts/changelog-order`, two sets of three
 # consecutive runs -> real 0.12/0.11/0.11 and 0.14/0.11/0.11. A COLD first run was 0.591s wall
 # (`time scripts/changelog-order`, 23% cpu), and that is the figure to quote if one is quoted,

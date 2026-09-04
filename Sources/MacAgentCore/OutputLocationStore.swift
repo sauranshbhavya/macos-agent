@@ -93,7 +93,7 @@ public struct OutputLocation: Codable, Equatable, Identifiable, Sendable {
 /// A folder is recorded when this run wrote a file into it **and that folder is inside the path
 /// whitelist**. The whitelist is the load-bearing half, and it is doing real work rather than
 /// belt-and-braces validation. Eight capability adapters produce `ActionPreview.writes` (at
-/// `7255551`, `git grep -l "writes:" Sources/MacAgentCore | grep CapabilityAdapter | wc -l` prints
+/// `f01d21a`, `git grep -l "writes:" Sources/MacAgentCore | grep CapabilityAdapter | wc -l` prints
 /// 8) and they split evenly into two populations:
 ///
 /// - **Four write the user's outputs**: `CreateLocalDraftCapabilityAdapter`,

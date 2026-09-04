@@ -34,7 +34,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     ///
     /// **Why not just widen the timestamp.** Adding fractional seconds to the encoder was the
     /// obvious alternative and is the wrong fix, though not for the reason it first looks like:
-    /// checked on this repo's toolchain at 6f89a5d (Apple Swift 6.3.3), `JSONDecoder`'s `.iso8601`
+    /// checked on this repo's toolchain at 4a7d996 (Apple Swift 6.3.3), `JSONDecoder`'s `.iso8601`
     /// strategy reads a fractional-seconds timestamp back happily, so the migration would in fact
     /// survive the files already on disk. It is the wrong fix because it does not buy identity.
     /// `(command, startedAt)` stays a *natural* key at any precision: it breaks the moment either

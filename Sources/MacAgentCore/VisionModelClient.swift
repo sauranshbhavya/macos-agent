@@ -152,7 +152,7 @@ public struct SonnyVisionModelClient: VisionModelDeciding {
     /// fixture at a 27-inch 5K display's point resolution — the encoder's worst case among the
     /// reproducible ones, since noise is the content no encoder can compress — encodes to
     /// **2,781,667 bytes at its full 2560x1440, without the ladder resampling at all**, at
-    /// `6201e45`. `theShippingPolicyKeepsEvenItsWorstCaseUnderTheCeiling` prints that figure on
+    /// `d004562`. `theShippingPolicyKeepsEvenItsWorstCaseUnderTheCeiling` prints that figure on
     /// every run, so it is regenerable rather than a number frozen into a comment.
     ///
     /// Larger point resolutions than 5K do reach the resampling rungs on noise, and no figure is

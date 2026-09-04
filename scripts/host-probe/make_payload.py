@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a JSON body byte-identical in shape to the one OpenCodeVisionModelClient.decide sends.
 
-Shape copied from Sources/MacAgentCore/VisionModelClient.swift:154-171 (SHA 87199ff): a
+Shape copied from Sources/MacAgentCore/VisionModelClient.swift:154-171 (SHA 9adfdd9): a
 {model, input:[{role, content:[input_text, input_image]}]} envelope whose image_url is a
 data: URL carrying base64 of the encoded capture.
 

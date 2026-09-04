@@ -7,7 +7,7 @@ from a throwaway spike into v1-integration input, per the founder mandate record
 by point (§D). Implementation tickets exist only after those answers land.
 
 Planning ticket: **SONNY-71** (module "X — experiments"). Branch: `feature/sonny-69-integration-plan`
-(docs-only, from `main` at `99f2fd2`). Modeled on `docs/sonny-branch-b-plan.md` in structure and in
+(docs-only, from `main` at `8bc9474`). Modeled on `docs/sonny-branch-b-plan.md` in structure and in
 honesty: every load-bearing claim carries file:line at a SHA, or a ticket/doc citation, per
 `CLAUDE.md`'s claims-and-evidence rules. Where the experiment's own ticket comments make a claim, the
 claim was checked against the code and any discrepancy is called out.
@@ -17,7 +17,7 @@ planning directive ratified supersessions of parts of §E, the locked roadmap ga
 §C "Amend" tickets were commented — so the status line above ("no roadmap row is edited, no ticket is
 amended") describes the 2026-08-08 session only. **Where §F and §E disagree, §F wins.**
 
-**Corrected 2026-08-09 by PR #37's light pre-merge pass (fix round at `3ae568d`).** The review found
+**Corrected 2026-08-09 by PR #37's light pre-merge pass (fix round at `4eeccf9`).** The review found
 no defect in the analysis, and confirmed the merge-base pitfall (§1), the impact matrix's coverage of
 all twenty named tickets (§C), and the risk-engine and planner-seam grounding (§A, §B) against
 source. Ten claim-accuracy defects were corrected in place: **E5**'s decision-letter label, which
@@ -26,7 +26,7 @@ tagged the ratified consent-gated behavior with the one option §B4 calls catego
 errors (§A1's case count, §A2's provider-decision section label and spike line number, §A4's
 `plannerDescription` type, §B5's readiness-row quote, §1's per-file delta) and two count/quotation
 nits (§1's extra-file count, §B3's spec-line quote). One review nit was itself wrong and is recorded
-rather than applied: §A1's `AgentPlan.swift:408` is correct at `99f2fd2`, the SHA this section cites —
+rather than applied: §A1's `AgentPlan.swift:408` is correct at `8bc9474`, the SHA this section cites —
 the reviewing agent read at `58e8cf5`, where the experiment branch's pre-SONNY-54/58 copy of that file
 puts the same construct at `:394`. §A1 now states its anchor SHA explicitly so the next reader does not
 repeat the mistake. One scope change followed:
@@ -61,12 +61,12 @@ Two success axes to map every recommendation to: **architecture quality** and **
 
 The complete experiment diff is **8 files, 1231 insertions(+), 6 deletions(-)** — measured at the
 branch's real merge-base, not against current `main`. This matters: the experiment forked from
-`6af453c` (Merge PR #32, workspace-restriction-scope), *before* SONNY-54, SONNY-58 and the
-SONNY-60/61/63 docs batch merged. A naive `git diff 99f2fd2..58e8cf5` shows 17 extra files and
+`a0e1393` (Merge PR #32, workspace-restriction-scope), *before* SONNY-54, SONNY-58 and the
+SONNY-60/61/63 docs batch merged. A naive `git diff 8bc9474..58e8cf5` shows 17 extra files and
 935 deletions that are pure stale-main noise — every one of those 17 files is byte-identical between
-`6af453c` and `58e8cf5` (enumerated and blob-hash-compared, PR #37 review). The experiment removed
+`a0e1393` and `58e8cf5` (enumerated and blob-hash-compared, PR #37 review). The experiment removed
 no routine-trust or scope logic. **Read the diff as
-`git diff 6af453c..58e8cf5`.**
+`git diff a0e1393..58e8cf5`.**
 
 The eight files:
 
@@ -138,8 +138,8 @@ instant resolver returning `nil` (`AgentViewModel.swift:654`). `AgentOperation` 
 `plannerVisibleCases` filters out 6 (`calculateUtility`, `lookupClipboardHistory`, `expandSnippet`,
 `saveSnippet`, `switchRunningApp`, `lookupRecentArtifacts` — `AgentPlan.swift:162-175`), leaving 25,
 and that filtered set is the literal JSON-schema `enum` the planner may emit (`AgentPlan.swift:408` at
-`99f2fd2` — the same construct is at `:394` on the experiment branch, whose `AgentPlan.swift` is the
-pre-SONNY-54/58 copy; every line citation in this section is at `99f2fd2`). The
+`8bc9474` — the same construct is at `:394` on the experiment branch, whose `AgentPlan.swift` is the
+pre-SONNY-54/58 copy; every line citation in this section is at `8bc9474`). The
 schema serializes to ~9.3 KB with 25 nullable-union properties — corroborating the experiment's
 ~9.2 KB / 25-union figure.
 
@@ -152,18 +152,18 @@ is no generic translation layer above `Planning`). The experiment's `CerebrasPla
 
 The spike adds Cerebras as a *second hardcoded client-side branch* in `performStart`
 (`AgentViewModel.swift:662-666` at `58e8cf5`; the same function's pre-existing
-single-planner site is `:654` on `main` at `99f2fd2`, cited in §A1). The spec already has an
+single-planner site is `:654` on `main` at `8bc9474`, cited in §A1). The spec already has an
 opinion about exactly this shape. Two sections resolve v1 to the same answer. §9.4 (Model
 Routing) states it in full: "OpenAI ships as the primary provider (already integrated in the
 prototype), with Anthropic added as a second provider behind a provider-agnostic router
 interface from day one — even before a second provider is actually wired up, **so the
 backend never hardcodes one vendor's request/response shape the way the current prototype's
-`OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §9.4:1412 at `126507c` —
+`OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §9.4:1412 at `1b67b29` —
 unstamped and reading 1404, which is now a bullet in the same section's list, until
 SONNY-290 restamped it on 2026-08-26). §16.5 (Model Provider Proxy) restates it as the
 provider decision — "OpenAI ships first (already integrated), Anthropic added second, both
 behind a provider-agnostic router interface designed in from day one so the backend never
-hardcodes one vendor's API shape" (spec §16.5:2162 at `126507c` — unstamped and reading
+hardcodes one vendor's API shape" (spec §16.5:2162 at `1b67b29` — unstamped and reading
 2141, which is now the `### 16.4 Billing` heading, until SONNY-290 restamped it on
 2026-08-26) — and adds the proxy's own requirements: provider credentials never ship to the
 client, model routing controlled server-side. BYOK is explicitly skipped (§7.9).
@@ -737,7 +737,7 @@ founder-authorized follow-up, not made by this planning session.
 
 ## F. The 100% directive — collisions with §E, founder-ratified 2026-08-12 (SONNY-81)
 
-With E12's cleanup merged (`main` at `a51acd0`), the founder directed the ticket-set phase to **plan as
+With E12's cleanup merged (`main` at `df5d61c`), the founder directed the ticket-set phase to **plan as
 if the vision models work 100% of the time**: perfect screen understanding, perfect action grounding —
 no capability hedges, no accuracy-contingent fallbacks, no benchmark-gated sequencing, no degraded
 modes designed around model unreliability. Friction removal became a first-class ticket source (named
@@ -803,11 +803,11 @@ H (SONNY-87/88/89/90), I (SONNY-91–96) — see the changelog's locked-roadmap 
   launch half.** Launch = open set: any installed app, tier 1 (§11.1's own placement of "Open app"),
   no membership check and no per-app consent — the launch whitelist was a capability hedge from the
   spec's "without pretending to support arbitrary app automation *yet*" era. Control = per-app consent
-  (E6), unchanged. Grounding, measured at `a51acd0` (SONNY-81's enumeration: 87 `MacAppCatalog`
+  (E6), unchanged. Grounding, measured at `df5d61c` (SONNY-81's enumeration: 87 `MacAppCatalog`
   call-site lines across 21 files): the only hard launch gate is
   `OpenAllowlistedAppCapabilityAdapter.swift:70`; `switch_running_app` is already open-universe; and
   the catalog's own doc comment scopes it to "exactly one meaning — the allowlist of what Sonny may
-  *launch*" (verbatim, `WorkspaceScopeOnlyApps.swift:8` at `a51acd0`) — a launchability roster rather
+  *launch*" (verbatim, `WorkspaceScopeOnlyApps.swift:8` at `df5d61c`) — a launchability roster rather
   than a broader security boundary (paraphrase). The name→bundle-id *resolution* function is
   load-bearing for workspace scope's anti-imposter `bundle:`/`name:` keys and is replaced by a
   Launch-Services-backed resolver, never deleted (SONNY-82/84). SONNY-66 closed as Done with successors

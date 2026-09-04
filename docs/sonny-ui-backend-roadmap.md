@@ -145,7 +145,7 @@ records vs. ranked snippets).
 **Resolved (built 2026-07-27, marked here 2026-08-21 by SONNY-183).**
 `CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`) is the surface this
 entry says is missing. It renders `.permission`/`.clarification`/`.failure` on **every** Command
-Center page that hosts `CommandCenterStorageNotice` — five pages at `126507c` (`git grep -c
+Center page that hosts `CommandCenterStorageNotice` — five pages at `1b67b29` (`git grep -c
 'CommandCenterStorageNotice(' -- Sources/MacAgent` → 5), four when this line was written, since
 Memory arrived with SONNY-208 on 2026-08-22; it said "the four pages" until SONNY-290 corrected
 it on 2026-08-26, as `docs/sonny-ui-backend-gaps.md` did.

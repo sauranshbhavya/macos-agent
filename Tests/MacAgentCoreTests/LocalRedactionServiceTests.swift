@@ -136,7 +136,7 @@ struct LocalRedactionTextTests {
     ///
     /// The lines below are real, copied out of this repository's own tracked Markdown, which is
     /// where the ticket was filed from: the unlabeled spaced pair fired on **98** colon-bound pairs
-    /// across the docs class of the corpus materialised at `4824e50` (and one more in the source
+    /// across the docs class of the corpus materialised at `be66eeb` (and one more in the source
     /// class, 99 in all), and every one blanked its whole line for the vision model.
     ///
     /// **What refuses them is the token in front of the colon, not the colon** — and this sentence
@@ -263,7 +263,7 @@ struct LocalRedactionTextTests {
     /// **What the discriminator costs, measured rather than estimated.**
     ///
     /// A Swift type name cited without its `.swift` extension reads as a label under any rule that
-    /// does not know Swift, so it is painted. Over the corpus materialised at `4824e50` that is
+    /// does not know Swift, so it is painted. Over the corpus materialised at `be66eeb` that is
     /// **one** occurrence of **99** colon-bound hyphenated pairs — this exact one, from the
     /// changelog — against the whole labelled class recovered. A length cap would refuse it and is
     /// deliberately not added: a threshold chosen to exclude a 22-character type name would have to
@@ -302,7 +302,7 @@ struct LocalRedactionTextTests {
     /// still a live regression test for the F2 fix even though it no longer separates these two.
     ///
     /// **Why narrow rather than wide.** Every colon-bound false positive in the corpus measured at
-    /// `4824e50` was hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no
+    /// `be66eeb` was hyphenated — 99 of them, 0 spaced — so widening would refuse a shape no
     /// measurement asked to refuse, in a detector whose whole design is fail-closed.
     @Test
     func aSpacedPairAgainstAColonIsStillDetected() {
@@ -959,7 +959,7 @@ struct LocalRedactionImageTests {
 
 /// **Serialized, because every test in here drives the real on-device recognizer** (PR #113 review,
 /// F5). Widening the realistic-size case into seven took this suite from three concurrent
-/// `VNRecognizeTextRequest`s to ten, and at ten the test process **stalls**. Re-proved at `176f186`
+/// `VNRecognizeTextRequest`s to ten, and at ten the test process **stalls**. Re-proved at `e524d45`
 /// by deleting this one attribute and running `--filter LocalRedactionLiveVisionTests`: the run
 /// **did not finish within 100 s** and the test process sat at **0% CPU** throughout, against
 /// **3.389 s** for the same filtered run with the attribute in place. Each case on its own is fast —
@@ -991,7 +991,7 @@ struct LocalRedactionLiveVisionTests {
 
     /// **The ceiling is a tripwire for a pathological regression, not a latency budget** — and the
     /// difference is what SONNY-224 came here to fix. At `.seconds(5)` this was a bet on how busy the
-    /// machine was, and it was losing: measured with the flagged suite at `98c50c8`, the 32 pt
+    /// machine was, and it was losing: measured with the flagged suite at `94afca1`, the 32 pt
     /// fixture this test carried then took **1465 ms** on an idle run, **4422 ms** and **4644 ms**
     /// with an ordinary parallel suite around it, and **11742 ms** with a cold `swift build` beside
     /// it (`grep REDACTION-LATENCY-MS` over four consecutive runs). The middle two are inside a 5 s

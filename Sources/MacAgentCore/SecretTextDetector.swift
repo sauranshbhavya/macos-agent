@@ -233,14 +233,14 @@ struct SecretTextDetector {
         //
         // **The corpus, named by the commit it was materialised at** (PR #158 review, F5; the
         // figures below replace a set labelled with two code heads that neither reproduces). This
-        // repository's own tracked Markdown and source as they stood at **`4824e50`** — `main`'s
+        // repository's own tracked Markdown and source as they stood at **`be66eeb`** — `main`'s
         // head at this branch's cut point, so it holds none of this branch's own fixtures, which
         // are made of the exact strings this detector fires on — laid out as screens: 25 + 394
         // files, **215 893 laid-out lines in 5 345 forty-two-line windows**. Every match in it is a
         // false positive by construction. Three code states, measured over that one materialised
         // corpus through the real detector:
         //
-        //     before (`4824e50`, no colon refusal)     151 matches, 143 painted lines, 98 screens
+        //     before (`be66eeb`, no colon refusal)     151 matches, 143 painted lines, 98 screens
         //     colon-only (the first version of it)      45 matches,  41 painted lines, 34 screens
         //     label/locator discriminator (this code)   46 matches,  42 painted lines, 35 screens
         //
@@ -363,7 +363,7 @@ struct SecretTextDetector {
     /// or `/` — is a locator. *No* token at all is the bare continuation form this repository's own
     /// docs write constantly. Anything else is a label, and a label keeps its match.
     ///
-    /// **Both directions measured, over one corpus materialised at `4824e50`** — `main`'s head at
+    /// **Both directions measured, over one corpus materialised at `be66eeb`** — `main`'s head at
     /// this branch's cut point, so it contains none of this branch's own fixtures, which are made of
     /// the exact strings this detector fires on. Of the **99** colon-bound hyphenated pairs there,
     /// **75** carry a filename or path token and **23** carry no token, so **98 stay refused**;

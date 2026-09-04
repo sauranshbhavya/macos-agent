@@ -147,7 +147,7 @@ struct SwitchInWorkspaceRoutingTests {
         #expect(fixture.resolver.resolve(command: "switch to code in the workspace Nowhere") == nil)
     }
 
-    /// **The base-parity table: every rejection the guard makes, measured at `48d0150` and required
+    /// **The base-parity table: every rejection the guard makes, measured at `b76bbcd` and required
     /// to be identical here.**
     ///
     /// This exists because the first version of the fix broke exactly this and nothing caught it.
@@ -157,7 +157,7 @@ struct SwitchInWorkspaceRoutingTests {
     /// asks, which is this ticket's own subject matter: "switch to my Research workspace" reached
     /// the planner's `open_workspace` rule before SONNY-68 and must still reach it.
     ///
-    /// Every command below returned `nil` at `48d0150` (measured with a temporary probe against the
+    /// Every command below returned `nil` at `b76bbcd` (measured with a temporary probe against the
     /// real resolver in a detached worktree at that SHA), with the single stated exception. The
     /// contract that makes this hold structurally rather than by luck: with no workspace clause
     /// recognised, `runningAppCandidate` returns the remainder untouched apart from edge
@@ -213,7 +213,7 @@ struct SwitchInWorkspaceRoutingTests {
     }
 
     /// New behaviour, named as new (PR #39 review, cycle 1, F2). Each of these returned `nil` at
-    /// `48d0150`; none of them is a preserved case, and asserting them inside a test named for
+    /// `b76bbcd`; none of them is a preserved case, and asserting them inside a test named for
     /// unchanged behaviour is what the review caught.
     ///
     /// The naming form, not an article rule: a clause-carrying residue shaped `[the|my] NAME app`
@@ -237,7 +237,7 @@ struct SwitchInWorkspaceRoutingTests {
     /// typed full stop no longer strands itself in the query.
     ///
     /// The clause-carrying shapes are newly reachable — they could not reach the resolver at all
-    /// before this ticket — but **the bare form was already broken at `48d0150`**, where
+    /// before this ticket — but **the bare form was already broken at `b76bbcd`**, where
     /// "switch to chrome." resolved to `appName "chrome."` and then failed by name because
     /// `RunningAppMatcher.normalize` folds spaces and not punctuation. That older kind is fixed
     /// here too; it is the one place this branch deliberately diverges from base on a clause-free
@@ -263,7 +263,7 @@ struct SwitchInWorkspaceRoutingTests {
 
     /// The phrasings that already resolved keep resolving, and the quick-dispatch precedence ahead
     /// of the running-app prefixes is unchanged. Base: each of these resolved identically at
-    /// `48d0150`.
+    /// `b76bbcd`.
     @Test
     func thePhrasingsThatAlreadyResolvedAreUntouched() throws {
         let fixture = try Fixture()

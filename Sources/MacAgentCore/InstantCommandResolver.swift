@@ -441,7 +441,7 @@ public struct InstantCommandResolver: Sendable {
     /// then sees exactly what it saw before this ticket existed, and every one of its rejections —
     /// all eight leading stop words, the three-word ceiling, the "mode" suffix — behaves identically.
     /// `PlannerBoundaryTests` is not where that is checked; `SwitchInWorkspaceRoutingTests`'
-    /// base-parity table is, case by case, with the measurement at `48d0150` recorded beside each.
+    /// base-parity table is, case by case, with the measurement at `b76bbcd` recorded beside each.
     ///
     /// **With a clause recognised, one normalisation is allowed, and it is a naming form rather
     /// than an article rule.** A residue of the shape `[the|my] NAME app` names an app: the trailing
@@ -456,7 +456,7 @@ public struct InstantCommandResolver: Sendable {
     /// itself in the query — "switch to code in the workspace Switch." asked to activate `code .`,
     /// and the bare "switch to chrome." asked for `chrome.` long before this ticket — and the
     /// matcher normalises spaces but not punctuation, so both failed by name. This is the one place
-    /// the no-clause path is deliberately *not* byte-identical to `48d0150`: it fixes that older
+    /// the no-clause path is deliberately *not* byte-identical to `b76bbcd`: it fixes that older
     /// kind too (PR #39 review, cycle 1, F3).
     private func runningAppCandidate(from remainder: String) -> String {
         let cleaned = edgePunctuationTrimmed(remainder)

@@ -28,7 +28,7 @@ import Foundation
 /// request. §7.2 case 1a's own words for what the user gets are "nothing — this is invisible when it
 /// works", and `aTokenExpiryMidSessionIsInvisibleAndTheSessionCarriesOn` is what holds it.
 ///
-/// **That sentence named the test before the test existed, and SONNY-136 wrote it.** At `4824e50`
+/// **That sentence named the test before the test existed, and SONNY-136 wrote it.** At `be66eeb`
 /// no such function was in the tree (`git grep -c aTokenExpiryMidSession -- Tests` exits 1 with no
 /// output there, and names the test in `VisionSessionRunTests.swift` after). The behaviour was
 /// real — `SonnyBackendClient`'s own suite covers the refresh on a single request — but nothing had

@@ -1,7 +1,7 @@
 # Row J — per-app control consent, and the terminal screen check
 
 Planning output for **SONNY-104**, produced 2026-08-16 on `docs/app-control-consent-planning`, cut
-from `main` at `9a84e3b`. Every measurement below is stamped with the SHA it was taken at and names
+from `main` at `9cfa090`. Every measurement below is stamped with the SHA it was taken at and names
 the command that produced it.
 
 This document plans **two gates**. They are planned together because both answer "which apps may
@@ -117,7 +117,7 @@ existing Allow/Deny controls.
 
 **Where it renders — and a premise that had to be corrected first.** SONNY-91's comment, SONNY-104's
 description, and the root `CLAUDE.md` all state that the floating widget is the only approval
-surface. **That is false at `9a84e3b` and has been since branch 10.** `CommandCenterAttentionPanel`
+surface. **That is false at `9cfa090` and has been since branch 10.** `CommandCenterAttentionPanel`
 (`Sources/MacAgent/CommandCenterView.swift:688-890`) declares its own `AttentionState` with
 `permission` / `clarification` / `failure` (`:695-712`), reads the same `viewModel.approvalRequest`,
 renders the same first-run explainer, disclosure lines and escalation reasons, and wires Deny/Allow
@@ -152,7 +152,7 @@ the existing nine follow — defaulted `encryption:` constructor parameter, AES-
 
 **It must reach the wipe, and that is two assertions, not one.**
 `LocalDataDeletionService.defaultStoreFileURLs()`
-(`Sources/MacAgentCore/LocalDataDeletionService.swift:85-99`) returns nine URLs at `9a84e3b`.
+(`Sources/MacAgentCore/LocalDataDeletionService.swift:85-99`) returns nine URLs at `9cfa090`.
 `theWipeReachesExactlyTheNineLocalStores`
 (`Tests/MacAgentCoreTests/LocalStorageSecurityTests.swift:346-364`) asserts **both**
 `urls.count == 9` **and** an exact set of nine literal filenames. A tenth store changes the count,
@@ -389,9 +389,9 @@ line number — this citation has already moved twice in two days, once when thi
 roadmap row above it and once when row 12's planning branch merged 45 lines above it. **Locator: the
 `feature/vision-foundations` entry of `docs/sonny-v1-implementation-changelog.md`, in the `Tests:`
 paragraph, the sentence printed by `redactionLatencyIsBoundedOnARepresentativeCapture`.** It records
-**374 ms** end-to-end at `4e430f0` — real Vision OCR, detect, paint and re-encode, 800×600, four
-lines, two planted secrets. `4e430f0` is an ancestor of `9a84e3b`. At this branch's rebase onto
-`8e22dab` it sits at line 2774; treat that as an aid, not the citation. The implementation ticket re-measures against that figure so
+**374 ms** end-to-end at `1ce1f66` — real Vision OCR, detect, paint and re-encode, 800×600, four
+lines, two planted secrets. `1ce1f66` is an ancestor of `9cfa090`. At this branch's rebase onto
+`347f5c0` it sits at line 2774; treat that as an aid, not the citation. The implementation ticket re-measures against that figure so
 the added cost is a delta against a known number rather than a fresh claim.
 
 **Per action, not per session.** A screen changes under you, so a once-per-session answer has a real
@@ -434,7 +434,7 @@ one by mistake. Three facts the founder required stated explicitly rather than l
 
 This is load-bearing: the founder made §4.6's "end the session" conditional on it, because if a
 capture could ever include other windows, a terminal sitting behind Chrome would kill an unrelated
-session. Verified at `9a84e3b` by enumerating every capture path, not by reading the one function
+session. Verified at `9cfa090` by enumerating every capture path, not by reading the one function
 that looked relevant:
 
 - `ScreenCaptureService` exposes exactly **one** capture entry point,
@@ -546,12 +546,12 @@ the new check.
 
 ## 5. Blast radius, measured with a compiler-driven method
 
-At `9a84e3b`. The founder required this re-measured after an earlier figure was reported from a plain
+At `9cfa090`. The founder required this re-measured after an earlier figure was reported from a plain
 grep with no method stated and no SHA — this repository has a recorded history of exactly this count
 being wrong three times in a row, each correction from a wider method, and only a compiler-driven one
 settling it, because grep cannot type-resolve receivers.
 
-**Method.** `Sources/`, `Tests/` and `Package.swift` at `9a84e3b` were copied to a scratch directory
+**Method.** `Sources/`, `Tests/` and `Package.swift` at `9cfa090` were copied to a scratch directory
 **outside the repository**. In that copy only, `ApprovalContext.init(safeMode:)` and
 `ApprovalContext.safeMode` were each marked `@available(*, deprecated, message: ...)` with distinct
 messages, and the copy was built with `swift build --build-tests` using `CLAUDE.md`'s exact flagged
@@ -559,7 +559,7 @@ flags — **exit 0**. Counts are unique `file:line` pairs extracted only from li
 `^/…\.swift:N:C: warning: …`; the raw log holds 716 lines mentioning the init probe, most of them
 caret continuation lines and macro-expansion notes, and counting those is how this measurement would
 have been wrong a fourth time. Nothing in the repository worktree was modified — `git status
---porcelain` empty, `HEAD` still `9a84e3b`, checked after the probe.
+--porcelain` empty, `HEAD` still `9cfa090`, checked after the probe.
 
 **Results.**
 
@@ -575,7 +575,7 @@ have been wrong a fourth time. Nothing in the repository worktree was modified �
 
 **Why the plain grep gives a different number, measured rather than asserted.**
 `grep -rn "safeMode" Sources/` → 26 lines; `grep -rn "safeMode" Tests/` → 77 lines across 18 files,
-both reproducing exactly at `9a84e3b`. It is a wider population because the token appears in
+both reproducing exactly at `9cfa090`. It is a wider population because the token appears in
 `safeModeRequirement`, `safeModeFloor`, `safeModeLines`, doc-comment prose — and, the trap grep
 cannot see past, in **unrelated `safeMode: Bool` declarations**: a stored property on
 `WidgetPermissionPanel` (`FloatingWidgetView.swift:634`) and parameters on two
@@ -633,7 +633,7 @@ SONNY-103 — which is a separate question, decided per ticket.
 **Row 12 (hosted agent runtime backend) and this work will both want Settings surfaces**, and neither
 ticket set may assume it owns that page.
 
-At `9a84e3b`, **no credential or API-key entry field exists anywhere in the UI** — verified by sweep.
+At `9cfa090`, **no credential or API-key entry field exists anywhere in the UI** — verified by sweep.
 Every provider key is read from the process environment, and row 12 is specced to hold credentials
 server-side. What exists today is read-only *presence*: `PermissionReadinessService` reports whether
 `OPENAI_API_KEY` is set, rendered in Security & Access → Permission Readiness

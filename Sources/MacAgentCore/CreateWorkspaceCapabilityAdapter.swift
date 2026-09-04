@@ -129,9 +129,9 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         // has to ride here or the ticket's "soft signal at creation" exists only in the model.
         // Deliberately *not* a `CapabilityRiskEscalation` — every existing escalation site raises
         // a tier (**11 construction sites across 10 files in `Sources/`**, by
-        // `git grep -n "CapabilityRiskEscalation(" -- Sources/` at `7f66300`, discounting this
+        // `git grep -n "CapabilityRiskEscalation(" -- Sources/` at `618350d`, discounting this
         // comment's own match; matches `RiskApproval.swift`'s own count of the same population. Was
-        // 9 across 8 files at `1994bba`; row I added the vision session's envelope escalation and
+        // 9 across 8 files at `dd21b97`; row I added the vision session's envelope escalation and
         // its per-action one, and both target tier 3 like every other site). Two earlier figures stood here
         // and both were wrong: "all six", which row B's two additions had already made stale, and
         // "8", which SONNY-98's whitelist-root widening had made stale two commits *before* this

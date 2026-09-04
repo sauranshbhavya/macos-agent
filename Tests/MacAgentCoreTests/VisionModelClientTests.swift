@@ -534,7 +534,7 @@ struct VisionModelClientTests {
     /// refusal above unreachable in practice rather than a failure mode users meet.
     ///
     /// The fixture is uniform noise at 2560x1440 — the encoder's own worst case at a 27-inch 5K
-    /// display's point resolution, and content no real screen produces. Measured at `9a84e3b`, the
+    /// display's point resolution, and content no real screen produces. Measured at `9cfa090`, the
     /// same input through the PNG-only path is 12,110,641 bytes, which is over the *old* ceiling
     /// of 9,000,000: the iteration would have failed outright.
     @Test

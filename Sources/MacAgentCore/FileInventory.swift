@@ -30,7 +30,7 @@ enum DestinationKey {
     /// **`.caseInsensitive` alone, and `locale: nil` — both halves were measured rather than
     /// reasoned about** (SONNY-79). The previous `lowercased()` under-folded: it leaves `ß` as `ß`
     /// while mapping `SS` to `ss`, so `Straße.pdf` and `STRASSE.pdf` were two keys here and one file
-    /// on disk. Measured on APFS at `06297f1`, comparing each candidate fold against what the volume
+    /// on disk. Measured on APFS at `317f2e3`, comparing each candidate fold against what the volume
     /// itself answers by writing one name and asking `fileExists` for the other:
     ///
     /// | pair | filesystem | `lowercased()` | `.caseInsensitive` |

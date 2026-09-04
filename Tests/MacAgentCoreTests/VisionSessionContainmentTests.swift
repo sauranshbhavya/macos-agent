@@ -37,7 +37,7 @@ struct VisionSessionContainmentTests {
     /// the suite. macOS grants Accessibility per responsible process, so one unchanged tree passed
     /// from the founder's terminal and failed 22 issues from an agent session's, every one of them
     /// `.permissionRevoked` returned before the boundary the test was written to pin. (Measured at
-    /// main `9a84e3b`: 1203 tests / 90 suites / 22 issues from a process where `AXIsProcessTrusted()`
+    /// main `9cfa090`: 1203 tests / 90 suites / 22 issues from a process where `AXIsProcessTrusted()`
     /// answered false, against 1203 / 90 / exit 0 from one where it answered true.) A suite whose
     /// result depends on machine state is not evidence — and this one failed in the flattering
     /// direction as well, because a defect that made the containment refuse everything would have

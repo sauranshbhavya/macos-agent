@@ -135,7 +135,7 @@
 --   1,000,000    this      56 MB         no      1309 ms      1299 ms       1303 ms
 --   2,000,000    this     113 MB        YES      2289 ms      2274 ms       2275 ms
 --
--- (Every row re-measured at `9cea6cf` after this branch rebased onto `969b138`. Nothing is carried:
+-- (Every row re-measured at `a767c6e` after this branch rebased onto `85a78f9`. Nothing is carried:
 -- `server/` moved twice under this branch, and the earlier readings — 2427/2424 and 213/212 at
 -- 200,000 — were taken at heads a rebase has since orphaned. The `backfill` rows are the rejected
 -- design, run here from its own commit's copy of this file so the comparison is against the same

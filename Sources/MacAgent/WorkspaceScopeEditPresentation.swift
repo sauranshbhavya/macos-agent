@@ -104,7 +104,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
     let freeEntryTitle: String
     let freeEntryPlaceholder: String
     /// The free-entry Add button's accessibility label. Here rather than interpolated in the view
-    /// body, for the reason commit 5ef804f moved the section builder's equivalent out of one.
+    /// body, for the reason commit 9d4c6af moved the section builder's equivalent out of one.
     /// (PR #40 review, F7.)
     let freeEntryAddAccessibilityLabel: String
     /// A standing note about what this dimension accepts, shown before anything is typed. Non-nil

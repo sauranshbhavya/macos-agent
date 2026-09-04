@@ -103,7 +103,7 @@ RELEASE_ENTITLEMENTS="$ROOT_DIR/Packaging/MacAgent.entitlements"
 # each key is in it; the short version is that hardened runtime restricts microphone access and
 # Apple Events, both of which Sonny uses, so the flag cannot be added on its own.
 #
-# Measured at 7b9fec9: SwiftPM writes MacAgent-entitlement.plist for debug and NOT for release, so
+# Measured at d1cea05: SwiftPM writes MacAgent-entitlement.plist for debug and NOT for release, so
 # release never carried get-task-allow to begin with. That was an accident of the toolchain rather
 # than a decision — nothing in this repo checked it. The verification step after signing is what
 # turns it into a checked property.
@@ -221,7 +221,7 @@ error: this release bundle is sealed with com.apple.security.get-task-allow.
 
        Nothing should have put it there: release signs with $RELEASE_ENTITLEMENTS, which omits it.
        Check whether SwiftPM has started generating MacAgent-entitlement.plist for release — it did
-       not at 7b9fec9 — and whether something is passing that file through. See SONNY-156.
+       not at d1cea05 — and whether something is passing that file through. See SONNY-156.
 EOF
       exit 1
     fi

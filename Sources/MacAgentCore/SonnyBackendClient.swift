@@ -214,7 +214,7 @@ public actor SonnyBackendClient {
     /// the first with headroom for the second, and it is the number the gateway already carries for
     /// the same purpose in the other direction: `ENTITLEMENT_SKEW_TOLERANCE_SECONDS` is 300
     /// (`grep -n 'ENTITLEMENT_SKEW_TOLERANCE_SECONDS = ' server/src/entitlement/claim.ts` → `107:`
-    /// at `f55e4ed`), which is what arrives in every claim as `skew_tolerance_seconds`. Both sides
+    /// at `65a7fc9`), which is what arrives in every claim as `skew_tolerance_seconds`. Both sides
     /// absorbing the same disagreement is the property worth having; a tighter number here would make
     /// this client refuse a skew its own claims are built to tolerate.
     static let maximumUncorroboratedForwardJump: TimeInterval = 300

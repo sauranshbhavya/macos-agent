@@ -2035,7 +2035,7 @@ private struct WidgetResultPanel: View {
 /// `.accessibilityLabel` keeps the full sentence naming the task, which matters *more* once the
 /// button shows no text at all, and that one was never in question. `.help` carries the words —
 /// "Continue", "Don't ask again" — on hover, and **it fires**: the founder hovered the tick and the
-/// cross on the packaged app at `5339640` and reported "yes tooltips appeared". That is the first
+/// cross on the packaged app at `368ab85` and reported "yes tooltips appeared". That is the first
 /// direct evidence in this project's record that a `.help` tooltip reaches anything in this widget
 /// at all, and the §3d-bis checklist row that carried the question carries the answer.
 ///
@@ -2050,11 +2050,11 @@ private struct WidgetResultPanel: View {
 /// **Two** other `.help` calls in this file predate the finding and were left in place — the compact
 /// capsule's "Open Sonny" and the clarification panel's cancel — and those two are still unhovered
 /// by anyone; §3d-bis now asks about them too, since one pass answers it. (Two, not the three this
-/// said before PR #107's F3. That correction's own figures were about `98c50c8`, where a plain
+/// said before PR #107's F3. That correction's own figures were about `94afca1`, where a plain
 /// search answered four — two calls plus two doc-comment mentions — and the live count was 2. At
 /// this head the live count is 4, which is those two plus this panel's pair:
 /// `git grep -cE '^[[:space:]]*\.help\(' -- Sources/MacAgent/FloatingWidgetView.swift` → 4 at
-/// `83355ff`. The POSIX class rather than `\s` is not decoration — `git grep`'s ERE engine answers
+/// `372528e`. The POSIX class rather than `\s` is not decoration — `git grep`'s ERE engine answers
 /// **0** for the same pattern written with `\s`, exit 1 and no output, which reads exactly like a
 /// file with no `.help` call in it. A plain search over this file answers more than four now and
 /// will keep drifting, because this correction added doc-comment mentions of its own; the call

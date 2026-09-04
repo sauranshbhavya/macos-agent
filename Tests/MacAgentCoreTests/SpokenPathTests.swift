@@ -5,7 +5,7 @@ import Testing
 
 /// SONNY-242. "write me a short note about today's plan and save it to my Desktop" was refused with
 /// `/Users/<user>/my Desktop is outside the writable whitelist` — the refusal copy as it stood at
-/// `98c50c8`, which this branch also rewrote — and that refusal then listed `/Users/<user>/Desktop`
+/// `94afca1`, which this branch also rewrote — and that refusal then listed `/Users/<user>/Desktop`
 /// as an allowed root. Two things had to be true for it: the planner copied the possessive into
 /// `outputPath`, which its prompt tells it to do ("Include user-supplied paths exactly as written"),
 /// and nothing between the plan and `PathWhitelist` knew that a leading possessive is not part of a

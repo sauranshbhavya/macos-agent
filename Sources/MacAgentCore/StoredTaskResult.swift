@@ -41,7 +41,7 @@ public struct StoredTaskResult: Codable, Equatable, Sendable {
     /// `.codeAuthored` template bounds a model's contribution to the slots it interpolates.
     ///
     /// Two cases rather than a spectrum, because only one distinction changes what a reader may do
-    /// with the value: whether a model composed it. Enumerated at `ebd6c1d` — `grep -rn
+    /// with the value: whether a model composed it. Enumerated at `ef0cf7c` — `grep -rn
     /// "AgentRunResult(" Sources | wc -l` finds 27 construction sites, 26 of which interpolate
     /// counts, names and paths into code-authored templates, and exactly one of which
     /// (`VisionSessionCapabilityAdapter.swift:278`) carries free text a model wrote after reading

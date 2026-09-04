@@ -29,7 +29,7 @@ Produced by SONNY-13 (planning ticket for roadmap row C), 2026-08-13. Branches:
 This file is a frozen artifact in the shape of `docs/sonny-branch-b-plan.md` — it is not updated as
 the branches proceed, except for the status line at the end.
 
-**Every measurement in this document was taken at `0fdac1ca1177b67be33f30d9e563f7e2c0c6ecfe`** (the
+**Every measurement in this document was taken at `cc4de3a070687dccc13b8995763f3737ed0fe093`** (the
 PR #43 merge). Two prerequisite branches land before row C's own implementation begins, so a session
 arriving later must re-measure rather than reuse these figures.
 
@@ -178,7 +178,7 @@ left for a reader to discover in a case body.
 
 Row B recorded the finding that makes Gate 3 answerable: **no capability has a static
 `defaultRiskTier` of `.tier3`.** Re-verified here across all 55 `defaultRiskTier` lines at
-`0fdac1c` — every static declaration is tier 0, 1 or 2, and `.tier3` appears attached to that
+`cc4de3a` — every static declaration is tier 0, 1 or 2, and `.tier3` appears attached to that
 concept only as an escalation's `toTier`.
 
 There are **exactly 8** `CapabilityRiskEscalation` construction sites in `Sources/`, and **all 8 have
@@ -409,7 +409,7 @@ I1 and I2 are pinned in the shape row B already established: a test asserting th
 only the tier.
 
 **Counting note for whoever writes these.** The suite is **828 `@Test` functions across 53 files** at
-`0fdac1c`, all swift-testing, zero XCTest. `grep -c "func test"` returns **4**, and all four are
+`cc4de3a`, all swift-testing, zero XCTest. `grep -c "func test"` returns **4**, and all four are
 private helpers — counting that way undercounts the regression surface by roughly 200×.
 
 ---

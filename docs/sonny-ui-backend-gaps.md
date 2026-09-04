@@ -115,7 +115,7 @@ relying on the widget or on notifications. **Done, and marked 2026-08-21 by SONN
 10 built `CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`), which
 renders all three states on **every** Command Center page that hosts
 `CommandCenterStorageNotice`, and wires Deny/Allow to the same `cancelCurrentRun()`/`start()`
-entry points the widget uses. That is five pages at `126507c` (`git grep -c
+entry points the widget uses. That is five pages at `1b67b29` (`git grep -c
 'CommandCenterStorageNotice(' -- Sources/MacAgent` → 5) and was four when this line was written —
 Memory arrived with SONNY-208 on 2026-08-22, and this said "the four pages" until SONNY-290
 corrected it on 2026-08-26.
@@ -141,7 +141,7 @@ now, kept correct by a 0.75s cursor-position poll plus an app-activation observe
 2026-07-23 roadmap note for the multi-monitor work this became).
 
 **Known UI mistakes deferred to the next branch (2026-07-21, explicit decision):** manual testing of
-this branch's round-3 widget fixes (commit `598582d`) surfaced real UI mistakes in the floating
+this branch's round-3 widget fixes (commit `9fdf0f5`) surfaced real UI mistakes in the floating
 widget, per direct user feedback. This project's default rule is that any bug found during a branch's
 own testing gets fixed in that branch before merge, never deferred — that default was explicitly
 overridden here, by direct instruction, rather than silently skipped: the mistakes will be addressed

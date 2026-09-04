@@ -118,7 +118,7 @@ public enum ScreenControlPolicy {
     /// already (PR #68 review, F1 and F2).
     ///
     /// - **Read from the bundle's own `Info.plist` (1):** `com.apple.terminal`, off
-    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` at `25fb29c`.
+    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` at `49a0e23`.
     /// - **Established from Launch Services' handler registry, 2026-08-17 (1):**
     ///   `com.termius-dmg.mac`. A different provenance from the line above — the answer came from
     ///   `NSWorkspace.urlsForApplications(toOpen:)` rather than from reading a bundle, and that

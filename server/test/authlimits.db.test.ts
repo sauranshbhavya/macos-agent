@@ -23,7 +23,7 @@ const SALT = "test-salt-not-a-secret";
  * :00. A test that spends a budget to its ceiling on the real clock and then asserts the next call
  * is refused is betting that its calls do not straddle one of those instants, and four times an hour
  * they do: the ceiling call lands in a new window, the counter is 0 again, and it is allowed.
- * Measured on this file's own concurrency test at `def8c3a` — 40 racing `consume` calls, 20 clocked
+ * Measured on this file's own concurrency test at `2f36250` — 40 racing `consume` calls, 20 clocked
  * a second before an 11:00 turnover and 20 at it, allowed **6** where the test asserts 3; the same
  * 40 on one frozen instant allowed 3.
  *
@@ -44,7 +44,7 @@ const SALT = "test-salt-not-a-secret";
  * **Convention is all that holds this, and the compiler was meant to.** `consume`'s `now` still
  * defaults to `new Date()`, so the wrong thing stays the shorter thing to write and a new test can
  * reintroduce the defect here without anything saying so. Removing that default — every production
- * call site already passes an explicit `now` (`git grep -c 'consume(' -- server/src` at `def8c3a`
+ * call site already passes an explicit `now` (`git grep -c 'consume(' -- server/src` at `2f36250`
  * → `auth/ratelimit.ts:1` the declaration, `entitlement/store.ts:1` and `routes/auth.ts:4`) — is the
  * same move `AgentViewModel`'s store parameters made, and it is written and measured and NOT in this
  * branch: `src/auth/` belongs to the SONNY-196/230 lane while that lane is open. SONNY-341's ticket

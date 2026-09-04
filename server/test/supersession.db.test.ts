@@ -395,7 +395,7 @@ describeDb("a superseded provider-side user is recorded, revocable, and cannot k
     itUnderHangBackstop("owes a fresh revocation after a close, a drain, a reopen and a second close", async () => {
       // **Route two, and it needs no supersession at all — it predates this branch** (SONNY-358,
       // authorised by the founder to be fixed here rather than split across two branches, because
-      // it is one root cause). The reviewer measured this same sequence against `main` at `def8c3a`
+      // it is one root cause). The reviewer measured this same sequence against `main` at `2f36250`
       // and got `owed = 1` after the first close and `owed = 0` after the reopen and the second.
       //
       // Reopening is `UPDATE sonny.account SET deleted_at = NULL`, which 0005's

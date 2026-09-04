@@ -6,10 +6,10 @@ Every figure in the results tables was observed against a live endpoint. **None 
 host's documentation.** Where a documented figure appears it is labelled as one and placed beside
 the measurement that tested it, because comparing the two is the point of the ticket.
 
-Repository figures — payload sizes, iteration counts — were measured at `87199ff` and **re-verified
-at `a44156f`**, this branch's head. **The branch point is `d71690f`, not `87199ff`**: the branch was
-rebased after PR #79 merged, and an earlier draft of this line called `87199ff` the branch point
-(PR #82 cycle 1, F5). That re-verification was not ceremonial — `git diff --stat 87199ff a44156f --
+Repository figures — payload sizes, iteration counts — were measured at `9adfdd9` and **re-verified
+at `a44156f`**, this branch's head. **The branch point is `ac3140a`, not `9adfdd9`**: the branch was
+rebased after PR #79 merged, and an earlier draft of this line called `9adfdd9` the branch point
+(PR #82 cycle 1, F5). That re-verification was not ceremonial — `git diff --stat 9adfdd9 a44156f --
 Sources/` is 4 files and 156 insertions, so the tree under those figures genuinely moved. All three
 still hold: `maximumImageBytes: 3_000_000` (`RedactedCaptureEncoder.swift:92`),
 `maximumIterations: 12` (`VisionSessionContainment.swift:239`), and the streaming sweep still
@@ -57,7 +57,7 @@ Both figures below are derived from Sonny's own code, not chosen for convenience
 
 **Payload.** SONNY-114 settled the encoding. `VisionCaptureEgressPolicy.default.maximumImageBytes`
 is **3,000,000** bytes (`Sources/MacAgentCore/RedactedCaptureEncoder.swift:92`, verified at
-`87199ff`). Base64 makes that exactly `ceil(3,000,000/3)×4 = 4,000,000` characters; plus SONNY-114's
+`9adfdd9`). Base64 makes that exactly `ceil(3,000,000/3)×4 = 4,000,000` characters; plus SONNY-114's
 measured 4,673-character prompt and about 120 bytes of JSON envelope, a request at the client's own
 ceiling is **4,004,793** bytes. The contract sets the server limit at **4,200,000**
 (`docs/sonny-backend-api-contract.md` §6.1), and §13 of that document names proving it lands as
@@ -261,7 +261,7 @@ one. The non-streaming path fails with a real error status — `546`, `504` or `
 for the first two, a parseable error object.
 
 This is a finding in the contract's favour rather than against it. Contract §4 defines no streaming
-route, and the client streams nowhere: a sweep of `Sources/` and `Tests/` at `87199ff` for
+route, and the client streams nowhere: a sweep of `Sources/` and `Tests/` at `9adfdd9` for
 `stream: true`, `"stream"`, `text/event-stream`, `AsyncBytes`, `.bytes(` and `chunked` returns
 **zero matches**. (Widening it to `EventSource` case-insensitively returns two files —
 `ScreenActionSynthesizer.swift` and `SystemSessionAttentionMonitor.swift` — and both are Core

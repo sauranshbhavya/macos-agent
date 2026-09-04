@@ -16,7 +16,7 @@ import Foundation
 ///
 /// The type is named for what it does now. Renamed from `OpenAllowlistedAppCapabilityAdapter`, and
 /// the capability identifier with it (`local.apps.open-allowlisted-app` -> `local.apps.open-app`),
-/// after sweeping for persistence: at `0fdac1c` the string occurred in exactly three places — the
+/// after sweeping for persistence: at `cc4de3a` the string occurred in exactly three places — the
 /// descriptor and two in-memory test expectations (`CapabilityRegistryTests.swift:44`,
 /// `RiskApprovalTests.swift:97`) — no local store, no `Codable` record, no `UserDefaults` key and no
 /// document writes it, so nothing on disk carries the old spelling forward.

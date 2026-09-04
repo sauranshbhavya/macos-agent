@@ -124,7 +124,7 @@ public struct AgentRunResult: Equatable, Sendable {
     /// nothing downstream can tell a model's sentence from an adapter's template.
     ///
     /// **Defaulted to `.codeAuthored`, and the enumeration is what makes that honest rather than
-    /// convenient.** At `ebd6c1d`, `grep -rn "AgentRunResult(" Sources | wc -l` finds 27
+    /// convenient.** At `ef0cf7c`, `grep -rn "AgentRunResult(" Sources | wc -l` finds 27
     /// construction sites: 26 interpolate counts, names and paths into templates written in this
     /// repository, and one — `VisionSessionCapabilityAdapter.swift:278` — carries free text a model
     /// composed after reading the user's screen. Two of those 26 do not author at all, they

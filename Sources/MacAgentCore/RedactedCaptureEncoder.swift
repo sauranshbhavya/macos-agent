@@ -29,7 +29,7 @@ public enum VisionCaptureMediaType: String, Equatable, Sendable {
 
 /// How a redacted capture is turned into the bytes that leave the device.
 ///
-/// **Every number here was measured, not chosen** (SONNY-114, at `9a84e3b`, on real captures from
+/// **Every number here was measured, not chosen** (SONNY-114, at `9cfa090`, on real captures from
 /// the three displays attached to the development machine plus synthetic stress images at display
 /// sizes this machine does not have). The two findings the shape follows from:
 ///

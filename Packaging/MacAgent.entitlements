@@ -11,7 +11,7 @@
   WHAT IS DELIBERATELY ABSENT: com.apple.security.get-task-allow.
 
   SwiftPM writes that entitlement into .build/<triple>/debug/MacAgent-entitlement.plist and Apple's
-  notary service rejects any submission carrying it. Measured at 7b9fec9: SwiftPM generates that
+  notary service rejects any submission carrying it. Measured at d1cea05: SwiftPM generates that
   file for debug and NOT for release, so a release build never carried the entitlement in the first
   place — but that was an accident of the toolchain rather than a decision, and nothing checked it.
   package-app.sh now reads the sealed entitlements back off the signed release bundle and refuses to
@@ -41,7 +41,7 @@
       FinderContextService and DocumentConverter drive Finder and Microsoft Word.
 
       A JUDGMENT CALL, recorded as one rather than stated as a fact. Sonny sends no Apple Events
-      in-process — verified at 7b9fec9 by grepping Sources/ for NSAppleScript,
+      in-process — verified at d1cea05 by grepping Sources/ for NSAppleScript,
       NSAppleEventDescriptor and AEDeterminePermissionToAutomateTarget, which returns nothing.
       Every event leaves through /usr/bin/osascript spawned as a child (FinderContextService.swift:55,
       DocumentConverter.swift:98), and osascript is Apple-signed and already entitled. So the process

@@ -549,11 +549,11 @@ public struct CapabilityRegistry: Sendable {
     /// Everywhere else the rule is that a default must not reach the machine, and the remedy is to
     /// remove the default so that the shipping site has to name the real thing. That remedy was not
     /// available here, because of how many call sites this one parameter sits on:
-    /// `git grep -n 'AgentActionExecutor(' 619ba62 -- Tests | grep -vE ':[0-9]+: *//' | wc -l`
+    /// `git grep -n 'AgentActionExecutor(' 15c7bd9 -- Tests | grep -vE ':[0-9]+: *//' | wc -l`
     /// → **42** construction lines across **26** files
-    /// (`git grep -ln 'AgentActionExecutor(' 619ba62 -- Tests | wc -l`), and of all of them just
+    /// (`git grep -ln 'AgentActionExecutor(' 15c7bd9 -- Tests | wc -l`), and of all of them just
     /// **4** lines in **1** file name a registry at all
-    /// (`git grep -n 'capabilityRegistry:' 619ba62 -- Tests | wc -l` → 4,
+    /// (`git grep -n 'capabilityRegistry:' 15c7bd9 -- Tests | wc -l` → 4,
     /// `git grep -ln …` → 1). The comment stage is not decoration and its control fires: without
     /// it the first command answers 43, the extra line being `LocalStoreInjectionScanTests`' prose
     /// about this very initializer.

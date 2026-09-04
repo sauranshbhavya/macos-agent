@@ -3045,7 +3045,7 @@ struct VisionSessionRunTests {
     ///
     /// **That paragraph named this test before it existed.** It cited
     /// `aTokenExpiryMidSessionIsInvisibleAndTheSessionCarriesOn` as what held the claim and no such
-    /// test was in the tree at `4824e50` (`git grep -c aTokenExpiryMidSession -- Tests` → exit 1,
+    /// test was in the tree at `be66eeb` (`git grep -c aTokenExpiryMidSession -- Tests` → exit 1,
     /// no output). The behaviour was real — the refresh lives in `SonnyBackendClient.send` and its
     /// own suite covers it on a single request — but nothing had ever run it inside a session, which
     /// is the case the requirement is about: a refresh that worked on request one and lost the

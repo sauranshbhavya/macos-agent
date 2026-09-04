@@ -1,6 +1,6 @@
 # Row 12 — hosted agent runtime backend: plan
 
-Planning output for SONNY-16, written 2026-08-16 against `main` at `9a84e3b`. Every measurement and
+Planning output for SONNY-16, written 2026-08-16 against `main` at `9cfa090`. Every measurement and
 every file:line below was taken at that SHA; the tree will move, so re-verify before relying on one.
 
 This document is the durable plan. The decisions in it are recorded on the Plane tickets they belong
@@ -32,7 +32,7 @@ row's metering can see what a screen-control session actually costs.
 
 ---
 
-## 2. What is true today, verified at `9a84e3b`
+## 2. What is true today, verified at `9cfa090`
 
 ### 2.1 The network surface
 
@@ -103,7 +103,7 @@ A backend client that needs token refresh, 401-triggered re-auth, timeouts and r
 ### 2.5 First run — corrected
 
 An earlier draft of this plan said there is no first-run flow anywhere in the app. **That was wrong**,
-stated from one inspected path, and it changes the design. What exists at `9a84e3b`:
+stated from one inspected path, and it changes the design. What exists at `9cfa090`:
 
 - `ScreenAccessOnboardingModel` (`Sources/MacAgent/ScreenAccessOnboarding.swift:39`) and
   `ScreenAccessOnboardingView` (`:109`) — a real Screen Recording and Accessibility setup flow,
@@ -135,7 +135,7 @@ the product's own encoders — `CGImageDestination` PNG (`ScreenCaptureService.s
 `RedactionImageRenderer.fillRegions`' `CGContext` re-encode (`LocalRedactionService.swift:246-305`),
 then the literal JSON body `OpenCodeVisionModelClient.decide` builds (`VisionModelClient.swift:95-115`).
 
-All figures at `9a84e3b`, measured 2026-08-17 (UTC):
+All figures at `9cfa090`, measured 2026-08-17 (UTC):
 
 | case | captured px | redacted PNG (what is sent) | JSON body | body gzipped |
 |---|---|---|---|---|

@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""SONNY-407: prove an attribution rewrite did exactly what it claimed, and nothing else.
+
+    scripts/verify-attribution-rewrite <old-repo> <lower-exclusive> <old-ref> <new-repo> <map>
+
+Exit 0 when every property holds, 2 when one does not, 1 when something could not be measured.
+
+WHY THIS IS A SCRIPT AND NOT A PARAGRAPH. WORKFLOW.md section 8 records the 2026-08-24 rewrite as
+"one tree SHA printed twice per pair, at all eighteen steps" — a check someone ran by hand over
+eighteen pairs. This rewrite has 1518, and every property below was violated by a draft of the
+rewriter that looked correct: git-filter-repo silently widened the range by stripping signatures
+below it, the first hand-rolled version signed 534 commits that had never been signed, and it
+stripped trailing whitespace from 156 messages carrying no attribution at all. None of those three
+is visible in a diff or a log; each is a count nobody would take unless a tool took it.
+
+EVERY CHECK CARRIES A CONTROL where a control is possible, because a check that cannot fail proves
+nothing — this repository's clean-zero family in CLAUDE.md is the reason.
+"""
+import re, subprocess, sys
+
+CO = re.compile(r'^[ \t]*co-authored-by:.*(claude|anthropic)', re.I)
+SE = re.compile(r'^[ \t]*claude-session:', re.I)
+
+fails = []
+def check(name, ok, detail=""):
+    print(("  ok    " if ok else "  FAIL  ") + name + (f" — {detail}" if detail else ""))
+    if not ok:
+        fails.append(name)
+
+def git(repo, *a):
+    return subprocess.run(("git", "-C", repo) + a, capture_output=True, text=True, check=True).stdout
+
+def records(repo, shas):
+    """sha -> dict(tree, an, ae, ad, cn, ce, cd, body), in ONE pass.
+
+    A spawn per commit is ~6000 processes over 1518 pairs and takes minutes; the founder runs this
+    at the push and it should take seconds. \x01 separates fields and \x00 records, so a message
+    containing newlines survives.
+    """
+    fmt = "\x01".join(["%H", "%T", "%an", "%ae", "%aD", "%cn", "%ce", "%cD", "%B"])
+    out = subprocess.run(("git", "-C", repo, "log", "--no-walk", f"--format={fmt}%x00", "--stdin"),
+                         input="\n".join(shas) + "\n", capture_output=True, text=True,
+                         check=True).stdout
+    res = {}
+    for rec in out.split("\x00"):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        f = rec.split("\x01")
+        res[f[0]] = dict(tree=f[1], ident=tuple(f[2:8]), body=f[8])
+    return res
+
+def signed_map(repo, shas):
+    """sha -> bool, in one batch pass rather than a spawn per commit."""
+    out = subprocess.run(("git", "-C", repo, "cat-file", "--batch"),
+                         input="\n".join(shas) + "\n", capture_output=True, text=True,
+                         check=True).stdout
+    res, cur = {}, None
+    for line in out.split("\n"):
+        h = re.match(r'^([0-9a-f]{40}) commit \d+$', line)
+        if h:
+            cur = h.group(1); res[cur] = False; continue
+        if cur and line.startswith("gpgsig"):
+            res[cur] = True
+        if line == "":
+            cur = None
+    return res
+
+def main():
+    old_repo, lower, old_ref, new_repo, mapfile = sys.argv[1:6]
+    pairs = [l.split() for l in open(mapfile) if l.strip()]
+    olds = [o for o, _ in pairs]
+    news = [n for _, n in pairs]
+    print(f"verifying {len(pairs)} pair(s)")
+
+    # 1. SCOPE. The map must be exactly the authorised range — no more, and no fewer.
+    rng = git(old_repo, "rev-list", f"{lower}..{old_ref}").split()
+    check("the map covers exactly the authorised range",
+          sorted(olds) == sorted(rng), f"map {len(olds)}, range {len(rng)}")
+    check("no commit maps to itself", not any(o == n for o, n in pairs))
+
+    # 2. NOTHING BELOW THE RANGE MOVED. The failure that widened the first attempt from 1518 to
+    #    1603 lived entirely here, and it is invisible from the top of the history.
+    base = git(old_repo, "rev-parse", f"{lower}").strip()
+    below = git(old_repo, "rev-list", base).split()
+    probe = subprocess.run(("git", "-C", new_repo, "cat-file", "--batch-check"),
+                           input="\n".join(below) + "\n", capture_output=True, text=True).stdout
+    still = [l.split()[0] for l in probe.split("\n") if " commit " in l]
+    check("every commit below the range survives untouched",
+          len(still) == len(below), f"{len(still)} of {len(below)}")
+    ob, nb = signed_map(old_repo, below), signed_map(new_repo, still)
+    lost = [b for b in below if ob.get(b) and not nb.get(b)]
+    check("no signature below the range was lost", not lost, f"{len(lost)} lost")
+
+    # 3. TREE IDENTITY, with a control. This is what makes a repoint a RENAME rather than a
+    #    re-measurement (CLAUDE.md): the figure beside a citation stands because the tree does.
+    ro, rn = records(old_repo, olds), records(new_repo, news)
+    bad = [(o, n) for o, n in pairs if ro[o]["tree"] != rn[n]["tree"]]
+    check("every pair holds the same tree", not bad, f"{len(bad)} mismatched")
+    if len(pairs) >= 2:
+        check("CONTROL: the same check fails on a deliberately mismatched pair",
+              ro[pairs[0][0]]["tree"] != rn[pairs[1][1]]["tree"])
+    check("the new head's tree equals the old head's",
+          git(old_repo, "rev-parse", f"{old_ref}^{{tree}}").strip() == rn[news[-1]]["tree"])
+
+    # 4. THE ATTRIBUTIONS ARE GONE, and the same query finds them on the old side.
+    def carries(repo, shas):
+        out = subprocess.run(("git", "-C", repo, "cat-file", "--batch"),
+                             input="\n".join(shas) + "\n", capture_output=True, text=True,
+                             check=True).stdout
+        return sum(1 for l in out.split("\n") if CO.match(l) or SE.match(l))
+    after, before = carries(new_repo, news), carries(old_repo, olds)
+    check("no attribution line survives", after == 0, f"{after} found")
+    check("CONTROL: the same scan finds them before the rewrite", before > 0, f"{before} found")
+
+    # 5. SIGNATURE STATE IS PRESERVED PER COMMIT. Not "all signed" — a draft signed 534 commits
+    #    that had never been signed, which puts a key on an attestation nobody made.
+    so, sn = signed_map(old_repo, olds), signed_map(new_repo, news)
+    added = [n for o, n in pairs if sn.get(n) and not so.get(o)]
+    dropped = [n for o, n in pairs if so.get(o) and not sn.get(n)]
+    check("no commit gained a signature it never had", not added, f"{len(added)} gained")
+    check("no commit lost the signature it had", not dropped, f"{len(dropped)} lost")
+
+    # 6. NOTHING ELSE ABOUT ANY MESSAGE CHANGED. A message with no attribution must come back
+    #    byte-for-byte, trailing whitespace included.
+    edited = unexpected = untouched_changed = 0
+    for o, n in pairs:
+        b_old, b_new = ro[o]["body"], rn[n]["body"]
+        had = any(CO.match(l) or SE.match(l) for l in b_old.split("\n"))
+        if had:
+            edited += 1
+            want = [l for l in b_old.split("\n") if not (CO.match(l) or SE.match(l))]
+            while want and not want[-1].strip():
+                want.pop()
+            got = b_new.split("\n")
+            while got and not got[-1].strip():
+                got.pop()
+            if want != got:
+                unexpected += 1
+        elif b_old != b_new:
+            untouched_changed += 1
+    check("a message with no attribution is byte-for-byte unchanged",
+          untouched_changed == 0, f"{untouched_changed} changed anyway")
+    check("every edited message lost exactly its attribution lines and nothing else",
+          unexpected == 0, f"{unexpected} wrong")
+    check("the number of edited messages is the number of offending commits",
+          edited == 10, f"{edited} edited")
+
+    # 7. Author and committer identity and dates are carried across verbatim.
+    drift = sum(1 for o, n in pairs if ro[o]["ident"] != rn[n]["ident"])
+    check("author and committer identity and both dates are unchanged", drift == 0, f"{drift} drifted")
+
+    print(f"\n{len(fails)} failure(s)")
+    sys.exit(2 if fails else 0)
+
+main()

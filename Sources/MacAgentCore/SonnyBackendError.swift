@@ -248,7 +248,7 @@ public extension SonnyBackendError {
     /// did, so the fourth shape above was recognised on one route and hidden on the other four; a
     /// stop on any of them read as a failure. The population is
     /// the error *type* rather than the route — four declarations,
-    /// `git grep -cE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 files at `1830b9e`
+    /// `git grep -cE '^ *case backend\(SonnyBackendError\)' -- Sources` → 4 files at `563c38f`
     /// — and they answer for five routes, because **`WebResearchSynthesizer.swift`
     /// declares no error of its own**: `WebResearchNoteDecodingError` there has three cases,
     /// `invalidJSON`, `unexpectedTopLevelKey` and `malformedNote`, and no `.backend` at all, so
@@ -258,11 +258,11 @@ public extension SonnyBackendError {
     /// unrelated decoding enum. The conforming four are ``VisionModelClientError`` (SONNY-131),
     /// `PlannerError`, `TranscriptionError` and `TavilySearchError`
     /// (`git grep -cE '^public enum .*, CarriesBackendError \{' -- Sources` → 4 files at
-    /// `3d42b20`.)
+    /// `4b5870a`.)
     ///
     /// **Neither of those two anchors does anything, and this paragraph said the opposite twice
     /// before a reviewer measured it** (SONNY-320, PR #146's F1). **Six readings**, at
-    /// `3d42b20` — and the numeral is six rather than the four the review measured because the
+    /// `4b5870a` — and the numeral is six rather than the four the review measured because the
     /// case-declaration grep is swept here as well: it answers **4** with `^ *` and **4** without
     /// it, and the conformance grep answers **4** as written, **4** with the `^` dropped and **4**
     /// with `public enum` dropped for `^.*,`. Only a genuinely looser pattern moves the number —

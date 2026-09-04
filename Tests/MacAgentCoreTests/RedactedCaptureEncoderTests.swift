@@ -44,7 +44,7 @@ struct RedactedCaptureEncoderTests {
     /// to lossless without a rule that says so.** Dense, sharp, two-tone content is simultaneously
     /// PNG's best case and JPEG's worst — both for size and for what lossy compression does to small
     /// text — so "pick the smaller" and "pick the one that reads better" agree on it. Measured for
-    /// SONNY-114 on real captures at `9a84e3b`: a terminal window chose PNG (60,390 bytes against
+    /// SONNY-114 on real captures at `9cfa090`: a terminal window chose PNG (60,390 bytes against
     /// JPEG q80's 78,315) while a photo-heavy desktop chose JPEG (124,953 against PNG's 1,552,704).
     @Test
     func theSmallerOfTheLosslessAndLossyEncodingsIsTheOneThatShips() async throws {
@@ -181,7 +181,7 @@ struct RedactedCaptureEncoderTests {
     ///
     /// **One thing measured here came out against the ticket's stated worry, and it is recorded
     /// rather than quietly dropped.** SONNY-114 expected a resample-before-paint to smear a redacted
-    /// region's edges past the rectangle. Measured at `9a84e3b` on this fixture at every ladder scale
+    /// region's edges past the rectangle. Measured at `9cfa090` on this fixture at every ladder scale
     /// (0.8, 0.64, 0.5) and at both round and odd source dimensions, a misordering that *also
     /// rescales the region* leaks nothing — 0 red dominance — because
     /// `LocalRedactionService`'s existing 2-pixel pad is wider than the resample kernel's spread even
@@ -305,7 +305,7 @@ struct RedactedCaptureEncoderTests {
     /// the two candidate encodings would be describing different pictures and their sizes would not
     /// be comparable. It costs nothing visible: a window capture's only non-opaque pixels are its
     /// rounded corners, which are transparent *black*, so compositing them onto black leaves them
-    /// exactly where they were. Verified on the real captures at `9a84e3b`: 356 sub-opaque pixels in
+    /// exactly where they were. Verified on the real captures at `9cfa090`: 356 sub-opaque pixels in
     /// each window capture, zero pixels whose RGB changed.
     @Test
     func theOpaqueCanvasLeavesTheVisiblePixelsExactlyWhereTheyWere() async throws {

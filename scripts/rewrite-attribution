@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""SONNY-407: strip every Claude attribution from the commit messages in a range, and change
+nothing else about any commit.
+
+    rewrite_attribution.py <repo> <lower-exclusive> <ref>
+
+WHY NOT git-filter-repo, which is the obvious tool and was tried first. Measured on a throwaway
+clone of this repository rather than argued:
+
+  1. It DROPS the signature from every commit it writes, including ones whose message it does not
+     change. This repository signs by default (commit.gpgsign=true, gpg.format=ssh) and 995 of
+     main's 1593 commits carry one. filter-repo removed the signature on c6104c8 — 2026-06-25,
+     well BELOW the authorised range — which changed that commit and cascaded to every descendant,
+     widening the rewrite from the authorised 1518 commits to 1603.
+  2. Nothing in it re-signs, so even a correctly scoped run leaves every rewritten commit unsigned.
+
+This walks the range oldest-first and rebuilds each commit with `git commit-tree -S`, reusing the
+ORIGINAL TREE OBJECT. "The tree did not change" is therefore true by construction — and it is
+verified afterwards anyway, because a property true by construction is one nobody has checked.
+Author and committer identity and both dates are carried across verbatim.
+"""
+import os, re, subprocess, sys
+
+CO_AUTHOR = re.compile(r'^[ \t]*co-authored-by:.*(claude|anthropic)', re.I)
+SESSION   = re.compile(r'^[ \t]*claude-session:', re.I)
+
+def strip_attribution(message):
+    """Return (new_message, touched).
+
+    A message carrying no attribution comes back BYTE-FOR-BYTE, trailing whitespace included. The
+    first draft collapsed the trailing blank run on every message, which rewrote 156 commits that
+    carry no attribution at all — a change beyond what was authorised, and invisible unless you
+    count the messages that differ. Only a message this actually edits is tidied, and only of the
+    blank tail the removal itself leaves behind.
+    """
+    lines = message.split('\n')
+    kept = [l for l in lines if not (CO_AUTHOR.match(l) or SESSION.match(l))]
+    if len(kept) == len(lines):
+        return message, False
+    while kept and not kept[-1].strip():
+        kept.pop()
+    return '\n'.join(kept) + '\n', True
+
+def main():
+    repo, lower, ref = sys.argv[1], sys.argv[2], sys.argv[3]
+    def git(*a, **kw):
+        return subprocess.run(("git", "-C", repo) + a, capture_output=True, text=True,
+                              check=True, **kw).stdout
+
+    order = git("rev-list", "--reverse", "--topo-order", f"{lower}..{ref}").split()
+    print(f"rewriting {len(order)} commit(s)", file=sys.stderr, flush=True)
+
+    # One pass for every field, rather than eight spawns per commit. \x01 separates fields and
+    # \x00 separates records, so a message containing newlines survives intact.
+    fmt = "\x01".join(["%H", "%T", "%P", "%an", "%ae", "%aD", "%cn", "%ce", "%cD", "%B"])
+    raw = git("log", "--reverse", "--topo-order", f"--format={fmt}%x00", f"{lower}..{ref}")
+    meta = {}
+    for rec in raw.split("\x00"):
+        rec = rec.strip("\n")
+        if not rec:
+            continue
+        f = rec.split("\x01")
+        meta[f[0]] = dict(tree=f[1], parents=f[2].split(), an=f[3], ae=f[4], ad=f[5],
+                          cn=f[6], ce=f[7], cd=f[8], body=f[9])
+
+    batch = subprocess.run(("git", "-C", repo, "cat-file", "--batch"),
+                           input="\n".join(order) + "\n", capture_output=True, text=True,
+                           check=True).stdout
+    sha = None
+    for line in batch.split("\n"):
+        hdr = re.match(r'^([0-9a-f]{40}) commit \d+$', line)
+        if hdr:
+            sha = hdr.group(1)
+            if sha in meta:
+                meta[sha]["signed"] = False
+            continue
+        if sha and line.startswith("gpgsig") and sha in meta:
+            meta[sha]["signed"] = True
+        if line == "":
+            sha = None
+    signed_n = sum(1 for c in order if meta[c].get("signed"))
+    print(f"  {signed_n} of {len(order)} originals are signed; the rest stay unsigned",
+          file=sys.stderr, flush=True)
+
+    mapping = {}
+    for n, old in enumerate(order, 1):
+        m = meta[old]
+        # Sign only what was signed. 534 of these 1518 commits carry no signature — signing
+        # was turned on partway through this repository's life — and signing them now would put
+        # the founder's key on an attestation nobody ever made. `-S` where the original had one,
+        # `--no-gpg-sign` where it did not, so commit.gpgsign=true cannot add one by default.
+        sign = ["-S"] if m["signed"] else ["--no-gpg-sign"]
+        args = ["git", "-C", repo, "commit-tree"] + sign + [m["tree"]]
+        for p in m["parents"]:
+            args += ["-p", mapping.get(p, p)]
+        env = dict(os.environ,
+                   GIT_AUTHOR_NAME=m["an"], GIT_AUTHOR_EMAIL=m["ae"], GIT_AUTHOR_DATE=m["ad"],
+                   GIT_COMMITTER_NAME=m["cn"], GIT_COMMITTER_EMAIL=m["ce"], GIT_COMMITTER_DATE=m["cd"])
+        new_message, _ = strip_attribution(m["body"])
+        r = subprocess.run(args, input=new_message, capture_output=True, text=True, env=env)
+        if r.returncode != 0:
+            sys.exit(f"commit-tree failed on {old}: {r.stderr}")
+        mapping[old] = r.stdout.strip()
+        if n % 250 == 0:
+            print(f"  {n}/{len(order)}", file=sys.stderr, flush=True)
+
+    # `git rev-parse --absolute-git-dir`, not `<repo>/.git` — in a WORKTREE that path is a FILE,
+    # not a directory, so the first run rebuilt all 1567 commits and then died writing the map,
+    # losing the mapping it had just spent three minutes computing. The objects survived; the map
+    # did not, and the map is the whole deliverable.
+    git_dir = subprocess.run(("git", "-C", repo, "rev-parse", "--absolute-git-dir"),
+                             capture_output=True, text=True, check=True).stdout.strip()
+    with open(os.path.join(git_dir, "attribution-rewrite-map"), "w") as fh:
+        for old in order:
+            fh.write(f"{old}\t{mapping[old]}\n")
+    backup = os.environ.get("MAP_BACKUP")
+    if backup:
+        with open(backup, "w") as fh:
+            for old_sha in order:
+                fh.write(f"{old_sha}\t{mapping[old_sha]}\n")
+    print(f"done: {len(order)} rewritten", file=sys.stderr, flush=True)
+    print(mapping[git("rev-parse", ref).strip()])
+
+main()

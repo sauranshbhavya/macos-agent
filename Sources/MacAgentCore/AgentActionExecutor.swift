@@ -500,7 +500,7 @@ public final class AgentActionExecutor {
     /// scope escalations' `toTier`, so nothing here can lower a tier — which everything reading
     /// that field depends on staying honest. The consumer population is larger than any closed
     /// list stays current with (this comment first said "four things"; row C's planning counted
-    /// 151 references across 24 files at `0fdac1c`): five structural decision gates alone — the
+    /// 151 references across 24 files at `cc4de3a`): five structural decision gates alone — the
     /// unattended gate (`approvedTier >= effectiveTier` against a fixed `.approved(.tier2)`), the
     /// stale-approval re-check in `AgentRunner.execute`, the `risk.assessed`/`risk.escalated`
     /// trace, `UnattendedTrustAdvisory` (which reads `effectiveTier` alone), and SONNY-54's
@@ -539,7 +539,7 @@ public final class AgentActionExecutor {
     /// *different* path, and the adapters' "output already exists" escalation — which is a
     /// `fileExists` check on the resolved path — then asks about a file the run will not touch while
     /// staying silent about the one it will overwrite. Measured before this was threaded, at
-    /// `98b4668` plus the execute-side fix: with the bumped name already on disk, both orderings of
+    /// `7770a48` plus the execute-side fix: with the bumped name already on disk, both orderings of
     /// the collision plan assessed `tier2` with **no** escalations, and the run then overwrote that
     /// file. That gap arrived with SONNY-190 rather than with this ticket — it is visible on `main`
     /// in the ordering SONNY-190 fixed — but this ticket creates the second ordering that reaches it,
@@ -1278,7 +1278,7 @@ public final class AgentActionExecutor {
         // alone fix exactly one ordering. `[create_local_draft, run_routine]` is safe because the
         // outer draft has executed and claimed by the time the routine resolves; the *same two steps
         // reversed* were not, because the routine resolves first and nothing it can see mentions the
-        // outer plan's name — measured, three runs out of three on the real clock at `98b4668`, one
+        // outer plan's name — measured, three runs out of three on the real clock at `7770a48`, one
         // file left holding the outer plan's text with the routine's document destroyed, and
         // `previews.writes` naming the same path twice so nothing in the report showed it.
         //

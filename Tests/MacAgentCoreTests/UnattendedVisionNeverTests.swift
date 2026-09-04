@@ -136,7 +136,7 @@ struct UnattendedVisionNeverTests {
     /// ``VisionSessionContainmentTests`` has one: left to its default, `permissionChecker` reads
     /// `AXIsProcessTrusted()`, and `checkIterationStart` consults it *ahead of* the attention check
     /// these tests exist to pin. Three of that ticket's 22 machine-dependent failures were here
-    /// (measured at main `9a84e3b`) — a locked Mac reported as a revoked grant, on any process
+    /// (measured at main `9cfa090`) — a locked Mac reported as a revoked grant, on any process
     /// without the grant.
     ///
     /// The grant is stated on every construction, including the two that only reach

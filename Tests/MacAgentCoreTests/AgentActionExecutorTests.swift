@@ -47,7 +47,7 @@ struct AgentActionExecutorTests {
     /// resumptions that decided it — the unstructured `Task`'s first step, and the test's own step
     /// after the sleep — were both queued on the main actor, and this suite is `@MainActor`, so a
     /// busy machine delayed both by however long it delayed anything, independently. Measured with a
-    /// probe on this ticket at `98c50c8`, four consecutive flagged runs with a cold `swift build`
+    /// probe on this ticket at `94afca1`, four consecutive flagged runs with a cold `swift build`
     /// beside the last three: that gap was 39 ms and 48 ms on the two runs that passed, and
     /// **8781 ms and 14474 ms on the two that failed** — both past `/bin/sleep 5`, both landing on
     /// the "expected cancellation to throw" branch, which is exactly what PR #109's R9 was reported
@@ -1956,7 +1956,7 @@ struct AgentActionExecutorTests {
     /// ordering where the outer step runs *first*. Reversed, the routine resolves before anything has
     /// executed, the claims are empty, and the outer plan's destination — pinned at `prepare`, and
     /// never re-derived afterwards because a step carrying an `outputPath` is deliberately not
-    /// bumped — is invisible to it. Measured on the real clock at `98b4668`, three runs out of three:
+    /// bumped — is invisible to it. Measured on the real clock at `7770a48`, three runs out of three:
     /// `[run_routine, create_local_draft]` produced **one** file holding the outer plan's text, with
     /// the routine's document gone, while `previews.writes` named that one path twice so nothing in
     /// the run's report showed it.
@@ -2076,7 +2076,7 @@ struct AgentActionExecutorTests {
     ///
     /// Before this ticket it did not: assessment resolved a nested plan against an empty set, so with
     /// the bumped name already on disk both orderings assessed `tier2` with no escalations at all,
-    /// and the run then overwrote that file in silence. Measured at `98b4668` plus the execute-side
+    /// and the run then overwrote that file in silence. Measured at `7770a48` plus the execute-side
     /// fix alone. That gap arrived with SONNY-190 and is visible on `main` in the ordering SONNY-190
     /// fixed; this ticket creates the second ordering that reaches it.
     ///

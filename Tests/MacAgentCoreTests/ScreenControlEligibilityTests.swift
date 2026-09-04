@@ -93,7 +93,7 @@ struct ScreenControlEligibilityTests {
     /// the one fact a session repeating this sweep needs.
     @Test
     func theEvidenceSplitMatchesTheList() {
-        // Verified on the development machine at `25fb29c`, from the bundle's own Info.plist.
+        // Verified on the development machine at `49a0e23`, from the bundle's own Info.plist.
         let verifiedFromABundle: Set<String> = ["com.apple.terminal"]
         // Established from Launch Services' handler registry on the founder's Mac, 2026-08-17.
         let establishedFromLaunchServices: Set<String> = ["com.termius-dmg.mac"]

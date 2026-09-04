@@ -107,7 +107,7 @@ struct HoverTeardownAuditTests {
     ///
     /// **Refuted.** The modifier discharges its push on four paths: hover-exit, `isEnabled` going
     /// false, `isControlEnabled` going false, and `onDisappear` — the teardown path the hypothesis
-    /// is about. `git log -S` puts all four in `8c48c83`, the commit that introduced the modifier, so
+    /// is about. `git log -S` puts all four in `20e330c`, the commit that introduced the modifier, so
     /// this was never a hole that got fixed; it was never open.
     ///
     /// **What this test actually holds, stated because the closing record once claimed more**

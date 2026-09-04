@@ -437,7 +437,7 @@ struct LocalStorageSecurityTests {
     /// deletions this Mac owes the gateway.
     ///
     /// **The count moved four times and no longer lives in this test's name** (SONNY-209). Row E's
-    /// plan details landed first, at `ebd6c1d`, taking it to ten; row J's approved apps rebased on
+    /// plan details landed first, at `ef0cf7c`, taking it to ten; row J's approved apps rebased on
     /// top of that and took it to eleven; row 13's output locations took it to twelve, and row 13's
     /// unfinished runs (SONNY-210) to thirteen, and SONNY-333's pending server deletions to
     /// fourteen. Each of the first three moves renamed this test, and

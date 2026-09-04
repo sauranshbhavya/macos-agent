@@ -50,7 +50,7 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # decides which names the gateway reads, and nothing else does: a name here it does not read is
 # forwarded to nothing, and a name it reads that is missing here is a credential this one command
 # cannot deliver. The schema's whole set is
-# `grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort` -> eleven names at f65e72e. Of those,
+# `grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort` -> eleven names at 6b72909. Of those,
 # SONNY_ENV and LOG_LEVEL are set explicitly below, PORT/HOST/SONNY_BUILD_ID are the container's own
 # and injected at build time, and TRUSTED_PROXIES is correct empty with no proxy in front. The five
 # that remain are these.
@@ -111,7 +111,7 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # `TRUSTED_PROXIES` is correct empty with no proxy in front and actively wrong inherited from a
 # shell. `VISION_API_KEY` is absent for its own reason, above.
 #
-# **The paragraph stamped at `f65e72e` says "eleven names ... the five that remain are these", and
+# **The paragraph stamped at `6b72909` says "eleven names ... the five that remain are these", and
 # both halves are that tree's rather than this one's.** Re-measured on the working tree: the schema
 # holds **26** names (`grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort | wc -l` -> 26),
 # `providerDataPolicies` reads a further **10** off the environment that the schema never sees, this
@@ -126,7 +126,7 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # **What that does not mean, stated so nobody reads the sentence above as wider than it is:** the
 # running container holds these values in its environment, because that is what forwarding them is,
 # so `docker inspect sonny-gateway-local` prints them and so does `printenv` inside it -- measured,
-# at `f65e72e` plus this change. That is the same exposure the host's own environment configuration
+# at `6b72909` plus this change. That is the same exposure the host's own environment configuration
 # has on staging and production (`README.md`, "Deploying"), and it is the exposure a credentialed
 # container is *for*. What this script guarantees is narrower and is the part it controls: nothing
 # it reads, logs or leaves behind on the Mac carries a value.
@@ -333,7 +333,7 @@ collect_passthrough() {
 # SONNY-307 it was not** -- which is the whole reason this probe exists rather than a sentence. As
 # SONNY-306 left it, `src/server.ts` called `buildApp(config)` with no `auth` argument and no
 # concrete `AuthProvider` adapter existed, so no process this repository shipped mounted an auth
-# route whatever its environment held: measured at `f65e72e` with all five names then forwarded
+# route whatever its environment held: measured at `6b72909` with all five names then forwarded
 # present inside the container, still `404 resource.not_found`. SONNY-307 built the adapter
 # (`src/auth/supabase.ts`) and the wiring (`src/auth/deps.ts`), and this probe flipped to the mounted
 # branch on its own, with no edit to the function below -- which is what "probed rather than stated"

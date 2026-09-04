@@ -17,7 +17,7 @@ moved there from a personal account on 2026-08-26, after PR #123, when the found
 took it over. A merge subject records the namespace that was current when the PR merged, not the one
 current now, so all 116 on `main` today still read `from sauranshbhardwaj/...`
 (`git log --first-parent --merges --format='%s' main | grep -c 'from sauranshbhardwaj/'` → 116 at
-`781fa4c`) — §8's log excerpt among them. None of those is stale, and none is anyone's to rewrite.
+`66c0f84`) — §8's log excerpt among them. None of those is stale, and none is anyone's to rewrite.
 
 The Plane project is [Sonny](https://app.plane.so/sonny/projects/c61e4035-d3a0-4089-a25a-1fb4f0aa813e/issues/).
 API behavior is documented in the [Plane API reference](https://developers.plane.so/api-reference/introduction).
@@ -287,7 +287,7 @@ something up.)
     `Sources/` — a test the merged range added changes the count without touching a source
     file, and a target the manifest gained changes what runs at all;
   - a **`scripts/warnings` count** depends on `Sources/` **and** `Tests/`, because the
-    script builds with `--build-tests` (`git grep -n 'swift build --build-tests' def8c3a --
+    script builds with `--build-tests` (`git grep -n 'swift build --build-tests' 2f36250 --
     scripts/warnings` → the invocation at `:545` and the line its own report prints at
     `:604`) and the debug build covers the test targets — which is the reason `--help` gives
     for the tool being debug-only;
@@ -469,7 +469,7 @@ owed by exactly the diffs that can break it — every branch writing an entry, a
 It checks three things: that the entries are in `main`'s first-parent merge order within each
 of the file's two eras, that no entry names a branch that never merged, and that every heading
 has exactly one entry under it. That last arm is not about ordering at all and is the reason
-the tool exists rather than a rule in prose: at `85bdccb` the file held a heading with no entry
+the tool exists rather than a rule in prose: at `711c92f` the file held a heading with no entry
 beneath it and a second heading glued to the end of the previous entry's last line by a lost
 newline, so no line-anchored search could see it — and the entry's own self-verifying `awk`
 command, pointed at that invisible heading, had been answering a number nobody read for two
@@ -502,7 +502,7 @@ names — a durable architectural decision, a pitfall discovered, or a correctio
 the first two are that sentence's own words, the third is what #122's and #123's entries are —
 and a bookkeeping branch that records none of that writes no entry at all. The prefix does not
 decide it: `docs/` is no exemption, and eleven `docs/` branches have entries
-(`grep -n '^### Branch: docs/' docs/sonny-v1-implementation-changelog.md`, at `bb7ce39`). Nor
+(`grep -n '^### Branch: docs/' docs/sonny-v1-implementation-changelog.md`, at `310f893`). Nor
 does the template's `Architectural decisions / pitfalls discovered` field: its "write none if
 true" governs a field inside an entry already owed, and does not make one owed.
 
@@ -514,7 +514,7 @@ on checklist rows — recorded nothing of that kind and rightly wrote none. **#1
 line actually runs, and it is the reason this paragraph names branches rather than prefixes: it
 was mostly process wording, this file's "Who does what" rewritten for two founders, but it also
 added `CLAUDE.md`'s gotcha about `git grep`'s ERE engine not honouring `\b`, a pitfall its own
-work turned up (`git diff b23f448^1 b23f448 -- CLAUDE.md` prints all three edits) — so it owed an
+work turned up (`git diff 30a6193^1 30a6193 -- CLAUDE.md` prints all three edits) — so it owed an
 entry and wrote none. **No back-entry is written for #124, #125 or #126** (founder decision
 2026-08-26, SONNY-298). #124's gap is recorded here rather than papered over, and the gotcha
 itself was never lost: it is in `CLAUDE.md`, which is where a session reads it.
@@ -549,12 +549,12 @@ than validating:
   (Package.swift declares five targets, every one of them with a `path:`, and all five name
   `Sources/…` or `Tests/…` —
   `grep -cE '\.(target|testTarget|executableTarget)\(' Package.swift` → 5 and
-  `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `2564273` — so
+  `grep -cE 'path: "(Sources|Tests)/' Package.swift` → 5, both at `ecfe3ae` — so
   nothing under `server/` reaches a Swift target. **This said *four* until 2026-08-27, and it
-  was true when it was written**: the commit that wrote it, `505ef8a`, has four
-  (`git show 505ef8a:Package.swift | grep -cE '\.(target|testTarget|executableTarget)\('` → 4),
+  was true when it was written**: the commit that wrote it, `2c76a2f`, has four
+  (`git show 2c76a2f:Package.swift | grep -cE '\.(target|testTarget|executableTarget)\('` → 4),
   and the fifth arrived two and a half minutes later in a parallel lane — SONNY-172's
-  `MacAgentTestSupport`, `a0f249e`, which `git merge-base --is-ancestor a0f249e 505ef8a`
+  `MacAgentTestSupport`, `11bfaf6`, which `git merge-base --is-ancestor 11bfaf6 2c76a2f`
   rejects with exit 1 because neither session could see the other. A count taken about a file
   another lane is editing is stale before the branch merges, and nothing re-reads it;
   SONNY-308), and rerunning them proves nothing about it — rerun the
@@ -656,20 +656,20 @@ incidents reads differently from one derived from taste, and this one was exempt
 - **PR #65** (`fix/docx-conversion-defects`, SONNY-76 and SONNY-79). The cycle-3 re-check found
   **F5**: the same-source skip introduced by the **F1** fix was keyed on the source alone, so a
   later unit wanting the same document in a *different output folder* was silently suppressed and
-  the user told a PDF already existed where none did. Granted, fixed at `4268797` (code
-  `18c38ab`) by keying on the document-and-folder pair, and the granted re-check at that head
+  the user told a PDF already existed where none did. Granted, fixed at `590568d` (code
+  `d05f1fd`) by keying on the document-and-folder pair, and the granted re-check at that head
   returned fixed with the folder-key reasoning surviving attack, searching for nothing outside F5.
 - **PR #67** (`feature/task-history-controls`). The cycle-3 re-check found **two defects inside
   F4's own fix**: clicking the finished-task notification opened nothing unless Command Center
   already sat on the Tasks page, and it left the request stranded so navigating there afterwards
   did not open it either. Granted, fixed, and the narrow re-check at `6596a42` — a pre-rebase head
-  the ancestry check now rejects; the branch merged as `8942195` — found three things wrong in the
+  the ancestry check now rejects; the branch merged as `9ea09d5` — found three things wrong in the
   record or the test rather than in the code, all fixed before merge.
 - **PR #70** (`chore/sonny-75-mutation-harness`, SONNY-75). The cycle-3 re-check found **G1**: the
   selftest's fault-injection seam sat before any mutant was applied, so the only death it could
   inject arrived while nothing was mutated and the mid-mutant restore property could never fail —
   in the branch whose entire thesis is that an unwatched guard is not a guard. Granted, scoped to
-  G1 and G2, fixed at `6ea303b`, and the cycle-4 re-check verified it by running both orderings on
+  G1 and G2, fixed at `aa01aa0`, and the cycle-4 re-check verified it by running both orderings on
   copies: shipped, exit 0 with 58 passes; reversed, exit 1 with 5 failures, three in the
   internal-error group and two in the byte-for-byte group.
 
@@ -750,10 +750,10 @@ the waste this removes. (Founder directive 2026-08-21, given by both founders an
 SONNY-170. Written here 2026-08-29 by SONNY-340; for the eight days between, its only written
 homes were that one ticket comment and a single changelog `Reviewed by:` line, which is to say
 a session could not find it.
-`git grep -n -i 'right-size' def8c3a -- WORKFLOW.md CLAUDE.md` exits 1 with nothing on
+`git grep -n -i 'right-size' 2f36250 -- WORKFLOW.md CLAUDE.md` exits 1 with nothing on
 stdout and nothing on stderr, and the positive control proving that pattern and those paths
-can find anything at all is `git grep -c -i 'review' def8c3a -- WORKFLOW.md` →
-`def8c3a:WORKFLOW.md:45`.)
+can find anything at all is `git grep -c -i 'review' 2f36250 -- WORKFLOW.md` →
+`2f36250:WORKFLOW.md:45`.)
 
 - **What earns the deep multi-cycle treatment is substantive or safety-critical work.** The
   founder's own three examples on 2026-08-21 were the approval/risk engine, the account and
@@ -817,7 +817,7 @@ tickets' final states.
 carried merge commits through PR #94 and then **sixteen consecutive squashes**, after which #110
 and #112 were merged with merge commits again. (The squashes themselves are no longer readable —
 the pre-rewrite head they sat on went with the archive namespace, below — but their order is,
-because the rewrite kept it: `git log --first-parent --merges --format='%h %s' 98b4668..20a180e`
+because the rewrite kept it: `git log --first-parent --merges --format='%h %s' 7770a48..47454aa`
 prints the eighteen replacements in the order the originals merged.) Neither this file nor `CLAUDE.md`
 stated a strategy, so no session could have known which was intended — which is why it is
 stated here rather than left to be inferred from `git log`, the way it was found.
@@ -847,15 +847,15 @@ this correctly, here and in the changelog's entry order.
   thousand-line squash.
 - **A squash orphans every SHA this repository cites.** `CLAUDE.md`'s *Claims and evidence*
   rule requires every measurement to carry the commit it was taken at, and the changelog alone
-  carries **500** distinct SHA-shaped strings at `2ceb530`
-  (`git show 2ceb530:docs/sonny-v1-implementation-changelog.md | grep -o -E '\b[0-9a-f]{7,40}\b' | sort -u | wc -l`
+  carries **500** distinct SHA-shaped strings at `50c91f6`
+  (`git show 50c91f6:docs/sonny-v1-implementation-changelog.md | grep -o -E '\b[0-9a-f]{7,40}\b' | sort -u | wc -l`
   → 500, and the same answer from perl and from python's `re`; that pattern also catches the odd tree
   hash, so read it as an upper bound). **This said 501 until 2026-08-26 (SONNY-290), and the extra one
   is worth keeping rather than quietly dropping**, because it is this section's own subject matter in
   miniature. The figure was measured on a working tree, not on the commit it was stamped with: the same
-  command over the file as `4d4bfb6` committed it — the commit that *wrote this bullet*, six minutes
-  after `2ceb530` and directly on top of it — answers 501, and the one token separating the two sets is
-  the string `2ceb530` itself, which `4d4bfb6` added to the changelog's verification paragraph
+  command over the file as `a1520d0` committed it — the commit that *wrote this bullet*, six minutes
+  after `50c91f6` and directly on top of it — answers 501, and the one token separating the two sets is
+  the string `50c91f6` itself, which `a1520d0` added to the changelog's verification paragraph
   (`comm -13` over the two sorted sets prints that token and nothing else). So both numbers were honest
   readings of a real file, and the stamp named the tree that had one fewer.
   A squash makes each one non-ancestral the moment it merges — and `git show` still prints a
@@ -872,9 +872,9 @@ judged smaller than losing the granularity.
 
 `main` was rewritten so the previously-squashed pull requests appear as merge commits with
 their own commits intact, matching the PR merges that already did — **89** of them
-(`git rev-list --first-parent --merges --count 98b4668`). **Two counts of that are both right
-and differ by one**: 89 is PR merges on the mainline, and `git rev-list --merges --count 98b4668`
-answers **90**, because one reachable merge is not a PR merge at all — `008c8b0`, a
+(`git rev-list --first-parent --merges --count 7770a48`). **Two counts of that are both right
+and differ by one**: 89 is PR merges on the mainline, and `git rev-list --merges --count 7770a48`
+answers **90**, because one reachable merge is not a PR merge at all — `1e05415`, a
 `Merge remote-tracking branch 'origin/main' into feature/ui-ux-wireframe-fidelity` made inside a
 branch. Say which of the two a figure is before comparing it with another. **No code changed** — the
 file tree was verified identical at all eighteen steps and again at the end. Eighteen commits of
@@ -888,15 +888,15 @@ ref either, and this table is the record of them. Old commit on the left, the me
 replaced it on the right:
 
 ```
-#96   c4d9680 -> 385de7a      #105  961b9c2 -> 98c50c8
-#97   b278209 -> ff17b71      #106  30dfc44 -> f3162c6
-#98   9bf36d1 -> 7255551      #107  cf3fa76 -> 971713e
-#99   8917a76 -> f755622      #108  31c2aed -> effbb43
-#100  2b14312 -> 76db3c3      #109  896035d -> dcca54d
-#101  187e46f -> 0c1e8ff      #110  ee84994 -> 56c8cf7
-#102  3036b34 -> 5f32f19      #111  2f22076 -> 70c024e
-#103  744eccf -> eb40294      #112  dc21d89 -> 20a180e
-#104  fb8420c -> e7732a9      #87   2c5804a -> 6cfd3ab
+#96   c4d9680 -> e421242      #105  961b9c2 -> 94afca1
+#97   b278209 -> dac12b9      #106  30dfc44 -> e09db2d
+#98   9bf36d1 -> f01d21a      #107  cf3fa76 -> a03bbe1
+#99   8917a76 -> 8f25e78      #108  31c2aed -> 86b7ccb
+#100  2b14312 -> 43bfc06      #109  896035d -> 725be8d
+#101  187e46f -> 85dff75      #110  ee84994 -> a6f9974
+#102  3036b34 -> 8fa6b4c      #111  2f22076 -> b0c78ea
+#103  744eccf -> 505471c      #112  dc21d89 -> 47454aa
+#104  fb8420c -> 205500d      #87   2c5804a -> 45fb7f6
 ```
 
 **Each pair holds the same tree**, so repointing a citation renames the tree rather than
@@ -908,11 +908,88 @@ does: a rebase replays a branch onto a moved base, so its new commit holds diffe
 and a figure measured at the old one has to be **re-measured, never translated**. Renaming
 across the rewrite is safe for exactly the reason renaming across a rebase is not.
 
+### The 2026-09-03 rewrite: removing Claude attributions
+
+`main` was rewritten a second time, to remove every Claude attribution from its commit messages
+(SONNY-407; the mechanical refusal that stops new ones is SONNY-406, merged as PR #195 before this
+ran). **Ten commits carried one** — eight from PR #192, each with both a co-author trailer and a
+session line holding a `claude.ai` session URL, and two from 2026-07-12 with a co-author trailer
+alone. The session URLs are why this could not wait: they put a session address into the permanent
+public record.
+
+**Scope was a founder decision made against measured cost**, 2026-09-03. The cheap option — rewriting
+only the eight recent commits — was 9 commits and 6 orphaned citations. The option taken reaches the
+two from 2026-07-12 as well, and at the head it ran against that is **1567 commits rewritten**
+(`git rev-list f595efe~1..d9c2398 --count`). The alternative of doing the cheap half now and the rest
+later was offered and refused, because range B contains range A entirely and doing both would have
+produced two maps where one is correct.
+
+**No code changed, and unlike 2026-08-24 that is true by construction rather than by verification.**
+The rewriter walks the range oldest-first and rebuilds each commit with `git commit-tree`, reusing
+the **original tree object**; a commit points at a tree, and rewriting a message changes the commit's
+hash and never the tree's. It was verified anyway, because a property true by construction is one
+nobody has checked. `scripts/verify-attribution-rewrite` is that check and it is committed rather
+than described — 15 assertions, exit 0, about a second, two of them controls that fire.
+
+**`git filter-repo` is the obvious tool and it is the wrong one here.** It strips the signature from
+every commit it writes, including commits whose message it does not change, and this repository signs
+by default (`commit.gpgsign=true`, `gpg.format=ssh`; 995 of `main`'s commits carried a signature at
+`f3d444a`). Run against this history it removed the signature on `c6104c8` — 2026-06-25, **below** the
+authorised range — which changed that commit and cascaded to every descendant, widening the rewrite
+from the authorised count to 85 more commits than anyone had approved. Nothing in its output says so.
+
+**Signatures were preserved per commit, not blanket-applied.** Signing was switched on partway through
+this repository's life, so a blanket `-S` would have put the founder's key on hundreds of attestations
+nobody ever made. The rewriter signs where the original was signed and passes `--no-gpg-sign` where it
+was not; the verifier asserts both directions.
+
+**What was proved, at `d9c2398` -> `2d03b0d`:** the map covers exactly the authorised range, 1567
+against 1567; no commit maps to itself; all **75** commits below the range survive untouched with no
+signature lost; **every one of the 1567 pairs holds the same tree**, with a control showing the same
+check fails on a deliberately mismatched pair; the new head's tree equals the old head's; no
+attribution line survives, with a control finding 18 of them before the rewrite; no commit gained a
+signature it never had and none lost one; a message with no attribution is byte-for-byte unchanged;
+every edited message lost exactly its attribution lines; **exactly ten** messages were edited; and
+author and committer identity and both dates are unchanged across all 1567.
+
+**Each pair holds the same tree, so repointing a citation renames the tree rather than restating the
+measurement** — the same rule as 2026-08-24, and the opposite of a rebase, which replays onto a moved
+base so its figures must be re-measured rather than translated. **3046 citation tokens on 1379 lines
+across 79 files** were repointed at the abbreviation length they were written with
+(`scripts/repoint-citations`, and afterwards zero tokens resolve to a rewritten old commit while 3046
+resolve to a new one, which is the control). Every figure beside a repointed citation still describes
+the tree it names.
+
+**The full old-to-new map is `docs/sonny-attribution-rewrite-map-2026-09-03.tsv`**, 1567 pairs, one
+`<old>\t<new>` per line. It is a file rather than a table because 1567 rows is not prose, and it is
+committed because the left column resolves nowhere once the objects are gone — the same reason the
+2026-08-24 table above is kept. The ten commits the rewrite exists for:
+
+```
+f595efe -> 9f14eca   2026-07-12      fad0c82 -> 371f7af   2026-09-03
+9fafa74 -> 1f0e306   2026-07-12      60d1e5d -> dc4248d   2026-09-03
+848870c -> 8ff58f7   2026-09-03      d9d7a12 -> 3b8c2b9   2026-09-03
+138ffa4 -> e34ba3f   2026-09-03      5344f83 -> 77accae   2026-09-03
+1366dfd -> ca7379e   2026-09-03      main:  d9c2398 -> 2d03b0d
+3f3f872 -> fd346b1   2026-09-03
+```
+
+**Sequencing was a constraint, not a preference.** The push waited until nothing was live: every open
+pull request merged, every review worktree torn down, no mutation battery running, and the branch
+carrying SONNY-406's guard merged **first**, on the pre-rewrite `main`, because that branch was rooted
+at a commit this rewrite destroys — a record of a rewrite, left unmerged on a branch the rewrite
+orphans, is exactly the failure this section exists to stop other people meeting.
+
+**One thing is different from 2026-08-24 and worth stating.** That rewrite replaced squashes with
+merge commits and changed no message; this one changes ten messages, so the *content* of ten commits
+genuinely differs. Everything else about the two is the same: same trees, repointed citations, a map
+kept because the old SHAs resolve nowhere afterwards.
+
 ### What the archive held, and why it is gone
 
 Until 2026-08-24 the commits the rewrite replaced, and the original copies of the branch commits
 it re-parented — **190** of them, meaning non-merge commits inside today's eighteen-entry range
-(`git rev-list --no-merges --count 98b4668..20a180e`) — were published under a non-default
+(`git rev-list --no-merges --count 7770a48..47454aa`) — were published under a non-default
 namespace, `refs/archive/*`: `pre-rewrite-main`, the old head of `main` at `dc21d89`, and
 seventeen `pr-<N>` refs holding the original head of each squashed branch — #87, and #95 through
 #109 and #111 (#95 closed *unmerged* by founder decision and was kept for its analysis; #110 and
@@ -926,7 +1003,7 @@ is worth naming rather than quoting.
 **The namespace was deleted entirely, by founder decision on 2026-08-24 (SONNY-274), rather than
 made clone-reachable.** The question had been whether to publish tags so a fresh clone could
 resolve pre-rewrite SHAs; measuring what actually needed them changed the answer. Of every
-hex-shaped token in the tracked files at `a10ff01`, 529 name a commit, and **161 of those name a
+hex-shaped token in the tracked files at `efa2a4d`, 529 name a commit, and **161 of those name a
 commit that no published ref reaches — 153 of them in the changelog** — and not one of the 161 is
 a pre-rewrite `main` commit. They are branch-only commits that were never on `main`: measurement
 heads that a later rebase on the same branch replaced. A fresh clone never resolved them, before
@@ -943,7 +1020,7 @@ answer now, not a regression.)
 Nothing the archive uniquely held is lost, and that was verified by patch identity rather than
 reasoned about. Of the 161, **124** have patch-identical content on `main` (`git show --format=
 <sha> | git patch-id --stable`, matched against the same over `git rev-list --no-merges
-origin/main`, at `a10ff01`); the other **37** are two kinds, neither of them lost work —
+origin/main`, at `efa2a4d`); the other **37** are two kinds, neither of them lost work —
 superseded intermediate versions (a branch writes an entry, a later commit on the same branch
 moves or restamps it, so the intermediate patch never lands while the final one does) and
 deliberately unmerged work (the SONNY-69/80 CUA experiment, and PR #95's chip-row branch), all
@@ -954,8 +1031,8 @@ before the ref went, and is the record that survives it:
 
 ```
 pre-rewrite (dc21d89) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
-rewritten   (20a180e) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
-git diff --stat dc21d89 20a180e  ->  empty, exit 0
+rewritten   (47454aa) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
+git diff --stat dc21d89 47454aa  ->  empty, exit 0
 commits: 734 -> 893
 ```
 
@@ -986,7 +1063,7 @@ and were never going to be. That is the convention working, not a gap in the arc
 this in full, beside the SHA-stamping rule it completes; it is repeated here because the
 mechanism is a property of merge commits, which is what this section is about. A branch head
 that merges is preserved on `main` forever as the merge commit's second parent — #113's
-`b5d80d1` and #114's `e02c4a6` both pass the ancestry check today — and so is every commit
+`341a787` and #114's `e7ac803` both pass the ancestry check today — and so is every commit
 beneath it. A head a later rebase replaced is preserved nowhere: #113's `064f387`, #112's
 `714606f` and #110's `9fe7ace` are each orphaned exactly that way, and they are how the 161
 accumulated. So when a branch's head moves after its entry is written — a fix round, a rebase
@@ -998,61 +1075,61 @@ review (step 7, "Step 0"), and a rebase after that review re-runs it.
 
 ### The squash of 2026-08-25: PR #118, PR #120, PR #121
 
-`main` between #116's merge (`140829b`) and #119's (`bb7857c`) does not read as one merge per
+`main` between #116's merge (`dd4ebae`) and #119's (`5ea62ed`) does not read as one merge per
 pull request, and the reason is recorded here because the three GitHub pages it would otherwise
 be reconstructed from each hold a third of it:
 
 ```
-git log --first-parent --format='%h  tree %t  %s' 140829b..c6bc2a2      (at bb7857c)
+git log --first-parent --format='%h  tree %t  %s' dd4ebae..fd00ad8      (at 5ea62ed)
 
-c6bc2a2  tree c503515  Merge pull request #121 from sauranshbhardwaj/fix/clarified-command-reaches-the-planner-whole
-48f5fb7  tree 9686035  Revert "SONNY-281 — a clarified command reaches the resolver that asked, and …" (#120)
-dca98e1  tree c503515  SONNY-281 — a clarified command reaches the resolver that asked, and a sum may end with = (#118)
+fd00ad8  tree c503515  Merge pull request #121 from sauranshbhardwaj/fix/clarified-command-reaches-the-planner-whole
+ab38c83  tree 9686035  Revert "SONNY-281 — a clarified command reaches the resolver that asked, and …" (#120)
+ca1666e  tree c503515  SONNY-281 — a clarified command reaches the resolver that asked, and a sum may end with = (#118)
 ```
 
 **What happened, in the order it happened** (times are the commits' own, −04:00; GitHub's
 `mergedAt` shows the same instants in UTC, dated 2026-08-26). PR #118 — SONNY-281, head
-`496fa0f`, ten commits above `140829b` (`git rev-list --count 140829b..496fa0f` → 10) — was
-merged at 23:05:33 with **Squash and merge**. That produced `dca98e1`: one commit with one
+`50c03df`, ten commits above `dd4ebae` (`git rev-list --count dd4ebae..50c03df` → 10) — was
+merged at 23:05:33 with **Squash and merge**. That produced `ca1666e`: one commit with one
 parent, and the ten commits reachable from nothing on `main`. **GitHub records #118 as Merged
-with `dca98e1` as its merge commit, and will keep saying so** — the squash is what that pull
+with `ca1666e` as its merge commit, and will keep saying so** — the squash is what that pull
 request merged, and a revert does not reopen one. The squash was reverted 47 seconds later
 through **PR #120**, GitHub's own revert button; its one commit, `7ff2024`, was merged as
-`48f5fb7` by the same squash control (one parent, and the squash title's `(#120)` suffix), which
+`ab38c83` by the same squash control (one parent, and the squash title's `(#120)` suffix), which
 for a single-commit revert changes nothing. The branch was then opened again as **PR #121** — the
-same head `496fa0f`, no new work, no rebase — and merged at 23:13:04 with a merge commit,
-`c6bc2a2`, whose second parent is `496fa0f`. The ten commits are on `main` intact, and every SHA
+same head `50c03df`, no new work, no rebase — and merged at 23:13:04 with a merge commit,
+`fd00ad8`, whose second parent is `50c03df`. The ten commits are on `main` intact, and every SHA
 SONNY-281's entry stamps passes the ancestry check.
 
-**What was verified before #121 was opened, re-run for this record at `bb7857c`.** The revert
-was complete: `git rev-parse 48f5fb7^{tree} 140829b^{tree}` prints
-`9686035726068d35736bae300ed8cd97a3f7998f` twice, and `git diff --stat 48f5fb7 140829b` prints
-nothing. The re-merge was proved clean before it ran: `git merge-tree --write-tree 48f5fb7
-496fa0f` exits 0 with no conflict section and prints `c5035151a546b85b8a8f42992b77b6783cc515da`,
-which is `git rev-parse 496fa0f^{tree}` — the merge could produce exactly the branch's content,
-and did: `git rev-parse c6bc2a2^{tree}` is the same hash. (#121's description writes the command
-as `git merge-tree --write-tree origin/main 496fa0f`; `origin/main` was `48f5fb7` when it ran.)
-One fact the checks imply is worth stating: `git rev-parse dca98e1^{tree}` is also `c503515…`.
+**What was verified before #121 was opened, re-run for this record at `5ea62ed`.** The revert
+was complete: `git rev-parse ab38c83^{tree} dd4ebae^{tree}` prints
+`9686035726068d35736bae300ed8cd97a3f7998f` twice, and `git diff --stat ab38c83 dd4ebae` prints
+nothing. The re-merge was proved clean before it ran: `git merge-tree --write-tree ab38c83
+50c03df` exits 0 with no conflict section and prints `c5035151a546b85b8a8f42992b77b6783cc515da`,
+which is `git rev-parse 50c03df^{tree}` — the merge could produce exactly the branch's content,
+and did: `git rev-parse fd00ad8^{tree}` is the same hash. (#121's description writes the command
+as `git merge-tree --write-tree origin/main 50c03df`; `origin/main` was `ab38c83` when it ran.)
+One fact the checks imply is worth stating: `git rev-parse ca1666e^{tree}` is also `c503515…`.
 The squash lost no content. What it lost was the ten commits, and with them every SHA the entry
 had stamped — the second reason above, arriving exactly as written.
 
 **What it cost, and what was left alone.** Two commits on the mainline that are not merges —
-`git rev-list --first-parent --no-merges --count 20a180e..bb7857c` → 2, and they are `dca98e1`
-and `48f5fb7`, the only such commits since the rewrite. `git log --first-parent --merges` skips
+`git rev-list --first-parent --no-merges --count 47454aa..5ea62ed` → 2, and they are `ca1666e`
+and `ab38c83`, the only such commits since the rewrite. `git log --first-parent --merges` skips
 both, so a PR-merge count stays one per ticket, and `git bisect --first-parent` steps through
 them as a pair that together change nothing. `main` was not rewritten to remove them: a rewrite
 is what this section records doing once, for sixteen squashes whose replacements needed a
 repointing pass of their own (SONNY-271), and two commits that orphan nothing are not that case.
-Nothing needed repointing, because no figure is stamped at `dca98e1` —
-`git grep -n 'dca98e1' -- docs CLAUDE.md WORKFLOW.md` finds PR #119's entry, SONNY-281's Status
+Nothing needed repointing, because no figure is stamped at `ca1666e` —
+`git grep -n 'ca1666e' -- docs CLAUDE.md WORKFLOW.md` finds PR #119's entry, SONNY-281's Status
 line and this record, each naming it as history. And the three commits GitHub's control made —
-`dca98e1`, `48f5fb7`, `c6bc2a2` — carry the author email
+`ca1666e`, `ab38c83`, `fd00ad8` — carry the author email
 `66620598+sauranshbhardwaj@users.noreply.github.com` rather than `sbhardwaj1418@gmail.com`; the
 founder decided on 2026-08-26 to leave them as they are. That address is not a mark of the
 squash, and those three are not the population: it is what GitHub's web control stamps on every
-commit it makes — 96 on `main` at `bb7857c` (`git log --format='%ae' bb7857c | grep -c
+commit it makes — 96 on `main` at `5ea62ed` (`git log --format='%ae' 5ea62ed | grep -c
 'users.noreply.github.com'` → 96, every one with `GitHub <noreply@github.com>` as committer,
-#119's own `bb7857c` among them) — while every commit made from the terminal carries the
+#119's own `5ea62ed` among them) — while every commit made from the terminal carries the
 founder's address, the rewrite's eighteen merges included.
 
 **The rule for the person at the control**, since the decision at the top of this section says

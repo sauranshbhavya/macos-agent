@@ -296,21 +296,21 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
         /// assessment: no `defaultTier` anywhere can reach tier 3, while all eleven
         /// (**this phrase has two copies — the other is on `requirement(for:context:)` below, and
-        /// row I corrected only this one, leaving them disagreeing at `6c3e4ad`; PR #50 review, F6.
+        /// row I corrected only this one, leaving them disagreeing at `0e892c0`; PR #50 review, F6.
         /// Any future re-count has to move both**)
         /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
-        /// `04ce7e4`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
-        /// session's envelope escalation and its per-action one; re-swept at `7f66300`) and each
+        /// `fcccab5`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
+        /// session's envelope escalation and its per-action one; re-swept at `618350d`) and each
         /// assessment forwards the escalations of any plan nested inside it — so a tier-3
         /// assessment always carries at least one reason, and a non-empty reason set always means
         /// tier 3.
         ///
-        /// **Why no `defaultTier` reaches tier 3.** Swept at `04ce7e4` — and first at `042f74e`,
+        /// **Why no `defaultTier` reaches tier 3.** Swept at `fcccab5` — and first at `042f74e`,
         /// before this branch rebased onto row F, which edited several of the files counted here and
         /// so required the whole sweep re-run rather than carried — over every `defaultRiskTier`
         /// occurrence and every `CapabilityRiskAssessment` construction site in `Sources/`, rather
         /// than over the adapters that looked relevant; every figure here is the re-measured one.
-        /// Re-swept again at `7f66300`, when row I's adapter added the twenty-sixth literal.
+        /// Re-swept again at `618350d`, when row I's adapter added the twenty-sixth literal.
         /// All 26 literals are tier 2 or below (7/8/11 across tiers 0/1/2), and the six
         /// `descriptor.defaultRiskTier` forwards each resolve to a `static let` in
         /// `AppWebsiteActionDescriptors` — one of those same literals. **Three**

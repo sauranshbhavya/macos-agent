@@ -123,7 +123,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return .trace
         case .clipboardHistorySettings:
             // The user's own preference — whether clipboard history runs at all, and whether its
-            // notice was dismissed. Enumerated at 6f89a5d: the only two `save(_:)` call sites are
+            // notice was dismissed. Enumerated at 4a7d996: the only two `save(_:)` call sites are
             // `applyClipboardHistoryNoticeChoice` (Sources/MacAgent/AgentViewModel.swift:1495), a
             // user preference action, and the store's own legacy-plaintext re-encrypt
             // (Sources/MacAgentCore/ClipboardHistoryService.swift:171). No task path reaches it.

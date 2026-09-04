@@ -32,7 +32,7 @@ import { up } from "../../src/db/migrate.js";
  * "about 18 s to about 57 s" for the first file and warned that ten of them would push the suite
  * into SONNY-354's timeouts. Measured here instead, three consecutive rebuilds against this
  * repository's 16 migrations on an idle local Postgres in Docker (a throwaway probe calling the two
- * statements and then `up`, at `f55e4ed`): **drop 51/28/21 ms, up 115/100/89 ms** — about 130 ms a
+ * statements and then `up`, at `65a7fc9`): **drop 51/28/21 ms, up 115/100/89 ms** — about 130 ms a
  * rebuild, against a `no-op up` of 3 ms. Ten of those is a little over a second on a suite that runs
  * in 22 s. The 57 s figure is described on the ticket as uncontrolled and does not reproduce:
  * `auth.db.test.ts`, the file that already rebuilds, runs alone in 4.52 s.

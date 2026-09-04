@@ -1,7 +1,7 @@
 # Sonny backend API contract, v1
 
 The agreement between the Mac app and the backend. Written for SONNY-124, against `main` at
-`6f89a5d`. Every file:line and every measurement below was taken at that SHA and re-verified there;
+`4a7d996`. Every file:line and every measurement below was taken at that SHA and re-verified there;
 the tree will move, so re-check before relying on one.
 
 **Which half of this document you are reading matters, and it is stated here rather than left to be
@@ -11,23 +11,23 @@ inferred** (added 2026-08-26, SONNY-288). Three kinds of text live in it and the
   values, the versioning rule, idempotency, retention, the metering event and the timeout table.
   These bind whatever the tree looks like, and every change to one is a dated row in section 14.
 - **A dated snapshot of the client.** Every `file:line` and every measured figure outside section 14
-  was read at `6f89a5d` **unless it stamps a SHA of its own**, and says nothing about the tree since.
+  was read at `4a7d996` **unless it stamps a SHA of its own**, and says nothing about the tree since.
   A citation that has moved is a stale reading, not a changed contract. **Five SHAs were cited
-  outside section 14 at `f8f5c75`** (`git show f8f5c75:docs/sonny-backend-api-contract.md | sed -n
+  outside section 14 at `554d85a`** (`git show 554d85a:docs/sonny-backend-api-contract.md | sed -n
   '1,/^## 14\./p' | grep -ohE '\b[0-9a-f]{7,40}\b' | sort -u | wc -l` → 5; `grep -P` answers the same,
   and the pattern also catches the odd hex-shaped word, so read it as an upper bound), **and 10.2's
-  divergence record makes `f8f5c75` itself the sixth** — the same command without the `git show`,
+  divergence record makes `554d85a` itself the sixth** — the same command without the `git show`,
   over whatever tree you are reading, is what says how many there are now. Of the six, **exactly one
   is not on `main`**: `e260575`, in 6.1 and 6.4, a branch head a rebase replaced — which is why 6.1
-  pairs it with the post-rebase `b07bee8`. It still resolves, so `git show` on it proves nothing; the
+  pairs it with the post-rebase `692c904`. It still resolves, so `git show` on it proves nothing; the
   check that separates the two cases is `git merge-base --is-ancestor <sha> origin/main`, read with
-  nothing between it and `$?` (`for t in d3598a7 6f89a5d b07bee8 e260575 f65e72e f8f5c75; do git
+  nothing between it and `$?` (`for t in 728d1ea 4a7d996 692c904 e260575 6b72909 554d85a; do git
   merge-base --is-ancestor $t origin/main; echo "$t $?"; done` → `0`, `0`, `0`, `1`, `0`, `0`, run
   2026-08-27). **This sentence said four until 2026-08-27, and the miss is worth naming rather than
-  absorbing**: `f65e72e` had been added to 4.4 that morning by SONNY-130's own commit — section 14's
+  absorbing**: `6b72909` had been added to 4.4 that morning by SONNY-130's own commit — section 14's
   preamble names it — without this sentence or its loop moving with it, so the document's account of
   itself had stopped matching the document, which is the same class of omission section 14 was
-  back-filled for on the same day (SONNY-297). The sixth, `f8f5c75`, is not a miss; it is the stamp
+  back-filled for on the same day (SONNY-297). The sixth, `554d85a`, is not a miss; it is the stamp
   10.2's divergence record was added under. **This sentence broke its own count once while being
   written**, by naming that commit here rather than in section 14: a commit citation belongs to that
   section's kind and not to this one's, and running the command beside the number is what said so.
@@ -73,7 +73,7 @@ The founder's decision of 2026-08-16: **the boundary is anything that needs a pr
 not "model calls." Nine files in `Sources/` send an HTTP request. Six need a credential and move
 behind the backend. Three need none and stay local by decision.
 
-| Client type | Credential today | file:line at `6f89a5d` (key, endpoint, send) | Endpoint |
+| Client type | Credential today | file:line at `4a7d996` (key, endpoint, send) | Endpoint |
 |---|---|---|---|
 | `OpenAIPlanner` | `OPENAI_API_KEY` | `OpenAIPlanner.swift:41`, `:43`, `:68` | `POST /v1/plan` |
 | `CerebrasPlanner` | `CEREBRAS_API_KEY` | `CerebrasPlanner.swift:51`, `:53`, `:81` | `POST /v1/plan` |
@@ -98,14 +98,14 @@ tradeoff was named when the decision was made: their traffic keeps carrying the 
 to those hosts, where proxying would hide it. That is a privacy question rather than a billing one,
 and the decision is to leave them local.
 
-| Client type | Send sites at `6f89a5d` | Reaches |
+| Client type | Send sites at `4a7d996` | Reaches |
 |---|---|---|
 | `HackerNewsService` | `:46`, `:55` | `hacker-news.firebaseio.com` |
 | `MediaPlaybackService` | `:652` | `itunes.apple.com` |
 | `WebResearchService` | `:275`, `:309` | whatever page the command names, plus its `robots.txt` |
 
 **`AgentViewModel.swift` is not a network call site**, despite spec §16.5's migration note (spec line
-2153) naming it. Enumerated rather than asserted: at `6f89a5d` the file's only `URLSession`- or
+2153) naming it. Enumerated rather than asserted: at `4a7d996` the file's only `URLSession`- or
 `URLError`-adjacent mentions are a doc comment at `:778-779` and a `URLError(.cancelled)` comparison
 at `:784` — three lines, no request. It still changes in this row, for provider construction and
 error copy, and it gets no endpoint.
@@ -358,7 +358,7 @@ can change.
 line said it was SONNY-135's to set, which section 3.1 already contradicted by citing "the 30-second
 skew tolerance of §3.5". SONNY-127 supplied the value and SONNY-203 applies it to every verified
 access token: `export const EXPIRY_SKEW_TOLERANCE_SECONDS = 30;`
-(`grep -n 'EXPIRY_SKEW_TOLERANCE_SECONDS = ' server/src/auth/clock.ts` → `34:` at `d3598a7`). The
+(`grep -n 'EXPIRY_SKEW_TOLERANCE_SECONDS = ' server/src/auth/clock.ts` → `34:` at `728d1ea`). The
 mechanism was fixed here so SONNY-127 and SONNY-135 would use the same one, and they do.
 
 **This is not section 5.3's `skew_tolerance_seconds`.** That is a separate value carried inside the
@@ -380,11 +380,11 @@ conflating the two is how a set value gets read as an open question, which is wh
 differently is an account-existence oracle for anyone who finds it. Code lifetime and the
 per-address and per-source rate limits were SONNY-127's, **and it set them** (updated 2026-08-26,
 SONNY-288): a code lives 600 seconds, which is the `expires_in` above
-(`grep -n 'CODE_LIFETIME_SECONDS = ' server/src/auth/codes.ts` → `33:` at `d3598a7`), and the four
+(`grep -n 'CODE_LIFETIME_SECONDS = ' server/src/auth/codes.ts` → `33:` at `728d1ea`), and the four
 limits are 3 per address per 15 minutes and 10 per source per hour on this route, 5 per address per
 15 minutes and 30 per source per hour on `email/verify`
 (`grep -nE 'export const CODE_(REQUEST|VERIFY)_PER_(ADDRESS|SOURCE)' server/src/auth/ratelimit.ts`
-→ 4 lines, `36`, `37`, `50`, `79`, at `d3598a7`). An unlimited code endpoint would have been a free
+→ 4 lines, `36`, `37`, `50`, `79`, at `728d1ea`). An unlimited code endpoint would have been a free
 email-sending service for whoever found it.
 
 `POST /v1/auth/email/verify` — exchange a code for tokens.
@@ -493,7 +493,7 @@ returns `204`. The client clears its Keychain entry and touches nothing else (3.
 `GET /v1/health` — liveness and a build identifier, unauthenticated. Its shape was SONNY-126's, and
 that ticket closed on 2026-08-21 having built it: `{ "status", "version", "environment" }` with
 `Cache-Control: no-store` (updated 2026-08-26, SONNY-288;
-`grep -n 'app.get("/v1/health"' server/src/routes/health.ts` → `29:` at `d3598a7`). It is listed
+`grep -n 'app.get("/v1/health"' server/src/routes/health.ts` → `29:` at `728d1ea`). It is listed
 here only so nobody adds a second one.
 
 ---
@@ -670,7 +670,7 @@ Multipart rather than base64-in-JSON because base64 would inflate the audio by a
 and the client already builds a multipart body (`OpenAITranscriber.swift:106-124`).
 
 What the recorder produces today, so the server knows what it will receive: `.m4a`, MPEG-4 AAC, mono,
-44.1 kHz, `AVAudioQuality.high` (`AudioCommandRecorder.swift:34-39` at `f65e72e`). It had **no
+44.1 kHz, `AVAudioQuality.high` (`AudioCommandRecorder.swift:34-39` at `6b72909`). It had **no
 maximum duration** until SONNY-130, which is why the byte limit in section 6.1 exists as a backstop.
 
 **The duration cap now exists** (updated 2026-08-27, SONNY-130): 180 seconds, in
@@ -814,15 +814,15 @@ and metering are filed under; `DELETE` removes everything filed under it. A read
 `task_id` is `CompletedTaskRecord.id`, **and the field exists** (corrected 2026-08-26, SONNY-288).
 SONNY-115 merged on 2026-08-17 and added it: `public var id: String?`
 (`grep -n 'public var id: String?' Sources/MacAgentCore/TaskHistoryStore.swift` → `53:` at
-`d3598a7`). This paragraph read "Until SONNY-115 merges there is nothing to put in this field" — true
-of `6f89a5d`, where `CompletedTaskRecord` had no identifier and the type's own comment said so, and
+`728d1ea`). This paragraph read "Until SONNY-115 merges there is nothing to put in this field" — true
+of `4a7d996`, where `CompletedTaskRecord` had no identifier and the type's own comment said so, and
 false since. The gateway tickets no longer sit behind row D for this reason; that dependency is
 satisfied, and it is the second of the two gaps SONNY-155 closed.
 
 **The id must be minted when the task starts, not when its record is written.** `CompletedTaskRecord`
 is written at completion, so an id that only appears in that initializer's default arrives after
 every request the task made. The field takes an id as a parameter, defaulting to a fresh
-`UUID().uuidString` evaluated per call (`TaskHistoryStore.swift:135-136` at `d3598a7`), so this is a
+`UUID().uuidString` evaluated per call (`TaskHistoryStore.swift:135-136` at `728d1ea`), so this is a
 matter of the caller passing the dispatch-time id through rather than letting it default — but it is
 the kind of thing that is cheap now and expensive after the gateway lands. SONNY-130 and SONNY-131
 build the requests that need it.
@@ -1054,8 +1054,8 @@ twelve — and about 120 bytes of JSON envelope gives a request at the ceiling o
 
 Those three inherited figures are SONNY-114's, not this ticket's, and they carry its SHAs: the 4.01 MB
 ceiling and the 4,673-character prompt were measured at `e260575` and re-verified after that branch's
-rebase at `b07bee8`; the largest JSON body across all fifteen of its fixtures, 3,512,879 bytes, was
-measured at `e260575`. The branch merged to `main` at `6f89a5d`, where `maximumImageBytes` is still
+rebase at `692c904`; the largest JSON body across all fifteen of its fixtures, 3,512,879 bytes, was
+measured at `e260575`. The branch merged to `main` at `4a7d996`, where `maximumImageBytes` is still
 3,000,000 — re-verified for this document. 4,200,000 leaves roughly 190,000 bytes of headroom over
 the largest body the client can build, which is about forty times the measured prompt.
 
@@ -1108,10 +1108,10 @@ The client still does not compress, and that is now a measured decision rather t
 completed on 2026-08-18). SONNY-146 measured 29–35% lossless recovery from deflating the finished
 vision body at `e260575` — SONNY-114's fixture head, kept verbatim because a compression ratio
 cannot be restated at another SHA, and not an ancestor of `main` (6.1 carries the same stamp and its
-post-rebase pair `b07bee8`). It then built the encoder and a per-endpoint switch:
+post-rebase pair `692c904`). It then built the encoder and a per-endpoint switch:
 `Sources/MacAgentCore/HTTPBodyCompression.swift`, and `compressesRequestBody` on the vision client,
 defaulting to `false` (`grep -n 'compressesRequestBody: Bool = false'
-Sources/MacAgentCore/VisionModelClient.swift` → `131:` at `d3598a7`). It was off because the route
+Sources/MacAgentCore/VisionModelClient.swift` → `131:` at `728d1ea`). It was off because the route
 the client talked to then answered a gzip-encoded body with a `500`, measured live against it rather
 than assumed.
 
@@ -1540,7 +1540,7 @@ declined.
 **Known divergence: the two values above name no column, because the tree stores this as a boolean**
 (recorded 2026-08-27, SONNY-297 — recorded, not reconciled). The column is `training_consent boolean
 NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at
-`f8f5c75`), so nothing anywhere holds the string `"granted"` or the string `"not_granted"`.
+`554d85a`), so nothing anywhere holds the string `"granted"` or the string `"not_granted"`.
 
 **The guarantee is identical, which is why this is a divergence and not a defect.** `DEFAULT false`
 *is* the `"not_granted"` default, `NOT NULL` *is* the absence of a third state that could be mistaken
@@ -1711,7 +1711,7 @@ vision-path files under `Sources/` — `VisionModelClient.swift`, `VisionSession
 `VisionSessionJournalStore.swift`, `VisionSessionCapabilityAdapter.swift`, `VisionSessionTypes.swift`,
 `AgentViewModel+VisionSession.swift`, `ScreenCaptureService.swift`, `LocalRedactionService.swift`,
 `RedactedCaptureEncoder.swift` and `ScreenActionSynthesizer.swift` — for `usageRecorder`,
-`AIUsageRecord` or `TaskUsageRecording` returns zero matches in every one of them at `6f89a5d`. The
+`AIUsageRecord` or `TaskUsageRecording` returns zero matches in every one of them at `4a7d996`. The
 four production recording sites in the whole repo are `OpenAIPlanner.swift:82`,
 `CerebrasPlanner.swift:97`, `WebResearchSynthesizer.swift:359` and `OpenAITranscriber.swift:102`.
 
@@ -1801,7 +1801,7 @@ Three rules alongside the table:
   would mint a fresh idempotency key per attempt, which §9.1 forbids. The token-expiry case is
   invisible: the shared client refreshes once and replays, which is §7.2 case 1a working. **The
   paragraph this replaces described the pre-SONNY-131 tree** — "there is no retry at all:
-  `VisionSessionRunner.runLoop()` has no `catch`" — which was a true reading of `6f89a5d` and is a
+  `VisionSessionRunner.runLoop()` has no `catch`" — which was a true reading of `4a7d996` and is a
   stale one now; the file-line it cited has moved with the `catch` that ends it.
 
 ---
@@ -1817,7 +1817,7 @@ the refresh overlap window to a ticket that section 3.3 already said does not ow
 plus one plus eleven is the nineteen; every row below carries which of the four it is.
 
 **The `Status` column is a board reading, not a contract term.** It was resolved against Plane and
-against the tree at `d3598a7` on 2026-08-26, and it goes stale the way any board reading does; the
+against the tree at `728d1ea` on 2026-08-26, and it goes stale the way any board reading does; the
 `Open` and `Owner` columns are the durable halves. **Decided** does not mean built — it means the
 question this contract left open has an answer, recorded where the row says. **Open** means it has
 none.
@@ -1829,9 +1829,9 @@ retention window and its snapshot-lineage row both moved from Open to Decided an
 Every other row is still the 2026-08-26 reading and has not been re-checked; a reader comparing two
 rows should read the date on each rather than the heading above both.
 
-| Open | Owner | Status, resolved 2026-08-26 at `d3598a7` |
+| Open | Owner | Status, resolved 2026-08-26 at `728d1ea` |
 |---|---|---|
-| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2); **amended 2026-08-30 (SONNY-373): the founders dropped the deploymind stage, leaving Oracle Cloud then AWS** (§12.4). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `395:` at `a175020`). The first real remote deploy is recorded as owed on SONNY-126 |
+| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 | **Decided; both proofs re-owed on the real host.** The founder chose a VM over serverless on 2026-08-21 — deploymind, then Oracle Cloud, then AWS, with Supabase keeping auth and Postgres (`docs/sonny-row-12-host-decision.md` §12.2); **amended 2026-08-30 (SONNY-373): the founders dropped the deploymind stage, leaving Oracle Cloud then AWS** (§12.4). SONNY-125 is Done. Both proofs passed, but against Supabase Edge Functions — the host that decision then moved away from — so they are the evidence the choice was made against rather than a measurement of the shipping host, and §12.2 says every Edge ceiling stops binding. On the shipping host they are unmade: nothing has been deployed remotely, and `server/scripts/deploy.sh` refuses `staging` and `production` (`grep -n 'exit 3' server/scripts/deploy.sh` → `395:` at `f675b3b`). The first real remote deploy is recorded as owed on SONNY-126 |
 | **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **SONNY-204**; the Mac's half is **SONNY-402** | **Decided and built, server-side** (2026-09-03). All three landed together — `server/src/routes/meta.ts`, `server/src/version/gate.ts`, `server/src/version/policy.ts` — with `MINIMUM_SUPPORTED_CLIENT`, `RECOMMENDED_CLIENT` and `UPGRADE_URL` as the deployment's own policy, and the gate installed before the auth gate so an outdated client is not sent round a refresh loop by an expired token. **Both bounds default to `0.0.0`, which disarms the gate**: shipping it refuses nobody until a founder sets a real minimum, because 8.4 makes raising the minimum past a version that had no deprecation period a breach of this contract and a default carries no deprecation period. The Mac calls none of it yet (SONNY-402, Backlog). This row read "**Owned, not built**" until 2026-09-03 and "**nobody yet** — SONNY-155, Backlog, untriaged" until 2026-08-26 (4.1) |
 | Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape | **Open.** SONNY-129 is in Backlog |
 | Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 | **Decided.** SONNY-126 closed 2026-08-21: TypeScript on Node >= 22, Fastify, Zod, Postgres via `pg`, a plain-SQL migration runner that refuses a file carrying no `-- @rollback` half (`ls server/src/db/migrations/*.sql \| wc -l` → 10), a containerized deploy path coupled to no host, and credential rotation as an ordered list so a rotation is three independently valid deploys (`server/README.md`). Two acceptance criteria — health on staging and production, a migration rolled back on staging — were deferred by the founder on 2026-08-21 because no remote environment exists; that is the row above |
@@ -1876,24 +1876,24 @@ more trust than one that has not:
 
 - **The population was closed when the rows were written, and that is the one completeness claim
   available here.** Twelve commits had ever touched this file
-  (`git log --format='%h' -- docs/sonny-backend-api-contract.md | wc -l` → 12 at `f8f5c75`, the head
+  (`git log --format='%h' -- docs/sonny-backend-api-contract.md | wc -l` → 12 at `554d85a`, the head
   this branch is based on; `--follow` answers the same 12, and `--diff-filter=R` over the same path
   answers 0, so no rename hides an earlier one), and every one is an ancestor of `origin/main`. So no
   amendment to *this file* escaped the list. The count grows with every later amendment, this one
-  included; what the back-fill rests on is that it was closed at `f8f5c75`. **It was re-measured
-  there rather than carried across a rebase**: the back-fill was written against `5ad846f`, PR #137
+  included; what the back-fill rests on is that it was closed at `554d85a`. **It was re-measured
+  there rather than carried across a rebase**: the back-fill was written against `9ac586b`, PR #137
   merged beneath it, and the same command answers the same 12 — which is what says that merge
   amended nothing here and owes no row, rather than anyone's word for it. Which commit each row
-  covers: **2026-08-17** is `c03eb3b` with its pre-merge review round `4e8c6a4`; **2026-08-21 (the
-  JWT row)** is `1f3e62f`, which wrote that row; the four back-filled rows name their own commits;
-  **2026-08-26** is `58c6202` and **2026-08-27 (SONNY-130)** is `cf9c1ef`. The check on all twelve:
-  `for t in c03eb3b 4e8c6a4 1f3e62f 1ea1584 792ea41 5a26871 5080bae 309336b 54a2646 9706c39 58c6202
-  cf9c1ef; do git merge-base
+  covers: **2026-08-17** is `25f75eb` with its pre-merge review round `5727da1`; **2026-08-21 (the
+  JWT row)** is `778e441`, which wrote that row; the four back-filled rows name their own commits;
+  **2026-08-26** is `4aa50ec` and **2026-08-27 (SONNY-130)** is `adba172`. The check on all twelve:
+  `for t in 25f75eb 5727da1 778e441 7445fb0 d0cdfb1 1db893e 8d54bac 5c24df5 a12ef99 f0745f4 4aa50ec
+  adba172; do git merge-base
   --is-ancestor $t origin/main; printf '%s %s  ' "$t" "$?"; done` → `0` for all twelve, run
-  2026-08-27 at `f8f5c75`. **Every SHA this section cites passes it**, not only those twelve — 17
+  2026-08-27 at `554d85a`. **Every SHA this section cites passes it**, not only those twelve — 17
   distinct tokens (`sed -n '/^## 14\./,$p' docs/sonny-backend-api-contract.md | grep -ohE
-  '\b[0-9a-f]{7,40}\b' | sort -u | wc -l` → 17), the other five being `5ad846f`, `6f89a5d`,
-  `bb7ce39`, `f65e72e` and `f8f5c75`, each `0` under the same loop. Unlike the count in the header,
+  '\b[0-9a-f]{7,40}\b' | sort -u | wc -l` → 17), the other five being `9ac586b`, `4a7d996`,
+  `310f893`, `6b72909` and `554d85a`, each `0` under the same loop. Unlike the count in the header,
   this one covers commit citations, which is why the two are kept apart.
 - **It does not establish that a row's summary is the whole of its diff.** A back-filled row is one
   session's reading of a commit it did not make. The commit is cited so a reader can go to the diff
@@ -1904,11 +1904,11 @@ more trust than one that has not:
   appear as a commit on this path, and nothing here went looking for one. This section indexes
   amendments to this file, and that is the whole of what it now claims.
 - **One shape moved in the seven.** No fenced example body was touched by any of them, and exactly
-  one markdown table row was — `5a26871`'s, four added and none removed, which is 3.6's new two-value
-  `link_hint` table rather than an edit to an existing row. Run 2026-08-27 at `f8f5c75`:
+  one markdown table row was — `1db893e`'s, four added and none removed, which is 3.6's new two-value
+  `link_hint` table rather than an edit to an existing row. Run 2026-08-27 at `554d85a`:
 
 ````
-for s in 1ea1584 792ea41 5a26871 5080bae 309336b 54a2646 9706c39; do
+for s in 7445fb0 d0cdfb1 1db893e 8d54bac 5c24df5 a12ef99 f0745f4; do
   d=$(git show $s --format= -- docs/sonny-backend-api-contract.md)
   printf '%s fence=%s row+=%s row-=%s\n' "$s" \
     "$(printf '%s\n' "$d" | grep -cE '^[+-]```')" \
@@ -1917,30 +1917,30 @@ for s in 1ea1584 792ea41 5a26871 5080bae 309336b 54a2646 9706c39; do
 done
 ````
 
-→ `fence=0` for all seven; `row+`/`row-` are `0`/`0` for six and `4`/`0` for `5a26871`.
+→ `fence=0` for all seven; `row+`/`row-` are `0`/`0` for six and `4`/`0` for `1db893e`.
 
 **One pair of rows is out of date order, and it is left that way rather than moved.** The 2026-08-27
 SONNY-130 row sits above the 2026-08-26 SONNY-288 row. That was not a rebase artifact: SONNY-288's
-row merged at `bb7ce39`, which is an ancestor of `f65e72e`, the commit SONNY-130's branch was cut
-from (`git merge-base --is-ancestor bb7ce39 f65e72e`, read with nothing between it and `$?`, exits
-`0`), so the row it belonged after was already present when `cf9c1ef` inserted above it. Both are
+row merged at `310f893`, which is an ancestor of `6b72909`, the commit SONNY-130's branch was cut
+from (`git merge-base --is-ancestor 310f893 6b72909`, read with nothing between it and `$?`, exits
+`0`), so the row it belonged after was already present when `adba172` inserted above it. Both are
 byte-identical to the versions their own branches merged. Recording the inversion costs a reader one
 sentence; rewriting two merged rows to tidy it would cost more than it buys, and this section is a
 record rather than a tidy list.
 
 | Date | Change | Ticket |
 |---|---|---|
-| 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
+| 2026-08-17 | Created, at `main` `4a7d996` | SONNY-124 |
 | 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |
-| 2026-08-21 | **3.3 — the refresh overlap window is the platform's and 10 seconds, not SONNY-127's to set; and 3.1 gains, then reassigns, the note that nothing verifies a presented access token.** Two commits, both PR #87 review findings: `1ea1584`, then `792ea41`. 3.3 had read "the overlap's length is SONNY-127's to set", written before the 2026-08-21 decision to serve auth from Supabase Auth; under that decision the window is the platform's. The 10 seconds is the figure the row above already names, so only the *ownership* was new — which is the half a reader of that row alone would not have. 3.1's note (F2) first said verification was SONNY-128's and was corrected the same day (second round, F5) to SONNY-203, because SONNY-128 is the client half and its never-touch list forbids `server/`, so it could never have supplied it; `792ea41` added the HS256 pin with it. **No shape changed** in either commit: no fenced example body and no table row moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
-| 2026-08-22 | **3.6 — `link_hint`, a new optional field on the token response** (`5a26871`). The one shape this document gained between 2026-08-21 and 2026-08-26. Present when the server can see a reason to suspect a sign-in belongs with an existing account and cannot prove one; advisory, naming no account and carrying no identifier, because naming one would answer "does this address have an account?" to anyone who can reach the endpoint. Two values, `relay_address_may_belong_to_existing_account` and `verified_email_matches_existing_account`. A client that ignores it is correct and gets two accounts; there is no failure mode in ignoring it, only a worse experience, and neither the field nor the prompt merges anything. **3.2's fenced token-response example does not show the field**, and this row does not change that — it is stated so a reader of 3.2 alone does not conclude the field does not exist. Surfacing it is SONNY-128's and SONNY-129's. It did reach its reader without this section's help: the client decodes it and pins that it changes nothing (`SonnyBackendClient.swift:705` and `SonnyAccountServiceTests.swift:192`, `aTokenResponseCarryingALinkHintStillSignsInNormally`, at `f8f5c75`). Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
-| 2026-08-22 | **3.6 — the three sign-in-code errors, and the per-address rate-limit refusal, are disclosed only to a caller who can be seen to have requested the code.** Two commits: `5080bae`, widened by `309336b` after measurement. The three distinct codes were an account-existence oracle and a working one — one unauthenticated request per address, carrying a code known to be wrong and never calling `email/start`, returned `auth.code_used` for a mailbox whose owner had signed in, `auth.code_expired` for one that had asked and not used, and `auth.code_invalid` for an address with nothing; reproduced against a real database, still reading `auth.code_used` after 400 simulated days, and unbounded across 200 addresses probed from one source. Everyone outside the flow now gets `auth.code_invalid`, gated on the issuance's recorded source matching the caller's and on the issuance being recent; `309336b` put the per-address refusal behind the same gate, because answering `429` to every caller made the attempt *count* readable. **What a client in the flow sees is unchanged**, which is why nothing on SONNY-128 moved; what narrowed is what a caller who never called `email/start` can learn. The residual is stated in place rather than implied: the match is on a salted hash of `request.ip`, so co-tenants behind one public address share a source, and a proxy with `TRUSTED_PROXIES` unset collapses every caller to one. The unconditional fix is a flow token across `email/start` and `email/verify` — two request/response shapes, SONNY-128's, not built. **No fenced example body and no table row moved.** Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
-| 2026-08-22 | **3.1 — access-token verification exists, the gate is deny-by-default, and a signed-out access token keeps verifying for one hour and thirty seconds.** Two commits: `54a2646`, corrected by `9706c39`. The token is verified as HS256 with the algorithm pinned, checking `iss`, `aud` and `exp` and trusting `sub` as the user id, and that `sub` is then attributed to a live Sonny account, so a cryptographically perfect token naming a closed one is refused. **The gate is deny-by-default**, which makes 4.1's `Auth` column a list of the routes that are *public* while everything else is challenged — so a route added without a thought about authentication refuses everyone rather than serving quietly. **What verification cannot do is un-issue a token**: an access token is self-contained, so signing out revokes the refresh family while the access token keeps verifying until its own `exp` plus 3.5's 30-second skew tolerance. `9706c39` is that correction — the paragraph had said "one hour" where the honest figure is one hour and thirty seconds on Supabase's default lifetime. A closed account is refused immediately on every request; the remaining window is SONNY-237's. **No shape changed**: 4.1's table was not edited, only the meaning its `Auth` column already carried made explicit, and no fenced example body moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-203 |
-| 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `f65e72e`, where the settings block is `:34-39`. | SONNY-130 |
-| 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |
+| 2026-08-21 | **3.3 — the refresh overlap window is the platform's and 10 seconds, not SONNY-127's to set; and 3.1 gains, then reassigns, the note that nothing verifies a presented access token.** Two commits, both PR #87 review findings: `7445fb0`, then `d0cdfb1`. 3.3 had read "the overlap's length is SONNY-127's to set", written before the 2026-08-21 decision to serve auth from Supabase Auth; under that decision the window is the platform's. The 10 seconds is the figure the row above already names, so only the *ownership* was new — which is the half a reader of that row alone would not have. 3.1's note (F2) first said verification was SONNY-128's and was corrected the same day (second round, F5) to SONNY-203, because SONNY-128 is the client half and its never-touch list forbids `server/`, so it could never have supplied it; `d0cdfb1` added the HS256 pin with it. **No shape changed** in either commit: no fenced example body and no table row moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.6 — `link_hint`, a new optional field on the token response** (`1db893e`). The one shape this document gained between 2026-08-21 and 2026-08-26. Present when the server can see a reason to suspect a sign-in belongs with an existing account and cannot prove one; advisory, naming no account and carrying no identifier, because naming one would answer "does this address have an account?" to anyone who can reach the endpoint. Two values, `relay_address_may_belong_to_existing_account` and `verified_email_matches_existing_account`. A client that ignores it is correct and gets two accounts; there is no failure mode in ignoring it, only a worse experience, and neither the field nor the prompt merges anything. **3.2's fenced token-response example does not show the field**, and this row does not change that — it is stated so a reader of 3.2 alone does not conclude the field does not exist. Surfacing it is SONNY-128's and SONNY-129's. It did reach its reader without this section's help: the client decodes it and pins that it changes nothing (`SonnyBackendClient.swift:705` and `SonnyAccountServiceTests.swift:192`, `aTokenResponseCarryingALinkHintStillSignsInNormally`, at `554d85a`). Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.6 — the three sign-in-code errors, and the per-address rate-limit refusal, are disclosed only to a caller who can be seen to have requested the code.** Two commits: `8d54bac`, widened by `5c24df5` after measurement. The three distinct codes were an account-existence oracle and a working one — one unauthenticated request per address, carrying a code known to be wrong and never calling `email/start`, returned `auth.code_used` for a mailbox whose owner had signed in, `auth.code_expired` for one that had asked and not used, and `auth.code_invalid` for an address with nothing; reproduced against a real database, still reading `auth.code_used` after 400 simulated days, and unbounded across 200 addresses probed from one source. Everyone outside the flow now gets `auth.code_invalid`, gated on the issuance's recorded source matching the caller's and on the issuance being recent; `5c24df5` put the per-address refusal behind the same gate, because answering `429` to every caller made the attempt *count* readable. **What a client in the flow sees is unchanged**, which is why nothing on SONNY-128 moved; what narrowed is what a caller who never called `email/start` can learn. The residual is stated in place rather than implied: the match is on a salted hash of `request.ip`, so co-tenants behind one public address share a source, and a proxy with `TRUSTED_PROXIES` unset collapses every caller to one. The unconditional fix is a flow token across `email/start` and `email/verify` — two request/response shapes, SONNY-128's, not built. **No fenced example body and no table row moved.** Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.1 — access-token verification exists, the gate is deny-by-default, and a signed-out access token keeps verifying for one hour and thirty seconds.** Two commits: `a12ef99`, corrected by `f0745f4`. The token is verified as HS256 with the algorithm pinned, checking `iss`, `aud` and `exp` and trusting `sub` as the user id, and that `sub` is then attributed to a live Sonny account, so a cryptographically perfect token naming a closed one is refused. **The gate is deny-by-default**, which makes 4.1's `Auth` column a list of the routes that are *public* while everything else is challenged — so a route added without a thought about authentication refuses everyone rather than serving quietly. **What verification cannot do is un-issue a token**: an access token is self-contained, so signing out revokes the refresh family while the access token keeps verifying until its own `exp` plus 3.5's 30-second skew tolerance. `f0745f4` is that correction — the paragraph had said "one hour" where the honest figure is one hour and thirty seconds on Supabase's default lifetime. A closed account is refused immediately on every request; the remaining window is SONNY-237's. **No shape changed**: 4.1's table was not edited, only the meaning its `Auth` column already carried made explicit, and no fenced example body moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-203 |
+| 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `6b72909`, where the settings block is `:34-39`. | SONNY-130 |
+| 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `4a7d996`, and which are a board reading. | SONNY-288 |
 | 2026-08-28 | **6.4's forward-looking sentence is corrected, 12's third rule is answered, and 13's two rows follow both.** §6.4 said the client's `compressesRequestBody` switch "travels with the endpoint, so SONNY-131 flips both in one edit when the client is repointed at Sonny's own gateway". That reads as a one-line optimisation and is a `400` on **every** screen-control request: the gateway implements no request decompression, and Fastify hands a gzip-encoded body to the JSON parser as bytes. Found by SONNY-130 (PR #139, F9) and left as a note on SONNY-131; corrected here because a note on a ticket is not where the next reader meets it. §6.4's obligation is unchanged — the server still **must** accept the encoding — and it now says plainly that none of its three parts is implemented and that **SONNY-317** owns all of them together with the client switch, because the end-to-end test needs both sides at once. §12's third rule — "which of retry, abort-with-partial-history, or a new typed error the session takes is SONNY-131's" — is answered: **abort at the failing iteration, keep what the session did, report it as a typed error**, with no retry at the loop level because §9.3's per-code budget is already spent one layer down and a second loop would mint a fresh idempotency key per attempt, which §9.1 forbids. Section 13's mid-loop row moves from Open to Decided-and-built, and its compression row's owner moves from SONNY-131 to SONNY-317 with the wrong sentence named. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved — §4.5, §6.1's table and §12's table are byte-identical, and `/v1/screen/analyze` was already in all three. Landed in `b3c2021`, whose own tree carries this row with the reference unfilled — the row names the commit the change landed in, and that commit cannot contain its own hash. | SONNY-131 |
 | 2026-08-28 | **11 — the metering event is built, and the section now describes a table rather than a plan.** `sonny.metering_event` exists (`server/src/db/migrations/0012_metering_records_what_every_call_cost.sql`), every one of the five model routes writes to it, and the vision route — which recorded usage nowhere at all — is the reason the section exists. Six rows of 11's table moved: `user_id` is **renamed `account_id`**, because section 5 makes the account the billable identity and one person can hold two Supabase users on one account; `failed_over` and `image_media_type` are **added**, the first because a failover spends a second upstream call nothing else records and the second because half of real captures are each format and the byte figure cannot be read without knowing which; and `idempotency_key`, `provider`, `model`, `token_source`, `request_bytes`, `response_bytes`, `upstream_duration_ms`, `retention` and `client_version` become **nullable**, each with the null's meaning stated in its own row — the alternative in every case was a zero or an invented value that reads as a measurement. Three things are stated that 11 left open and building it settled: which requests produce an event at all (a table of six cases, of which the `409` row is the one that is not merely "free"), that SONNY-131's four proposed outcome values map onto 11's five without loss, and that the founder query path is a **command** (`npm run usage`) rather than a surface — the usage UI is SONNY-214's. 11's "a live UI surface" is corrected: no view reads `taskUsageSummary`, which PR #144's F1 measured; the rule it protects is unchanged and is now pinned end to end by a test. **No shape changed on the wire**: 11 is what the *server records*, not a request or a response — no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 2.4, 4.5 and 12's tables are byte-identical. | SONNY-133 |
-| 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `f8f5c75`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `f8f5c75` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `f8f5c75` as at `5ad846f`. | SONNY-297 |
+| 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `554d85a`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `6b72909` was added to 4.4 on 2026-08-27 by `adba172` without that sentence or its ancestry loop moving, and `554d85a` is the stamp on 10.2's new evidence. **PR #137 merged beneath this row while it was open and owes no row of its own**, which is a reading of the population rather than anyone's word for it: it changed no line of this file, and the commit count over this path is the same 12 at `554d85a` as at `9ac586b`. | SONNY-297 |
 | 2026-08-28 | **5.3 — the two values it left open are set, `sub`'s meaning is stated, and its revocation-bound sentence is corrected.** `grace_seconds` is **259,200** and `skew_tolerance_seconds` is **300**, both carried in the claim as this section already required and both argued in place against the 24-hour lifetime and 8-hour refresh cadence they sit beside; 13's row for them moves from Open to Decided-and-built. **The tolerance is applied in both directions, which is the inverse of 3.5's rule**, and the inversion is argued rather than asserted: there the server judges a token against its own clock and a token from the future is either the server's clock being wrong or a forgery, while here the client judges a claim the gateway *signed*, so `issued_at` cannot be attacker-chosen and a not-yet-valid claim means this Mac's clock is behind. **`sub` is the identity that asked and the claim's content is the account's** — this section already wrote the field as `<user id>`, and the reason it must stay one is a client obligation: the Mac has to check that a cached claim belongs to the session it holds or a claim cached before a sign-out grants to whoever signs in next, and `user.id` from 3.2 is the only identifier the Mac ever learns. **The revocation-bound bullet is corrected**: "within the claim's lifetime, because that lifetime is the bound" is true of an online client, whose real bound is the shorter 8-hour refresh, and understates an offline one by exactly the grace window the same sentence recommends — the offline bound is lifetime **plus** grace, 96 hours, and it is now stated as two numbers. Two further statements of fact rather than of intent: `GET /v1/meta` is not built, so rotation-without-a-release is promised here and delivered by nothing yet (SONNY-204, Backlog); and the client's shipped key set is **empty** in every build, because no gateway has been deployed to have signed anything, which refuses every gated capability and affects no free one. **The fenced payload example changed** — the two zeroes became the two set values and the illustrative instants moved to the lifetime the values describe — and it is the only fenced body touched; no endpoint, request body, response body, header, error `code`, size limit or timeout moved. 13's spend-cap row also moves from named-not-implemented to built. | SONNY-135 |
 | 2026-08-28 | **9.2 — two founder decisions recorded, and one implementation limit stated.** The gateway implemented no `Idempotency-Key` handling at all until this ticket, so 9.2 had never been built against; building it surfaced a conflict between 9.2's first sentence and 9.3's retryable list that cannot be resolved by reading either more carefully. A stored *retryable* failure is now released rather than replayed, so a same-key retry re-runs — without which a `429` is a twenty-four-hour ban on that operation and a `503` during a deploy freezes every request in flight. The at-most-once metering guarantee is untouched and is what makes the release safe: the claim survives it, so the re-attempt cannot bill again. A `POST` with no key is served rather than refused, because 9.1 is the client's obligation and the only client meets it. And conflict detection on `POST /v1/transcriptions` is by declared body length rather than by body, because a multipart body is consumed inside the handler and buffering it would take 6.1's audio ceiling away from the guard that fires while the part is still streaming. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved. **9.3's `email/verify` row gains one clause and is the only table cell edited** — it read "the idempotency record returns the original *result*, including the original failure", which the carve-out above makes untrue for the retryable subset, and a reader arriving at 9.3 alone would have taken the pre-decision behaviour. This row claimed 9.3 was byte-identical until PR #142's review found the contradiction that claim was concealing (F3). Two further limits are now stated in 9.2 rather than left to a code comment: a streaming response gets none of these guarantees, and a claim's lease can be outlived on the one route whose body read is unbounded. | SONNY-300 |
 | 2026-08-28 | **10 — retention is built, and the two questions 13 left open under it are answered.** The content store exists (`server/src/db/migrations/0013_content_is_kept_on_its_own_clock.sql`) and holds request text, voice audio, redacted screenshots, the served response and provider error bodies. **The content clock is 30 days**, confirmed by the founder on 2026-08-28 from the 30–90 range his 2026-08-16 decision names — 10.3 and 11's own header had both been assuming it in prose while nothing had settled it, so 13's row moves from Open to Decided and built. **Snapshot lineage's shape and the support lookup's reach**, 13's other SONNY-134 row, are answered in that row and in `server/README.md`. Two sentences elsewhere in this document stopped being true and are corrected where they live rather than only here: 4.6 and 10.1 described SONNY-134's rules in the future tense, and `routes/auth.ts`' own comment said `DELETE /v1/account` "does not reach retained content", which it now does — content, training-snapshot membership, and the account's stored idempotency response bodies (SONNY-319, filed by SONNY-300 and closed here). **Two things this row does not claim.** 10.2's boolean-versus-strings divergence is unchanged and still recorded rather than reconciled; honouring the field was SONNY-134's and the spelling was not. And 10.1's `retention` field, 2.4's table and 2.4.2's no-default rule are untouched — the client's half shipped with SONNY-130 and SONNY-131 and this ticket is the server keeping the promise it already made. **No shape changed on the wire**: no request body, response body, header, error `code`, size limit or timeout moved, and 4.6's response shape is served exactly as written — the one new route, `DELETE /v1/tasks/{task_id}`, was already in 4.1's table and in 4.6 with SONNY-134 named as its owner. | SONNY-134 |
