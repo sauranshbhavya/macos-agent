@@ -2556,10 +2556,11 @@ served normally with `Sonny-Deprecation: true` and `Sonny-Deprecation-Info: <url
 minimum. That is deliberate — the contract makes raising the minimum past a version that never had a
 deprecation period a breach, and a default has given nobody a deprecation period.
 
-**The Mac does not call any of it yet** (SONNY-402). The app sends its version on every request and
-already understands the `version.unsupported` code, but it does not fetch `/v1/meta`, does not read
-the two headers, and has no "Sonny needs an update" screen. So **every row below is `curl` against a
-local gateway, not the app** — there is nothing to see in the product yet, and that is not a finding.
+**The Mac did not call any of it when this section was written, and now it does** (corrected
+2026-09-04, SONNY-402). Every row below is still `curl` against a local gateway rather than the app,
+and each of them is still exactly right — they check the *gateway's* side. What the app now does is a
+section of its own, "The app learns it needs an update", directly below this one. Read that one for
+anything you expect to see in the product; nothing you see here is a finding about the Mac.
 
 **Setup, once:** `cd server && ./scripts/deploy.sh local`, the same container the sign-in section
 uses. **`deploy.sh` forwards names from the shell you launch it in — it does not read `server/.env`**,
@@ -2614,6 +2615,81 @@ MINIMUM_SUPPORTED_CLIENT=2.0.0 RECOMMENDED_CLIENT=3.0.0 \
       any of those is the finding — (c) especially, because it would tell users to update and give
       them nowhere to go. **The message is what to report if one of them fails differently**: a
       generic crash with no variable named is still a finding even though the container did stop.
+### The app learns it needs an update (new 2026-09-04, SONNY-402)
+
+**What changed:** the Mac now does contract §8's client half, which SONNY-204's own section says it
+did not. On launch the app calls `GET /v1/meta` once and keeps what it says; on any `410
+version.unsupported` it calls it again, and never once per request. It reads `Sonny-Deprecation` and
+`Sonny-Deprecation-Info` on every response, successes and failures alike. Two new states render
+through the surfaces that already exist — the floating widget's panel and the attention panel at the
+top of every Command Center page — with no new window and no wireframe, so **what these rows are
+really asking is whether the result looks right to you**.
+
+**The packaged app reports version `1.0+1`** (`Packaging/Info.plist`: `CFBundleShortVersionString`
+`1.0`, `CFBundleVersion` `1`), which the gateway reads as the marketing version **`1.0.0`** — build
+metadata is not ordered, so the `+1` is ignored. Every bound below is chosen against that number.
+
+**Setup, once, and it is smaller than the SONNY-204 section's.** No Supabase credentials are needed
+for either row: the version gate is registered before the auth gate, so it answers a request that
+carries no token at all, and `GET /v1/meta` is unauthenticated. You need the container and the app
+pointed at it.
+
+1. `cd server && ./scripts/deploy.sh local`, with the version variables set **in the launching
+   shell** — `deploy.sh` forwards names from the shell you run it in and does not read `server/.env`.
+2. `defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`, once. Same pointer
+   the sign-in section uses, and a `defaults` value rather than an environment variable because the
+   relaunch after a Screen Recording grant loses an environment variable.
+3. `./scripts/package-app.sh`, then open `.build/arm64-apple-macosx/debug/MacAgent.app`. A bare
+   `swift run` has no bundle identity and reports version `0.0+0`, which is a different test.
+
+- [ ] **(new 2026-09-04, SONNY-402) — the wall: a build this deployment refuses.** Start the gateway
+      with exactly this, then launch the packaged app:
+      ```
+      cd server && MINIMUM_SUPPORTED_CLIENT=2.0.0 RECOMMENDED_CLIENT=2.0.0 \
+        UPGRADE_URL=https://example.test/download ./scripts/deploy.sh local
+      ```
+      The app sends `1.0+1`, which is below `2.0.0`, so every route answers 410. **Expect, within a
+      moment of launch:** the floating widget shows a panel headed **Update needed** reading *"This
+      version of Sonny is too old. Update to carry on."* with an **Update Sonny** button and no
+      dismiss control — the wall deliberately has no way out but updating. Open Command Center: the
+      same title, sentence and button at the top of the page, on **every** page you visit. Press
+      **Update Sonny** — your default browser must open `https://example.test/download` (it will not
+      resolve; that the browser went there is the whole check).
+      **Then check the two things that would be defects.** Run a command that needs the backend
+      ("summarise what's on my screen", or anything that plans) — the update panel must stay up
+      rather than being replaced by a "Sonny couldn't finish this one. Try again." failure, because
+      trying again cannot work. And run a local one that does not need the backend ("what is 12 times
+      31", "open Safari") — that must still work, and its result appears while the update panel
+      steps aside for it. **What would be a finding:** a generic failure sentence instead of the
+      update panel; the two surfaces saying different things; a Retry button anywhere on it; the
+      widget refusing to shrink back to its capsule when you leave it alone; or the panel taking the
+      screen away from an approval or a clarification the app is waiting on.
+- [ ] **(new 2026-09-04, SONNY-402) — the warning: still working, but out of date.** Restart the
+      gateway with the minimum **at** this build and the recommendation above it, then relaunch the
+      app:
+      ```
+      cd server && MINIMUM_SUPPORTED_CLIENT=1.0.0 RECOMMENDED_CLIENT=2.0.0 \
+        UPGRADE_URL=https://example.test/download ./scripts/deploy.sh local
+      ```
+      `1.0.0` is served (the minimum is inclusive) and warned (it is below the recommendation).
+      **Expect:** everything works exactly as normal — sign-in, tasks, all of it — plus a panel
+      headed **Update available** reading *"A new version of Sonny is out."* with **Update Sonny**
+      and **Not now**. It must be the *last* thing that shows: start a task and its progress takes
+      the panel, finish one and its result does, and the update panel comes back afterwards. Press
+      **Not now** — it goes for the rest of this launch and the widget returns to its ordinary idle
+      capsule. Quit and relaunch: it is back, which is correct. Press **Update Sonny** instead —
+      the browser opens the same URL. **What would be a finding:** anything failing or refusing while
+      this is showing; the panel sitting on top of a running task or a result; **Not now** not
+      sticking for the rest of the launch; or the panel appearing at all once you restart the gateway
+      with `RECOMMENDED_CLIENT=1.0.0` and relaunch the app, which is the row's own control.
+
+**One case is deliberately not a row, because a correctly configured gateway cannot produce it.** If
+the upgrade URL is not `http` or `https`, the app shows the message with no button — the founder's
+decision of 2026-09-04. You cannot reach that from here: the gateway refuses to start with a
+non-http `UPGRADE_URL` (SONNY-204's own configuration row (d) is that refusal), and refuses to start
+with an armed minimum and no `UPGRADE_URL` at all (row (c)). It is held by tests instead —
+`ClientVersionTests` over the rule and `ClientVersionSurfaceTests` over both surfaces.
+
 ### Buying more runs when they run out (new 2026-09-03, SONNY-215)
 
 **What changed:** an **opt-in** setting, **off by default**, in Command Center's Account section
