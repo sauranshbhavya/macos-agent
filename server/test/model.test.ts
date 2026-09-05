@@ -1190,6 +1190,42 @@ describe("the numbers this ticket is held to", () => {
     // And above the route-level body-read bound, which is the tighter of the two and the one that
     // actually holds the lease's arithmetic.
     expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(BODY_READ_DEADLINE_MS);
+
+    // **The constant reaching the server, which is a separate claim from the constant's value.** A
+    // mutation battery is what makes this worth writing: deleting the `requestTimeout` line from
+    // `app.ts`'s options block leaves every assertion above green, because they all read the
+    // exported number rather than the server built from it. `server.requestTimeout` is readable
+    // before `listen`, so this costs nothing.
+    const app = build();
+    expect(app.server.requestTimeout).toBe(REQUEST_TIMEOUT_MS);
+    // Fastify's own default, restated so the line above is visibly not asserting a default: a bare
+    // instance reports 0, which is the disabled state this ticket exists to leave.
+    expect(app.server.requestTimeout).not.toBe(0);
+  });
+
+  it("wires the client-error handler, so a socket-level refusal carries §7.1's envelope", async () => {
+    // The other half of the wiring, and the same lesson: `clientErrorResponse()` can be perfect and
+    // reach nothing. Fastify installs it as a `clientError` listener on the raw server, so emitting
+    // that event is what proves the handler is attached — nothing else in the suite can reach a
+    // failure that happens before a request object exists.
+    const app = build();
+    const written: string[] = [];
+    let ended = false;
+    const socket = {
+      writable: true,
+      end: (chunk?: string) => { if (chunk !== undefined) written.push(chunk); ended = true; },
+      destroy: () => { ended = true; },
+    };
+    app.server.emit("clientError", Object.assign(new Error("timeout"), { code: "ERR_HTTP_REQUEST_TIMEOUT" }), socket);
+
+    expect(ended).toBe(true);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toBe(clientErrorResponse());
+    // Fastify's own default handler answers `{"error":"Request Timeout","message":"Client Timeout",
+    // "statusCode":408}`. Asserting the absence of that shape is what tells a wired handler from an
+    // unwired one, since both end the socket with a 408 status line.
+    expect(written[0]).not.toContain('"statusCode"');
+    expect(written[0]).toContain('"request_id"');
   });
 
   it("answers a client error with §7.1's envelope rather than Fastify's own", () => {
