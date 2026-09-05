@@ -170,6 +170,117 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/a-past-due-customer-is-told
+Status: complete
+Date: 2026-09-05
+Tickets: SONNY-380 — a customer past due inside the grace window is told so in the app, and offered the control that fixes it; the fourteen-day window reviewed and kept.
+Reviewed by: pending (per WORKFLOW.md step 7).
+
+**Three correct decisions met and produced a silence, and the fix is a fourth thing rather than an undoing of any of them.** Spec §16.4 keeps every capability through a payment failure's grace window on purpose, so that billing never interrupts someone mid-task. `entitlement/store.ts` therefore mints, for a customer whose card was declined, a claim carrying `plan` and `capabilities` — the same two fields, with the same values, that a healthy account gets. And SONNY-216's Account line says what the claim can prove. Each of those is right on its own, and together they meant the app read `<Plan> · Active` for the entire fourteen days while a customer's access quietly ran out, with the payment provider's own dunning email as their only notice. §16.4 exists to stop a surprise wall; that was a quiet road to one.
+
+**The founders' three decisions of 2026-09-05, which this branch implements and does not reopen.** (1) The customer is told **in the app** — a line that names the state and the control that resolves it — rather than being left to the provider's email. (2) The word comes from **a separate read**, not from a new field on the signed claim: the claim is §4.1 and §5.3, §8.2 items 1–3 make changing its shape a `/v2` question, and that is not a trade worth making for a status word. Offline the line shows nothing about payment, which is acceptable because the grace window keeps capabilities working offline anyway. (3) `BILLING_GRACE_DAYS` **stays at fourteen days, reviewed and kept** — it would have been shortened had email-only been chosen, and the in-app line removes the silence that made the length dangerous. SONNY-216's own entry and `SubscriptionReading.swift`'s doc both recorded this gap as filed and unbuilt; both now say what happened to it.
+
+**`GET /v1/billing/payment-state` is unsigned, and that is affordable for exactly one reason: it decides nothing.** It answers `{ "payment": "current" | "past_due" }` about the authenticated caller's own account, from `sonny.entitlement.past_due_since`, with no provider call and no parameter that could name somebody else. No capability, gate or refusal reads it — `admitRequest`, `claimFactsFor`, `EntitlementJudgement` and `decision(for:)` are all untouched — so what a forged answer would change is one word on one line and one label on one button, on the forger's own screen. That property is the whole argument for putting the word outside the claim, and it stops being true the moment anything is allowed to depend on it.
+
+**The read takes no `billing_provider`, unlike every other query in `billing/store.ts`, and the omission is the fail-safe direction rather than an oversight.** `past_due_since` is written only by `applyBillingDelivery`, which sets `billing_provider` in the same statement, so the narrowing would exclude nothing today. What it could do is exclude a row written by a provider a deployment has since moved away from — and that mistake reports a past-due account as healthy, which is the one answer this read exists to make impossible. The other direction is unreachable: nothing else in the repository writes that column.
+
+**It reads `past_due_since` and not `grace_until`, and the difference is a whole state.** Past the deadline `claimFactsFor` empties the capabilities, so the claim a still-declined customer holds becomes byte-identical to a cancelled one's and the line would read `Ended` — sending them to look for a subscribe button instead of the control that actually fixes it. A `grace_until`-based read would have reverted to `current` at exactly that moment. `aPastDueAccountIsStillPastDueOnceItsWindowHasClosed` asserts both halves in one test: `claimFactsFor` answering no capabilities, and the read still answering `past_due`.
+
+**A past-due reading wins over the claim's own word in both directions, and the second direction is the one worth defending.** Against `.active` it is the defect being fixed. Against `.ended` it is the paragraph above. A customer who genuinely cancelled never reaches that arm — `writeFor`'s `ended` case clears `past_due_since`, so the gateway answers `current` for them and they read `Ended`, which is what happened. `aCancelledSubscriptionIsNotAPaymentFailure` is what stops that drifting: telling someone who cancelled on purpose that their payment failed is the mirror defect.
+
+**`SubscriptionCopy.line(for:payment:)` takes the payment reading as a required parameter with no default, and that is how this defect is kept fixed rather than merely fixed.** A defaulted parameter would let a second host of this line render it without answering the payment question, which is precisely the state the app was in before this ticket. Required, a caller with no answer says `nil` in words, and a new call site that forgets is a compile error rather than a quiet `Active`. Same argument `SignInDialogView` already makes for its own required parameters, applied to a copy function.
+
+**`nil` and `.unrecognised` are one answer — say nothing about payment — and the cost of that is stated rather than left to be found.** `nil` is the offline case the founders chose. `.unrecognised` is §8.2 item 7's required fallback, present from this route's first release, which is the only reason the server may ever add a value at all. Both fall back to what the claim proves, because asserting a state this build cannot interpret is worse than saying less. **What that cannot do**: a future value meaning something *worse* than `past_due` would read on an old build exactly as a healthy account does — this ticket's own defect arriving through the version door. That is §8.4's ladder to solve, `recommended_client` then `minimum_supported_client`, and the contract's change row says so rather than leaving a third value looking like a free addition.
+
+**The control is named for what it resolves, so it is a function of the payment state rather than one string.** `Update payment` past due, `Manage subscription` otherwise, both opening the same hosted portal. The row reads `model.paymentState` **once** into a local and hands the same value to the line and to the label, so a refresh landing between two reads cannot put `Past due` beside `Manage subscription`; `theRowDerivesItsLineAndItsControlFromOneReadOfThePaymentState` counts that occurrence rather than asking `contains`, which is the shared-token trap `CLAUDE.md` records.
+
+**The payment read is its own method with its own two call sites, and it deliberately does not touch `refreshSubscription()`.** They are two requests to two routes, one local and instant and the other on the network, and folding them would make a slow one hold the other's row off screen — the same reasoning the screen-control allowance already follows in this file. It also leaves `refreshSubscription()`'s never-waits-when-the-cache-answered guard exactly as it stands, which is a guard one test exists solely to hold (PR #183's C2, the third of three surviving-guard mutants on that branch). It is **not gated on a subscription existing**, and that costs one cheap request per Account open for accounts that hold none: the gate would have to run after the claim read had answered, which is the coupling above, and at `.task` time both reads start together so a gate would skip for every account and never retry.
+
+**A failed payment read reports nothing to the user, which is a judgement rather than a swallow.** A Mac that has never reached a gateway is the ordinary state of this product today, and a warning under the subscription row would sit beneath a sign-in the user has just completed and be about a line they can already read. Same call `refreshSubscription()` makes, for the same reason. The battery's `S5` is the mutant that turns that swallow into a *claim* of health, and it dies.
+
+**Sign-out clears it synchronously**, for PR #183's F13 reason applied to the new value: `signedInStep` renders the moment `step` becomes `.signedIn` while the reads behind it are still in flight, so a payment state left set is the previous customer's `Past due` and an `Update payment` button on a new person's screen.
+
+**Two population scans caught this route rather than being told about it**, which is what they are for: `gate.test.ts`'s billing-configured scan and `billing.test.ts`'s exact-list guard both failed until the new route was named in them, and both now carry `HEAD /v1/billing/payment-state` beside the `GET` — Fastify serves `HEAD` for every `GET`, the shape `/v1/account/credits` and `/v1/account/entitlements` already take.
+
+**One reconciliation between the kickoff prompt and the contract, resolved toward the region and said out loud** (WORKFLOW.md step 4). The coordinator's file boundaries named `Sources/MacAgent/CommandCenterView.swift` "in SONNY-216's subscription-state region only" and `Sources/MacAgentCore/SonnyBackendClient.swift` "for the one new read". SONNY-216's subscription-state region is not in `CommandCenterView.swift` — it is `SignInDialogView.subscriptionRow` in `Sources/MacAgent/SignInView.swift`, which SONNY-216's own hand-back records discovering — and the portal call it neighbours is in `SonnyAccountService.swift`, not in the client, whose own doc explains why route calls live there. The named *regions* are unambiguous and the description names no files, so the regions won and the two shared files the note flagged for lane-404 were not touched at all: `git diff --name-only 6cc9e189 HEAD -- Sources/MacAgentCore/SonnyBackendClient.swift Sources/MacAgent/CommandCenterView.swift` prints nothing (0 paths at `fb13431d`). Every never-touch item held: the same command over `server/src/entitlement/store.ts server/src/routes/tasks.ts server/src/content Sources/MacAgentCore/ClientVersionClient.swift` prints nothing (0 paths at `fb13431d`), and the signed claim's shape is unchanged.
+
+Spec sections covered: §16.4 (the grace window's silence, closed at the surface rather than at the window); contract §4.1 (one new route), §8.1/§8.2 (additive, and item 7's client fallback), §7.1 (the words are the client's).
+
+Files changed:
+- `server/src/billing/store.ts` — `BillingPaymentState`, `OUTSTANDING_PAYMENT_FAILURE`, `paymentStateFor`, and the fourth question on `BillingStore`.
+- `server/src/routes/billing.ts` — `BILLING_PAYMENT_STATE_PATH` and the `GET` handler beside the portal route, plus the file header's account of why this route exists.
+- `server/test/billing.test.ts`, `server/test/billing.db.test.ts`, `server/test/gate.test.ts`, `server/test/topup.test.ts`.
+- `Sources/MacAgentCore/SubscriptionReading.swift` — `BillingPaymentState` and its wire mapping; `SubscriptionCopy.line(for:payment:)`, `word(for:payment:)`, `controlLabel(for:)`, `pastDueWord`, `updatePaymentLabel`; and the `SubscriptionStatus` doc that had recorded this gap as unbuilt.
+- `Sources/MacAgentCore/SonnyAccountService.swift` — `billingPaymentState()` and `WireBillingPaymentState`.
+- `Sources/MacAgent/SignInView.swift` — the published `paymentState`, `refreshPaymentState()`, the sign-out clear, the two read sites, and the row.
+- `Tests/MacAgentCoreTests/SubscriptionReadingTests.swift`, `Tests/MacAgentTests/BillingPortalSurfaceTests.swift`.
+- `docs/sonny-backend-api-contract.md` — one §4.1 row and one §14 change row.
+- `docs/sonny-manual-test-checklist.md` — three unchecked rows.
+
+Behavior added:
+- A customer whose payment has failed reads `<Plan> · Past due` in Command Center → Account, with an `Update payment` button opening the same hosted portal, for the whole grace window and past its end.
+- `GET /v1/billing/payment-state`, authenticated, one indexed `SELECT`, no provider call.
+
+Behavior preserved (required, no blanket claims):
+- **The subscription row for a healthy subscriber** still reads `<Plan> · Active` with `Manage subscription`, and the button still opens the portal the gateway minted — `aHealthyAccountStillReadsActive` and `pressingManageOpensTheLinkTheGatewayMinted`.
+- **A cancelled subscriber** still reads `<Plan> · Ended`, because the gateway answers `current` for them: `aCancelledSubscriptionIsNotAPaymentFailure` on the SQL, `aRevokedSubscriptionRendersAsEndedFromTheEntitlement` on the surface.
+- **An account that never subscribed** still gets no row and no control at all — `aMacThatCanProveNothingShowsNoSubscription`, `theAbsenceOfAPlanIsNotASubscription`.
+- **`refreshSubscription()`'s two properties are untouched**: the first read never waits on the network (`theFirstReadNeverWaitsOnTheNetwork`) and a cached answer does not wait for the refresh it started (`theCachedAnswerWinsAndDoesNotWaitForTheRefreshItStarted`). Nothing in this branch edits that method.
+- **The portal's five failure arms and their `retryable` flags** are unchanged; `maps every provider failure onto its own status and retryable flag` still passes, and no `PortalLink` case moved.
+- **The signed claim is byte-identical** — `server/src/entitlement/store.ts` is not in the diff, and `EntitlementClaim` gained no field.
+- **The gate's deny-by-default population** is unchanged in kind: the new route is challenged, listed nowhere in `PUBLIC_ROUTES`, and appears in both population scans.
+
+Tests (exact commands from `CLAUDE.md`), all at **`fb13431d`** — the code head; the docs commit on top of it touches only `docs/sonny-v1-implementation-changelog.md`, and the tree-identity proof for every figure below is beside the figures:
+
+- App half: `swift build` → **0**. The flagged suite → **exit 0, 2942 tests in 198 suites, 8 known issues**, up from 2929 in 198 on `main` at `6cc9e189` — **this branch's own 13 Swift tests**, 5 in `SubscriptionReadingTests` and 8 in `BillingPortalSurfaceTests`. `scripts/warnings` → **exit 0, 0 warnings**, its own report stamped `fb13431d (clean)`, 152s, every file in `Sources/` and `Tests/` compiled.
+- Server half: `npm run build` → **0**; `npm run typecheck` → **0**; `npm run check:secrets` → **0** (`clean (625 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `./scripts/check-secrets-selftest.sh` → **0** (`53 passed, 0 failed`); `npm test` → **exit 0, 812 passed | 407 skipped (1219)**, up from 806 | 401 on `main` — **6 new tests in `billing.test.ts`**; `npm run test:db` against this lane's own derived container → **exit 0, 1219 passed (1219)** with `grep -ic "skipped"` over the log answering **0**, up from 1207 — **6 more in `billing.db.test.ts`**.
+- `scripts/changelog-order` → **exit 0**, over 175 entries, run at the docs head.
+- Every exit code above was read with nothing between the command and `$?`, and no figure was taken through a pipe.
+
+**Mutation batteries: 14 mutants, 14 killed, 0 survived, 0 unattributed**, both halves through `scripts/mutate` at `fb13431d`, one mutant per property rather than one per changed file. **No killer is a timing test or a `HangBackstop` wait**, so none of these is the manufactured-kill shape — and none is `twoCallersAtOnceMakeOneRequest`, which the wave's baseline note says cannot be trusted as a killer until lane-420 lands.
+
+App half — 9 killed:
+
+| id | property broken | killed by |
+|---|---|---|
+| S1 | the past-due override removed, so the line renders `Active` for a declined card | `aPastDueReadingCannotRenderAsActive`, `theLineNamesThePlanAndTheStateAndExplainsNeither`, `aDeclinedCardIsNamedOnTheLineInsteadOfActive` |
+| S2 | the control is never named for what resolves a past-due account | `aPastDueReadingNamesTheControlThatResolvesIt`, `aDeclinedCardIsNamedOnTheLineInsteadOfActive` |
+| S3 | the wire value for a failed payment is read as health | `theWireValuesAreTheOnesTheContractNames`, `aDeclinedCardIsNamedOnTheLineInsteadOfActive`, `signingOutClearsThePaymentStateBeforeTheNextUserSeesIt` |
+| S4 | an unknown wire value asserted as a payment failure rather than tolerated | `theWireValuesAreTheOnesTheContractNames`, `aValueThisBuildDoesNotKnowIsToleratedAndSaysNothing`, `aPaymentStateThisBuildDoesNotKnowSaysNothingRatherThanFailing` |
+| S5 | a failed read reported as health instead of as nothing known | `aRefusedPaymentReadIsNotAFailureTheUserIsShown`, `aMacWithNoNetworkSaysNothingAboutPaymentAndReportsNothing` |
+| S6 | the previous user's payment state survives a sign-out | `signingOutClearsThePaymentStateBeforeTheNextUserSeesIt` |
+| S7 | the row renders its line without the payment reading | `theRowDerivesItsLineAndItsControlFromOneReadOfThePaymentState` |
+| S8 | a past-due customer shown no row at all, so no control reaches the portal | `theRowDerivesItsLineAndItsControlFromOneReadOfThePaymentState` |
+| S9 | the payment state read on only one of the two occasions the subscription is | `thePaymentStateIsReadOnBothOccasionsTheSubscriptionIs` |
+
+Server half — 5 killed, run with `MUTATE_TEST_CMD` carrying this lane's `DATABASE_URL` so the `.db.test.ts` files actually ran; without it every one of these mutants would have met a suite that skips the tests that catch it:
+
+| id | property broken | killed by |
+|---|---|---|
+| R1 | the read reports health whatever the row says | 4 tests, `aDeclinedCardIsReportedPastDue` and `aPastDueAccountIsStillPastDueOnceItsWindowHasClosed` among them |
+| R2 | the read reports a failure for every account that has a row | 5 tests, `aCancelledSubscriptionIsNotAPaymentFailure` and `anAccountWithNoEntitlementRowIsNotPastDue` among them |
+| R3 | the outstanding-failure clause dropped, so a cancelled subscriber reads as past due | `aDeclinedCardIsReportedPastDue`, `aRecoveredPaymentStopsBeingReportedPastDue`, `aCancelledSubscriptionIsNotAPaymentFailure` |
+| R4 | the account scoping dropped, so one past-due account makes the deployment past due | all 6 of the new db tests, `onePastDueAccountDoesNotMakeAnotherOnePastDue` included |
+| R5 | the route answers health without asking the store | `says past_due for an account whose payment has failed`, `never answers current for an account the store reports past due`, `asks about the caller's own account and nothing else` |
+
+**S8 is worth reading rather than counting.** It is the mutant for "the control does not reach the portal" — a past-due customer shown no row at all — and what killed it is the *scan*, on its `model.paymentState` occurrence count going from one to two, not on anything about rendering. That is a real kill and a narrow one: the scan holds the shape of the row rather than its behaviour, because a SwiftUI body is not renderable in this suite. Whoever reviews this should treat the row's actual appearance as a manual item, which is what the three checklist rows are for.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **An unsigned read is affordable exactly as long as nothing depends on it.** The whole justification for putting a billing word outside the signed claim is that it decides no permission. Anything that later reads `payment` to gate, refuse or allow turns this from a display value into an unauthenticated authority, and the §8.2 cost the founders declined would have to be paid after all.
+- **`past_due_since` and `grace_until` answer different questions and the wrong one reverts.** A read keyed on the window rather than on the failure goes quiet at exactly the moment the customer's access ends, which is the moment the line matters most.
+- **A required parameter is what keeps a display defect fixed.** The defect here was a line rendered without asking a question; a defaulted parameter would let the next call site not ask it either, silently.
+- **`.unrecognised` and `nil` collapsing to one answer is deliberate and has a stated blind spot.** A future value worse than `past_due` reads as health on an old build. That is the version ladder's problem, recorded in the contract's change row so a third value is not added as though it were free.
+- **Running a server battery without `DATABASE_URL` would have measured nothing here.** Four of five mutants are only reachable through `.db.test.ts` files, which `npm test` skips with a warning — a skip reads exactly like a pass, and the battery would have reported five clean kills from a suite that never ran the tests.
+
+Known limitations / deferred scope:
+- **Nothing in this repository can produce the past-due state.** It needs a real Polar test subscription and a declining card, so the three manual rows are the only end-to-end verification that exists, and they are owed at the next manual pass.
+- **The row's rendering is held by a source scan, not by a rendered view.** See S8 above.
+- The `422`-versus-`404` question SONNY-216 left open, and the four manual rows it owes, are untouched by this branch and still outstanding.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the coordinator's wave-6 sequencing; this lane holds on `6cc9e189` and does not rebase until it is told it is next (WORKFLOW.md step 3).
+
 ### Branch: fix/a-second-caller-arrives-while-the-first-is-in-flight
 Status: complete
 Date: 2026-09-05
