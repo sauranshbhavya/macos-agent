@@ -180,7 +180,7 @@ Spec sections covered: none — this is a reading of existing code and a manual-
 
 Files changed: `docs/sonny-manual-test-checklist.md` (one new section, four unchecked rows), `docs/sonny-v1-implementation-changelog.md` (this entry).
 
-Tests: none owed and none run, and the reason is the rule rather than a judgment. The diff touches only `docs/`, so it reaches neither half of the repository — `WORKFLOW.md` step 7's docs/comments exemption covers the Swift suite and `scripts/warnings`, and nothing under `server/` changed either. `scripts/changelog-order` **exit 0, 175 entries, both eras** at `PLACEHOLDER_SHA_TO_FILL` — the one check this diff genuinely owes, being a diff that touches the changelog. Its baseline on `main` at `6cc9e189` was exit 0 with 174 entries, so this entry is the only one added.
+Tests: none owed and none run, and the reason is the rule rather than a judgment. The diff touches only `docs/`, so it reaches neither half of the repository — `WORKFLOW.md` step 7's docs/comments exemption covers the Swift suite and `scripts/warnings`, and nothing under `server/` changed either. `scripts/changelog-order` **exit 0, 175 entries, both eras** at `88fa238` — the one check this diff genuinely owes, being a diff that touches the changelog. Its baseline on `main` at `6cc9e189` was exit 0 with 174 entries, so this entry is the only one added.
 
 Behavior added: none.
 
