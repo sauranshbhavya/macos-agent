@@ -497,13 +497,21 @@ struct EveryDeleteReachesTheServerTests {
     func aWipeThatCannotReachTheServerSaysSoAndLeavesOneObligationNamingNoTask() async throws {
         let fixture = try TaskDeletionFixture()
         defer { fixture.tearDown() }
-        _ = try fixture.writeTaskRecord(id: "task-a")
+        let record = try fixture.writeTaskRecord(id: "task-a")
         fixture.goOffline()
+        // A per-task obligation already owed when the press lands — the case the whole rule is
+        // about, because that entry names a task and the file it sits in is the file the wipe leaves
+        // behind.
+        fixture.viewModel.deleteTask(record)
+        try await fixture.waitForDeliveryPasses(1)
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
 
         fixture.viewModel.deleteLocalData()
         await fixture.viewModel.localDataWipeForTests?.value
 
         let owed = try fixture.viewModel.pendingServerDeletionsForTests()
+        // **Exactly one, and it is not the one that was there before.** The per-task obligation did
+        // not survive the press; what stands in its place is wider than it was.
         #expect(owed.count == 1)
         #expect(owed.first?.scope == .everythingUnderTheAccount)
         // **The property the whole shape turns on.** A file a privacy wipe leaves behind may not
@@ -722,7 +730,18 @@ private struct TaskDeletionFixture {
                     encryption: encryption
                 )
             ),
-            localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+            // **Over this fixture's own files, not an empty list** (SONNY-404's fix round). The wipe
+            // has to genuinely remove the queue for a test to be able to say that a per-task
+            // obligation does not survive the press — with an empty list the wipe deleted nothing
+            // and the assertion would have been about a file nobody touched. The real list is
+            // `LocalDataDeletionService.defaultStoreFileURLs()`, which points under `~/Library` and
+            // is never what a fixture passes.
+            localDataDeletionService: LocalDataDeletionService(fileURLs: [
+                queueURL,
+                root.appendingPathComponent("task-history.json"),
+                root.appendingPathComponent("vision-sessions.json"),
+                root.appendingPathComponent("task-plan-details.json")
+            ]),
             backendClient: client,
             userDefaults: userDefaults,
             whitelist: PathWhitelist(roots: [root])
