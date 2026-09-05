@@ -49,7 +49,11 @@ struct EgressClassificationTests {
              .getFinderSelection, .revealInFinder, .showPermissionReadiness, .saveRoutine,
              .createWorkspace, .editWorkspace, .openGeneratedArtifact, .createLocalDraft,
              .calculateUtility, .lookupClipboardHistory, .expandSnippet, .saveSnippet,
-             .switchRunningApp, .lookupRecentArtifacts, .clarify, .unsupported:
+             .switchRunningApp, .lookupRecentArtifacts, .clarify,
+             // SONNY-385. One `moveItem` on a whitelisted path. It reads no file's contents and
+             // opens no connection, so there is nothing for a redaction gate to be about.
+             .rename,
+             .unsupported:
             return .neverLeavesDevice
         // `.writeMarkdown` is a local file write. It reads "no" honestly only because the
         // solitary-step shape can no longer be silently promoted into the Hacker News preset

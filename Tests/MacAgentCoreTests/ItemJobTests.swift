@@ -1095,15 +1095,27 @@ struct ItemJobTests {
     /// The complement is the half that carries the risk here, and it is asserted over
     /// `AgentOperation.allCases` rather than over a hand-picked five: this rule refuses work a user
     /// legitimately asked for, and a job is *for* doing one thing many times, so a rule that crept
-    /// wider would break the feature it lives inside. Exactly one operation is refused, and the
+    /// wider would break the feature it lives inside. Exactly two operations are refused, and the
     /// sweep is what says so.
+    ///
+    /// **The delivery is pinned as well as the membership** (SONNY-385). `start_watching` has
+    /// nothing for the user to answer and `rename` has exactly one thing, so the two take different
+    /// doors out of `AgentActionExecutor.prepare` — a failure and a question. Asserting the whole
+    /// `JobTemplateRefusal` value rather than its `message` is what makes a silent change of
+    /// delivery fail here: a `.refused` rename would still refuse batch renaming, and would refuse
+    /// it by telling the user the run failed instead of asking them for the names, which is the
+    /// founders' decision reversed with the test still green.
     @Test
-    func theOnlyOperationAJobMayNotRepeatIsTheOneThatSpendsAStandingCap() {
+    func theOnlyOperationsAJobMayNotRepeatAreTheStandingCapAndTheOneThatNeedsAnAnswer() {
         let refused = AgentOperation.allCases.filter { $0.jobTemplateRefusal != nil }
-        #expect(refused == [.startWatching])
+        #expect(refused == [.startWatching, .rename])
         #expect(
             AgentOperation.startWatching.jobTemplateRefusal
-                == "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+                == .refused("Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own.")
+        )
+        #expect(
+            AgentOperation.rename.jobTemplateRefusal
+                == .asks("What should each one be called? Sonny renames one file or folder at a time, so tell it the new names and it will do them.")
         )
         // The everyday job operations, named rather than merely absent above, so that adding one
         // here later fails on the direction the feature is about.

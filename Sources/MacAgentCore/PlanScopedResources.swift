@@ -229,6 +229,24 @@ public enum PlanScopedResources {
         case .createLocalDraft:
             return .knowable(files(step.outputPath))
 
+        case .rename:
+            // **Both paths, and the second one is the point** (SONNY-385). A rename reads one file
+            // and writes another, and the written one is a path no field of the step holds — it is
+            // `inputPath`'s own parent with `newName` in it. Reporting only the source would answer a
+            // workspace boundary about the file being read and say nothing about the file being
+            // created, which is the direction that silently blesses.
+            //
+            // Derived through the adapter's own `destinationPath` rather than composed again here,
+            // so the boundary is answered about the path the run will actually touch. That call is
+            // pure — it builds a string and validates nothing — which is what lets this classifier
+            // stay pure with it.
+            return .knowable(
+                files(
+                    step.inputPath,
+                    RenameCapabilityAdapter.destinationPath(forInputPath: step.inputPath, newName: step.newName)
+                )
+            )
+
         case .switchRunningApp:
             // The pin is the resource (SONNY-58): `RunningAppSwitchCapabilityAdapter`'s resolve
             // hook runs before every gate reads the plan, so by the time a verdict is computed the

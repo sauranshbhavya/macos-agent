@@ -245,21 +245,40 @@ public final class AgentActionExecutor {
     /// moment could return a different folder listing, and the user's one approval would then cover
     /// a job they were never shown.
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
-        let plan = try PlanItemJobResolver.resolving(
-            plan,
-            whitelist: whitelist,
-            finderContextReader: finderContextReader,
-            fileManager: fileManager
-        )
-        if let question = try clarificationQuestion(in: plan) {
+        let expandedPlan: AgentPlan
+        do {
+            expandedPlan = try PlanItemJobResolver.resolving(
+                plan,
+                whitelist: whitelist,
+                finderContextReader: finderContextReader,
+                fileManager: fileManager
+            )
+        } catch PlanItemJobError.templateNeedsClarification(let question) {
+            // **A refusal the user can answer becomes a question rather than a failure**
+            // (SONNY-385). "Rename all of these" is refused because a batch rename would need a
+            // rule Sonny does not have, and the founders' decision is that it asks for the names
+            // instead of inventing one — so the whole point is lost if this arrives as red text.
+            //
+            // The conversion is the same one the `AutomationStoreError` catch below already
+            // performs for a routine or workspace that does not exist, and it goes through the same
+            // `clarificationPlan` — so the widget's panel, its answer field, and the re-entry that
+            // sends the answer back through `start()` are all reached by exactly the path a
+            // planner-authored `clarify` step reaches.
+            //
+            // Only this one error converts. Every other `PlanItemJobError` is a job that cannot run
+            // and has nothing to ask, and a blanket catch here would turn each of those into a
+            // question with no answer.
+            return Self.clarification(question: question)
+        }
+        if let question = try clarificationQuestion(in: expandedPlan) {
             let preview = ActionPreview(
                 title: "Clarification needed",
                 details: [question]
             )
-            return PreparedAgentRun(plan: plan, previews: [preview], clarificationQuestion: question)
+            return PreparedAgentRun(plan: expandedPlan, previews: [preview], clarificationQuestion: question)
         }
 
-        let resolvedPlan = try resolveDefaultOutputs(in: plan)
+        let resolvedPlan = try resolveDefaultOutputs(in: expandedPlan)
         if let question = try clarificationQuestion(in: resolvedPlan) {
             let preview = ActionPreview(
                 title: "Clarification needed",
@@ -286,13 +305,22 @@ public final class AgentActionExecutor {
             guard let question = missingAutomationTargetQuestion(for: error) else {
                 throw error
             }
-            let clarifyPlan = Self.clarificationPlan(question: question)
-            let preview = ActionPreview(
-                title: "Clarification needed",
-                details: [question]
-            )
-            return PreparedAgentRun(plan: clarifyPlan, previews: [preview], clarificationQuestion: question)
+            return Self.clarification(question: question)
         }
+    }
+
+    /// A prepared run that asks `question` and does nothing else.
+    ///
+    /// Two callers build this — a missing routine or workspace, and a job whose template asks rather
+    /// than refuses (SONNY-385) — and they built it identically before this existed. One home,
+    /// because the three parts have to agree: the plan the approval gate will see, the preview the
+    /// surfaces render, and the question that opens the answer field.
+    private static func clarification(question: String) -> PreparedAgentRun {
+        PreparedAgentRun(
+            plan: clarificationPlan(question: question),
+            previews: [ActionPreview(title: "Clarification needed", details: [question])],
+            clarificationQuestion: question
+        )
     }
 
     /// `preview`, plus the one thing only `prepare` needs from it: which items of a job could not be
@@ -891,6 +919,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .visionSession, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .startWatching:
             return try previewCapability(for: .startWatching, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
+        case .rename:
+            return try previewCapability(for: .rename, plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan)
         case .chain:
             // Discarded deliberately — see `previewChain`'s parameter note for why every caller but
             // `prepare` has nothing to do with a job's unavailable items.
@@ -1035,6 +1065,8 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .startWatching:
             return try await executeCapability(for: .startWatching, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+        case .rename:
+            return try await executeCapability(for: .rename, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, onItemFailed: onItemFailed, log: log)
         }
@@ -1069,6 +1101,7 @@ public final class AgentActionExecutor {
         case invokeShortcut
         case visionSession
         case startWatching
+        case rename
         case chain
     }
 
@@ -1194,6 +1227,8 @@ public final class AgentActionExecutor {
             return .visionSession
         case .startWatching:
             return .startWatching
+        case .rename:
+            return .rename
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }

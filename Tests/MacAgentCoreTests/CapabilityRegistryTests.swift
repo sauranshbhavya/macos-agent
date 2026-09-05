@@ -65,6 +65,8 @@ struct CapabilityRegistryTests {
         #expect(try registry.adapter(for: .getFinderSelection) is FinderSelectionCapabilityAdapter)
         #expect(try registry.adapter(for: .revealInFinder).metadata.id == "local.finder.reveal-path")
         #expect(try registry.adapter(for: .revealInFinder) is RevealInFinderCapabilityAdapter)
+        #expect(try registry.adapter(for: .rename).metadata.id == "local.files.rename")
+        #expect(try registry.adapter(for: .rename) is RenameCapabilityAdapter)
         #expect(try registry.adapter(for: .showPermissionReadiness).metadata.id == "local.permissions.readiness")
         #expect(try registry.adapter(for: .showPermissionReadiness) is PermissionReadinessCapabilityAdapter)
         #expect(try registry.adapter(for: .saveRoutine).metadata.id == "local.routines.save")

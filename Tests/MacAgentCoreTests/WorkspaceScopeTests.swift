@@ -762,7 +762,7 @@ struct WorkspaceScopeTests {
         // names, and SONNY-382 is the operation that made it bite). It was
         // `…CoversAllThirtyTwoCases`, which the changelog's PR #94 entry cites by that name — that
         // citation is a dated record of what the test was called then and stays verbatim.
-        #expect(AgentOperation.allCases.count == 33)
+        #expect(AgentOperation.allCases.count == 34)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
@@ -820,6 +820,11 @@ struct WorkspaceScopeTests {
             // anything. Knowable rather than opaque, because what it will touch is decided now and
             // never re-decided.
             .startWatching: [.webDomain("example.com")],
+            // SONNY-385. Two file locations, and the second is the one no field of the step holds:
+            // the destination is `inputPath`'s parent with `newName` in it, which is why the probe
+            // below carries a `newName` at all. Reporting only `input` would answer a boundary about
+            // the file being read and stay silent about the file being written.
+            .rename: [input, .fileLocation("~/Documents/renamed.pdf")],
             .clarify: [],
             .unsupported: []
         ]
@@ -1574,7 +1579,12 @@ private extension AgentStep {
             draftTitle: "Draft",
             draftContent: "Body",
             shortcutName: "Daily Digest",
-            shortcutInput: "input"
+            shortcutInput: "input",
+            // Populated for `workspaceFileLocations`' reason (SONNY-385): the rename row's second
+            // resource is *derived* from this field and `inputPath` rather than read off the step,
+            // so left nil the row would collapse to `[input]` and pass while saying nothing about
+            // the derivation. Every other row is unchanged by it.
+            newName: "renamed.pdf"
         )
     }
 }

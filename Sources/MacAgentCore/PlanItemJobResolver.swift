@@ -227,10 +227,22 @@ public enum PlanItemJobResolver {
     /// the population it greps adds a match, so the stamp has to name a commit that already contains
     /// the sentence (`CLAUDE.md`'s ninth write-the-command defect, arriving inside the fix for this
     /// branch's own F1 — which is where that rule says attention is lowest).
+    ///
+    /// **Two errors rather than one, because a refusal with an answer is not a failure**
+    /// (SONNY-385). `JobTemplateRefusal` carries how its words reach the user, and this is the one
+    /// place that reading happens: `.refused` is the run failing, `.asks` becomes a question
+    /// `AgentActionExecutor.prepare` puts in front of the user with a field to type into. Neither
+    /// arm looks at the operation, so a third entry gets its delivery from its own classification
+    /// rather than from a list here that would have to be kept in step with it.
     private static func validateTemplateOperations(_ steps: [AgentStep]) throws {
         for step in steps {
-            if let refusal = step.operation.jobTemplateRefusal {
-                throw PlanItemJobError.forbiddenStepOperation(refusal)
+            switch step.operation.jobTemplateRefusal {
+            case .refused(let message):
+                throw PlanItemJobError.forbiddenStepOperation(message)
+            case .asks(let question):
+                throw PlanItemJobError.templateNeedsClarification(question)
+            case nil:
+                continue
             }
         }
     }

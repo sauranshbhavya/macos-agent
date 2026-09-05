@@ -368,6 +368,50 @@ struct AgentPlanDecoderTests {
         #expect(step.workspaceFileLocationsToRemove == ["~/Documents/Old"])
     }
 
+    /// The same drift, for `rename`'s own key (SONNY-385, PR #200 F2).
+    ///
+    /// **`newName` is `required` in the schema, so this drift is not one field going missing — it is
+    /// every rename command a real user types dying at `unexpectedStepKey`, at run time.** The
+    /// structured-output subset makes the model send every property in `stepRequiredKeys`, so a
+    /// well-formed planner response for "rename this to invoice-march" carries the key whether or
+    /// not the decoder will accept it.
+    ///
+    /// The asymmetry is what makes it invisible: the schema half is pinned **by value** in two
+    /// places (`PlannerBoundaryTests.theAgentPlanSchemaKeepsItsStrictShape` and the serialized
+    /// fixture), and before this test the decoder half was pinned by nothing — a reviewer's mutant
+    /// dropping `"newName"` from `stepKeys` survived the whole suite while the mirror mutant on the
+    /// schema list died by two tests. `AutomationStoresTests`' `plannerWritable` set names the key,
+    /// but that is a claim *about* `stepKeys` rather than a check *of* it, which is the distinction
+    /// that file's own doc comment already draws about `resolverOnly`.
+    @Test
+    func decodesARenamePlanCarryingTheNewNameKey() throws {
+        let json = """
+        {
+          "summary": "Rename the scan.",
+          "requiresConfirmation": true,
+          "steps": [
+            {
+              "id": "rename",
+              "operation": "rename",
+              "description": "Rename the file.",
+              "inputPath": "~/Documents/scan1.pdf",
+              "newName": "invoice-march.pdf"
+            }
+          ]
+        }
+        """
+
+        let plan = try AgentPlanDecoder.decodeStrict(from: json)
+
+        let step = try #require(plan.steps.first)
+        #expect(step.operation == .rename)
+        #expect(step.inputPath == "~/Documents/scan1.pdf")
+        // Asserted by value rather than for being non-nil: a decoder that accepted the key and
+        // dropped the value would leave `renameSpec` refusing every rename for a missing newName,
+        // which is the same run-time failure by a quieter route.
+        #expect(step.newName == "invoice-march.pdf")
+    }
+
     /// The other half of the same allowlist: a key outside it is still rejected, so the test above
     /// pins acceptance of exactly four new names rather than the removal of the check itself.
     @Test

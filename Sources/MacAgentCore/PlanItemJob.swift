@@ -279,6 +279,15 @@ public extension AgentOperation {
         // why writing one into a *trailing* consuming step is exactly what stops it consuming.
         case .revealInFinder, .openGeneratedArtifact:
             return [.inputPath]
+        // Reads `inputPath` as the item to rename — an honest answer to *this* switch's question,
+        // and one that decides nothing about whether a job may carry a rename. It may not, and
+        // `jobTemplateRefusal` below is what says so (SONNY-385). Answering `[]` here to express the
+        // refusal would have been the tempting shortcut and is the one this table cannot afford: the
+        // question it asks is what the adapter reads, `theItemFieldTableMatchesWhatTheAdaptersActuallyRead`
+        // checks that against the adapter's own source, and a table that lies about one operation to
+        // achieve an unrelated effect is a table nobody can read the next one off.
+        case .rename:
+            return [.inputPath]
         case .invokeShortcut:
             return [.shortcutInput]
         case .openHackerNews, .fetchHNHeadlines, .writeMarkdown, .webToMarkdown, .openApp,
@@ -321,19 +330,46 @@ public extension AgentOperation {
     ///
     /// **Exhaustive with no `default`, following `resumeRepeatSafety`'s precedent rather than
     /// `forbiddenStepOperations`' set.** A set has no compiler guard: a fourteenth operation joins
-    /// the tree unclassified and the omission looks exactly like a decision. The bar is narrow and
-    /// worth stating, because most things are fine to repeat: an operation belongs here when each
-    /// copy **consumes a share of something capped and standing** that outlives the run. A second
-    /// local file, a second browser tab and a second identical save are all permitted — they are
-    /// untidy, and a job is *for* doing one thing many times.
+    /// the tree unclassified and the omission looks exactly like a decision.
+    ///
+    /// **Two bars, not one, and the second arrived with the second entry** (SONNY-385). Most things
+    /// are fine to repeat — a second local file, a second browser tab, a second identical save are
+    /// all permitted, because a job is *for* doing one thing many times. An operation belongs here
+    /// when one of these holds:
+    ///
+    /// - each copy **consumes a share of something capped and standing** that outlives the run
+    ///   (`start_watching`); or
+    /// - the operation takes a value that is **different for every item and cannot be derived from
+    ///   the item**, so repeating the template means repeating that one value (`rename`).
+    ///
+    /// The second bar is narrower than it looks and does not reach the ordinary job operations:
+    /// every one of those takes the item itself as its input, which is precisely what the expansion
+    /// supplies. `rename` is the first operation to want a *second* per-item value — the new name —
+    /// and `PlanItemField` has no way to carry one, so a `[rename]` job would expand into forty
+    /// steps all renaming to the same name: the first would succeed and the other thirty-nine would
+    /// collide with it.
+    ///
+    /// **Why the planner prompt was not the answer, for either entry.** The prompt already says to
+    /// produce one `start_watching` step, and `StoredRoutine.forbiddenStepOperations` exists because
+    /// a prompt is advice — the same reason, at the same product, for the same operation. This is
+    /// the door.
     ///
     /// **The sentence lives here rather than at the throw site**, so a second entry cannot arrive
     /// with a generic message covering two different harms; the classification and the words the
-    /// user reads are one decision in one place.
-    var jobTemplateRefusal: String? {
+    /// user reads are one decision in one place. That property is exactly what the second entry
+    /// tested, because the two harms want different *deliveries* as well as different words —
+    /// which is what `JobTemplateRefusal` carries.
+    var jobTemplateRefusal: JobTemplateRefusal? {
         switch self {
         case .startWatching:
-            return "Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own."
+            return .refused("Sonny will not start a watcher for each item — that would spend everything it can watch on copies of one page. Ask for the watcher on its own.")
+        case .rename:
+            // Founder decision, 2026-09-03: batch rename takes no rule in v1 (SONNY-385). A pattern,
+            // a sequence and a substitution were each priced and each rejected — a wrong bulk rename
+            // cannot be undone through the product, and a question is cheap. So Sonny asks, and this
+            // is the only entry whose delivery is `.asks`: there is something the user can answer,
+            // and answering it produces the single renames Sonny can actually do.
+            return .asks("What should each one be called? Sonny renames one file or folder at a time, so tell it the new names and it will do them.")
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .revealInFinder,
              .openGeneratedArtifact, .invokeShortcut, .openHackerNews, .fetchHNHeadlines,
              .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL, .openURL, .playMedia,
@@ -342,6 +378,38 @@ public extension AgentOperation {
              .lookupClipboardHistory, .expandSnippet, .saveSnippet, .switchRunningApp,
              .lookupRecentArtifacts, .visionSession, .clarify, .unsupported:
             return nil
+        }
+    }
+}
+
+/// Why a job's template may not contain an operation, **and how that reaches the user**
+/// (SONNY-385).
+///
+/// This was a bare `String?` while there was one entry, and the second one is what showed the
+/// string was carrying two decisions at once. `start_watching` has nothing to answer — the user's
+/// next move is to ask for the watcher on its own, so the refusal is the run's failure. A batch
+/// rename has exactly one thing to answer, the names, so refusing it as a failure would throw away
+/// the whole point of refusing it: the founder's decision is that Sonny **asks** rather than
+/// guessing a rule.
+///
+/// **One value rather than two properties**, for the reason the property's own comment gives about
+/// its sentence: the classification and the words the user reads are one decision in one place, and
+/// how those words arrive is part of that decision rather than something a caller picks afterwards.
+public enum JobTemplateRefusal: Equatable, Sendable {
+    /// Nothing to answer. Reaches the user as the run's failure, through
+    /// `PlanItemJobError.forbiddenStepOperation`.
+    case refused(String)
+    /// A question with an answer. Reaches the user through the clarification panel, with a field to
+    /// type into — `AgentActionExecutor.prepare` converts it, the same way it already converts a
+    /// missing routine or workspace into a question rather than an error.
+    case asks(String)
+
+    /// The words, whichever delivery this is. Two callers want them without caring which — the
+    /// throw site, and the tests that pin the copy.
+    public var message: String {
+        switch self {
+        case .refused(let message), .asks(let message):
+            return message
         }
     }
 }
@@ -391,6 +459,15 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
     /// The template contains an operation a job may not repeat once per item — see
     /// `AgentOperation.jobTemplateRefusal`, which is where the sentence comes from (PR #187, F1).
     case forbiddenStepOperation(String)
+    /// The same refusal, for an operation whose `jobTemplateRefusal` is a **question** rather than a
+    /// statement (SONNY-385). Its own case because the two are handled differently one level up:
+    /// `AgentActionExecutor.prepare` turns this one into a clarification the user can answer and
+    /// lets every other `PlanItemJobError` through as the failure it is.
+    ///
+    /// **Distinguished by the error rather than by re-asking the operation**, so the conversion has
+    /// exactly one thing to inspect and cannot disagree with the resolver about which refusal it is
+    /// looking at.
+    case templateNeedsClarification(String)
     /// Not one item of the job could even be previewed, so there is nothing to ask approval for. The
     /// associated value is the first item's own error, which is the message that explains what is
     /// wrong with what the user pointed at.
@@ -413,6 +490,11 @@ public enum PlanItemJobError: Error, Equatable, LocalizedError {
         case .noStepReadsTheItemField(let detail):
             return detail
         case .forbiddenStepOperation(let detail):
+            return detail
+        case .templateNeedsClarification(let detail):
+            // The clarification path uses the associated value directly; this exists for the case
+            // where one is thrown somewhere that reports errors rather than asking — a caller
+            // outside `prepare` — and the question is still the right thing to read.
             return detail
         case .everyItemUnavailable(let detail):
             return detail

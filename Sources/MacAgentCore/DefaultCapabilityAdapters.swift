@@ -27,6 +27,7 @@ public enum DefaultCapabilityAdapters {
             OpenMediaResultCapabilityAdapter(),
             FinderSelectionCapabilityAdapter(),
             RevealInFinderCapabilityAdapter(reveal: finderRevealer),
+            RenameCapabilityAdapter(),
             PermissionReadinessCapabilityAdapter(),
             SaveRoutineCapabilityAdapter(),
             RunRoutineCapabilityAdapter(),

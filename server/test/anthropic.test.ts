@@ -304,8 +304,10 @@ describe("the real plan schema meets the prune", () => {
     // **60 since SONNY-382**, which added one nullable step property (`watchSubject`). It is two
     // rather than one for the reason the paragraph above already gives: a step property is embedded
     // twice, under `steps` and under `routineSteps`.
+    // **62 since SONNY-385**, which added one nullable step property (`newName`), embedded twice for
+    // the same reason.
     const unions = nodes(planSchema).filter((node) => Array.isArray(node["type"]));
-    expect(unions).toHaveLength(60);
+    expect(unions).toHaveLength(62);
     // One `minItems`, on the top-level `steps` array. The nested `routineSteps` does not carry one,
     // which is why this is 1 rather than the 2 an embedded-twice `stepSchema` would suggest —
     // `minItems` sits on the property that *holds* the steps, and only `steps` is required non-empty.
@@ -332,8 +334,8 @@ describe("the real plan schema meets the prune", () => {
   it("comes out with every type union rewritten as an anyOf, and none left", () => {
     const pruned = nodes(prunedSchema(planSchema));
     expect(pruned.filter((node) => Array.isArray(node["type"]))).toHaveLength(0);
-    // The 60 unions become 60 `anyOf`s; the schema has none of its own to add to the count.
-    expect(pruned.filter((node) => Array.isArray(node["anyOf"]))).toHaveLength(60);
+    // The 62 unions become 62 `anyOf`s; the schema has none of its own to add to the count.
+    expect(pruned.filter((node) => Array.isArray(node["anyOf"]))).toHaveLength(62);
   });
 
   it("keeps an enum on the node whose type it split, so the field stays as narrow as it was", () => {
