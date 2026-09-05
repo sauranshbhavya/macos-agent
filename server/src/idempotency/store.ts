@@ -38,19 +38,38 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  * **The interval this has to cover is claim → `onSend`, and that is not the same as a route's
  * deadline** — which is what this comment used to claim, saying §12's longest total deadline is 105 s
  * "so a request that is genuinely still running can never have its key taken". PR #142's review
- * measured the gap. On the JSON routes the margin is real but thin: `synthesize` and
- * `screen/analyze` total 105 s against this 120 s. On `POST /v1/transcriptions` there is **no bound
- * at all** — the multipart body read (`for await (const part of request.parts())` with
- * `part.toBuffer()` over up to 10 MiB) sits *outside* `withDeadlines`, which `routes/model.ts`
- * applies only to the upstream call, and Fastify's `requestTimeout` is unset and therefore disabled.
- * A stalled upload holds its claim indefinitely, and no constant here can fix that.
+ * measured the gap, and SONNY-322 closed it. **This is the one place the relationship is stated**,
+ * which is what that ticket asked for: the lease was a constant with no guarantee behind it.
  *
- * **So a lease can be taken from a live holder, and the fencing token is what makes that survivable
- * rather than corrupting.** `claim_token` means a superseded holder's `complete` or `release` matches
- * zero rows instead of landing on its successor's claim. What the token does *not* prevent is the
- * other consequence: while both are running, the provider may be called twice for one key, which is
- * the outcome §9.2 bullet 4 exists to avoid. Bounding the body read is the fix for that, it belongs
- * to the route rather than to this file, and it is filed rather than assumed away.
+ * Every route's claim-to-`onSend` interval is now bounded by something this process owns, and each
+ * bound sits below this constant:
+ *
+ * | route family                        | bounded by                                   | worst case |
+ * |-------------------------------------|----------------------------------------------|-----------|
+ * | the JSON routes                     | §12's total deadline (`model/limits.ts`)      | 105 s     |
+ * | `POST /v1/transcriptions`           | `BODY_READ_DEADLINE_MS` + its total deadline  | 105 s     |
+ *
+ * The transcription row is the one that used to be unbounded: its body is `multipart/form-data`,
+ * consumed by `request.parts()` **inside** the handler, so the read happens *after* the `preHandler`
+ * hook takes the claim and *outside* `withDeadlines`, which `routes/model.ts` applies to the upstream
+ * call alone. `routes/model.ts` now runs that read under `BODY_READ_DEADLINE_MS` (30 s) and destroys
+ * the request stream when it elapses, so 30 s + 75 s = 105 s, fifteen seconds under this lease — the
+ * same margin the JSON routes already had. `model/limits.ts` derives that 30 s from this constant,
+ * and `model.test.ts` asserts the inequality rather than any of the three numbers alone, so a later
+ * change to one of them cannot quietly reopen this.
+ *
+ * **`app.ts`'s `requestTimeout` is not what holds this, and it is worth saying why**, because it is
+ * the obvious candidate. It bounds receipt of a request rather than a handler, and it is enforced on
+ * Node's thirty-second connection sweep: measured at Fastify 5.12.1 / Node v22.23.1, a 2000 ms
+ * setting answered at 89955 ms and a 35000 ms setting at 60003 ms. A bound that cannot be held to
+ * within a minute cannot carry a fifteen-second margin. It is a backstop against connection
+ * occupancy; the arithmetic above is held at the route.
+ *
+ * **The lease still exists, and the fencing token still matters, because a bound is not a
+ * guarantee.** A process killed mid-request runs no deadline at all — which is the case this
+ * constant was always for — so a claim can still be taken from a row whose holder is gone.
+ * `claim_token` means a superseded holder's `complete` or `release` matches zero rows instead of
+ * landing on its successor's claim.
  */
 export const CLAIM_LEASE_SECONDS = 120;
 

@@ -1,10 +1,15 @@
+import { Readable } from "node:stream";
 import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { Config } from "../src/config.js";
 import type { WithConnection } from "../src/db/connection.js";
-import { BODY_LIMIT_BYTES, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS } from "../src/model/limits.js";
+import {
+  BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS,
+} from "../src/model/limits.js";
+import { CLAIM_LEASE_SECONDS } from "../src/idempotency/store.js";
+import { REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -1078,6 +1083,143 @@ describe("the numbers this ticket is held to", () => {
     // The other five numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
     // matching `total` here. `ModelRouteNumbersTests` asserts them against these same literals, so
     // the two halves of §12's table cannot move independently without one of the two failing.
+  });
+
+  it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {
+    // **SONNY-322's user-visible half, over the real route.** A caller that opens a request, sends
+    // the multipart preamble and then stops holds a socket, a Fastify request and — because the
+    // `Idempotency-Key` claim is taken in a `preHandler` hook that runs before this route's body is
+    // read — an idempotency claim, with nothing to end any of them. This is that request.
+    //
+    // **Fake timers rather than a shortened deadline**, so the test drives the real 30 s constant
+    // instead of a value only tests use. Advancing the clock is what fires the route's timer; a
+    // sleep-then-assert would be the wall-clock bet CLAUDE.md forbids, and at 30 s it would also be
+    // the slowest test in the suite.
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
+    const app = build();
+    const boundary = "SonnyTestBoundary-stalled";
+    // A body that begins correctly and never ends: the preamble and the opening of the audio part,
+    // with no terminating boundary and no `end()`. `content-length` is deliberately not set, so the
+    // stream is what decides when the body is over — which is never.
+    const stalled = new Readable({ read() { /* nothing more will ever arrive */ } });
+    stalled.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="meta"\r\n` +
+        `Content-Type: application/json\r\n\r\n` +
+        `{"task_id":"t","retention":"standard"}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="audio"; filename="voice.m4a"\r\n` +
+        `Content-Type: audio/mp4\r\n\r\n`,
+    );
+    stalled.push("partial-audio-bytes-and-then-silence");
+
+    vi.useFakeTimers();
+    try {
+      const pending = app.inject({
+        method: "POST",
+        url: "/v1/transcriptions",
+        headers: {
+          authorization: authorization(),
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: stalled,
+      });
+      // Let the handler reach its body read and register the deadline before the clock moves.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BODY_READ_DEADLINE_MS + 1);
+      const response = await pending;
+
+      // The status and the code, because they can come apart: `errors.ts` maps an unnamed 4xx to
+      // `request.invalid`, and a 400 carrying the same code would look identical in a body-only
+      // assertion while telling the client the body was malformed rather than late.
+      expect(response.statusCode).toBe(408);
+      expect(response.json().error.code).toBe("request.invalid");
+      expect(response.json().error.retryable).toBe(false);
+      // And no upstream call was made for a body that never arrived — the whole reason §9.2's
+      // fourth bullet cares about this interval.
+      expect(calls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      await app.close();
+    }
+  });
+
+  it("keeps the transcription body read plus its handler INSIDE the idempotency lease", () => {
+    // **SONNY-322's whole point, asserted as the inequality rather than as three literals.** The
+    // claim on an `Idempotency-Key` is taken in a `preHandler` hook, and on this one route the body
+    // is `multipart/form-data` read inside the handler — so the interval the lease has to cover is
+    // the body read PLUS the rest of the handler, and until this ticket the body read was bounded by
+    // nothing at all. §9.2's fourth bullet promises a key in flight is never a second upstream call,
+    // and only a bound on that interval makes it unreachable.
+    //
+    // Asserting the relationship rather than the numbers is deliberate: each of the three is
+    // separately defensible and any one of them may move, and what must survive the move is that the
+    // sum stays under the lease. A test pinning `30_000` would go red on a change that is fine and
+    // stay green on the change that is not — raising the lease's two inputs while leaving the lease.
+    const worstCaseMs = BODY_READ_DEADLINE_MS + DEADLINE_MS.transcriptions.total;
+    expect(worstCaseMs).toBeLessThan(CLAIM_LEASE_SECONDS * 1000);
+
+    // The margin is real rather than incidental — a sum one millisecond under the lease would
+    // satisfy the line above and leave nothing for the process's own work between the two.
+    expect(CLAIM_LEASE_SECONDS * 1000 - worstCaseMs).toBeGreaterThanOrEqual(15_000);
+
+    // And the JSON routes, which were already inside it and are the reason 15 s is the margin used:
+    // `synthesize` and `screenAnalyze` are the longest at 105 s against the same 120 s lease.
+    for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
+      expect(deadlines.total, route).toBeLessThanOrEqual(CLAIM_LEASE_SECONDS * 1000 - 15_000);
+    }
+  });
+
+  it("bounds a request's delivery at §12's longest CLIENT timeout, not at one of its server deadlines", () => {
+    // **SONNY-322.** Fastify's default is `0`, which disables the bound; nothing else anywhere
+    // bounds how long a caller may take to deliver a request, which is a connection-occupancy shape
+    // available to an unauthenticated caller on the sign-in routes.
+    //
+    // 120 s is §12's longest *client* timeout (`screen/analyze` and `research/synthesize`). Past it
+    // no Sonny client is still waiting for any answer, so a body still arriving then is one nobody
+    // will read. It is deliberately NOT one of §12's server deadlines: this bounds receiving the
+    // request and not running the handler, measured — with `requestTimeout: 2000` a handler that
+    // slept five seconds still returned 200.
+    expect(REQUEST_TIMEOUT_MS).toBe(120_000);
+
+    // It has to sit above every server-side total deadline, or a legitimate slow request would be
+    // cut off mid-handler on a route whose own deadline had not yet elapsed.
+    for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
+      expect(REQUEST_TIMEOUT_MS, route).toBeGreaterThan(deadlines.total);
+    }
+    // And above the route-level body-read bound, which is the tighter of the two and the one that
+    // actually holds the lease's arithmetic.
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(BODY_READ_DEADLINE_MS);
+  });
+
+  it("answers a client error with §7.1's envelope rather than Fastify's own", () => {
+    // **Turning `requestTimeout` on introduced a response shape this server did not produce**, and
+    // Fastify's is `{"error":"Request Timeout","message":"Client Timeout","statusCode":408}` — which
+    // shares no field with §7.1's envelope. It arrives on a socket before any request object exists,
+    // so `setErrorHandler` and `frameworkErrors` are both downstream of it and neither runs, which
+    // is why `app.ts` states the envelope guarantee and this asserts it.
+    const raw = clientErrorResponse();
+    const [statusLine, ...rest] = raw.split("\r\n");
+    expect(statusLine).toBe("HTTP/1.1 408 Request Timeout");
+    expect(rest).toContain("Connection: close");
+    expect(rest).toContain("Content-Type: application/json; charset=utf-8");
+
+    const body = JSON.parse(raw.slice(raw.indexOf("\r\n\r\n") + 4));
+    expect(Object.keys(body)).toEqual(["error"]);
+    // §7.2 names no case for "you took too long to send your request", and `errors.ts`' rule for a
+    // 4xx it does not name individually is `request.invalid` — the same answer the route-level
+    // deadline gives, so the two doors cannot disagree.
+    expect(body.error.code).toBe("request.invalid");
+    expect(body.error.retryable).toBe(false);
+    expect(body.error.retry_after_seconds).toBe(null);
+    // Empty rather than invented: `genReqId` runs per request and this fires on a socket that never
+    // completed one, so there is no id to quote in a support lookup.
+    expect(body.error.request_id).toBe("");
+
+    // The declared length has to be the real one, or the client reads a truncated body or hangs
+    // waiting for bytes that never come.
+    const declared = rest.find((h) => h.startsWith("Content-Length: "));
+    expect(declared).toBe(`Content-Length: ${Buffer.byteLength(raw.slice(raw.indexOf("\r\n\r\n") + 4))}`);
   });
 
   it("caps a recording at three minutes, which is the number the Mac's refusal is built from", () => {

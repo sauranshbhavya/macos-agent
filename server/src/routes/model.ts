@@ -3,7 +3,7 @@ import { z } from "zod";
 import { errorBody } from "../errors.js";
 import { noteContent } from "../content/hook.js";
 import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
-import { BODY_LIMIT_BYTES, DEADLINE_MS } from "../model/limits.js";
+import { BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS } from "../model/limits.js";
 import {
   ProviderRejected,
   ProviderTimedOut,
@@ -220,6 +220,50 @@ function invalid(request: FastifyRequest, reply: FastifyReply, message: string):
   return reply.status(400).send(errorBody("request.invalid", message, request.id));
 }
 
+/** Raised when a request body did not finish arriving inside `BODY_READ_DEADLINE_MS`. */
+class BodyReadTimedOut extends Error {}
+
+/**
+ * Run a body read under its own deadline (SONNY-322).
+ *
+ * **Racing an async iterator does not stop it, so the caller has two things to do and not one.**
+ * `request.parts()` pulls from a socket the caller still controls, so a race that merely rejects
+ * leaves the iterator, its buffers and the connection exactly where they were — the handler returns,
+ * the claim is released, and the stalled upload goes on holding the socket, which is the defect with
+ * a timer in front of it. Ending the stream is what settles the pending `toBuffer()` and frees the
+ * connection.
+ *
+ * **The stream is ended AFTER the answer is written, not here, and that ordering is measured rather
+ * than reasoned.** Destroying it from inside the timer was the first version, and it destroys the
+ * *response* with it: an `IncomingMessage`'s destroy takes the socket, so the 408 can never be
+ * delivered. It failed as `response destroyed before completion` / `LIGHT_ECONNRESET`, which is the
+ * correct outcome for that ordering and a silent one in production — the caller would have got a
+ * dropped connection where a typed refusal was intended. So this function only bounds and reports;
+ * the handler answers and then ends the stream once the reply has finished.
+ *
+ * **Why the route needs this when `app.ts` sets `requestTimeout`.** That option is a coarse
+ * backstop: measured at Fastify 5.12.1 / Node v22.23.1, a 2000 ms setting answered at 89955 ms and a
+ * 35000 ms setting at 60003 ms, because Node checks expired connections on a thirty-second sweep.
+ * `CLAIM_LEASE_SECONDS`' arithmetic needs an interval held to the second, so it is held here, on a
+ * timer this process owns.
+ */
+async function withBodyReadDeadline(read: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      read(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new BodyReadTimedOut("the request body did not finish arriving in time")),
+          BODY_READ_DEADLINE_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * A sentinel for "this was not JSON", distinct from every value `JSON.parse` can return.
  *
@@ -381,6 +425,7 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       let contentType = "audio/mp4";
 
       try {
+        await withBodyReadDeadline(async () => {
         for await (const part of request.parts()) {
           if (part.type === "file") {
             if (part.fieldname !== "audio") {
@@ -401,7 +446,26 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
             meta = typeof part.value === "string" ? parseJSON(part.value) : part.value;
           }
         }
+        });
       } catch (error) {
+        // **The deadline first, because it is the one failure that is not about the body's
+        // content** (SONNY-322). `408` rather than `400`: the body may have been perfectly valid and
+        // simply did not arrive, and `errors.ts`' rule for a 4xx §7.2 does not name individually is
+        // `request.invalid`, which is the same answer `app.ts`' `clientErrorHandler` gives when the
+        // server-wide `requestTimeout` catches this one sweep later. Two doors, one answer.
+        if (error instanceof BodyReadTimedOut) {
+          request.log.info({ err: error }, "transcription body read exceeded its deadline");
+          // **The connection cannot be reused and this is what says so.** The caller is still
+          // sending a body this server has stopped reading, so there is no message boundary left to
+          // find; `Connection: close` tells the caller, and the destroy on `finish` is what actually
+          // releases the socket — after the answer is out, because destroying the request first
+          // takes the response with it.
+          reply.raw.once("finish", () => request.raw.destroy());
+          return reply
+            .status(408)
+            .header("Connection", "close")
+            .send(errorBody("request.invalid", "Request body was not delivered in time.", request.id));
+        }
         // `@fastify/multipart` throws its own typed errors for a malformed body and for a file over
         // `limits.fileSize`. The size one carries a 413 status, which `errors.ts` maps; anything
         // else here is a body this server could not read.

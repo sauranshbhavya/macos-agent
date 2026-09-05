@@ -115,6 +115,38 @@ export const DEADLINE_MS = {
 } as const;
 
 /**
+ * How long `POST /v1/transcriptions` may spend *reading its body*, in milliseconds (SONNY-322).
+ *
+ * **This route is the one whose body is read inside the handler**, so it is the one route where the
+ * body read is not covered by anything above. §4.4's body is `multipart/form-data`, consumed by
+ * `request.parts()` in the handler; `DEADLINE_MS` above is applied by `routes/model.ts` to the
+ * *upstream call* alone, and Fastify's `requestTimeout` — which `app.ts` now sets — bounds receipt of
+ * the request but is enforced on a thirty-second sweep and measured landing a minute or more late,
+ * so it cannot hold an interval this tight. Every other route's body is parsed by Fastify before the
+ * handler runs.
+ *
+ * **The number is derived from `CLAIM_LEASE_SECONDS`, which is what it exists to make true.** An
+ * `Idempotency-Key` claim is taken in a `preHandler` hook — before this route's body read, because
+ * the body is read in the handler — and §9.2's fourth bullet promises that a key in flight is never
+ * a second upstream call. The interval the lease has to cover is therefore the body read plus the
+ * rest of the handler:
+ *
+ *     body read (30 s) + this route's total deadline (75 s) = 105 s  <  CLAIM_LEASE_SECONDS (120 s)
+ *
+ * That leaves fifteen seconds of margin, which is the same margin §12 gives this route between its
+ * upstream and total deadlines. `idempotency/store.ts` states the relationship from the lease's side;
+ * this is the constant that makes it hold, and `model.test.ts` asserts the inequality rather than
+ * either number alone, so a later change to one of the three cannot quietly break it.
+ *
+ * **What a real caller needs, checked rather than assumed.** SONNY-130's cap is a duration enforced
+ * on the Mac — `MAXIMUM_AUDIO_DURATION_SECONDS` below, 180 s, roughly 2 MB at the recorder's AAC
+ * bitrate — so thirty seconds is about 560 kbit/s for the longest recording this client will send.
+ * The 10 MiB byte ceiling is a backstop against a client that is not ours, and a caller trying to
+ * push 10 MiB through this route slowly is the shape this deadline exists to end.
+ */
+export const BODY_READ_DEADLINE_MS = 30_000;
+
+/**
  * The longest recording this gateway will transcribe, in seconds — **SONNY-130's cap, and the
  * number the client's own refusal is built from.**
  *

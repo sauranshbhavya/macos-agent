@@ -63,6 +63,80 @@ export const API_VERSION = "1.0";
 export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 
 /**
+ * How long a caller may take to deliver a whole request, in milliseconds (SONNY-322).
+ *
+ * **Fastify's default is `0`, which disables it, and that is not a choice this repository made** —
+ * measured rather than read off the documentation: a bare `Fastify()` reports
+ * `server.requestTimeout === 0`, where Node's own default for the same property is `300000`. So
+ * Fastify turns Node's bound off and nothing turned it back on. With it off, nothing anywhere
+ * bounds how long a request may take to arrive: a caller that opens a socket, sends headers
+ * declaring a body and then sends the body one byte at a time — or never — holds a connection and a
+ * Fastify request forever. That is available to any authenticated caller and, on the public sign-in
+ * routes, to an unauthenticated one.
+ *
+ * **What this bounds is receiving the request, not running the handler**, which is the half that
+ * decides the number. Measured at Fastify 5.12.1 / Node v22.23.1 with `requestTimeout: 2000`: a body
+ * dribbled in over six seconds was refused `408`, a request whose declared body never arrived at all
+ * was refused `408`, and a handler that slept for five seconds returned `200`. So this is not a
+ * second copy of §12's total deadlines and cannot be read as one; `model/limits.ts` owns those.
+ *
+ * **120 seconds, and the reason is §12 rather than a guess.** §12's longest *client* timeout is 120 s
+ * (`screen/analyze` and `research/synthesize`). Past that instant no Sonny client is still waiting
+ * for any route's answer, so a request whose body is still arriving at 120 s is one nobody will read
+ * — refusing it costs a real caller nothing, and letting it run is the whole defect. A tighter
+ * number would buy nothing, for the reason below.
+ *
+ * **This is a coarse backstop and not a deadline, which is measured and is the reason the claim
+ * lease is fixed at the route instead of here.** Node checks for expired connections on a sweep —
+ * `server.connectionsCheckingInterval`, which reads `30000` on this runtime — so the refusal lands
+ * tens of seconds after the configured instant, and not monotonically in it. Three readings at
+ * Fastify 5.12.1 / Node v22.23.1, timed to the first response byte rather than to the socket
+ * closing (`keepAliveTimeout` is `72000` here, and timing the close measures that instead): a
+ * `requestTimeout` of 2000 answered `408` at 89955 ms, one of 5000 at 90003 ms, and one of 35000 at
+ * 60003 ms. **So this value cannot hold any interval to within a minute**, which is exactly why
+ * `CLAIM_LEASE_SECONDS`' guarantee is not built on it — `routes/model.ts` bounds the multipart body
+ * read itself, on a timer this process owns, and `idempotency/store.ts` states the arithmetic.
+ */
+export const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * §7.1's envelope on the one class of response Fastify answers without a route (SONNY-322).
+ *
+ * **Turning `requestTimeout` on introduces a response shape this server did not previously
+ * produce**, and the shape Fastify produces for it is its own: measured, a timed-out request was
+ * answered `{"error":"Request Timeout","message":"Client Timeout","statusCode":408}`, which shares
+ * no field with §7.1's `{error: {code, message, retryable, retry_after_seconds, request_id}}`. That
+ * is the same defect `errors.ts` and `frameworkErrors` exist to close one layer up, arriving through
+ * a door neither of them watches — a client error is raised on the socket before any request object
+ * exists, so `setErrorHandler` and `frameworkErrors` are both downstream of it and neither runs.
+ * Left alone it would make this file's own claim below — that with `frameworkErrors` "every response
+ * this server can produce carries contract §7.1's envelope" — false the moment the timeout fires.
+ *
+ * **`request.invalid` at the status Fastify chose, and no new code.** §7.2 names no case for "you
+ * took too long to send your request", and `errors.ts`'s `classify` already decides what a 4xx the
+ * taxonomy does not name individually answers: `request.invalid`, "still a taxonomy code rather than
+ * a framework one". This is that rule applied at the one layer `classify` cannot reach, so the two
+ * doors agree rather than each inventing an answer.
+ *
+ * **`request_id` is empty here and that is honest.** `genReqId` runs per *request*, and this fires
+ * on a socket that never completed one, so there is no id to quote — inventing one would put a join
+ * key into a support lookup that names nothing. The bytes are written by hand because that is the
+ * whole of what this seam offers: a socket, not a reply.
+ */
+export function clientErrorResponse(): string {
+  const body = JSON.stringify(errorBody("request.invalid", "Request was not delivered in time.", ""));
+  return [
+    "HTTP/1.1 408 Request Timeout",
+    "Content-Type: application/json; charset=utf-8",
+    `Content-Length: ${Buffer.byteLength(body)}`,
+    `Sonny-Api-Version: ${API_VERSION}`,
+    "Connection: close",
+    "",
+    body,
+  ].join("\r\n");
+}
+
+/**
  * `auth` is optional so a deployment that mounts no auth route needs no provider, no rate-limit salt
  * and no JWT secret. When it is supplied all three are required, and `requireRateLimitSalt` /
  * `requireSupabaseJwtPolicy` refuse at startup rather than letting `bucketKey` hash addresses
@@ -218,6 +292,20 @@ export function buildApp(
     genReqId: () => randomUUID(),
 
     bodyLimit: DEFAULT_BODY_LIMIT_BYTES,
+
+    // SONNY-322. See `REQUEST_TIMEOUT_MS` for what this bounds, what it does not, and why the
+    // number is §12's longest client timeout rather than one of its server deadlines.
+    requestTimeout: REQUEST_TIMEOUT_MS,
+
+    /**
+     * The envelope on a request that never became one. `clientErrorResponse` carries the argument;
+     * the socket is destroyed after the write because `Connection: close` is a statement about a
+     * connection this server is done with, and a half-open one is the occupancy this ticket removes.
+     */
+    clientErrorHandler: (_error, socket) => {
+      if (socket.writable) socket.end(clientErrorResponse());
+      else socket.destroy();
+    },
 
     /**
      * Off unless a proxy is actually in front, which is a per-environment fact.
