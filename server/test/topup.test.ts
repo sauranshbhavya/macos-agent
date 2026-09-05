@@ -835,6 +835,9 @@ function buildTopUpApp(input: {
         hasLiveSubscription: async () => false,
         hasSubscriptionRecord: async () => false,
         billingCustomerFor: async () => ("customer" in input ? input.customer : CUSTOMER),
+        // Nothing on the top-up path reads this (SONNY-380). Present because `BillingStore` requires
+        // it, and answering `"current"` is what an account with no recorded failure answers.
+        paymentState: async () => "current",
       },
       // The fake provider reaches the route through the same door the real one does; `app.ts` builds
       // the provider from config, so this override is the credit route's own.

@@ -133,11 +133,24 @@ import Testing
 
     @Test func theLineNamesThePlanAndTheStateAndExplainsNeither() {
         // The standing rule that the product does not explain itself, asserted rather than trusted
-        // to review: the line is the plan and one word. A mutant that appended a sentence about what
-        // "Ended" means fails on the exact-equality here.
-        #expect(SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "paid", status: .active)) == "Paid · Active")
-        #expect(SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "paid", status: .ended)) == "Paid · Ended")
+        // to review: the line is the plan and one word — two, for the state that needs two. A mutant
+        // that appended a sentence about what "Ended" means, or about how long a grace window runs,
+        // fails on the exact-equality here.
+        #expect(
+            SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "paid", status: .active), payment: .current)
+                == "Paid · Active"
+        )
+        #expect(
+            SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "paid", status: .ended), payment: .current)
+                == "Paid · Ended"
+        )
+        #expect(
+            SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "paid", status: .active), payment: .pastDue)
+                == "Paid · Past due"
+        )
         #expect(SubscriptionCopy.manageLabel == "Manage subscription")
+        #expect(SubscriptionCopy.updatePaymentLabel == "Update payment")
+        #expect(SubscriptionCopy.pastDueWord == "Past due")
     }
 
     @Test func thePlanKeyIsShownAsTheGatewaySentItApartFromItsCase() {
@@ -145,8 +158,83 @@ import Testing
         // enumerates plan keys, so there is no translation table here and this is what pins that:
         // an unfamiliar key renders rather than falling back to a word this ticket invented.
         #expect(
-            SubscriptionCopy.line(for: SubscriptionSnapshot(plan: "team-annual", status: .active))
-                == "Team-Annual · Active"
+            SubscriptionCopy.line(
+                for: SubscriptionSnapshot(plan: "team-annual", status: .active),
+                payment: .current
+            ) == "Team-Annual · Active"
         )
+    }
+
+    // MARK: - What a past-due reading does to the line (SONNY-380)
+
+    @Test func aPastDueReadingCannotRenderAsActive() {
+        // **The ticket's central property, asserted over the whole population rather than on a
+        // case.** §16.4 keeps the capabilities through the grace window on purpose, so the claim a
+        // past-due customer holds is byte-identical to a healthy one's and `status` is `.active` for
+        // both — this is the only thing that can tell them apart. Every claim state, against the
+        // past-due reading: none of them may produce the word the defect was.
+        for status in [SubscriptionStatus.active, .ended] {
+            let line = SubscriptionCopy.line(
+                for: SubscriptionSnapshot(plan: "paid", status: status),
+                payment: .pastDue
+            )
+
+            #expect(line == "Paid · Past due", "status \(status)")
+            // Asserted as an absence too, because the equality above would still hold if a later
+            // change made the word a substring of a longer one.
+            #expect(!line.contains("Active"), "status \(status)")
+        }
+    }
+
+    @Test func aPastDueReadingNamesTheControlThatResolvesIt() {
+        // The founders' decision of 2026-09-05 asks for "the control that resolves it", and what
+        // resolves a declined card is not managing a subscription. One button, two labels, the same
+        // hosted portal behind both.
+        #expect(SubscriptionCopy.controlLabel(for: .pastDue) == "Update payment")
+        #expect(SubscriptionCopy.controlLabel(for: .current) == "Manage subscription")
+        #expect(SubscriptionCopy.controlLabel(for: nil) == "Manage subscription")
+        #expect(SubscriptionCopy.controlLabel(for: .unrecognised) == "Manage subscription")
+    }
+
+    @Test func aMacThatKnowsNothingAboutPaymentSaysNothingAboutIt() {
+        // The offline answer, which the founders chose on 2026-09-05: the grace window keeps
+        // capabilities working without a network, so a Mac that cannot reach the gateway shows the
+        // line the claim alone supports rather than guessing in either direction.
+        let active = SubscriptionSnapshot(plan: "paid", status: .active)
+        let ended = SubscriptionSnapshot(plan: "paid", status: .ended)
+
+        #expect(SubscriptionCopy.line(for: active, payment: nil) == "Paid · Active")
+        #expect(SubscriptionCopy.line(for: ended, payment: nil) == "Paid · Ended")
+        // And `current` is not a third rendering: it says the same thing as knowing nothing, because
+        // what it means is the absence of a failure rather than a fact about a payment.
+        #expect(SubscriptionCopy.line(for: active, payment: .current) == "Paid · Active")
+    }
+
+    @Test func aValueThisBuildDoesNotKnowIsToleratedAndSaysNothing() {
+        // §8.2 item 7: the server may add a value to a wire enum only because every client carries
+        // an unknown fallback, and this is that fallback doing the honest thing — an unrecognised
+        // state is not asserted as anything, so the line falls back to what the claim proves.
+        #expect(BillingPaymentState(wire: "settled_yesterday") == .unrecognised)
+        #expect(BillingPaymentState(wire: "") == .unrecognised)
+        #expect(
+            SubscriptionCopy.line(
+                for: SubscriptionSnapshot(plan: "paid", status: .active),
+                payment: .unrecognised
+            ) == "Paid · Active"
+        )
+    }
+
+    @Test func theWireValuesAreTheOnesTheContractNames() {
+        // The two literals whose meaning is set on the other side of the wire, in the one place they
+        // are written down on this side. §4.1's row for `GET /v1/billing/payment-state` is what
+        // these have to agree with, and `billing/store.ts`'s `BillingPaymentState` is what serves
+        // them; a rename on either side fails here rather than silently reading as unrecognised —
+        // which would present as the line quietly saying `Active` again.
+        #expect(BillingPaymentState(wire: "current") == .current)
+        #expect(BillingPaymentState(wire: "past_due") == .pastDue)
+        // Case and shape are exact, not tolerated: a server sending `PAST_DUE` has changed the
+        // contract, and reading it anyway would hide that.
+        #expect(BillingPaymentState(wire: "PAST_DUE") == .unrecognised)
+        #expect(BillingPaymentState(wire: "pastDue") == .unrecognised)
     }
 }

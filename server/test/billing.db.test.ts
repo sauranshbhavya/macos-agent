@@ -4,6 +4,7 @@ import {
   applyBillingDelivery,
   hasLiveSubscription,
   hasSubscriptionRecord,
+  paymentStateFor,
   type BillingPlans,
 } from "../src/billing/store.js";
 import { POLAR } from "../src/billing/polar.js";
@@ -708,5 +709,84 @@ describeDb("a subscription reaches the entitlement", () => {
       [POLAR, SUBSCRIPTION],
     );
     expect(owner.rows.map((row) => row.account_id)).toEqual([account]);
+  });
+
+  // SONNY-380 — the read that separates a past-due customer from a healthy one, against the real
+  // column. `billing.test.ts` proves the route over a fake store; only these prove that the SQL
+  // reads the column the webhook path actually writes.
+
+  itUnderHangBackstop("aDeclinedCardIsReportedPastDue", async () => {
+    await apply(event({ state: "active" }));
+    expect(await paymentStateFor(client, account)).toBe("current");
+
+    await apply(
+      event({ eventId: "msg_2", state: "past_due", occurredAt: new Date(NOW.getTime() + 60_000) }),
+    );
+
+    expect(await paymentStateFor(client, account)).toBe("past_due");
+    // **And the claim still says nothing**, which is the whole reason this read exists: §16.4 keeps
+    // the capabilities through the window, so the signed claim a past-due account mints is
+    // byte-identical to a healthy one's and the app read `Active` off it.
+    const record = await readEntitlement(client, account);
+    expect(claimFactsFor(record, NOW)).toEqual({ plan: "paid", capabilities: ["screen_control"] });
+  });
+
+  itUnderHangBackstop("aPastDueAccountIsStillPastDueOnceItsWindowHasClosed", async () => {
+    // The half a `grace_until` reading would get wrong. Past the deadline the capabilities go, so
+    // the claim flips to the shape a cancellation mints and the app would say `Ended` — but the
+    // card is still declined and the control that fixes it is still the right one to offer, so
+    // this must not revert to `current`.
+    await apply(event({ state: "past_due" }));
+    const closed = new Date(NOW.getTime() + GRACE_MS + 60_000);
+
+    const record = await readEntitlement(client, account);
+    expect(claimFactsFor(record, closed)).toEqual({ plan: "paid", capabilities: [] });
+    expect(await paymentStateFor(client, account)).toBe("past_due");
+  });
+
+  itUnderHangBackstop("aRecoveredPaymentStopsBeingReportedPastDue", async () => {
+    await apply(event({ state: "past_due" }));
+    expect(await paymentStateFor(client, account)).toBe("past_due");
+
+    await apply(
+      event({ eventId: "msg_2", state: "active", occurredAt: new Date(NOW.getTime() + 60_000) }),
+    );
+
+    expect(await paymentStateFor(client, account)).toBe("current");
+  });
+
+  itUnderHangBackstop("aCancelledSubscriptionIsNotAPaymentFailure", async () => {
+    // `writeFor`'s `ended` arm clears `past_due_since`, so a cancelled subscriber answers `current`
+    // and the line they meet is the claim's own `Ended`. Asserted rather than assumed, because the
+    // opposite would tell someone who cancelled on purpose that their payment failed.
+    await apply(event({ state: "past_due" }));
+    await apply(
+      event({ eventId: "msg_2", state: "ended", occurredAt: new Date(NOW.getTime() + 60_000) }),
+    );
+
+    expect(await paymentStateFor(client, account)).toBe("current");
+  });
+
+  itUnderHangBackstop("anAccountWithNoEntitlementRowIsNotPastDue", async () => {
+    // Every account that has never subscribed, which is most of them. `current` is the absence of a
+    // recorded failure and not a claim that anything was paid.
+    const fresh = await client.query<{ id: string }>(
+      "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
+    );
+
+    expect(await paymentStateFor(client, fresh.rows[0]!.id)).toBe("current");
+  });
+
+  itUnderHangBackstop("onePastDueAccountDoesNotMakeAnotherOnePastDue", async () => {
+    // The predicate takes no provider, deliberately (`paymentStateFor` says why), so the account id
+    // is the only thing narrowing it — and a read that dropped that clause would answer `past_due`
+    // for the whole deployment while every test above still passed.
+    await apply(event({ state: "past_due" }));
+    const second = await client.query<{ id: string }>(
+      "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
+    );
+
+    expect(await paymentStateFor(client, second.rows[0]!.id)).toBe("current");
+    expect(await paymentStateFor(client, account)).toBe("past_due");
   });
 });

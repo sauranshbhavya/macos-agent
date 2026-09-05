@@ -2296,6 +2296,37 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       prompt appearing is the finding**, and it means the pre-authenticated session was not used;
       that is the failure the whole design exists to avoid, because Sonny's identity key is never the
       email address and a Hide My Email user has no address to type.
+- [ ] **(new 2026-09-05, SONNY-380) — a customer whose card was declined is told so, and the control
+      changes with it.** **Needs a live Polar test subscription and a card that declines** — Polar's
+      test mode publishes card numbers that fail on a renewal charge; this row cannot be run without
+      one, and it is the only way to produce the state, because nothing in the app or the gateway
+      sets it. Same setup and same account as SONNY-216's portal row above. With the subscription
+      **active**, open **Account**: the line reads `<plan> · Active` and the button reads **Manage
+      subscription**. Now make the renewal fail — swap the card on the Polar dashboard for a
+      declining test card and trigger the renewal, or replay a `subscription.past_due` delivery for
+      that subscription — so that the gateway records the failure (`SELECT past_due_since, grace_until
+      FROM sonny.entitlement WHERE account_id = '<id>'` must show both set). Close Account and open
+      it again. **The line must read `<plan> · Past due` and the button must read `Update payment`.**
+      Press it: the same Polar portal opens, pre-authenticated, exactly as it does in the Active
+      state. **The line still reading `Active` here is the finding** — that is the whole defect this
+      ticket was filed for, and it is what a user saw for the entire fourteen-day window while their
+      access quietly ran out. Two things that are **not** findings: Sonny still works normally
+      throughout, because §16.4 keeps the capabilities through the window on purpose; and there is no
+      sentence anywhere explaining what "Past due" means or how long is left — the line is a state
+      and a control by decision, and **an explanatory sentence appearing is itself a finding**.
+- [ ] **(new 2026-09-05, SONNY-380) — what the line says with the network off, which is deliberately
+      less than it says with it on.** With the account in the **past due** state from the row above
+      and Account already opened once so the claim is cached, turn Wi-Fi off and reopen Account. The
+      row must still render — the claim is local — and it will read `<plan> · Active` with **Manage
+      subscription**, because payment state is a network read and this Mac cannot make one. That is
+      the founders' decision of 2026-09-05 and is the expected result; **an error sentence under the
+      row is the finding**, and so is the row vanishing. Turn Wi-Fi back on, close and reopen
+      Account, and it must return to `Past due` / `Update payment`.
+- [ ] **(new 2026-09-05, SONNY-380) — the state clears with the person.** In the past-due state,
+      press **Sign out** and sign in as a different account that has never subscribed. The Account
+      dialog must show **no subscription row at all** — no `Past due` line and no `Update payment`
+      button, not even for a moment while the reads behind it complete. **Either one appearing, however
+      briefly, is the finding**: it is the previous customer's billing state on a new person's screen.
 - [ ] **(new 2026-08-31, SONNY-216) — the control is absent for someone who never paid, and this is
       the row that matters most.** Sign in on a **fresh** account that has never subscribed. Open
       Account. There must be **no subscription line and no Manage subscription button at all** — not
