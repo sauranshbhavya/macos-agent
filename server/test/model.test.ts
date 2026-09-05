@@ -1097,6 +1097,14 @@ describe("the numbers this ticket is held to", () => {
     // the slowest test in the suite.
     const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
+    // **The request stream, captured so the release can be asserted and not just the answer.** A
+    // mutation battery is why this is here: deleting the `once("finish", …)` destroy from the route
+    // left the whole suite green (W7 survived at `222d2578`), because every assertion below is about
+    // the response and the defect is about what happens to the connection afterwards — a caller
+    // answered 408 and then left holding the socket is the occupancy this ticket removes, arriving
+    // one line later than the version it replaced.
+    let raw: { destroyed: boolean } | undefined;
+    app.addHook("onRequest", async (request) => { raw = request.raw; });
     const boundary = "SonnyTestBoundary-stalled";
     // A body that begins correctly and never ends: the preamble and the opening of the audio part,
     // with no terminating boundary and no `end()`. `content-length` is deliberately not set, so the
@@ -1138,6 +1146,12 @@ describe("the numbers this ticket is held to", () => {
       // And no upstream call was made for a body that never arrived — the whole reason §9.2's
       // fourth bullet cares about this interval.
       expect(calls).toHaveLength(0);
+
+      // **The connection is released, which is the half the answer does not prove.** Ordered after
+      // the response is read on purpose: the destroy is hung off the reply's `finish`, because
+      // destroying the request first takes the response with it, so a check made any earlier would
+      // assert the bug rather than the fix.
+      expect(raw?.destroyed).toBe(true);
     } finally {
       vi.useRealTimers();
       await app.close();
