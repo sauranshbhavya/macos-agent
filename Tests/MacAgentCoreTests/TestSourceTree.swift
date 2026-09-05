@@ -137,12 +137,13 @@ enum TestSourceTree {
     ///
     /// **Line-prefixed rather than a block-span reader, and that is a decision rather than an
     /// omission.** `MacAgentSource.strippingBlockComments` tracks `/*` … `*/` depth across lines, and
-    /// `CLAUDE.md` records what that costs: a `/*` inside a *line* comment opens a span nothing
-    /// closes, and every line after it disappears from the scanned text — a scan reporting zero
-    /// occurrences of a line plainly present in the file. Dropping the three prefixes instead cannot
-    /// do that. What it does instead is over-drop: a real code line opening on `*` is dropped too,
-    /// and a signature's site count then reads one low and the suite says so. Over-dropping fails
-    /// loudly and under-dropping fails silently, so this takes the loud one.
+    /// `CLAUDE.md` records what that costs: a block-comment opener inside a *line* comment opens a
+    /// span nothing closes, and every line after it disappears from the scanned text — a scan
+    /// reporting zero occurrences of a line plainly present in the file. That is SONNY-409, and
+    /// `LineCommentMayNotOpenABlockTests` refuses it across every Swift tree now. Dropping the three
+    /// prefixes instead cannot do that. What it does instead is over-drop: a real code line opening
+    /// on `*` is dropped too, and a signature's site count then reads one low and the suite says so.
+    /// Over-dropping fails loudly and under-dropping fails silently, so this takes the loud one.
     static let typeScriptCommentPrefixes = ["//", "/*", "*"]
 
     /// Lines that are not comment-prefixed, keeping their original 1-based numbers.

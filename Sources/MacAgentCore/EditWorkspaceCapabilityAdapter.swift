@@ -414,7 +414,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// `WorkspaceScopeOnlyApps` rather than re-derived.
         ///
         /// SONNY-44's decoupling decision is "normalize on save plus a soft warning at
-        /// creation/**edit** time", and its note to this ticket said the edit path should read the
+        /// creation/_edit_ time", and its note to this ticket said the edit path should read the
         /// three behaviours from the shared rule rather than grow its own. Create and open both
         /// disclose; adding an unlaunchable app through *this* path used to disclose nothing, so the
         /// same addition told the user two different things depending on which door it came through.

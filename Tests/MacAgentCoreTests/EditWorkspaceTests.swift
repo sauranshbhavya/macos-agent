@@ -1331,7 +1331,7 @@ private struct NoopFileOpener: FileOpening {
     func openFile(_ url: URL) async throws {}
 }
 
-/// SONNY-44's decoupling decision is "normalize on save plus a soft warning at creation/**edit**
+/// SONNY-44's decoupling decision is "normalize on save plus a soft warning at creation/_edit_
 /// time", and its written note to SONNY-40 asked the edit path to read the behaviours from
 /// `WorkspaceScopeOnlyApps` rather than re-derive them. Create and open both disclosed; edit shipped
 /// without it, so the same addition told the user two different things depending on which door it
