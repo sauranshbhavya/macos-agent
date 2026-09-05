@@ -406,6 +406,41 @@ that whatever survives the wipe names nothing the user did.
 and `docs/sonny-manual-test-checklist.md`, whose wipe row is **corrected in place** rather than
 joined by a second, with a parenthesis saying it briefly asked the opposite.
 
+**One defect the round's own verification found, in this round's own work.** `npm run test:db` failed
+on `migrate.db.test.ts`'s "a rollback actually changes the schema": migration `0021` widens one CHECK
+and adds no column, index, trigger or function, and that test's schema fingerprint read triggers,
+columns, indexes and functions only — so a rollback that had worked perfectly was indistinguishable
+from one that had done nothing. The fingerprint now reads CHECK constraints too, and the direction
+that matters is the other one: without that arm a rollback which silently *kept* a constraint reads
+exactly like one that removed it. `0020` moved a CHECK as well and passed only because it added
+columns beside it.
+
+**Fix round's figures, stamped at `710d5e00`, which is the head.** Every earlier stamp in this entry
+passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2950 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` was 2929 in 198 with the same 8, so the branch now adds 21 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `710d5e00` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- Server — `npm run build`, `npm run typecheck`, `npm run check:secrets` and `npm test` all exit 0,
+  with **806 passed / 416 skipped**; `npm run test:db` **exit 0, 1222 passed** against a lane-named
+  Postgres.
+- `scripts/mutate` — **19 mutants, 19 killed, 0 survived, 0 unattributed**, at `0c086ab3`, in two
+  runs (12 app-half, 7 gateway). **Nothing was carried**: every mutant's target file moved in this
+  round, which is the first of step 5's four conditions and is measured rather than argued —
+  `git diff --name-only 75f0c7cf HEAD -- <each target>` answers 1 for all five files the plans point
+  at, and the killers' own file (`TaskDeletionReachesTheServerTests.swift`) and the helper they drive
+  (`RecordedBackendRequests.swift`) moved as well. Three mutants are new and are the ones this round
+  is about — the drain skipped, the server reach skipped, and the wipe leaving a file that names
+  tasks — plus two on the new route: its record filed as an account close, and its delete not scoped
+  to the caller's account.
+- **One killer name is worth flagging rather than leaving to be noticed.** M8 lists
+  `twoCallersAtOnceMakeOneRequest`, which the coordinator's kickoff says is not a kill until
+  lane-420 lands. M8's verdict does not rest on it: its other killer,
+  `aBulkDeleteThatReachedSomebodyElsesTaskKeepsTheObligation`, is this branch's own and is the test
+  written for that property.
+
 Next branch: per the coordinator's wave-6 order.
 
 ### Branch: fix/a-short-article-about-a-wall-is-served
