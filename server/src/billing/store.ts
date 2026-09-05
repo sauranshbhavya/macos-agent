@@ -266,11 +266,18 @@ const LIVE_SUBSCRIPTION = `${SUBSCRIPTION_RECORD}
 /**
  * Whether this account has an outstanding payment failure (SONNY-380).
  *
- * **It reads `past_due_since`, not `grace_until`, and the difference is what the answer is for.** A
- * failure that is still inside its window and one whose window has closed are the same fact about
- * the customer's card, and both are things the app must be able to say. `claimFactsFor` is what
- * decides whether the capabilities are still there, and it stays the only thing that decides it —
- * this question is deliberately not that one.
+ * **What makes this correct is that it never compares against `now()`, and NOT which of the two
+ * columns it reads** (PR #206's F6). Those are easy to confuse and only one of them is load-bearing.
+ * Migration 0018 carries `CONSTRAINT entitlement_grace_is_whole CHECK ((grace_until IS NULL) =
+ * (past_due_since IS NULL))`, so on every row that can exist `grace_until IS NOT NULL` and
+ * `past_due_since IS NOT NULL` are the *same predicate* — swapping the column in the query below
+ * changes nothing. What would break it is asking whether the deadline has passed. A failure still
+ * inside its window and one whose window has closed are the same fact about the customer's card,
+ * and both are things the app must be able to say; a `now()` comparison here would answer
+ * `"current"` at exactly the moment the customer's access ends, which is when the line matters
+ * most. `claimFactsFor` is the one place that comparison belongs, and it stays the only thing that
+ * decides whether the capabilities are still there — this question is deliberately not that one.
+ * So: a later simplification may move the column; it may not add a clock.
  *
  * **It is not scoped by `billing_provider`, unlike every other query in this file, and that is the
  * fail-safe direction rather than an oversight.** `past_due_since` is written only by
@@ -409,10 +416,20 @@ export async function hasSubscriptionRecord(
  * property that makes it affordable to answer outside the claim at all.
  *
  * **`"current"` is the absence of a recorded failure and never a claim that a payment succeeded.**
- * An account with no entitlement row, an operator-granted one, and a cancelled subscriber all
- * answer `"current"`, because none of them has an outstanding failure. The line the app renders
- * from this is the claim's own word unless this says otherwise, so `"current"` adds nothing and
- * only `"past_due"` changes anything.
+ * An account with no entitlement row, a cancelled subscriber, and an account an operator has
+ * granted or revoked all answer `"current"`, because none of them has an outstanding failure. The
+ * line the app renders from this is the claim's own word unless this says otherwise, so
+ * `"current"` adds nothing and only `"past_due"` changes anything.
+ *
+ * **The operator half of that sentence was false when it was written, and it is true now because
+ * the behaviour changed rather than the wording** (PR #206's F2). `grant`'s upsert cleared
+ * `revoked_at` and touched neither payment column, so a comped past-due customer read
+ * `<Plan> · Past due` with an `Update payment` button indefinitely — nothing but a newer billing
+ * delivery clears `past_due_since`, and for an account somebody is comping one may never arrive.
+ * `setRevoked` had the mirror shape. Both clear both columns now, with the reasoning at each
+ * statement in `entitlements.ts`, and `anOperatorGrantEndsAnOutstandingPaymentFailure` and
+ * `anOperatorRevokeEndsAnOutstandingPaymentFailure` in `billing.db.test.ts` fail against the tree
+ * that shipped this sentence.
  */
 export async function paymentStateFor(
   client: pg.Client,

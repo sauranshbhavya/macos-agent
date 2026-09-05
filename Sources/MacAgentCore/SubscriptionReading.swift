@@ -76,8 +76,15 @@ public enum SubscriptionStatus: Equatable, Sendable {
 /// by construction an old build does not know what the new value means.
 public enum BillingPaymentState: Equatable, Sendable {
     /// No payment failure is outstanding. **Not a claim that a payment succeeded**: an account with
-    /// no subscription, an operator-granted one and a customer who cancelled on purpose all answer
-    /// this, because none of them has a failure recorded.
+    /// no subscription, a customer who cancelled on purpose, and an account an operator has granted
+    /// or revoked all answer this, because none of them has a failure recorded.
+    ///
+    /// **The operator half was false when this was written** (PR #206's F2). The gateway's `grant`
+    /// cleared the revocation and left the payment columns alone, so a comped past-due customer
+    /// read `Past due` here with an `Update payment` control indefinitely — only a newer billing
+    /// delivery clears that column, and for a comped account one may never arrive. `setRevoked` had
+    /// the mirror shape. Both clear it now; `server/src/entitlements.ts` carries the reasoning at
+    /// each statement.
     case current
     /// A payment has failed and has not been resolved — inside its grace window or past it. Both are
     /// the same fact about the customer's card, and the control that fixes either is the same one.

@@ -2310,7 +2310,17 @@ defaults write com.sonny.MacAgent SonnyEntitlementPublicKeys "sonny-dev-1:<the k
       Press it: the same Polar portal opens, pre-authenticated, exactly as it does in the Active
       state. **The line still reading `Active` here is the finding** — that is the whole defect this
       ticket was filed for, and it is what a user saw for the entire fourteen-day window while their
-      access quietly ran out. Two things that are **not** findings: Sonny still works normally
+      access quietly ran out. **Then, without closing the Account sheet, fix the card in the portal
+      and switch back to Sonny.** The row re-reads by itself when the window comes back (founders'
+      decision of 2026-09-05) — so within a moment the line should become `<Plan> · Active` with
+      **Manage subscription**, without you closing and reopening Account. **Two things here are not
+      findings.** If it still says `Past due`, wait a few seconds and switch away and back once
+      more: the gateway only learns from Polar's webhook, and a return that beats the delivery
+      honestly still reads past due. And it re-reads only after a press — switching back to Sonny
+      with no press behind it must *not* change the line, which is what stops an open sheet asking
+      the server on every app switch. **What is a finding is the line never changing at all**, even
+      after the webhook has landed (check `past_due_since` is now NULL in `sonny.entitlement`), or
+      changing without a press. Two things that are **not** findings: Sonny still works normally
       throughout, because §16.4 keeps the capabilities through the window on purpose; and there is no
       sentence anywhere explaining what "Past due" means or how long is left — the line is a state
       and a control by decision, and **an explanatory sentence appearing is itself a finding**.

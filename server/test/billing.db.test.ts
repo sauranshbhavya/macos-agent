@@ -10,6 +10,7 @@ import {
 import { POLAR } from "../src/billing/polar.js";
 import type { SubscriptionEvent, SubscriptionState, WebhookReading } from "../src/billing/provider.js";
 import { claimFactsFor, readEntitlement } from "../src/entitlement/store.js";
+import { grant, setRevoked } from "../src/entitlements.js";
 import { testDatabaseUrl } from "./support/database.js";
 import { rebuildSchema } from "./support/schema.js";
 import {
@@ -775,6 +776,55 @@ describeDb("a subscription reaches the entitlement", () => {
     );
 
     expect(await paymentStateFor(client, fresh.rows[0]!.id)).toBe("current");
+  });
+
+  itUnderHangBackstop("anOperatorGrantEndsAnOutstandingPaymentFailure", async () => {
+    // **PR #206's F2, and the doc sentence that claimed this was already true is what found it.**
+    // `grant`'s upsert cleared `revoked_at` and touched neither payment column, so a comped
+    // customer read `<Plan> · Past due` with an `Update payment` button **indefinitely** — the only
+    // thing that clears `past_due_since` is a newer billing delivery, and for an account somebody
+    // is comping one may never arrive.
+    await apply(event({ state: "past_due" }));
+    expect(await paymentStateFor(client, account)).toBe("past_due");
+
+    await grant(client, {
+      accountId: account,
+      plan: "comped",
+      capabilities: ["screen_control"],
+      capUnits: null,
+    });
+
+    expect(await paymentStateFor(client, account)).toBe("current");
+    // **The half that is worse than the line, and it is why this is a behaviour fix rather than a
+    // wording one.** `claimFactsFor` compares `grace_until` against the instant it is given, so a
+    // deadline left behind by the failure empties the capabilities on every read past it — the
+    // grant would not have restored access at all. Asserted well past the window to prove the
+    // deadline is gone rather than merely far away.
+    const record = await readEntitlement(client, account);
+    expect(record.pastDueSince).toBeNull();
+    expect(record.graceUntil).toBeNull();
+    expect(claimFactsFor(record, new Date(NOW.getTime() + GRACE_MS + 86_400_000))).toEqual({
+      plan: "comped",
+      capabilities: ["screen_control"],
+    });
+  });
+
+  itUnderHangBackstop("anOperatorRevokeEndsAnOutstandingPaymentFailure", async () => {
+    // The mirror (PR #206's F2). A revoked account is not past due, it is over — and leaving the
+    // column set made the line read `Past due` with an `Update payment` control for an account the
+    // operator had just ended, which is the opposite of what they did.
+    await apply(event({ state: "past_due" }));
+    expect(await paymentStateFor(client, account)).toBe("past_due");
+
+    expect(await setRevoked(client, account, true)).toBe(true);
+
+    expect(await paymentStateFor(client, account)).toBe("current");
+    const record = await readEntitlement(client, account);
+    expect(record.revokedAt).toBeInstanceOf(Date);
+    expect(record.pastDueSince).toBeNull();
+    expect(record.graceUntil).toBeNull();
+    // So the line the operator's own action produces is the claim's `Ended`, not `Past due`.
+    expect(claimFactsFor(record, NOW)).toEqual({ plan: "paid", capabilities: [] });
   });
 
   itUnderHangBackstop("onePastDueAccountDoesNotMakeAnotherOnePastDue", async () => {
