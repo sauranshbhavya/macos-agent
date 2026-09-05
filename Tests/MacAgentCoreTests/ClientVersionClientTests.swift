@@ -16,6 +16,19 @@ struct ClientVersionClientTests {
     private static let metaPath = "/v1/meta"
     private static let planPath = "/v1/plan"
 
+    /// How long ``twoCallersAtOnceMakeOneRequest``'s stub handler waits for the second caller before
+    /// answering the request it is holding.
+    ///
+    /// **Half of ``SonnyBackendTimeouts/auth`` rather than a number of its own, because the thing it
+    /// has to stay under is the client's own deadline for this route.** The hold is what keeps the
+    /// first fetch in flight, and a hold that outlasts twenty seconds does not extend the window —
+    /// it ends it, from the client's side, and the test then reads a second request as a coalescing
+    /// failure when what happened was a timeout. Ten seconds is far past anything the second caller
+    /// needs (one detached task and one actor hop, no main actor anywhere in it) and far short of
+    /// the deadline it must not reach, so if this budget is ever exceeded the assertion that names
+    /// it fires first and says which of the two happened.
+    private static let secondCallerBudget = SonnyBackendTimeouts.auth / 2
+
     private func planRequest() -> SonnyBackendRequest {
         SonnyBackendRequest(
             method: "POST",
@@ -117,21 +130,96 @@ struct ClientVersionClientTests {
     /// request, which is the same flag that keeps a `410` on the meta request itself from starting
     /// another fetch — and unlike that arm, deleting this one produces a second request rather than
     /// a hang, so it is a property a mutant can be measured against.
+    ///
+    /// **"At once" was a bet on the scheduler until SONNY-420, and it lost one.** The two callers
+    /// were two `async let`s and nothing held the first request open, so on a busy machine the first
+    /// fetch could finish before the second child task had ever run, the second would then make its
+    /// own request, and the count would read 2. That failure is not a wrong answer about the client;
+    /// it is no answer at all, and `scripts/mutate` reads a red suite as the mutant being caught. It
+    /// manufactured a kill inside SONNY-409's nine-mutant battery at `4bbf985` — W1, a mutant in a
+    /// different target that `--only` re-runs report SURVIVED — and flipped that run's summary from
+    /// `1 survived` to `0 survived` and its exit code from 2 to 0. `CLAUDE.md` records the class.
+    ///
+    /// **What replaces the bet: the stub holds the first request open and starts the second caller
+    /// from inside that hold.** The handler records the request and then does not answer it, so
+    /// `isFetchingMeta` is true for exactly as long as the handler sits there; the second caller is
+    /// launched from that same handler and the handler waits for it to return before replying. The
+    /// second call is therefore inside the first's flight by construction, with no ordering left for
+    /// a scheduler to get wrong, and both mutants that break the coalescing die here every time
+    /// because under either one the second caller *always* sends the request the count then refuses.
+    ///
+    /// **Nothing in that window touches the main actor, and that is the whole of the fix rather than
+    /// a detail.** The first version of this test kept the orchestration in the test body: it waited
+    /// on a `HangBackstop` for the request to be recorded and then made the second call. That is a
+    /// real signal rather than a sleep, and it still failed **2 of 3 full-suite runs** run three at a
+    /// time on one Mac (2026-09-05, this branch, before the rewrite), because the window it opened
+    /// was bounded by the shared main actor: the poll took **56.9 s** and **56.6 s** to observe a
+    /// request that had already arrived, the client's own transport deadline for this route is
+    /// ``SonnyBackendTimeouts/auth`` — twenty seconds — so the first fetch timed out at twenty, the
+    /// flag came down, and the second caller made a second request at fifty-seven. Both of that
+    /// version's precondition assertions passed while it happened. **A window a starved actor can
+    /// hold open is not a window**; this one is held by a thread of the stub's own concurrent queue,
+    /// which is the thing `BackendStubURLProtocol` dispatches to precisely so that a handler may
+    /// block.
+    ///
+    /// **Bounded rather than eliminated, which is the honest wording.** The handler's wait carries
+    /// ``secondCallerBudget``, and `#expect` reads the outcome of that wait rather than assuming it —
+    /// so a window that did close early says so, in its own words, instead of arriving as a count
+    /// nobody can explain. The first caller's document is asserted for the same reason, and its
+    /// message names **every** way `performMetaFetch` ends without one rather than only the way
+    /// this test is defending against (PR #205's F2): one `try?` swallows the whole send, so a
+    /// reached deadline, an offline transport and a non-2xx envelope are one branch between them,
+    /// and a body that does not decode is the other. Naming only the deadline would send a reader
+    /// after a twenty-second timeout that a decoder change had never reached.
     @Test
     @MainActor
-    func twoCallersAtOnceMakeOneRequest() async throws {
+    func twoCallersAtOnceMakeOneRequest() async {
         let fixture = SignedInBackendFixture()
         defer { fixture.unregister() }
         let requests = RecordedRequests()
+        let holdsTheFirstRequest = OneShotSwitch()
+        let flight = StubCounter()
+        let client = fixture.client
+        let served = BackendStubURLProtocol.Outcome.reply(
+            statusCode: 200,
+            headers: [:],
+            body: SonnyBackendFixtures.metaDocumentJSON()
+        )
         fixture.register { request in
             requests.record(request)
-            return .reply(statusCode: 200, headers: [:], body: SonnyBackendFixtures.metaDocumentJSON())
+            guard holdsTheFirstRequest.takeIfArmed() else { return served }
+            // Nothing has answered this request, so the client is inside one fetch — and stays
+            // inside it until this handler returns. The second caller runs entirely in there.
+            let secondCallerReturned = DispatchSemaphore(value: 0)
+            Task.detached {
+                _ = await client.refreshMetaDocument()
+                secondCallerReturned.signal()
+            }
+            if secondCallerReturned.wait(timeout: .now() + Self.secondCallerBudget) == .success {
+                flight.increment("the second caller returned inside the first request's flight")
+            }
+            return served
         }
 
-        async let first = fixture.client.refreshMetaDocument()
-        async let second = fixture.client.refreshMetaDocument()
-        _ = await (first, second)
+        let firstDocument = await client.refreshMetaDocument()
 
+        #expect(
+            flight.count("the second caller returned inside the first request's flight") == 1,
+            """
+            the second caller has to have run and returned while the first request was still \
+            unanswered, or the count below is measuring two calls that never overlapped
+            """
+        )
+        #expect(
+            firstDocument != nil,
+            """
+            the first caller came back with no document, so the fetch did not complete, and \
+            performMetaFetch has three ways to end that way: the send threw and was swallowed — \
+            either SonnyBackendTimeouts.auth reached, which is the one this test defends against, \
+            or any other backend error, since one `try?` covers them all — or the body came back \
+            and did not decode
+            """
+        )
         #expect(requests.count(path: Self.metaPath) == 1)
     }
 
