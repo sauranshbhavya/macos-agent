@@ -197,6 +197,8 @@ Content was explicitly open/exploratory at design time ("I don't know what we're
 ## Memory / history retrieval (relevant to branch 11, not immediate UI work)
 Explicit architecture decision: persistent "memory" storage is for **user preferences only**. Anything fetchable live (calendar events, etc.) should be fetched fresh via the relevant API first. Only fall back to searching Sonny's own past conversation/task history (searched by date proximity to whatever date the user mentions, e.g. "the meeting on July 1st" searches roughly June 28-July 3) when a live API fetch isn't possible or doesn't apply. Conversations should be tagged with any dates mentioned in them so date-based search surfaces them later even if the conversation itself happened on a different date. This is not a new "memory" feature to build — it's a decision about what memory is *for* (preferences) versus what should just be live search over existing history.
 
+**Amended 2026-08-21 by the founder's row-13 memory decision (SONNY-17 section 3), recorded here 2026-09-05 by SONNY-217 — and the amendment inverts the sentence a reader would take from this paragraph.** "Persistent memory storage is for user preferences only" is kept as the record of what was decided in July and is not current: what shipped is the opposite assignment. Memory is the local stores Sonny already had, unified under one Command Center section, plus two new stores of the same shape — and **preferences are the one listed type that is surfaced rather than stored**, as a Memory row that opens the existing Settings dialog. See "Billing and memory — what row 13 decided" at the end of this file. What is **not** amended, and is the durable half of the paragraph above: fetch live before remembering, fall back to searching past task history only when a live fetch does not apply, and never build always-on recording (§6.10's own "do not include" list says the same).
+
 ## Approval panel — first-run moment
 Branch 9's checkpoint 8 (proposed 2026-07-15): the approval panel renders identically on a user's 1st and 100th approval — five plain structured lines, no first-time explainer. That gap is real: most early real tasks already resolve to tier 2 by default under the existing risk model, so the natural-usage probability of hitting this moment early is already high without engineering a specific triggering task. The 2026-07-15 resolution called for two things: (1) first-time-specific framing on the panel itself, and (2) "a light, non-forced version of curating one good example in the empty-state/onboarding — explicitly not a forced onboarding walkthrough." That resolution was only ever recorded in `docs/sonny-v1-implementation-changelog.md`'s prose, never written back here — this entry backfills that gap.
 
@@ -435,3 +437,120 @@ Recorded as a decision rather than as copy polish, because it resolves a conflic
 **Why a finished task keeps what it produced at all, when the backend keeps model traffic anyway** (founder, 2026-08-16). The hosted gateway retains requests and responses for 30–90 days. That is not the same thing as what a task produced and is not a substitute for it. Three reasons the local copy exists, written down so a later reader does not "simplify" task detail into a server read: server traffic is prompts and completions rather than the product's own record of a run's outcome; the local copy works offline, and this product is local-first; and the two retention clocks differ, so a task the user can still see could have no server-side record left at all.
 
 **What a task keeps, and where** (founder, 2026-08-17, revising his own decision of the day before). The result stays on the task's own record — it is small, it is the first thing detail renders, and keeping it there means a task can say what it produced without a second file read. The plan summary and its steps moved to a store of their own, after the first shape measured at 38.81 MiB and 307 ms per write against 3.53 MiB and 130 ms today. **The split is for size and never for lifetime.** The objection that made splitting look wrong was that follow-ups on older tasks would quietly get weaker with no way to say so, which is the same failure the "Don't save this task" rename exists to avoid — so the new store shares the task row's retention exactly: same cap, same eviction, deleted together, suppressed together. A shorter life would reintroduce precisely what was rejected, and is a new founder question rather than an implementation detail.
+
+
+## Billing and memory — what row 13 decided (2026-08-16 to 2026-09-03, roadmap row 13)
+
+Founder decisions made during row 13's planning and its nine implementation branches, recorded here
+as the durable product truth. The full records, with what was offered and declined on each, are
+SONNY-17's comments of 2026-08-16, 2026-08-17 and 2026-08-21, the same-dated comments on SONNY-211
+through SONNY-216, and SONNY-106's readiness update of 2026-08-30. The changelog's
+`docs/row-13-records` entry is the branch-by-branch account; this file is the decision itself.
+
+**Free plus exactly one paid tier, and the paid line is screen control** (founder, 2026-08-16,
+Sauransh Bhardwaj). Everything else — planning, opening apps, routines, workspaces, instant
+utilities, web research, voice — is free and uncapped. Above the line, tiers differ **by volume
+only, never by feature**. A third tier is added when there is a real reason for it and not before.
+Keeping the three-tier shape was declined, and so was reserving a third tier for Enterprise.
+
+**The durable lesson underneath it, which is why this is written as a rule and not as a price
+list.** The 2026-07-15 ladder's top tier was justified by Power Mode, and Power Mode's meaning
+changed underneath it until that tier had no product reason to exist. **A tier justified by a
+feature can be left justified by nothing when that feature's meaning changes underneath it.** That
+is why "volume only, never by feature" is the rule rather than a preference — and it is also why
+Power Mode is decoupled from billing entirely: it stays free and gates no paid feature of its own.
+The posture difference row J gave it — Power is the one mode that skips the per-app control gate
+(SONNY-143, 2026-08-20) — is not a billing difference, and any future Power gate is row 18's, not
+row 13's.
+
+**Every dollar amount and allowance number is deliberately unset**, and that is a decision rather
+than an omission. They are release-time inputs waiting on a measured per-session screen-control
+cost, which only the gateway's metering can produce. So every mechanism was built to take the
+numbers as **configuration on a deployment** rather than as constants: the plan list is one configuration value,
+of any length, that the gateway refuses to start without. A number guessed here would be revised, and a
+guess that reaches a paying stranger is worse than a blank.
+
+**The user's unit is "screen-control runs left this month"; credits are internal accounting**
+(founder, 2026-08-21). The user is never asked to think in credits, and the runs figure is derived
+from metering rather than kept in a ledger of its own.
+
+**Two light indicators and no more.** A usage line in Command Center, and "X runs left" shown only
+when a screen-control task is about to run. Nothing on ordinary free tasks, and no sentence
+anywhere explaining the scheme — the no-explanatory-copy rule of 2026-08-14 applies here as
+everywhere.
+
+**Where the usage line lives is Account, not Insights** (founders, 2026-09-02, Sauransh Bhardwaj
+and Bhavya). It sits beside the plan and the Manage-subscription control. This decision exists
+because the shipped surface contradicted the **Insights** section of this file — "deliberately do
+not show usage/quota-consumption metrics on this page", because it creates cancellation anxiety in
+heavy users and money's-worth doubt in light ones — and the contradiction was found only after the
+work had been written, implemented, reviewed and coordinator-verified without this file being
+opened. Both decisions are honoured rather than one chosen over the other: Insights stays free of
+quota metrics, and usage becomes visible where the user is already thinking about their plan.
+Treating the 2026-07-24 decision as superseded by billing was available and was declined, for
+exactly the effect it names. **The transferable half is worth more than the placement: a ticket's
+scoped-requirements line is not authority over this file, and a manual-checklist row can be the
+last surviving reflection of a decision recorded elsewhere** — retiring that row as a stale
+wireframe note nearly retired the decision behind it.
+
+**Exactly one gate: screen control blocks on billing and nothing else does.** Everything else works
+offline, with a stale entitlement cache, or with no network at all — §16.3's guarantee that a
+network blip never breaks Sonny's instant feel. The gate is one function consulted at two moments,
+not two gates, because a second type answering the same question is how two answers come to
+disagree.
+
+**Running out mid-run finishes the current atomic step and stops at the next boundary** (founder,
+2026-08-21) — never a mid-action yank, the same graceful-halt shape as the permission-revocation
+path in §13.5. The asymmetry that follows from it is deliberate: at session start the gate refuses
+on every ground it has, including an allowance it could not read, because nothing has happened yet;
+mid-session, only a *confirmed* exhaustion halts, because halting a running session on a transient
+read failure is the mid-action yank this rule forbids, arriving through the check meant to prevent
+one.
+
+**A watcher is free, and capped** (founders, 2026-08-31, Sauransh Bhardwaj and Bhavya). Standing
+watchers do not draw on the paid allowance — screen control stays the only draw, so "runs left"
+remains the whole story rather than a number a forgotten watcher can spend. What bounds the
+runaway case is a cap on watchers themselves (how many, how long, how often), whose numbers are
+release-time inputs like every other. Metering watcher checks against the allowance was declined
+for a reason worth keeping: two different things drawing on one pool makes the number the user sees
+misleading, and a cap is a number that can be set from measured data later where a second currency
+is a model change.
+
+**Auto top-up is opt-in and off by default** (founder, 2026-08-21). A user who has not asked for it
+meets the graceful halt rather than a charge.
+
+**What makes a standing card authorisation honest: the price on the switch, and the last charge in
+the Account section** (founder, 2026-09-03, Sauransh Bhardwaj). Chosen from three options. A
+per-charge confirmation was declined because a prompt before each purchase brings back the wall the
+feature exists to remove; the price alone was declined as the floor rather than the answer. **This
+is not a loosening of the no-explanatory-copy rule**: a price is what a purchase always carries, and
+a last-charge line is a record, not a disclosure — neither says anything about how the product
+works. The line to hold is the price and the record, and no sentence explaining why either is there.
+
+**Polar is the payment provider** (founders, 2026-08-30, Sauransh Bhardwaj and Bhavya). Final,
+not a shortlist entry, and it closed the open clause every row-13 billing ticket had carried.
+Merchant-of-record, so global tax is theirs. **The decision names which provider gets wired, not
+that the provider-agnostic seam stops existing** — a merchant-of-record swap is a business decision
+that can recur, and the seam is what keeps it a configuration change rather than a rewrite.
+
+**The billing portal is the provider's own hosted one, linked from Command Center — no custom
+billing UI** (founder, 2026-08-21). What shipped takes a pre-authenticated customer session rather
+than the static portal link, and that reversal has a product reason rather than a technical one:
+the static link asks the customer to type their email, and Sonny deliberately does not key on email
+and never sends one to the provider, so it cannot tell a user which address their billing record is
+under. A user who does not remember it would be locked out of their own billing with nothing Sonny
+could do.
+
+**Memory unifies the stores Sonny already had; it is not a parallel memory engine** (founder,
+2026-08-21). One Command Center **Memory** section over the existing local stores, with uniform
+per-type controls — view, edit, delete, disable — plus a master switch and an
+enterprise-policy-can-disable hook. The three genuinely missing types from §6.10 ship in v1 rather
+than being deferred: common output locations, long-running task state, and user preferences —
+**and preferences are surfaced, not stored**, as a row that opens the existing Settings dialog.
+This amends the July "memory storage is for user preferences only" decision earlier in this file,
+which now reads as the inverse of what shipped.
+
+**The Data-Sent-To-AI history stays cancelled, and the Memory section does not resurrect it**
+(founder, 2026-08-21, reaffirming the decision of 2026-08-14). Memory lists what Sonny remembers
+*for the user*; it is not a route back to an egress ledger that was deleted rather than deferred.
+The transparency posture is unchanged and lives in its own section above.
