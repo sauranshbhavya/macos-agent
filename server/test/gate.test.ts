@@ -92,6 +92,11 @@ describe("which routes the gate challenges", () => {
     const protectedRoutes = routes.filter((route) => !isPublicRoute(route.method, route.url));
     expect(protectedRoutes.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       "DELETE /v1/account",
+      // SONNY-404's account-scoped sibling, challenged for the sharpest reason on this list after
+      // the account close itself: an unauthenticated caller reaching it would delete every task an
+      // account has ever stored, and it carries no identifier at all — the account it acts on is
+      // the one the gate established, which is exactly why the gate has to have run.
+      "DELETE /v1/account/content",
       // SONNY-134's, and it arrives here the same way as every other: `routes/tasks.ts` mentions
       // auth nowhere. It is the one route a user can call to destroy their own retained content,
       // so being challenged is not a formality — an unauthenticated caller could otherwise delete

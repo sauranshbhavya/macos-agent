@@ -50,6 +50,17 @@ public final class RecordedBackendRequests: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Forgets everything recorded so far, so a test can assert about one phase of a scenario
+    /// rather than about every request the whole scenario made (SONNY-404).
+    ///
+    /// The alternative is a suffix assertion, and a suffix assertion is satisfied by a prefix that
+    /// is wrong — which is the shape `only`'s own doc records paying for.
+    public func removeAll() {
+        lock.lock()
+        recorded.removeAll()
+        lock.unlock()
+    }
+
     public var all: [RecordedBackendRequest] {
         lock.lock()
         defer { lock.unlock() }

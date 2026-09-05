@@ -606,6 +606,9 @@ final class AgentViewModel: ObservableObject {
     /// state and leaves a test unable to await the pass its own press produced, to save background
     /// work that is already serialized and bounded.
     private var pendingServerDeletionDelivery: Task<Void, Never>?
+    /// Settings' whole wipe in flight (SONNY-404). Chained the way the delivery pass is, and for the
+    /// same reason: both write the queue file.
+    private var localDataWipe: Task<Void, Never>?
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
     /// Row 19's seam. `UnmanagedMemoryPolicyProvider` is the only implementation that ships, so this
@@ -3998,18 +4001,94 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Settings' whole wipe — **a promise about the account, not about this Mac** (SONNY-404,
+    /// founder decision 2026-09-04, restated 2026-09-05).
+    ///
+    /// The press deletes what this Mac holds *and* what the gateway retains for the account: every
+    /// task's stored content, every training-snapshot copy of it, and the response bodies the
+    /// idempotency store holds. **The account itself stays open** — closing it is
+    /// `DELETE /v1/account`, a different promise with no control in the app today.
+    ///
+    /// ## The order, and why each step is where it is
+    ///
+    /// 1. **Drain the queue**, before the file holding it is removed. That is the cost the founder
+    ///    accepted with this decision, in those words.
+    /// 2. **Delete the account's server-side content.** Before the local wipe, so that a press which
+    ///    succeeds leaves *nothing* behind on either side, and so that a press which fails still has
+    ///    every local file intact when it decides what to tell the user.
+    /// 3. **Delete every local file**, the queue among them — so no task id survives this press
+    ///    whatever happened above it.
+    /// 4. **Only if step 2 failed, record one obligation**: everything under this account. It is the
+    ///    single thing the wipe may leave on disk, and it is safe to leave because it *names no
+    ///    task* — a queue file holding it carries nothing about what the user did.
+    /// 5. **Say once, plainly, what happened** — including, when the gateway could not be reached,
+    ///    what is still on the servers and what will happen to it.
+    ///
+    /// **The account-wide obligation is strictly wider than every per-task one**, which is what
+    /// makes step 3 safe: an undelivered per-task obligation is not abandoned by the wipe, it is
+    /// subsumed. If step 2 succeeded there is nothing left to owe at all.
+    ///
+    /// **The one obligation that really is abandoned, stated rather than left to be found**: an
+    /// entry the drain kept on a `404`, which §4.6 reserves for a task belonging to a *different*
+    /// account — a Mac two people have signed into. The account-wide delete cannot reach it, because
+    /// it is not this account's, and the queue file goes; so the other user's copy survives. Keeping
+    /// it would mean leaving a file that names a task, which is the one thing this press must not
+    /// do. Recorded here as the cost of the rule rather than answered.
+    ///
+    /// **The press now waits on the network, and that is the decision reversing.** Under the
+    /// superseded 2026-09-05 reading a privacy wipe could not depend on a network call; under the
+    /// standing decision it must, because it is promising something the network is the only way to
+    /// keep. What it must not do is fail *silently*, which is what step 5 exists for.
     func deleteLocalData() {
         guard !isRunning else {
             setError("Stop the current run before deleting local data.")
             return
         }
+        // Chained rather than overlapped, for `deliverPendingServerDeletions`' reason: two wipes over
+        // one queue file is a lost-update race, and the chain also means a second press reads the
+        // file the first one left.
+        let previous = localDataWipe
+        localDataWipe = Task { @MainActor in
+            await previous?.value
+            await self.performLocalDataWipe()
+        }
+    }
+
+    /// The wipe in flight, for tests. `nil` when none has been started.
+    ///
+    /// Internal for the reason `pendingServerDeletionDeliveryForTests` is: the press is asynchronous
+    /// now and there is no other surface to observe it settle through.
+    var localDataWipeForTests: Task<Void, Never>? {
+        localDataWipe
+    }
+
+    private func performLocalDataWipe() async {
+        // Stopped first, before anything else: the poll timer can write a clipboard entry between
+        // the wipe and the refresh, and the network steps below make that window seconds wide rather
+        // than milliseconds.
+        stopClipboardHistoryMonitoring()
+
+        // Step 1 — the drain, before the queue file goes.
+        await taskDeletionService.drainBeforeAWipe()
+        // Step 2 — the account's server-side content.
+        let serverCopyIsGone = await taskDeletionService.deleteEverythingUnderTheAccount()
 
         do {
-            stopClipboardHistoryMonitoring()
+            // Step 3 — every local file, the queue among them.
             let result = try localDataDeletionService.deleteAllLocalData()
             clearInMemoryLocalDataState()
-            let noun = result.deletedFileCount == 1 ? "local data file" : "local data files"
-            let message = "Deleted \(result.deletedFileCount) \(noun)."
+            // Step 4 — the one obligation the wipe may leave, and only when it is owed.
+            if !serverCopyIsGone {
+                // `try?` because the user is about to be told the servers' copy is still there
+                // either way, and a second sentence about bookkeeping is not something they could
+                // act on. What it costs when it fails is the retry, not the promise: the local half
+                // is done and pressing Delete again re-attempts everything.
+                try? taskDeletionService.recordOwedAccountContentDeletion()
+            }
+            let message = LocalDataDeletionCopy.outcome(
+                deletedFileCount: result.deletedFileCount,
+                serverCopyIsGone: serverCopyIsGone
+            )
             errorMessage = nil
             localDataDeletionStatusMessage = message
             finalSummary = message

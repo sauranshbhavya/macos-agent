@@ -462,12 +462,12 @@ struct EveryDeleteReachesTheServerTests {
         #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
     }
 
-    // MARK: - The whole wipe stays a promise about this Mac
+    // MARK: - The whole wipe is a promise about the account (SONNY-404 fix round, 2026-09-05)
 
-    /// **Founder decision 1 of 2026-09-05, as behaviour rather than as words.** The wipe sends
-    /// nothing and takes the queue with everything else; both surfaces that describe it say so.
+    /// **The whole press, on the path where everything works.** The queue is drained, the account's
+    /// server-side content is deleted, the local files go, and nothing at all is left owed.
     @Test
-    func theWholeWipeSendsNothingAndItsWordsSayItIsAboutThisMac() async throws {
+    func theWipeDrainsTheQueueThenDeletesTheAccountsContentAndLeavesNothingOwed() async throws {
         let fixture = try TaskDeletionFixture()
         defer { fixture.tearDown() }
         let record = try fixture.writeTaskRecord(id: "task-a")
@@ -475,33 +475,114 @@ struct EveryDeleteReachesTheServerTests {
         fixture.viewModel.deleteTask(record)
         try await fixture.waitForDeliveryPasses(1)
         #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
-        let sentBeforeTheWipe = fixture.seen.all.count
 
         fixture.comeBackOnline()
+        fixture.seen.removeAll()
         fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
 
-        // **Nothing was sent by the wipe itself**, which is the whole of founder decision 1: this
-        // press is a promise about this Mac, so it cannot depend on the network being there. That
-        // the queue file goes with every other store — abandoning the obligation, deliberately — is
-        // `LocalDataDeletionServiceTests`' to hold, over the real URL list; this fixture's wipe
-        // service is constructed over no files at all.
-        #expect(fixture.seen.all.count == sentBeforeTheWipe)
-        #expect(LocalDataDeletionCopy.everythingItTakes.contains("deletions Sonny hasn't finished"))
+        // The drain went first — the owed per-task delete was sent before the file holding it could
+        // be removed — and then the account-wide route. In that order, which is the founder's own
+        // condition on this decision.
+        #expect(fixture.seen.all.map(\.path) == ["/v1/tasks/task-a", "/v1/account/content"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.localDataDeletionStatusMessage?.contains("servers is deleted too") == true)
     }
 
-    /// **The words, at both surfaces that state them.** Neither sentence is reachable from a test
-    /// except through the source, because this repository renders no views in the suite — and the
-    /// founder's decision is precisely that the words say which promise this press is.
+    /// **The failing state, which is the one the founder's condition is about.** Offline, the press
+    /// says once and plainly what is left and what happens to it, and leaves exactly one obligation
+    /// behind — which names no task.
     @Test
-    func bothSurfacesSayTheWipeIsAboutThisMacAndNameWhatSonnysServersKeep() throws {
+    func aWipeThatCannotReachTheServerSaysSoAndLeavesOneObligationNamingNoTask() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+        fixture.goOffline()
+
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        let owed = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(owed.count == 1)
+        #expect(owed.first?.scope == .everythingUnderTheAccount)
+        // **The property the whole shape turns on.** A file a privacy wipe leaves behind may not
+        // name anything the user did, and this one names nothing at all.
+        #expect(owed.first?.taskIDs.isEmpty == true)
+
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.contains("couldn't reach its servers"))
+        #expect(message.contains("still there"))
+        #expect(message.contains("the next time it can"))
+        // Never silently: the sentence exists, and it is the same one the run summary carries.
+        #expect(fixture.viewModel.finalSummary == message)
+    }
+
+    /// The obligation the wipe left is delivered by the ordinary sweep, and then nothing is owed.
+    @Test
+    func theObligationAWipeLeavesIsDeliveredAtTheNextSweep() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
+
+        fixture.comeBackOnline()
+        fixture.seen.removeAll()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(1)
+
+        #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/account/content"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+    }
+
+    /// A wipe that reached the gateway leaves **nothing** on disk to owe — not an entry that would
+    /// be delivered again for no reason.
+    @Test
+    func aWipeThatReachedTheServerRecordsNoObligationAtAll() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.seen.all.map(\.path) == ["/v1/account/content"])
+    }
+
+    /// **The words, at both surfaces that state them, in each state.** Neither sentence is reachable
+    /// from a test except through the source, because this repository renders no views in the suite
+    /// — and the founder's decision is precisely that the words say which promise this press is.
+    @Test
+    func bothSurfacesSayTheWipeReachesTheServersAndWhatHappensWhenItCannot() throws {
         let page = try MacAgentSource.read("CommandCenterView.swift")
         let dialog = try MacAgentSource.read("ContentView.swift")
 
-        #expect(page.contains("Deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac."))
-        #expect(dialog.contains("This deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac."))
-        // The third item in the list of what the press does *not* take, which is the half nobody
-        // could guess from the button's name.
-        #expect(dialog.contains("what Sonny's servers keep are not deleted."))
+        #expect(page.contains(
+            "Deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers."
+        ))
+        #expect(dialog.contains(
+            "This deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers."
+        ))
+        // The other state, said before the press rather than only after it.
+        #expect(dialog.contains("If Sonny can't reach them now, it deletes their copy the next time it can."))
+        // And what it leaves alone — the account among them, because "delete my data" and "delete my
+        // account" are two promises and only one of them has a control in the app.
+        #expect(dialog.contains("Generated files, API keys and your account are not deleted."))
+        // The superseded reading is gone from both surfaces rather than merely added to.
+        #expect(!page.contains("from this Mac.\""))
+        #expect(!dialog.contains("what Sonny's servers keep are not deleted"))
+    }
+
+    /// Both outcomes of the one sentence, at the type that owns it.
+    @Test
+    func theWipesOwnSentenceNamesBothOutcomesAndNeverGoesQuiet() {
+        let reached = LocalDataDeletionCopy.outcome(deletedFileCount: 13, serverCopyIsGone: true)
+        #expect(reached == "Deleted 13 local data files. The copy on Sonny's servers is deleted too.")
+
+        let didNot = LocalDataDeletionCopy.outcome(deletedFileCount: 1, serverCopyIsGone: false)
+        #expect(didNot == "Deleted 1 local data file. Sonny couldn't reach its servers, so their copy is still there. Sonny deletes it the next time it can.")
     }
 
     /// The narrow button's confirmation names both halves of what it reaches.

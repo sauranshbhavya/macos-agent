@@ -127,6 +127,40 @@ public struct SonnyTaskDeletionService: Sendable {
         ))
     }
 
+    // MARK: - Settings' whole wipe (SONNY-404)
+
+    /// Delivers whatever the queue still owes, and says whether it emptied it.
+    ///
+    /// **This is the drain the founder's decision of 2026-09-04 names**, and its place in the wipe
+    /// is *before the queue file is removed*. Everything it fails to deliver is either subsumed by
+    /// the account-wide delete that follows it or, in the one case that is neither, abandoned — see
+    /// `AgentViewModel.deleteLocalData`, which is where that cost is written down.
+    @discardableResult
+    public func drainBeforeAWipe() async -> PendingServerDeletionDelivery {
+        await deliverPendingDeletions()
+    }
+
+    /// Deletes everything the gateway retains for this account, leaving the account open.
+    ///
+    /// **Not queued first and then delivered**, unlike every other delete in this file, because the
+    /// wipe has to *know* whether it worked: the words it shows the user differ, and a press that
+    /// could not reach the gateway has to say so rather than report a silent success. So this is the
+    /// attempt, and the caller records the obligation only when it fails.
+    public func deleteEverythingUnderTheAccount() async -> Bool {
+        do {
+            try await client.deleteAccountContent()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Records that the account's server-side content is still owed, after a wipe could not reach
+    /// the gateway. **Names no task**, which is what makes the queue file safe to leave behind.
+    public func recordOwedAccountContentDeletion(deletedAt: Date = Date()) throws {
+        try store.enqueue(taskIDs: [], scope: .everythingUnderTheAccount, deletedAt: deletedAt)
+    }
+
     /// What is still owed, oldest first. Read by tests and by nothing in the product — the queue has
     /// no surface, deliberately, and `PendingServerDeletionStore` says why.
     public func pendingDeletions() throws -> [PendingServerDeletion] {
@@ -244,6 +278,9 @@ public struct SonnyTaskDeletionService: Sendable {
     ///   has already reviewed four times over for a saving of nothing.
     /// - **many tasks, whole** — `DELETE /v1/tasks`, one call. The founder's decision of 2026-09-05.
     /// - **one task, screenshots only** — `DELETE /v1/tasks/{task_id}/screenshots`.
+    /// - **the whole account** — `DELETE /v1/account/content`, which names no task and takes
+    ///   everything the other two could have named. Settings' wipe leaves this one behind when it
+    ///   could not reach the gateway.
     private func attempt(_ entry: PendingServerDeletion) async -> AttemptOutcome {
         switch entry.scope {
         case .wholeTask:
@@ -262,6 +299,28 @@ public struct SonnyTaskDeletionService: Sendable {
                 return .settled
             }
             return await attemptScreenshotsDelete(taskID: only)
+        case .everythingUnderTheAccount:
+            return await attemptAccountContentDelete()
+        }
+    }
+
+    /// `DELETE /v1/account/content` — everything this account has stored, account left open.
+    ///
+    /// **The one obligation whose four outcomes read differently, and only in the `404` arm.** There
+    /// is no id on this path, so `resource.not_found` cannot mean "belongs to another account"; if
+    /// the gateway ever answered it, it would mean the route is not there, which no future session
+    /// changes either. It goes through the shared classifier anyway rather than being special-cased
+    /// — `.notThisSession` keeps the entry, which is the safe direction for an obligation about a
+    /// user's whole account, and a special case here would be a fourth reading of a taxonomy whose
+    /// value is that there are three places it is written and one place it is decided.
+    private func attemptAccountContentDelete() async -> AttemptOutcome {
+        do {
+            try await client.deleteAccountContent()
+            return .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
         }
     }
 

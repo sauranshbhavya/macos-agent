@@ -511,7 +511,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     let wiped: DeletionOutcome | undefined;
     try {
       const storedResponses = await deleteStoredResponsesForAccount(client, accountId);
-      wiped = await deleteContentForAccount(client, accountId, storedResponses);
+      wiped = await deleteContentForAccount(client, accountId, storedResponses, "account");
     } catch (error) {
       request.log.error(
         { err: error, requestId: request.id },

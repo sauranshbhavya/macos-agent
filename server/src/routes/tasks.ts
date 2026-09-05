@@ -3,10 +3,12 @@ import { z } from "zod";
 import { callerOf } from "../auth/gate.js";
 import {
   clearScreenshotsForTask,
+  deleteContentForAccount,
   deleteContentForTask,
   deleteContentForTasks,
   taskOwnership,
 } from "../content/store.js";
+import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
 import type { WithConnection } from "../db/connection.js";
 import { errorBody } from "../errors.js";
 
@@ -85,7 +87,16 @@ export interface TaskRoutesDeps {
   readonly withConnection: WithConnection;
 }
 
-export function registerTaskRoutes(app: FastifyInstance, deps?: TaskRoutesDeps): void {
+/**
+ * **The four content-deletion routes, grouped by what they delete rather than by path prefix**
+ * (SONNY-404). Three are task-scoped and one is account-scoped, and they are registered together
+ * because they share `taskOwnership`, the `deleteContentFor*` primitives and — more to the point —
+ * §4.6's three answers, which a reader checking one of them wants to check against the others.
+ * `DELETE /v1/account/content` is the odd path in that set and is here for that reason rather than
+ * beside `DELETE /v1/account` in `routes/auth.ts`: it deletes content and closes nothing, so filing
+ * it with the account's own lifecycle is where a later reader would confuse the two promises.
+ */
+export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskRoutesDeps): void {
   /**
    * Mounted unconditionally, including on a deployment with no database.
    *
@@ -272,6 +283,73 @@ export function registerTaskRoutes(app: FastifyInstance, deps?: TaskRoutesDeps):
         // gateway's own record rather than here: the client has nothing to do with the difference,
         // and a second number on the wire would be a field no caller reads.
         screenshots_deleted: outcome.screenshotsCleared,
+      });
+    });
+  });
+
+  /**
+   * `DELETE /v1/account/content` — everything this account has stored, and the account stays open
+   * (SONNY-404). Contract §4.6.3.
+   *
+   * **This is the Mac's "Delete Sonny local data", which is a promise about the account.** Founder
+   * decision 2026-09-04, restated 2026-09-05: that press deletes what the servers retain as well as
+   * what this Mac holds. The alternative — the wipe promises this Mac only, and its words say so —
+   * was built for one round after a coordinator re-asked the settled question, and was declined
+   * again by both founders.
+   *
+   * **It closes nothing, and that is the line between this route and `DELETE /v1/account`.** Closing
+   * an account is a different promise with no control in the app today; this deletes the content and
+   * leaves the account, its identities, its entitlement and its usage exactly where they were. The
+   * user can keep using Sonny straight afterwards, which is what "delete my data" means and what
+   * "delete my account" does not.
+   *
+   * **It reaches what the account-close path reaches, through the same function**, so the two cannot
+   * drift: live content, every training-snapshot copy, and `sonny.idempotency_key`'s stored response
+   * bodies — the one place the gateway holds response content outside the route that produced it.
+   * Usage survives, deliberately, on §10.3's long clock: `sonny.metering_event` holds no content and
+   * is the record of what the account was billed for.
+   *
+   * **Scoped to the caller's own account and to nothing else.** There is no id on this path to get
+   * wrong: the account is `callerOf(request).accountId`, which the gate established before the body
+   * was read, and every statement beneath is keyed on it.
+   *
+   * **It is safe to repeat**, which is what makes the Mac's queue able to retry it: a second call
+   * finds nothing and answers `200` with zeroes.
+   */
+  app.delete("/v1/account/content", async (request, reply) => {
+    if (deps === undefined) {
+      // Unreachable for the reason the first route gives, and loud for the same one.
+      throw new Error("DELETE /v1/account/content served with no database configured");
+    }
+    const accountId = callerOf(request).accountId;
+
+    return deps.withConnection(async (client) => {
+      const storedResponses = await deleteStoredResponsesForAccount(client, accountId);
+      const outcome = await deleteContentForAccount(
+        client,
+        accountId,
+        storedResponses,
+        // Not `account`: that value means the account was closed and its content went with it, and
+        // nothing in the row would tell the two apart once the user does close it for real.
+        "account_content",
+      );
+      request.log.info(
+        {
+          contentRows: outcome.contentRows,
+          snapshotRows: outcome.snapshotRows,
+          snapshots: outcome.snapshotsTouched,
+          storedResponses: outcome.storedResponses,
+        },
+        "account content deleted, account left open",
+      );
+      return reply.status(200).send({
+        deleted_at: new Date().toISOString(),
+        // §4.6's field, over the whole account: content rows removed, one per kept request.
+        requests_deleted: outcome.contentRows,
+        // The stored response bodies that went with them. Counted apart because it is a different
+        // table with a different clock, which is `sonny.content_deletion`'s own reason for keeping
+        // them in a column of their own.
+        stored_responses_deleted: outcome.storedResponses,
       });
     });
   });

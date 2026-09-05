@@ -6325,10 +6325,13 @@ private struct SettingsDataPage: View {
                         // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            // "from this Mac" is the founder decision of 2026-09-05 (SONNY-404):
-                            // this control is a promise about this Mac and not about the account,
-                            // and its words say so. `LocalDataDeletionCopy` carries the decision.
-                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac."
+                            // **"and from Sonny's servers" is the founder decision of 2026-09-04,
+                            // restated 2026-09-05** (SONNY-404): this control is a promise about the
+                            // account. It read "from this Mac" for one round, under a reversal that
+                            // was a coordinator's error. `LocalDataDeletionCopy` carries the whole
+                            // decision; the confirmation behind this row says what happens when the
+                            // servers cannot be reached.
+                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers."
                         )
                     } trailing: {
                         Button {

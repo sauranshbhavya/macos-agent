@@ -1036,6 +1036,30 @@ public actor SonnyBackendClient {
         ))
     }
 
+    /// `DELETE /v1/account/content` — everything this account has stored, account left open
+    /// (contract §4.6.3).
+    ///
+    /// **The account is not on the wire**, which is the whole safety property of this call: the
+    /// gateway takes it from the token the gate already verified, so there is no id here to get
+    /// wrong and no way for this Mac to name somebody else's account.
+    ///
+    /// The body is not decoded, for the reason the two calls above give about their own counts:
+    /// nothing on this Mac renders `requests_deleted`, and the wipe's words turn on whether the call
+    /// succeeded rather than on what it took.
+    public func deleteAccountContent() async throws {
+        _ = try await send(SonnyBackendRequest(
+            method: "DELETE",
+            path: "/v1/account/content",
+            body: nil,
+            authentication: .bearer,
+            // §9.3's naturally-idempotent family, which this route joins: a second call finds
+            // nothing and succeeds.
+            idempotencyKey: nil,
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        ))
+    }
+
     // MARK: - Clock
 
     func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }

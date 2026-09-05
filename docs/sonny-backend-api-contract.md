@@ -533,6 +533,7 @@ here only so nobody adds a second one.
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
 | `DELETE /v1/tasks` | yes | Delete several tasks' retained content in one call | SONNY-404 |
 | `DELETE /v1/tasks/{task_id}/screenshots` | yes | Delete this task's screenshots and nothing else | SONNY-404 |
+| `DELETE /v1/account/content` | yes | Delete everything retained for this account; the account stays open | SONNY-404 |
 | `POST /v1/billing/checkout` | yes | Where to send this account to subscribe | SONNY-211 |
 | `POST /v1/billing/webhook` | HMAC signature over the raw body, not a Bearer token | Subscription lifecycle from the payment provider | SONNY-211 |
 | `POST /v1/billing/portal` | yes | Where to send this account to manage an existing subscription | SONNY-216 |
@@ -861,6 +862,36 @@ under 8.1 on the same terms as 4.6.1.
   with `screenshots_deleted: 0` for a task this gateway never stored, and the clear scoped by
   account whatever the ownership read said.
 
+### 4.6.3 `DELETE /v1/account/content`
+
+```json
+{ "deleted_at": "2026-09-05T09:41:07Z", "requests_deleted": 34, "stored_responses_deleted": 2 }
+```
+
+Everything this account has stored — live content, every training-snapshot copy of it, and the
+response bodies §9.2 keeps for twenty-four hours — and **the account stays open** (SONNY-404).
+Additive under 8.1: a new endpoint, no existing path's behaviour altered, no field removed or
+renamed.
+
+- **This is the Mac's "Delete Sonny local data", which is a promise about the account.** Founder
+  decision 2026-09-04, restated 2026-09-05 after a coordinator's question had briefly reversed it.
+  That press deletes what the Mac holds and what this route reaches, and its own words say so in
+  both states.
+- **It closes nothing, which is the whole line between this route and `DELETE /v1/account`.**
+  Closing an account is a different promise with no control in the app today: identities,
+  entitlement and usage are untouched here, and the user keeps using Sonny straight afterwards.
+  §10.3's long clock is why usage survives — `sonny.metering_event` holds no content and is the
+  record of what the account was billed for.
+- **There is no identifier on this path**, deliberately. The account comes from the token the gate
+  already verified, so there is nothing here for a client to get wrong and no shape in which this
+  Mac could name another account.
+- **Safe to repeat**, which is what lets the Mac retry it from its queue: a second call finds nothing
+  and answers `200` with zeroes. It is `404`-free for the same reason 4.6 is: a delete that is
+  already true is not an error.
+- **It records itself under a reason of its own.** `sonny.content_deletion` already carries `account`
+  for a *closed* account's wipe, and filing this under that value would make every earlier content
+  wipe read as a close the day the user does close their account.
+
 ### 4.7 Reconciling with spec §16.2
 
 §16.2 (spec lines 2103-2117) lists eleven initial endpoints. Eight of them assume §9's server-side
@@ -884,8 +915,8 @@ architecture there is no server-side task resource to create, read, feed context
 
 Added beyond §16.2: the auth endpoints (§16.3 requires them; §16.2 never listed them), `/v1/plan`,
 `/v1/research/synthesize`, `/v1/search`, `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account`,
-`GET /v1/meta`, `GET /v1/health`, and SONNY-404's two narrower deletes, `DELETE /v1/tasks` and
-`DELETE /v1/tasks/{task_id}/screenshots`.
+`GET /v1/meta`, `GET /v1/health`, and SONNY-404's three, `DELETE /v1/tasks`,
+`DELETE /v1/tasks/{task_id}/screenshots` and `DELETE /v1/account/content`.
 
 **`DELETE /v1/tasks/{task_id}` reuses §16.2's path space for something else, and that is worth saying
 plainly.** There is no task *resource* on this server. `task_id` is a client-minted key that content
@@ -1567,6 +1598,7 @@ token is still what keeps that survivable rather than corrupting.
 | `POST /v1/auth/signout` | yes | Revoking an already-revoked family succeeds |
 | `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account` | yes | Naturally idempotent; a second delete succeeds with `requests_deleted: 0` |
 | `DELETE /v1/tasks`, `DELETE /v1/tasks/{task_id}/screenshots` | yes | Naturally idempotent for the same reason (SONNY-404). A repeat of the batch answers the same `tasks_not_found` and deletes nothing the first pass took; a repeat of the screenshot clear answers `screenshots_deleted: 0` |
+| `DELETE /v1/account/content` | yes | Naturally idempotent (SONNY-404). A repeat finds nothing and answers `200` with zeroes; it closes nothing, so there is no state a second call could destroy |
 
 **Retry is decided by `code`, never by status.** Several statuses carry more than one code with
 opposite semantics, which is the whole reason section 7's taxonomy keys off `code` — and a client
@@ -1882,8 +1914,8 @@ own opaque transport timeout, which it cannot tell apart from a dead network.
 | `POST /v1/search` | 20 s | 25 s | 30 s |
 | auth, account, meta, health, delete | 10 s | 15 s | 20 s |
 
-SONNY-404's two deletes are in that last row and take no row of their own: they are the same
-database work as 4.6's, over more rows or over fewer columns, and neither calls a provider.
+SONNY-404's three deletes are in that last row and take no row of their own: they are the same
+database work as 4.6's, over more rows or over fewer columns, and none of them calls a provider.
 
 The vision and synthesis routes get the longest budgets because they genuinely take longest: a vision
 call carries megabytes upstream and waits on a large model, and a session spends up to twelve of them

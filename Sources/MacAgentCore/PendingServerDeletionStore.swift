@@ -25,6 +25,30 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
         /// This task's screenshots and nothing else — §4.6.2. *Delete what Sonny did on screen*,
         /// whose local half removes the vision-session record and leaves the task standing.
         case screenshotsOnly
+        /// **Everything the servers retain under this account — §4.6.3 — and it names no task**
+        /// (SONNY-404, founder decision 2026-09-04 restated 2026-09-05). Settings' whole wipe is a
+        /// promise about the account, so when it cannot reach the gateway this is the one obligation
+        /// it may leave on disk: a queue file holding it carries no task id, no command and no
+        /// timestamp of anything the user did, so it leaks nothing a privacy wipe exists to remove.
+        ///
+        /// It is also strictly wider than the other two, which is what makes leaving it behind
+        /// *sufficient*: an account-wide delete reaches everything every queued per-task obligation
+        /// named, so the wipe can drop those and keep only this one without losing an obligation.
+        case everythingUnderTheAccount
+    }
+
+    /// Whether this scope's obligation is about particular tasks.
+    ///
+    /// Exhaustive and with no `default`, so a fourth scope has to answer it rather than inheriting
+    /// an answer — the difference decides whether an entry may carry no ids, and an entry that
+    /// carries none when it should is an obligation no request can discharge.
+    public static func namesTasks(_ scope: Scope) -> Bool {
+        switch scope {
+        case .wholeTask, .screenshotsOnly:
+            return true
+        case .everythingUnderTheAccount:
+            return false
+        }
     }
 
     /// The tasks this obligation covers — `CompletedTaskRecord.id`, which is the backend's
@@ -70,6 +94,12 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
     }
 
     static func key(scope: Scope, taskIDs: [String]) -> String {
+        guard namesTasks(scope) else {
+            // One obligation of this kind ever, so a second wipe that could not reach the gateway
+            // coalesces onto the first rather than queueing a duplicate of a request that is
+            // idempotent anyway.
+            return scope.rawValue
+        }
         guard taskIDs.count != 1 else {
             return "\(scope.rawValue):\(taskIDs[0])"
         }
@@ -149,22 +179,33 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
 ///   tombstones while deleting the rows is right, while one that took them would cancel deletions
 ///   the user had already asked for. That is a live hazard on the row a user presses most.
 ///
-/// **What the whole wipe does to it, stated rather than left to be found.**
-/// `LocalDataDeletionService.deleteAllLocalData()` reaches this file like every other, so a user who
-/// presses "Delete Sonny local data" with deliveries still owed abandons them. That is deliberate:
-/// a file under `~/Library/Application Support/Sonny/` that the wipe does not reach would be a new
-/// class of thing, and the wipe's own copy says it is "a promise about the whole directory rather
-/// than about the parts a reader thinks of first". It is also consistent rather than a hole — after
-/// that wipe no task's server copy is deleted, including the hundreds the user never deleted
-/// individually, because "Delete Sonny local data" has never been a promise about the server.
+/// **What the whole wipe does to this file, and it is not what this paragraph used to say**
+/// (SONNY-404, founder decision 2026-09-04 restated 2026-09-05). It said the wipe reaches this file
+/// like every other and therefore *abandons* whatever was owed — "deliberate", because "Delete Sonny
+/// local data has never been a promise about the server". That is superseded. The wipe **is** a
+/// promise about the account, and the rule is now:
 ///
-/// **SONNY-404 answered the three questions this paragraph left open, and two of the three answers
-/// changed the product** (founder decisions, 2026-09-05). The wipe stays a promise about *this Mac*
-/// — so the abandonment above is intended behaviour rather than a residual, and both surfaces that
-/// describe the press now say "from this Mac" and name Sonny's servers among what it does not take.
-/// The Memory Task-history row's Delete queues every row's deletion, as one entry naming many ids
-/// and one bulk call. And "Delete what Sonny did on screen" got a route of its own, because
-/// `DELETE /v1/tasks/{task_id}` takes a task's whole content and that button names one part of it.
+/// 1. **The queue is drained before this file is removed.** That is the founder's own condition on
+///    the decision, in those words.
+/// 2. **Everything the gateway retains for the account is deleted** — `DELETE /v1/account/content`,
+///    contract §4.6.3 — which reaches everything every queued per-task obligation named. The account
+///    itself stays open.
+/// 3. **This file is then deleted with every other store**, so no task id survives the press.
+/// 4. **If step 2 could not reach the gateway, one obligation is written back**:
+///    `.everythingUnderTheAccount`, which **names no task**. That is what makes it safe for the one
+///    file a privacy wipe leaves behind to be this one — it carries no id, no command and no time of
+///    anything the user did — and what makes it *sufficient* is that it is strictly wider than every
+///    obligation the wipe just discarded.
+///
+/// So nothing owed is abandoned by the press, with one exception written down at
+/// `AgentViewModel.deleteLocalData`: an entry the drain kept on a `404`, meaning a task belonging to
+/// a **different** account signed into this same Mac. The account-wide delete cannot reach it and
+/// the file cannot keep it, because keeping it would mean leaving a file that names a task.
+///
+/// **The other two answers of 2026-09-05 stand.** The Memory Task-history row's Delete queues every
+/// row's deletion, as one entry naming many ids and one bulk call. And "Delete what Sonny did on
+/// screen" got a route of its own, because `DELETE /v1/tasks/{task_id}` takes a task's whole content
+/// and that button names one part of it.
 ///
 /// On the shared `LocalStorageEncryption` pattern exactly: AES-GCM under the `SONNYENC1` header and
 /// the transparent legacy-plaintext migration every other store performs on its first load. There
@@ -375,10 +416,15 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         // an id of spaces names nothing the gateway will accept, so an obligation carrying one is an
         // obligation no request can ever discharge. The id itself is kept as it was — this decides
         // what to drop, not what to send.
-        let unique = Array(Set(taskIDs.filter {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }))
-        guard !unique.isEmpty else {
+        let unique = PendingServerDeletion.namesTasks(scope)
+            ? Array(Set(taskIDs.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }))
+            // **An account-wide obligation carries no ids and any it was handed are dropped here**
+            // (SONNY-404). It is about the account and not about tasks, and the whole reason the
+            // wipe may leave it on disk is that the file it sits in then names nothing the user did.
+            : []
+        guard !unique.isEmpty || !PendingServerDeletion.namesTasks(scope) else {
             return
         }
         let entry = PendingServerDeletion(taskIDs: unique, scope: scope, deletedAt: deletedAt)
@@ -523,7 +569,9 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         _ entries: [String: PendingServerDeletion]
     ) -> [String: PendingServerDeletion] {
         Dictionary(
-            entries.values.filter { !$0.taskIDs.isEmpty }.map { ($0.id, $0) },
+            entries.values
+                .filter { !PendingServerDeletion.namesTasks($0.scope) || !$0.taskIDs.isEmpty }
+                .map { ($0.id, $0) },
             uniquingKeysWith: { first, second in first.deletedAt <= second.deletedAt ? first : second }
         )
     }

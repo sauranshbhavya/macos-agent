@@ -923,7 +923,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       }
 
       const storedResponses = await deleteStoredResponsesForAccount(client, CONSENTING);
-      const outcome = await deleteContentForAccount(client, CONSENTING, storedResponses);
+      const outcome = await deleteContentForAccount(client, CONSENTING, storedResponses, "account");
       expect(outcome.contentRows).toBe(2);
       expect(outcome.snapshotRows).toBe(2);
       expect(outcome.storedResponses).toBe(1);
@@ -970,7 +970,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
     itUnderHangBackstop("keeps the usage history, which requirement 8 separates from content", async () => {
       await insertMeteringEvent(client, meteringEvent({ accountId: CONSENTING }));
       await insertRetainedContent(client, content({ accountId: CONSENTING }));
-      await deleteContentForAccount(client, CONSENTING, 0);
+      await deleteContentForAccount(client, CONSENTING, 0, "account");
       const { rows } = await client.query<{ count: string }>(
         "SELECT count(*)::text AS count FROM sonny.metering_event WHERE account_id = $1",
         [CONSENTING],
@@ -1234,7 +1234,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
           "SELECT count(*)::text AS count FROM sonny.training_snapshot_member",
         );
         expect(rows[0]!.count).toBe("0");
-        const snapshots = await trainingSnapshots(client, { limit: 10 });
+        const snapshots = await trainingSnapshots(client);
         expect(snapshots[0]!.memberCount).toBe(0);
         const deletions = await recentContentDeletions(client, { limit: 10 });
         expect(deletions.every((deletion) => deletion.snapshotRows === 1)).toBe(true);
@@ -1277,7 +1277,7 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         expect(rows[0]!.screenshot).toBeNull();
         expect(rows[0]!.media).toBeNull();
         // No member left the snapshot, so the count it describes has not changed.
-        const snapshots = await trainingSnapshots(client, { limit: 10 });
+        const snapshots = await trainingSnapshots(client);
         expect(snapshots[0]!.memberCount).toBe(1);
       });
 
@@ -1315,6 +1315,103 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         const response = await deleteScreenshots("never-stored-anything");
         expect(response.statusCode).toBe(200);
         expect(JSON.parse(response.body).screenshots_deleted).toBe(0);
+      });
+
+      itUnderHangBackstop("deletes everything this account has stored and leaves the account open", async () => {
+        // **Settings' whole wipe, through the real route** (SONNY-404, founder decision 2026-09-04).
+        // The rows go; the account does not.
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "b", accountId: CONSENTING }));
+        await insertMeteringEvent(client, meteringEvent({ accountId: CONSENTING, taskId: "a" }));
+
+        const response = await app().inject({
+          method: "DELETE",
+          url: "/v1/account/content",
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({ requests_deleted: 2 });
+        expect(await contentRows()).toHaveLength(0);
+
+        // The account is still open and still usable — this is "delete my data", not "delete my
+        // account", and those are two promises with one control between them.
+        const { rows } = await client.query<{ deleted_at: Date | null }>(
+          "SELECT deleted_at FROM sonny.account WHERE id = $1",
+          [CONSENTING],
+        );
+        expect(rows[0]!.deleted_at).toBeNull();
+        // And usage survives on §10.3's long clock: deleting content never rewrites what it cost.
+        const usage = await client.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM sonny.metering_event WHERE account_id = $1",
+          [CONSENTING],
+        );
+        expect(usage.rows[0]!.count).toBe("1");
+      });
+
+      itUnderHangBackstop("takes only the caller's own account and nothing of anybody else's", async () => {
+        await insertRetainedContent(client, content({ taskId: "mine", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "theirs", accountId: OTHER }));
+
+        const response = await app().inject({
+          method: "DELETE",
+          url: "/v1/account/content",
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body).requests_deleted).toBe(1);
+        const rows = await contentRows();
+        expect(rows.map((row) => row["account_id"])).toEqual([OTHER]);
+      });
+
+      itUnderHangBackstop("reaches the training-snapshot copies too, which is the half that never expires", async () => {
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        const built = await buildTrainingSnapshot(client, { label: "wipe-corpus" });
+        expect(built.memberCount).toBe(1);
+
+        await app().inject({
+          method: "DELETE",
+          url: "/v1/account/content",
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        const { rows } = await client.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM sonny.training_snapshot_member",
+        );
+        expect(rows[0]!.count).toBe("0");
+      });
+
+      itUnderHangBackstop("records the wipe under a reason of its own, not the account close's", async () => {
+        // Filed under `account` it would say the account was closed and its content went with it —
+        // and `sonny.account.deleted_at` stops telling the two apart the day the user does close it.
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+
+        await app().inject({
+          method: "DELETE",
+          url: "/v1/account/content",
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        const deletions = await recentContentDeletions(client, { limit: 10 });
+        expect(deletions).toHaveLength(1);
+        expect(deletions[0]!.reason).toBe("account_content");
+        expect(deletions[0]!.contentRows).toBe(1);
+      });
+
+      itUnderHangBackstop("is safe to repeat, which is what lets the Mac retry it from its queue", async () => {
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        const send = async () =>
+          app().inject({
+            method: "DELETE",
+            url: "/v1/account/content",
+            headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+          });
+
+        expect(JSON.parse((await send()).body).requests_deleted).toBe(1);
+        const again = await send();
+        expect(again.statusCode).toBe(200);
+        expect(JSON.parse(again.body).requests_deleted).toBe(0);
       });
 
       itUnderHangBackstop("answers 404 for another account's task and leaves that task's screenshot where it is", async () => {

@@ -69,20 +69,26 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 /// puts the screen records first, which is right for a destructive-action disclosure rather than
 /// merely accepted: it is the item a person is likeliest to be checking for.
 ///
-/// **Both surfaces say "from this Mac", and that is the founder decision of 2026-09-05 in the one
-/// place it can be read** (SONNY-404). The question SONNY-333 left open was whether "Delete Sonny
-/// local data" promises this Mac or the account. It promises this Mac: the control is named local
-/// data, account-wide deletion is a different promise that `DELETE /v1/account` already keeps, and a
-/// privacy wipe must not depend on a network call. The alternative — the wipe also deleting every
-/// server copy, with new words, its own confirmation and a rule for a wipe performed signed out —
-/// was put to the founder and declined.
+/// **Both surfaces say "from this Mac and from Sonny's servers", and that is the founder decision of
+/// 2026-09-04 in the one place it can be read** (SONNY-404, restated 2026-09-05). The question
+/// SONNY-333 left open was whether "Delete Sonny local data" promises this Mac or the account. It
+/// promises **the account**: the press deletes every task's retained content under the account, live
+/// and in training-snapshot copies, and leaves the account itself open. The alternative — the wipe
+/// promises this Mac only, and its words say so — was declined twice.
 ///
-/// So the dialog's list of what the press does *not* take gains a third item beside generated files
-/// and API keys: what Sonny's servers keep. That list is where this belongs rather than in a
-/// sentence of its own — the words a person reads before an irreversible press should say what it
-/// reaches and what it leaves, and this is the second of those. It is also the honest description of
-/// the outstanding-deliveries file the wipe removes with everything else: after this press no task's
-/// server copy is deleted, including the ones the queue was still owed.
+/// **It was built the other way for exactly one round**, on 2026-09-05, after the same question was
+/// re-asked without the standing decision being named; both founders restored the original answer
+/// the same day. The sentence that stood here said the wipe "promises this Mac … a privacy wipe must
+/// not depend on a network call", and it is quoted inside its own correction rather than silently
+/// replaced, so a later sweep for that wording finds it labelled as history rather than finding
+/// nothing and concluding it was never written.
+///
+/// **The dialog says three things and each one is a decision.** What the press reaches, both halves.
+/// What happens when the servers cannot be reached right now — because the founder's own condition
+/// on this decision is that the wipe must never be the one delete that quietly leaves a copy behind.
+/// And what it leaves alone, which now names the **account** beside generated files and API keys:
+/// "delete my data" and "delete my account" are two promises, only one of them has a control in the
+/// app, and a person pressing this one should not have to guess which they are pressing.
 public enum LocalDataDeletionCopy {
     /// Every store the wipe reaches, named, as one list phrase — "a, b, and c".
     ///
@@ -93,6 +99,30 @@ public enum LocalDataDeletionCopy {
         // `resumable-tasks.json` holds two collections (SONNY-236). A `map` here would silently
         // drop every phrase after a store's first.
         list(LocalStore.allCases.flatMap(\.deletionCopyNames))
+    }
+
+    /// What the press did, in one sentence, in the two states it can end in (SONNY-404).
+    ///
+    /// **One sentence and not two, and never silence.** The founder's decision of 2026-09-04 accepts
+    /// that this wipe may be pressed with no way to reach the gateway, on the condition that it says
+    /// so once and plainly rather than being the one delete that quietly leaves a copy behind. So
+    /// the failing state names what is still there and what happens to it, and the succeeding state
+    /// says both halves are gone — because a user who has just been told a press reaches the servers
+    /// is owed the confirmation that it did.
+    ///
+    /// **"the next time it can" rather than "when you're back online".** Two things stop the call —
+    /// no network and no session — and the sentence covers both without asking the user to work out
+    /// which they are in. What actually retries it is the launch sweep and every later delete's
+    /// delivery pass, and neither is something the product explains.
+    public static func outcome(deletedFileCount: Int, serverCopyIsGone: Bool) -> String {
+        let noun = deletedFileCount == 1 ? "local data file" : "local data files"
+        let local = "Deleted \(deletedFileCount) \(noun)."
+        guard serverCopyIsGone else {
+            return local
+                + " Sonny couldn't reach its servers, so their copy is still there."
+                + " Sonny deletes it the next time it can."
+        }
+        return local + " The copy on Sonny's servers is deleted too."
     }
 
     /// Oxford-comma join. Written out rather than `joined(separator:)` because the last separator
@@ -419,11 +449,17 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // Delete was pressed — and it is here anyway, because "delete my local data" is a
             // promise about the whole directory rather than about the parts a reader thinks of
             // first, and a file this wipe skipped would be a residual record of what the user
-            // deleted surviving the wipe. What that costs is written on
-            // `PendingServerDeletionStore`: a wipe with deliveries outstanding abandons them —
-            // **intended behaviour since the founder decision of 2026-09-05, not a residual**
-            // (SONNY-404). This wipe is a promise about this Mac, its words say so, and a promise
-            // about this Mac cannot be made to depend on the network being there.
+            // deleted surviving the wipe.
+            //
+            // **What that used to cost is no longer what it costs** (SONNY-404, founder decision
+            // 2026-09-04 restated 2026-09-05). The wipe is a promise about the account, so before it
+            // reaches this file it drains the queue and deletes everything the gateway retains for
+            // the account; and when it could not reach the gateway it writes **one** obligation back
+            // — everything under this account, naming no task. So a queued per-task deletion is not
+            // abandoned by this press, it is either delivered, discharged by the account-wide delete
+            // or subsumed by the obligation left in its place. `AgentViewModel.deleteLocalData`
+            // carries the ordering and the one case that really is abandoned: an entry the drain
+            // kept on a `404`, which belongs to a *different* account signed into this same Mac.
             PendingServerDeletionStore.realFileURL(fileManager: fileManager)
         ]
     }

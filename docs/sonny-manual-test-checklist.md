@@ -3639,15 +3639,31 @@ gateway and the same account.
       several delete requests instead of one, any task's content surviving, or a red error or storage
       banner appearing that you did not press for.
 
-- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. The whole wipe is about this Mac, and
-      says so.** Open Settings &rsaquo; Data. The line under **Delete Sonny local data** must end
-      "**from this Mac**". Press Delete and **read the confirmation before confirming**: it must also
-      say "from this Mac", and it must name **what Sonny's servers keep** among the things it does
-      *not* delete, beside generated files and API keys. Confirm it. Then check the account report:
-      the tasks the backend kept must **still be there**. **What would be a finding:** either
-      sentence not saying "from this Mac", the not-deleted list not mentioning the servers, or the
-      backend's copies disappearing — that last one would mean the wipe made a promise about the
-      account, which is the option the founder declined.
+- [ ] **(new 2026-09-05, corrected 2026-09-05 after the fix round, SONNY-404) — needs a local
+      gateway. The whole wipe is about the account, and says so.** *(This row asked the opposite for
+      part of one day: the wipe was briefly built as a promise about this Mac, and both founders
+      restored the account reading. Run the row as it stands below.)* Run two or three ordinary tasks
+      and confirm the backend kept them with `npm run support -- account <your account id>`. Open
+      Settings &rsaquo; Data. The line under **Delete Sonny local data** must end "**from this Mac and
+      from Sonny's servers**". Press Delete and **read the confirmation before confirming**: it must
+      say the same thing, then say what happens if Sonny can't reach the servers right now, and then
+      name **your account** among the things it does *not* delete, beside generated files and API
+      keys. Confirm it. The message that appears must say the copy on Sonny's servers is deleted
+      too. Then check the account report: **nothing** the backend kept for those tasks may be left,
+      and **you must still be signed in and able to run a task** — the account stays open. **What
+      would be a finding:** either sentence still saying only "from this Mac", the confirmation not
+      mentioning what happens when the servers are unreachable, any of the backend's copies
+      surviving, or being signed out afterwards.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway you can stop. The wipe never fails
+      silently.** Run one ordinary task and confirm the backend kept it. Now **stop the gateway** (or
+      turn off Wi-Fi) and press **Delete Sonny local data**, confirming it. The message must say, in
+      plain words, that Sonny couldn't reach its servers, that their copy is **still there**, and
+      that Sonny deletes it the next time it can — never just "Deleted N local data files." Start the
+      gateway again, quit Sonny and reopen it, then check the account report: that task's content
+      must now be **gone**, deleted by the sweep at launch. **What would be a finding:** a message
+      that says only how many local files went, or the backend's copy still being there after the
+      relaunch.
 
 ### Renaming one file, and being asked first (new 2026-09-04, SONNY-385)
 

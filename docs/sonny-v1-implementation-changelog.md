@@ -266,11 +266,12 @@ Files changed:
   `Tests/MacAgentTests/MemoryCommandCenterTests.swift`
 - `docs/sonny-manual-test-checklist.md`, and this entry
 
-Tests: every figure below is stamped at **`75f0c7cf`**, the commit carrying all the code; the head is
-one docs-only commit above it, and the check a reader re-runs is
-`git diff --name-only 75f0c7cf HEAD -- Sources Tests Package.swift server | wc -l` -> 0 against the
-same command with no pathspec, which fires. Both halves are owed and both were run: this diff touches
-`Sources/`, `Tests/` and `server/`.
+Tests (first round; the fix round's figures are below its own paragraph): every figure in this block
+is stamped at **`75f0c7cf`**, the commit carrying that round's code; that round's head was
+`e17187e2`, one docs-only commit above it
+(`git diff --name-only 75f0c7cf e17187e2 -- Sources Tests Package.swift server | wc -l` -> 0 against
+the same command with no pathspec -> 1, which fires). Both halves are owed and both were run: this
+diff touches `Sources/`, `Tests/` and `server/`.
 
 - Flagged Swift suite (CLAUDE.md's exact command) — passed, **2946 tests in 199 suites, 8 known
   issues**. Main's baseline at `6cc9e189` was 2929 in 198 with the same 8, so this branch adds 17
@@ -336,6 +337,74 @@ Known limitations / deferred scope:
   along with the cap's silent eviction.
 
 Open questions: none.
+
+**Fix round, 2026-09-05: the first of the three decisions above was reversed back, and the wipe now
+reaches the account.** Both founders restored the decision of **2026-09-04** — "Delete Sonny local
+data" is a promise about the **account** — and recorded that the 2026-09-05 answer this entry was
+first written against was a coordinator's error: the settled question had been re-asked as an
+enumerated option without the standing decision being named. The second and third answers stand
+untouched, and no line of the screenshots route or the bulk route moved in this round.
+
+**What the press does now**, in the order the steps have to run in:
+
+1. **Drains the queue**, before the file holding it is removed — the founder's own condition on this
+   decision, in those words.
+2. **Deletes everything the gateway retains for the account** — `DELETE /v1/account/content`,
+   contract **§4.6.3**, a new route, additive under §8.1 and with a row of its own in §4.1 and §9.3.
+   Live content, every training-snapshot copy, and the response bodies §9.2 keeps for twenty-four
+   hours. **The account stays open**: closing it is `DELETE /v1/account`, a different promise with no
+   control in the app today.
+3. **Deletes every local file, the queue among them**, so no task id survives the press whatever
+   happened above it.
+4. **Only if step 2 failed, writes one obligation back** — `.everythingUnderTheAccount`, the queue's
+   third scope, which **names no task**. That is what makes it safe to be the one thing a privacy
+   wipe leaves on disk, and what makes it *sufficient* is that it is strictly wider than every
+   obligation step 3 just discarded: an account-wide delete reaches everything each per-task
+   obligation named.
+5. **Says once and plainly what happened**, including what is still on the servers and what will
+   happen to it. `LocalDataDeletionCopy.outcome` owns both sentences.
+
+**Why a new route rather than a `scope` on the bulk one**, which the coordinator's note offered as
+the shape to weigh first. Extending `DELETE /v1/tasks` would have made `task_ids` optional, and on a
+delete route an absent or empty body would then be one typo away from meaning *everything* — the most
+expensive possible misreading, and one a 400 currently prevents. A separate path is also
+unambiguously additive under §8.1's first bullet, gets its own §4.1 row and its own line in the
+deny-by-default gate scan, and reads correctly beside `DELETE /v1/account`: the two paths differ by
+exactly the thing that differs in the promise.
+
+**Why the record needed migration `0021`.** `sonny.content_deletion.reason` already carries `account`
+for a *closed* account's wipe. Filing this act under that value would be the closest wrong answer
+available — `sonny.account.deleted_at` distinguishes them only until the user does close the account,
+at which point every earlier content wipe reads as a close. So `account_content` is its own reason,
+and `deleteContentForAccount` takes the reason as a required parameter rather than a defaulted one,
+on this repository's own recorded ground that a defaulted parameter is a decision nobody reads.
+
+**The press waits on the network now, and that is the decision reversing rather than an oversight.**
+The superseded reading argued a privacy wipe must not depend on a network call; the standing decision
+requires it to, because it is promising something only the network can deliver. What it must not do
+is fail silently, which is what step 5 exists for. `deleteLocalData()` is therefore an asynchronous
+entry point with a chained handle, and eleven existing tests across four suites had to await it —
+they were asserting on a press that had not finished.
+
+**The one obligation this press really does abandon, stated rather than left to be found:** an entry
+the drain kept on a `404`, which §4.6 reserves for a task belonging to a *different* account signed
+into the same Mac. The account-wide delete cannot reach it, and the queue file cannot keep it,
+because keeping it would mean leaving behind a file that names a task. It is the cost of the rule
+that whatever survives the wipe names nothing the user did.
+
+**Files this round added or changed on top of the list above:**
+`server/src/db/migrations/0021_a_wipe_leaves_the_account_open.sql` (new),
+`server/src/routes/tasks.ts` (the account-scoped sibling, and `registerTaskRoutes` renamed
+`registerContentDeletionRoutes` because it no longer registers only task routes),
+`server/src/content/store.ts`, `server/src/routes/auth.ts` (one call site, naming its reason),
+`server/src/app.ts` (the renamed registrar), `docs/sonny-backend-api-contract.md`,
+`server/test/{content.db,gate,migration-round-trip.db}.test.ts`,
+`Sources/MacAgentCore/{PendingServerDeletionStore,SonnyTaskDeletionService,SonnyBackendClient,LocalDataDeletionService}.swift`,
+`Sources/MacAgent/{AgentViewModel,ContentView,CommandCenterView}.swift`,
+`Tests/MacAgentTestSupport/RecordedBackendRequests.swift`,
+`Tests/MacAgentTests/{TaskDeletionReachesTheServerTests,MemoryCommandCenterTests,ProductShellTests,ConsequenceRuleDispatchTests,StandingWatcherRunTests}.swift`,
+and `docs/sonny-manual-test-checklist.md`, whose wipe row is **corrected in place** rather than
+joined by a second, with a parenthesis saying it briefly asked the opposite.
 
 Next branch: per the coordinator's wave-6 order.
 

@@ -158,7 +158,7 @@ async function removeSnapshotMembers(
 async function recordDeletion(
   client: pg.Client,
   entry: {
-    reason: "task" | "account" | "expiry" | "snapshot_expiry";
+    reason: "task" | "account" | "account_content" | "expiry" | "snapshot_expiry";
     accountId: string | null;
     taskId: string | null;
     outcome: DeletionOutcome;
@@ -511,6 +511,13 @@ export async function clearScreenshotsForTask(
 /**
  * Everything one account has: content, snapshot membership, and its stored idempotency responses.
  *
+ * **Two acts share this function and the `reason` tells them apart** (SONNY-404). `account` is
+ * `DELETE /v1/account` — the account is closed and its content goes with it. `account_content` is
+ * `DELETE /v1/account/content`, the Mac's own "Delete Sonny local data", which takes the same rows
+ * and leaves the account open. The work is identical, so it is one function; the *record* is not,
+ * because a row saying `account` is a row saying the account was closed, and
+ * `sonny.account.deleted_at` stops distinguishing them the day the user does close it.
+ *
  * **The third of those is SONNY-319, closed here rather than left as a function with no call site.**
  * `sonny.idempotency_key` holds response bodies for twenty-four hours, which makes it the one place
  * in the gateway holding response content outside the route that produced it, and
@@ -534,6 +541,10 @@ export async function deleteContentForAccount(
   client: pg.Client,
   accountId: string,
   storedResponses: number,
+  // Required rather than defaulted, on this repository's own recorded ground that a defaulted
+  // parameter is a decision nobody has to make and therefore one nobody reads (SONNY-350's store
+  // locations). Both callers name their act.
+  reason: "account" | "account_content",
 ): Promise<DeletionOutcome> {
   await client.query("BEGIN");
   try {
@@ -549,7 +560,7 @@ export async function deleteContentForAccount(
       storedResponses,
     };
     await recordDeletion(client, {
-      reason: "account",
+      reason,
       accountId,
       taskId: null,
       outcome,
@@ -604,7 +615,7 @@ export async function sweepClosedAccountContent(
   const accountId = rows[0]?.account_id;
   if (accountId === undefined) return undefined;
   const storedResponses = await clearStoredResponses(client, accountId);
-  return deleteContentForAccount(client, accountId, storedResponses);
+  return deleteContentForAccount(client, accountId, storedResponses, "account");
 }
 
 /**

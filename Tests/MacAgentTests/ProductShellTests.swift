@@ -730,6 +730,9 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope != .unscoped)
 
         viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await viewModel.localDataWipeForTests?.value
 
         #expect(viewModel.activeTaskScope == .unscoped)
     }
@@ -1032,6 +1035,11 @@ struct ProductShellTests {
             // deleted the queue file underneath it and the pass reads that file itself — a pass
             // that survives the wipe finds an empty queue and does nothing, which is exactly right.
             "pendingServerDeletionStore", "taskDeletionService", "pendingServerDeletionDelivery",
+            // **`localDataWipe` is the wipe's own handle** (SONNY-404's fix round), and it is in
+            // this group for a sharper version of the same reason: the wipe is what would be doing
+            // the clearing, so clearing its own handle from inside itself is a task cancelling
+            // itself half way through the promise it is keeping. It holds no local data either.
+            "localDataWipe",
             // A monotone count of finished delivery passes, for the test that cannot wait on the
             // handle above (PR #194 cycle-3). Not local data and not task state — it counts
             // background work since launch, so a wipe has nothing to find in it and resetting it
@@ -1688,7 +1696,7 @@ struct ProductShellTests {
     /// itself is gone by then; a chip still naming it, and a next command still binding to it, is
     /// the same defect SONNY-38's review filed against this function one ticket earlier.
     @Test
-    func clearingInMemoryStateAlsoDropsAnArmedCardBinding() throws {
+    func clearingInMemoryStateAlsoDropsAnArmedCardBinding() async throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
@@ -1700,6 +1708,9 @@ struct ProductShellTests {
         #expect(viewModel.pendingWorkspaceBinding == "Research")
 
         viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await viewModel.localDataWipeForTests?.value
 
         #expect(viewModel.pendingWorkspaceBinding == nil)
         #expect(viewModel.boundWorkspaceName == nil)
