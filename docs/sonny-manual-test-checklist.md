@@ -2683,6 +2683,22 @@ pointed at it.
       sticking for the rest of the launch; or the panel appearing at all once you restart the gateway
       with `RECOMMENDED_CLIENT=1.0.0` and relaunch the app, which is the row's own control.
 
+- [ ] **(new 2026-09-04, SONNY-402) — the rollback: the wall comes down without quitting the app.**
+      The row above and the row above that, run back to back and **without relaunching in between**,
+      because what this checks is a running app changing its mind. Start with the wall's
+      configuration and leave the app open and showing **Update needed**. Now restart the gateway
+      with the warning's configuration — the minimum lowered to `1.0.0`, the recommendation left at
+      `2.0.0` — and, still without touching the app, run any command that reaches Sonny (a plan, a
+      screen task, anything that is not a purely local utility). **Expect:** the panel changes by
+      itself from **Update needed** to **Update available**, on both surfaces, and the **Not now**
+      button appears where there was none. Everything works again from that moment.
+      **This is the row a review found missing behaviour behind** (PR #202, F1): a served response
+      carrying `Sonny-Deprecation: true` could not take the wall down, and since the warning band is
+      exactly where every response is served *and* carries that header, there was no way back at
+      all — the wall has no dismiss control, so quitting the app was the only exit. **What would be
+      a finding:** the wall still showing after a successful command; the panel clearing all the way
+      to nothing instead of to the warning; or either surface changing while the other does not.
+
 **One case is deliberately not a row, because a correctly configured gateway cannot produce it.** If
 the upgrade URL is not `http` or `https`, the app shows the message with no button — the founder's
 decision of 2026-09-04. You cannot reach that from here: the gateway refuses to start with a
