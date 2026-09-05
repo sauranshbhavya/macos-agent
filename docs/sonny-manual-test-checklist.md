@@ -3532,6 +3532,73 @@ only so the third one collides with what row 2 asks for. Open the packaged app.
       about this feature. **What would be a finding:** the files being renamed to anything at all; a
       plain red error instead of a question; or a question with no way to answer it.
 
+### Moving to a new Mac with Migration Assistant (new 2026-09-05, SONNY-422)
+
+**Why these rows exist.** Sonny is not going to ship a backup-and-restore button in v1 (founder
+decision 2026-09-05, on SONNY-253). The design that was going to do it needed a password, and
+Sonny's sign-in — an email code, Google, Apple — never gives the app one. So moving to a new Mac is
+Apple's Migration Assistant's job, and these rows are what turn "it should work" into "we watched it
+work". Everything you have made in Sonny sits in two places: the files under
+`~/Library/Application Support/Sonny/`, and one 32-byte key in your login keychain that those files
+are encrypted with. **Both have to arrive, and the key is the one that matters** — without it every
+file is unreadable noise, and there is no second copy of it anywhere.
+
+**What the code says should happen, so you are confirming a prediction and not guessing.** Sonny
+writes three things into the keychain, and it sets no attribute on any of them that would pin them
+to one machine — nothing marked "this device only", nothing marked to sync through iCloud. They go
+into the ordinary login keychain, which is exactly what Migration Assistant carries across. So the
+expected result is the boring one: **everything is there, and you are still signed in.** If any row
+below fails, that is a real finding and worth stopping on — it means something in that chain is not
+what the code reads like.
+
+**Set up (do the first part before you migrate — afterwards is too late).** On the **source Mac**,
+open Sonny and make sure there is something of each kind to count: at least two routines, at least
+one workspace, at least one snippet, and a handful of finished tasks in Task history. Be signed in.
+Then go to **Command Center → Memory** and **write down the number on every row** — Routines,
+Workspaces, Task history, Recent artifacts, Output locations, Clipboard history, Snippets, Allowed
+apps, Unfinished tasks. Note the email address you are signed in as. Quit Sonny properly (not just
+close the window). Then set up the **second Mac** and run **Migration Assistant on it**, pulling
+from the source Mac, with the user account included. Install and open Sonny there.
+
+- [ ] **(SONNY-422)** **The app opens on the new Mac with nothing broken.** Open Sonny on the new
+      Mac and let it settle. There must be **no banner saying a local data file "could not be
+      decrypted or decoded"**, and no Memory row reading **"Can't be read"**. Click through Tasks,
+      Routines, Workspaces and Memory so each one actually loads its files rather than sitting
+      unopened. **One thing that is not a finding but please tell me if it happens:** macOS may ask
+      for your login password once, saying Sonny wants to use a key stored in your keychain. That is
+      the operating system checking that this copy of the app is allowed to read the migrated key,
+      not Sonny failing. Allow it and carry on — but write down that it happened, and which button
+      you pressed, because it changes what we tell a real user to expect. **What would be a
+      finding:** the "could not be decrypted or decoded" banner; any Memory row saying "Can't be
+      read"; a page that stays empty when the source Mac had things on it; or the app refusing to
+      open at all.
+- [ ] **(SONNY-422)** **Your things are all there, and there are the same number of them.** On the
+      new Mac, count what you can see: routines on the **Routines** page, workspaces on
+      **Workspaces**, finished tasks in **Task history** on the Tasks page, and snippets on the
+      **Memory** page's Snippets row. Every one of those must match what you wrote down on the
+      source Mac. Open one routine and one workspace and check the inside of them too — the names,
+      the steps, the apps they point at — not just that a row exists. **What would be a finding:**
+      any count lower than the source Mac's; a routine or workspace that opens empty or with its
+      steps missing; or anything present but renamed to something you did not choose.
+- [ ] **(SONNY-422)** **The Memory section's own counts match, row for row.** Go to **Command Center
+      → Memory** on the new Mac and compare all nine rows against the numbers you wrote down:
+      Routines, Workspaces, Task history, Recent artifacts, Output locations, Clipboard history,
+      Snippets, Allowed apps, Unfinished tasks. They are a separate reading from the pages in the
+      row above — the pages show you the things, these rows count the files — so both are worth
+      checking. A row reading **0 saved** where the source Mac had a number is a finding on its own,
+      and so is a row that says **"Can't be read"**. **What would be a finding:** any row whose
+      number is different from the source Mac's, in either direction.
+- [ ] **(SONNY-422)** **You are still signed in — this is the prediction, please confirm or break
+      it.** The reading of the code says the signed-in session travels with everything else, because
+      it is held in the same login keychain with the same absence of any device-pinning attribute.
+      **So the expected result is that Sonny opens already signed in, as the same email address you
+      noted on the source Mac, with no sign-in screen.** Check the account menu shows that address.
+      Your plan and your remaining screen-control runs should also be intact, since those are held
+      the same way. **What would be a finding — and this one is genuinely useful either way:** being
+      shown the sign-in screen and asked to sign in again. That would not be data loss and nothing
+      would be broken, but it would mean the prediction above is wrong, and we would want to know
+      before a real user meets it rather than after.
+
 ## 8. How to report back
 
 For each real finding, give me:
