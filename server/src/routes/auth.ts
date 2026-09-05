@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   CODE_LIFETIME_SECONDS, callerOriginatedLatestCode, classifyFailure, consumeLatest, issueCode,
@@ -45,6 +45,36 @@ function sourceOf(request: FastifyRequest): string {
 
 function sourceHash(request: FastifyRequest, salt: string): string {
   return createHash("sha256").update(`${salt}:src:${sourceOf(request)}`).digest("hex");
+}
+
+/**
+ * §7.2 case 5 — the auth provider could not be reached — answered identically by every route here.
+ *
+ * **One function because three routes disagreed about one event** (SONNY-311). `email/verify` mapped
+ * `ProviderUnavailable` to `502 provider.unavailable`; `refresh` and `signout` let it past their
+ * `catch` and it reached Fastify's handler, where `errors.ts` classifies an unmapped throw as a
+ * `500 server.error`. Three routes, one condition, two answers — and the two wrong ones sat on the
+ * same branch of the same file as the right one. The condition became reachable when SONNY-307
+ * landed the concrete Supabase adapter, which raises `ProviderUnavailable` for a 429, a 5xx, a
+ * timeout, a socket failure and an unparseable 200; before it, every implementation of
+ * `AuthProvider` was a test fake and no request could produce this.
+ *
+ * Copying the arm into the two handlers would have fixed the instance and left the shape that
+ * produced it, so the answer lives once. `message` is never displayed — §7.1 makes the client map
+ * `code` to its own copy — so the wording here is for the log and the support lookup, and it names
+ * the operation rather than the provider, which §7.2 case 5 requires ("Never a vendor name").
+ *
+ * `retryable: true` is §7.2's own column for this code, and §9.3 makes all three of these routes
+ * safe to retry with the same key.
+ */
+function providerUnavailable(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  message: string,
+): FastifyReply {
+  return reply.status(502).send(
+    errorBody("provider.unavailable", message, request.id, { retryable: true }),
+  );
 }
 
 export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDeps): void {
@@ -221,9 +251,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         return reply.status(400).send(errorBody(code, "Sign-in code was not accepted.", request.id));
       }
       if (error instanceof ProviderUnavailable) {
-        return reply.status(502).send(
-          errorBody("provider.unavailable", "Sign-in is temporarily unavailable.", request.id, { retryable: true }),
-        );
+        return providerUnavailable(request, reply, "Sign-in is temporarily unavailable.");
       }
       throw error;
     }
@@ -299,6 +327,14 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         return reply.status(401).send(
           errorBody("auth.token_revoked", "Refresh token is no longer valid.", request.id),
         );
+      }
+      // **A provider this gateway could not reach is not a rejected token** (SONNY-311). Falling
+      // through to the throw below made this a `500 server.error`, which tells a client that Sonny
+      // broke rather than that the login service is down — and §9.3 marks both retryable, so the
+      // client was not stranded and nothing surfaced the difference. It matters anyway: a `500` is
+      // what an operator pages on, and the operator would have been paged for someone else's outage.
+      if (error instanceof ProviderUnavailable) {
+        return providerUnavailable(request, reply, "Session refresh is temporarily unavailable.");
       }
       throw error;
     }
@@ -529,14 +565,44 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * plus `EXPIRY_SKEW_TOLERANCE_SECONDS`, because it is self-contained and this gateway verifies it
    * locally rather than asking the provider. `auth/gate.ts` states that residual in full, tolerance
    * included (PR #104's adversarial review, F9).
+   *
+   * **An unreachable provider answers `502 provider.unavailable` and not `204`, and that was a
+   * decision rather than a copy of the route above** (SONNY-311, whose own text asked for one).
+   * `204` here would be this gateway asserting a revocation that did not happen: the refresh-token
+   * family is still live at the provider, so a refresh token in someone else's hands can still mint
+   * access tokens against the project, and the caller would have been told the opposite. The two
+   * failures are not the same shape and answering them alike is what would conflate them —
+   * `ProviderRejected` means the family is *already* gone, which is the state the caller asked for,
+   * so it is swallowed; `ProviderUnavailable` means nobody knows, and probably not.
+   *
+   * **What decided it is that the client can already act on this and loses information if it
+   * cannot.** `SonnyAccountService.signOut()` clears this Mac either way — the local clear is
+   * unconditional and runs after the call — and it carries a `SignOutOutcome.clearedLocallyOnly`
+   * arm for exactly a failure that is neither `auth.token_revoked` nor `auth.unauthenticated`. So a
+   * `502` strands nobody: the user is signed out of their Mac, and the outcome type says truthfully
+   * that only the local half happened. A `204` would collapse `clearedLocallyOnly` into `revoked`
+   * and make the client's own type lie. No client change is needed for this and none is made:
+   * `SonnyBackendError` already carries `providerUnavailable`, and a `500` lands in the same arm
+   * today, so what changes is that the arm is now reached with the accurate code.
    */
   app.post("/v1/auth/signout", async (request, reply) => {
     try {
       await deps.provider.signOut(callerOf(request).accessToken);
     } catch (error) {
-      if (!(error instanceof ProviderRejected)) throw error;
-      // An already-invalid token is a signed-out session. Answering 401 would make the client's
-      // retry loop the user's problem for a state it already wanted.
+      if (error instanceof ProviderRejected) {
+        // An already-invalid token is a signed-out session. Answering 401 would make the client's
+        // retry loop the user's problem for a state it already wanted.
+      } else if (error instanceof ProviderUnavailable) {
+        // Logged as well as answered: the caller is told to retry, and nothing else records that a
+        // family this gateway was asked to revoke is still live.
+        request.log.warn(
+          { requestId: request.id },
+          "sign-out could not reach the auth provider; the refresh-token family was not revoked",
+        );
+        return providerUnavailable(request, reply, "Sign-out is temporarily unavailable.");
+      } else {
+        throw error;
+      }
     }
     return reply.status(204).send();
   });
