@@ -12,10 +12,25 @@ import Foundation
 /// parallel with each other and with everything else.
 ///
 /// **`startLoading` dispatches rather than running the handler inline.** URLSession calls it on its
-/// own worker threads, and two of the tests here need a handler that blocks: one holds ten
-/// concurrent requests at a barrier so they raise their 401s together, and one never answers at all
-/// so the client's own timeout is what ends the request. Blocking URLSession's threads to do that
-/// risks exhausting its pool; a queue of our own cannot.
+/// own worker threads, and tests here register handlers that block: on a barrier, so a burst of
+/// requests raises its 401s together, and on a signal, so one request is still in flight while the
+/// test does something else with the client. Blocking URLSession's threads to do that risks
+/// exhausting its pool; a queue of our own cannot.
+///
+/// **That said "two of the tests here" and named a number instead of a method, which is why it is a
+/// method now** (PR #205's F1, SONNY-420). The number was stale before the branch that found it and
+/// staler after — a suite that registers a blocking handler joins this population the day it lands,
+/// and nothing brings the sentence with it. Count them rather than trusting a numeral:
+/// `git grep -n "arriveAndWait()|waitUntilSignalled|secondCallerReturned.wait" <sha> -- Tests`
+/// piped through `grep -v "MacAgentTestSupport/BackendStubURLProtocol.swift"`, with the alternation
+/// written for the engine you use — `git grep -E` for that spelling, backslashed alternation for the
+/// default. **The exclusion stage is not tidiness and its control fires**: this comment names all
+/// three tokens and `waitUntilSignalled` is declared further down this very file, so without it the
+/// answer counts the file that is only describing the population.
+///
+/// The old sentence also described the wrong pair. `.hang` is not a blocking handler: that handler
+/// returns immediately and it is the `Outcome` that never answers, so the request ends on the
+/// client's own timeout with nothing of ours parked on a thread.
 public final class BackendStubURLProtocol: URLProtocol, @unchecked Sendable {
     public enum Outcome: Sendable {
         case reply(statusCode: Int, headers: [String: String], body: Data)

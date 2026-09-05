@@ -165,9 +165,12 @@ struct ClientVersionClientTests {
     /// **Bounded rather than eliminated, which is the honest wording.** The handler's wait carries
     /// ``secondCallerBudget``, and `#expect` reads the outcome of that wait rather than assuming it —
     /// so a window that did close early says so, in its own words, instead of arriving as a count
-    /// nobody can explain. The first caller's document is asserted for the same reason: a `nil`
-    /// there is the signature of the failure above, the client having given up on a request this
-    /// test was still holding.
+    /// nobody can explain. The first caller's document is asserted for the same reason, and its
+    /// message names **every** way `performMetaFetch` ends without one rather than only the way
+    /// this test is defending against (PR #205's F2): one `try?` swallows the whole send, so a
+    /// reached deadline, an offline transport and a non-2xx envelope are one branch between them,
+    /// and a body that does not decode is the other. Naming only the deadline would send a reader
+    /// after a twenty-second timeout that a decoder change had never reached.
     @Test
     @MainActor
     func twoCallersAtOnceMakeOneRequest() async {
@@ -210,8 +213,11 @@ struct ClientVersionClientTests {
         #expect(
             firstDocument != nil,
             """
-            the first caller came back with no document, which is what this route does when it \
-            gives up: the hold outlasted SonnyBackendTimeouts.auth and the window had already closed
+            the first caller came back with no document, so the fetch did not complete, and \
+            performMetaFetch has three ways to end that way: the send threw and was swallowed — \
+            either SonnyBackendTimeouts.auth reached, which is the one this test defends against, \
+            or any other backend error, since one `try?` covers them all — or the body came back \
+            and did not decode
             """
         )
         #expect(requests.count(path: Self.metaPath) == 1)
