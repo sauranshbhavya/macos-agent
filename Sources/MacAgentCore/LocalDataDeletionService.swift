@@ -68,6 +68,21 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 /// **The order is `LocalStore.allCases`'** rather than a second list that can disagree with it. That
 /// puts the screen records first, which is right for a destructive-action disclosure rather than
 /// merely accepted: it is the item a person is likeliest to be checking for.
+///
+/// **Both surfaces say "from this Mac", and that is the founder decision of 2026-09-05 in the one
+/// place it can be read** (SONNY-404). The question SONNY-333 left open was whether "Delete Sonny
+/// local data" promises this Mac or the account. It promises this Mac: the control is named local
+/// data, account-wide deletion is a different promise that `DELETE /v1/account` already keeps, and a
+/// privacy wipe must not depend on a network call. The alternative — the wipe also deleting every
+/// server copy, with new words, its own confirmation and a rule for a wipe performed signed out —
+/// was put to the founder and declined.
+///
+/// So the dialog's list of what the press does *not* take gains a third item beside generated files
+/// and API keys: what Sonny's servers keep. That list is where this belongs rather than in a
+/// sentence of its own — the words a person reads before an irreversible press should say what it
+/// reaches and what it leaves, and this is the second of those. It is also the honest description of
+/// the outstanding-deliveries file the wipe removes with everything else: after this press no task's
+/// server copy is deleted, including the ones the queue was still owed.
 public enum LocalDataDeletionCopy {
     /// Every store the wipe reaches, named, as one list phrase — "a, b, and c".
     ///
@@ -405,7 +420,10 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // promise about the whole directory rather than about the parts a reader thinks of
             // first, and a file this wipe skipped would be a residual record of what the user
             // deleted surviving the wipe. What that costs is written on
-            // `PendingServerDeletionStore`: a wipe with deliveries outstanding abandons them.
+            // `PendingServerDeletionStore`: a wipe with deliveries outstanding abandons them —
+            // **intended behaviour since the founder decision of 2026-09-05, not a residual**
+            // (SONNY-404). This wipe is a promise about this Mac, its words say so, and a promise
+            // about this Mac cannot be made to depend on the network being there.
             PendingServerDeletionStore.realFileURL(fileManager: fileManager)
         ]
     }

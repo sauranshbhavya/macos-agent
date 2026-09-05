@@ -3905,16 +3905,60 @@ final class AgentViewModel: ObservableObject {
     /// agrees with the file, and this delete does not touch task history — the row is byte-identical
     /// afterwards. Calling it anyway would decrypt and decode the whole history file (130 ms at the
     /// cap, measured at `36cef9e`) to reload records that did not change.
+    ///
+    /// ## The server's copy of the screenshots (SONNY-404)
+    ///
+    /// The gateway holds the redacted captures this task sent to `POST /v1/screen/analyze`, and
+    /// every training-snapshot member copied from them. Until this ticket this button reached none
+    /// of it, and it could not be fixed by pressing `DELETE /v1/tasks/{task_id}` — that route takes
+    /// a task's *whole* retained content, so it would have deleted the command text and the
+    /// responses too, which is more than the button says. The founder decided on 2026-09-05 for a
+    /// narrower route, `DELETE /v1/tasks/{task_id}/screenshots`, and the confirmation this button
+    /// raises now names what it reaches.
+    ///
+    /// **The enqueue goes first, and the reason is `deleteTask`'s reason in a milder form.** The
+    /// task row survives this press, so the id is not destroyed the way it is there — but the
+    /// *button* does not survive it: `showsScreenRecordDeleteAction` is offered only for a screen
+    /// record that reads back, so once the journal entry is gone there is nothing left to press
+    /// again. A local delete that ran first with the enqueue then failing would leave the
+    /// screenshots on the server with no control in the product able to ask for them again.
+    ///
+    /// So the two throws are handled the same way `deleteTask` handles its own: an enqueue that
+    /// throws aborts with the screen record intact, and a local delete that throws withdraws the
+    /// obligation it had just recorded — because an entry left queued for a delete the user was told
+    /// had failed would have the next launch take the server's screenshots for a record they can
+    /// still open.
     func deleteScreenRecord(for record: CompletedTaskRecord) {
         guard let visionSessionID = record.visionSessionID else {
+            return
+        }
+        guard let id = record.id, !id.isEmpty else {
+            // The same refusal `deleteTask` makes, in the same words and for the same reason: an id
+            // is what names the server's copy, and without one this press cannot keep the promise
+            // its confirmation now makes. Unreachable in practice — `loadAll()` backfills the id —
+            // so the message points at the retry that fixes it.
+            setError("Could not delete this task's screen record: its saved copy has no identifier yet. Try again in a moment.")
+            return
+        }
+
+        do {
+            try taskDeletionService.recordDeletedScreenRecord(taskID: id)
+        } catch {
+            setError("Could not delete this task's screen record: \(error.localizedDescription)")
             return
         }
 
         do {
             try visionSessionJournalStore.delete(id: visionSessionID)
         } catch {
+            // `try?` for `deleteTask`'s reason: the user is already being told the delete did not
+            // happen, and a second sentence about bookkeeping is not something they can act on.
+            try? taskDeletionService.withdrawDeletedScreenRecord(taskID: id)
             setError("Could not delete this task's screen record: \(error.localizedDescription)")
+            return
         }
+
+        deliverPendingServerDeletions()
     }
 
     func refreshClipboardHistoryNotice() {
@@ -4263,6 +4307,32 @@ final class AgentViewModel: ObservableObject {
             stopClipboardHistoryMonitoring()
         }
 
+        // **The server's copies, owed before anything local goes** (SONNY-404). This row deletes
+        // every task-history row at once, and the founder decision of 2026-09-05 is that it queues
+        // every one of those tasks' server deletions — as one bulk call rather than one call per
+        // row. It is the same ordering `deleteTask` uses and for the same reason: the ids are
+        // carried by the rows and by nothing else, so a local delete that ran first and an enqueue
+        // that then failed would destroy the only remaining name for the server's copies,
+        // permanently and silently. An enqueue that throws aborts with everything intact.
+        //
+        // **The ids come from the file with the published list as the fallback**, and the fallback
+        // is the point: `taskHistoryRecords` is what the row's own count was built from, so if the
+        // file will not read the press still owes what the user was shown. An unreadable file names
+        // no tasks either way — that is the honest limit, and it is also the case where nothing is
+        // deleted locally, because an unreadable store is quarantined rather than removed.
+        var enqueuedTaskIDs: [String] = []
+        if category == .taskHistory {
+            enqueuedTaskIDs = ((try? taskHistoryStore.loadAll()) ?? taskHistoryRecords)
+                .compactMap(\.id)
+                .filter { !$0.isEmpty }
+            do {
+                try taskDeletionService.recordDeletedTasks(ids: enqueuedTaskIDs)
+            } catch {
+                setError("Could not delete task history: \(error.localizedDescription)")
+                return
+            }
+        }
+
         // **The split this ticket exists for** (SONNY-239, founder decision 2026-08-23). A file
         // Sonny can read is deleted, exactly as before — that is the privacy promise every one of
         // `MemoryDeletionCopy.message(for:)`'s sentences makes, and a Delete that quietly kept a
@@ -4322,6 +4392,18 @@ final class AgentViewModel: ObservableObject {
             } catch {
                 failures.append(error.localizedDescription)
             }
+        }
+
+        // **The obligation is withdrawn when nothing local went**, the symmetric half of the enqueue
+        // above and of `deleteTask`'s own (PR #194's F1). A row that could delete none of its files
+        // has left every task still in the user's history, and an entry left queued for it would
+        // have the next launch delete those tasks' server copies after the press visibly failed.
+        // Keyed on `failures.isEmpty` being false *and* nothing having been deleted, because a
+        // partial delete really did remove rows and those tasks' server copies are genuinely owed.
+        if !enqueuedTaskIDs.isEmpty, !failures.isEmpty, deletedFileCount == 0, keptFileURLs.isEmpty {
+            try? taskDeletionService.withdrawDeletedTasks(ids: enqueuedTaskIDs)
+        } else if !enqueuedTaskIDs.isEmpty {
+            deliverPendingServerDeletions()
         }
 
         // Replaced on every press — a delete that keeps nothing leaves `nil`, so the previous one's

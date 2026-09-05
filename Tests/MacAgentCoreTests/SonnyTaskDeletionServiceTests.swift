@@ -172,7 +172,7 @@ struct SonnyTaskDeletionServiceTests {
             undeliverable: 0,
             stoppedEarly: false
         ))
-        #expect(try store.loadAll().map(\.taskID) == ["someone-elses"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["someone-elses"])
     }
 
     /// **A `400 request.invalid` is the one answer that abandons an entry, and it is the only one.**
@@ -267,7 +267,7 @@ struct SonnyTaskDeletionServiceTests {
         #expect(seen.all.isEmpty)
         #expect(outcome.stillOwed == 1)
         #expect(outcome.stoppedEarly)
-        #expect(try store.loadAll().map(\.taskID) == ["task-a"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-a"])
     }
 
     /// Offline, then online. The whole point of the queue, end to end.
@@ -288,7 +288,7 @@ struct SonnyTaskDeletionServiceTests {
         offline.turnOn()
         let whileOffline = await service.deliverPendingDeletions()
         #expect(whileOffline.stillOwed == 1)
-        #expect(try store.loadAll().map(\.taskID) == ["task-a"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-a"])
 
         offline.turnOff()
         let whenBack = await service.deliverPendingDeletions()

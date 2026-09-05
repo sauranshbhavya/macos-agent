@@ -84,6 +84,49 @@ public struct SonnyTaskDeletionService: Sendable {
         try store.remove(taskID: id)
     }
 
+    /// Records that several tasks' server copies are owed as **one** obligation (SONNY-404).
+    ///
+    /// *Command Center › Memory › Task history › Delete* removes every history row at once, and the
+    /// founder decided on 2026-09-05 that it queues one bulk call rather than one call per row. One
+    /// entry is the same decision at the store: the queue keeps two hundred entries and a history
+    /// keeps ten thousand rows, so one entry per row would have the cap drop the difference in
+    /// silence — from the single press that asks for the most.
+    ///
+    /// An empty list records nothing; `PendingServerDeletionStore.enqueue` says why.
+    public func recordDeletedTasks(ids: [String], deletedAt: Date = Date()) throws {
+        try store.enqueue(taskIDs: ids, scope: .wholeTask, deletedAt: deletedAt)
+    }
+
+    /// Withdraws the obligation `recordDeletedTasks` wrote, because the local delete it was recorded
+    /// for did not happen. The pair to it, exactly as `withdrawDeletedTask` is to
+    /// `recordDeletedTask`, and for the reason on that method.
+    public func withdrawDeletedTasks(ids: [String]) throws {
+        try store.remove(PendingServerDeletion(
+            taskIDs: Array(Set(ids.filter { !$0.isEmpty })),
+            scope: .wholeTask,
+            deletedAt: Date()
+        ))
+    }
+
+    /// Records that this task's **screenshots** are owed — not the task (SONNY-404).
+    ///
+    /// *Delete what Sonny did on screen* removes the task's vision-session record and leaves the
+    /// task, its command and its result standing. `DELETE /v1/tasks/{task_id}` would take all three
+    /// on the server, which is more than the button says, so the founder decided on 2026-09-05 for a
+    /// narrower route and this is the obligation that reaches it.
+    public func recordDeletedScreenRecord(taskID: String, deletedAt: Date = Date()) throws {
+        try store.enqueue(taskIDs: [taskID], scope: .screenshotsOnly, deletedAt: deletedAt)
+    }
+
+    /// The withdrawal pair to `recordDeletedScreenRecord`.
+    public func withdrawDeletedScreenRecord(taskID: String) throws {
+        try store.remove(PendingServerDeletion(
+            taskIDs: [taskID],
+            scope: .screenshotsOnly,
+            deletedAt: Date()
+        ))
+    }
+
     /// What is still owed, oldest first. Read by tests and by nothing in the product — the queue has
     /// no surface, deliberately, and `PendingServerDeletionStore` says why.
     public func pendingDeletions() throws -> [PendingServerDeletion] {
@@ -156,13 +199,13 @@ public struct SonnyTaskDeletionService: Sendable {
         // this is precisely the shape where that mistake reads as working code that quietly keeps
         // going after it was told to stop.
         pass: for entry in owed {
-            switch await attemptDelete(taskID: entry.taskID) {
+            switch await attempt(entry) {
             case .settled:
                 delivered += 1
-                try? store.remove(taskID: entry.taskID)
+                try? store.remove(entry)
             case .neverDeliverable:
                 undeliverable += 1
-                try? store.remove(taskID: entry.taskID)
+                try? store.remove(entry)
             case .notThisSession:
                 // Kept, and the pass carries on: this is about the account rather than the network.
                 continue
@@ -191,6 +234,85 @@ public struct SonnyTaskDeletionService: Sendable {
         case notNow
     }
 
+    /// Sends whichever request settles this obligation, and reads its answer under the same four
+    /// outcomes (SONNY-404).
+    ///
+    /// The three shapes and why each takes the route it does:
+    ///
+    /// - **one task, whole** — `DELETE /v1/tasks/{task_id}`, untouched from SONNY-333. The bulk
+    ///   route would serve it, and using it here would rewrite the one delete path this repository
+    ///   has already reviewed four times over for a saving of nothing.
+    /// - **many tasks, whole** — `DELETE /v1/tasks`, one call. The founder's decision of 2026-09-05.
+    /// - **one task, screenshots only** — `DELETE /v1/tasks/{task_id}/screenshots`.
+    private func attempt(_ entry: PendingServerDeletion) async -> AttemptOutcome {
+        switch entry.scope {
+        case .wholeTask:
+            guard entry.taskIDs.count > 1 else {
+                guard let only = entry.taskIDs.first else {
+                    // An entry naming nothing. `enqueue` refuses to write one and `loadKeyed` drops
+                    // one it reads, so this is unreachable; it settles rather than sticking, because
+                    // an obligation about no tasks is one no request could ever discharge.
+                    return .settled
+                }
+                return await attemptDelete(taskID: only)
+            }
+            return await attemptBulkDelete(taskIDs: entry.taskIDs)
+        case .screenshotsOnly:
+            guard let only = entry.taskIDs.first else {
+                return .settled
+            }
+            return await attemptScreenshotsDelete(taskID: only)
+        }
+    }
+
+    /// **`tasks_not_found` is read as the batch's `404`, and the entry is kept whole.**
+    ///
+    /// §4.6's `404` means "belongs to a different account", which SONNY-333 keeps rather than drops
+    /// because a Mac two people have signed into raises it for an entry the other one owes. The
+    /// batch says the same thing with a count, so the same rule applies: any foreign id and the
+    /// obligation stays.
+    ///
+    /// **Kept whole rather than narrowed to the ids that were refused**, which the gateway could
+    /// have reported and deliberately does not. Narrowing would need a fourth store door that
+    /// rewrites an entry mid-pass, and what it would buy is a smaller request on a Mac that is
+    /// already re-sending ids the gateway will delete a second time for free. The cost of not
+    /// narrowing is one bulk request per launch until the other account signs in — which is exactly
+    /// the cost SONNY-333 accepted for the single-task case, in the same words.
+    private func attemptBulkDelete(taskIDs: [String]) async -> AttemptOutcome {
+        do {
+            let outcome = try await client.deleteTasks(ids: taskIDs)
+            return outcome.tasksNotFound > 0 ? .notThisSession : .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
+        }
+    }
+
+    private func attemptScreenshotsDelete(taskID: String) async -> AttemptOutcome {
+        do {
+            try await client.deleteTaskScreenshots(id: taskID)
+            return .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
+        }
+    }
+
+    /// The four-outcome classification, in one place so the three routes cannot drift apart
+    /// (SONNY-404). Every sentence justifying it is on `deliverPendingDeletions()`.
+    private static func outcome(for error: SonnyBackendError) -> AttemptOutcome {
+        switch error {
+        case .api(let api) where api.code == .resourceNotFound:
+            return .notThisSession
+        case .api(let api) where api.code == .requestInvalid:
+            return .neverDeliverable
+        default:
+            return .notNow
+        }
+    }
+
     private func attemptDelete(taskID: String) async -> AttemptOutcome {
         do {
             _ = try await client.send(SonnyBackendRequest(
@@ -209,14 +331,7 @@ public struct SonnyTaskDeletionService: Sendable {
             ))
             return .settled
         } catch let error as SonnyBackendError {
-            switch error {
-            case .api(let api) where api.code == .resourceNotFound:
-                return .notThisSession
-            case .api(let api) where api.code == .requestInvalid:
-                return .neverDeliverable
-            default:
-                return .notNow
-            }
+            return Self.outcome(for: error)
         } catch {
             // `send` throws `SonnyBackendError` and nothing else, so this arm is unreachable. It
             // answers "not now" rather than dropping the entry, because an unrecognised failure is

@@ -49,7 +49,7 @@ struct TaskDeletionReachesTheServerTests {
         // Synchronously after the press, with the gateway still holding the request open.
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
         #expect(fixture.viewModel.errorMessage == nil)
-        #expect(try fixture.viewModel.pendingServerDeletionsForTests().map(\.taskID) == ["task-a"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().flatMap(\.taskIDs) == ["task-a"])
 
         fixture.viewModel.pendingServerDeletionDeliveryForTests?.cancel()
     }
@@ -72,7 +72,7 @@ struct TaskDeletionReachesTheServerTests {
         // handler runs and *then* answers with a transport failure, so an attempt that never
         // reached a server still shows up here — and the client spends `.offline`'s own two-attempt
         // budget, so the count is two rather than zero or one either way.
-        #expect(try fixture.viewModel.pendingServerDeletionsForTests().map(\.taskID) == ["task-a"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().flatMap(\.taskIDs) == ["task-a"])
         // A failed delivery is not the user's problem and must not read as one — the founders'
         // 2026-08-30 decision, and the reason this is not on `errorMessage`.
         #expect(fixture.viewModel.errorMessage == nil)
@@ -102,7 +102,7 @@ struct TaskDeletionReachesTheServerTests {
         await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
 
         #expect(fixture.seen.all.isEmpty)
-        #expect(try fixture.viewModel.pendingServerDeletionsForTests().map(\.taskID) == ["task-a"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().flatMap(\.taskIDs) == ["task-a"])
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
         #expect(fixture.viewModel.errorMessage == nil)
     }
@@ -262,6 +262,254 @@ struct TaskDeletionReachesTheServerTests {
         #expect(LocalStore.pendingServerDeletions.kind == .notWrittenByTasks)
         #expect(TaskRecordingPolicy.suppressTraces.allowsWriting(to: .pendingServerDeletions))
         #expect(LocalDataDeletionCopy.everythingItTakes.contains("deletions Sonny hasn't finished"))
+    }
+}
+
+/// The other three delete buttons reach the server too (SONNY-404).
+///
+/// SONNY-333 made one button keep the founder decision of 2026-08-16. Three deletions still stopped
+/// at this Mac, and the founder settled all three on 2026-09-05: the whole local-data wipe stays a
+/// promise about this Mac and says so; *Memory › Task history › Delete* queues every row's server
+/// deletion as one bulk call; and *Delete what Sonny did on screen* gets a route that takes exactly
+/// that task's screenshots.
+@Suite
+@MainActor
+struct EveryDeleteReachesTheServerTests {
+    // MARK: - Delete what Sonny did on screen
+
+    /// **The narrower route, and the reason the whole ticket needed a contract change.**
+    /// `DELETE /v1/tasks/{task_id}` would have taken the command text and the responses too, which
+    /// is more than this button says.
+    @Test
+    func deletingAScreenRecordSendsTheScreenshotsRouteAndNotTheWholeTaskRoute() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        let record = try fixture.writeTaskWithAScreenRecord(id: "task-a", sessionID: "session-a")
+
+        fixture.viewModel.deleteScreenRecord(for: record)
+        try await fixture.waitForDeliveryPasses(1)
+
+        #expect(try fixture.seen.only.path == "/v1/tasks/task-a/screenshots")
+        #expect(try fixture.seen.only.method == "DELETE")
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.viewModel.errorMessage == nil)
+        // The local half is unchanged: the screen record goes and the task row stays.
+        #expect(try fixture.visionSessionsOnDisk() == [])
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
+    }
+
+    /// Offline, the obligation is remembered under its own scope — not as a whole-task delete, which
+    /// would take content this button never named.
+    @Test
+    func aScreenRecordDeletedOfflineIsQueuedAsAScreenshotsObligationAndSentAtTheNextSweep() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        let record = try fixture.writeTaskWithAScreenRecord(id: "task-a", sessionID: "session-a")
+        fixture.goOffline()
+
+        fixture.viewModel.deleteScreenRecord(for: record)
+        try await fixture.waitForDeliveryPasses(1)
+
+        let queued = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(queued.count == 1)
+        #expect(queued.first?.taskIDs == ["task-a"])
+        #expect(queued.first?.scope == .screenshotsOnly)
+        // Gone locally either way: the button is never blocked on the network.
+        #expect(try fixture.visionSessionsOnDisk() == [])
+
+        fixture.comeBackOnline()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(2)
+
+        // A set rather than a list: the offline pass is a retry-safe request, so the shared client
+        // spends its own attempt budget on it and the request *count* is that budget's, not this
+        // test's. What this test is about is which route the queue delivers to, which is the set.
+        #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks/task-a/screenshots"])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+    }
+
+    /// **The enqueue goes first, and a failed one aborts.** The button does not survive the local
+    /// delete — it is offered only for a screen record that reads back — so a local delete that ran
+    /// with nothing queued would leave the server's screenshots with no control able to ask again.
+    @Test
+    func aScreenRecordDeleteWhoseQueueWriteFailsDeletesNothingAndSaysSo() async throws {
+        let fixture = try TaskDeletionFixture(queueInsideAFile: true)
+        defer { fixture.tearDown() }
+        let record = try fixture.writeTaskWithAScreenRecord(id: "task-a", sessionID: "session-a")
+
+        fixture.viewModel.deleteScreenRecord(for: record)
+
+        #expect(try fixture.visionSessionsOnDisk() == ["session-a"])
+        #expect(fixture.viewModel.errorMessage != nil)
+        #expect(fixture.seen.all.isEmpty)
+    }
+
+    // MARK: - Memory › Task history › Delete
+
+    /// **One request naming every row, which is the founder decision of 2026-09-05.** One call per
+    /// row would be up to ten thousand requests behind one press — and, in the queue, up to ten
+    /// thousand entries against a cap of two hundred.
+    @Test
+    func deletingTheTaskHistoryRowSendsOneBulkCallNamingEveryRow() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+        _ = try fixture.writeTaskRecord(id: "task-b")
+        _ = try fixture.writeTaskRecord(id: "task-c")
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+        try await fixture.waitForDeliveryPasses(1)
+
+        let sent = try fixture.seen.only
+        #expect(sent.path == "/v1/tasks")
+        #expect(sent.method == "DELETE")
+        let ids = try #require(sent.json["task_ids"] as? [String])
+        #expect(Set(ids) == ["task-a", "task-b", "task-c"])
+        #expect(try fixture.taskHistoryOnDisk() == [])
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+    }
+
+    /// Offline, the whole press is **one** entry rather than one per row — which is what keeps the
+    /// two-hundred cap from silently dropping the difference at the press that asks for the most.
+    @Test
+    func aTaskHistoryRowDeletedOfflineIsOneQueuedObligationNamingEveryRow() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+        _ = try fixture.writeTaskRecord(id: "task-b")
+        fixture.goOffline()
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+        try await fixture.waitForDeliveryPasses(1)
+
+        let queued = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(queued.count == 1)
+        #expect(queued.first?.scope == .wholeTask)
+        #expect(Set(try #require(queued.first?.taskIDs)) == ["task-a", "task-b"])
+        #expect(try fixture.taskHistoryOnDisk() == [])
+
+        fixture.comeBackOnline()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(2)
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        // A set, for the reason the screenshots test above gives: the offline attempt's retry budget
+        // belongs to the shared client and not to this assertion.
+        #expect(Set(fixture.seen.all.map(\.path)) == ["/v1/tasks"])
+    }
+
+    /// **A batch the gateway says holds another account's task stays queued**, exactly as §4.6's
+    /// `404` keeps a single-task obligation: it means "not deliverable by this session", never "not
+    /// deliverable", and a Mac two people have signed into raises it for the other one's tasks.
+    @Test
+    func aBulkDeleteThatReachedSomebodyElsesTaskKeepsTheObligation() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.answerBulkDeleteWith(tasksDeleted: 1, tasksNotFound: 1)
+        _ = try fixture.writeTaskRecord(id: "task-a")
+        _ = try fixture.writeTaskRecord(id: "task-b")
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+        try await fixture.waitForDeliveryPasses(1)
+
+        let queued = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(queued.count == 1)
+        #expect(Set(try #require(queued.first?.taskIDs)) == ["task-a", "task-b"])
+    }
+
+    /// The enqueue goes first here too, for `deleteTask`'s reason: the ids are carried by the rows
+    /// and by nothing else.
+    @Test
+    func aTaskHistoryRowDeleteWhoseQueueWriteFailsDeletesNothingAndSaysSo() async throws {
+        let fixture = try TaskDeletionFixture(queueInsideAFile: true)
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
+        #expect(fixture.viewModel.errorMessage != nil)
+        #expect(fixture.seen.all.isEmpty)
+    }
+
+    /// A press on an empty history owes nothing, so it queues nothing and sends nothing — an entry
+    /// naming no tasks would be an obligation every future pass delivered as a request about
+    /// nothing.
+    @Test
+    func deletingAnEmptyTaskHistoryQueuesNothingAndSendsNothing() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.seen.all.isEmpty)
+    }
+
+    /// **A different Memory row queues nothing.** The founder's decision names Task history, and a
+    /// row deleting routines or snippets has no server copy to reach — a press that enqueued
+    /// anything here would be sending task ids for a control that never mentioned tasks.
+    @Test
+    func deletingAnotherMemoryRowReachesTheServerNotAtAll() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+
+        fixture.viewModel.deleteMemory(in: .snippets)
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.seen.all.isEmpty)
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
+    }
+
+    // MARK: - The whole wipe stays a promise about this Mac
+
+    /// **Founder decision 1 of 2026-09-05, as behaviour rather than as words.** The wipe sends
+    /// nothing and takes the queue with everything else; both surfaces that describe it say so.
+    @Test
+    func theWholeWipeSendsNothingAndItsWordsSayItIsAboutThisMac() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        let record = try fixture.writeTaskRecord(id: "task-a")
+        fixture.goOffline()
+        fixture.viewModel.deleteTask(record)
+        try await fixture.waitForDeliveryPasses(1)
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
+        let sentBeforeTheWipe = fixture.seen.all.count
+
+        fixture.comeBackOnline()
+        fixture.viewModel.deleteLocalData()
+
+        // **Nothing was sent by the wipe itself**, which is the whole of founder decision 1: this
+        // press is a promise about this Mac, so it cannot depend on the network being there. That
+        // the queue file goes with every other store — abandoning the obligation, deliberately — is
+        // `LocalDataDeletionServiceTests`' to hold, over the real URL list; this fixture's wipe
+        // service is constructed over no files at all.
+        #expect(fixture.seen.all.count == sentBeforeTheWipe)
+        #expect(LocalDataDeletionCopy.everythingItTakes.contains("deletions Sonny hasn't finished"))
+    }
+
+    /// **The words, at both surfaces that state them.** Neither sentence is reachable from a test
+    /// except through the source, because this repository renders no views in the suite — and the
+    /// founder's decision is precisely that the words say which promise this press is.
+    @Test
+    func bothSurfacesSayTheWipeIsAboutThisMacAndNameWhatSonnysServersKeep() throws {
+        let page = try MacAgentSource.read("CommandCenterView.swift")
+        let dialog = try MacAgentSource.read("ContentView.swift")
+
+        #expect(page.contains("Deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac."))
+        #expect(dialog.contains("This deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac."))
+        // The third item in the list of what the press does *not* take, which is the half nobody
+        // could guess from the button's name.
+        #expect(dialog.contains("what Sonny's servers keep are not deleted."))
+    }
+
+    /// The narrow button's confirmation names both halves of what it reaches.
+    @Test
+    func theScreenRecordConfirmationSaysItReachesTheServerAndKeepsTheTask() {
+        let message = TaskDeletePresentation.screenRecordConfirmationMessage
+        #expect(message.contains("from this Mac and from Sonny's servers"))
+        #expect(message.contains("The task stays in your history."))
     }
 }
 
@@ -432,6 +680,49 @@ private struct TaskDeletionFixture {
         // taking the head of the list gives a test with two rows whichever one the sort happened to
         // put on top, which is how this helper silently handed the same record back twice.
         return try #require(viewModel.taskHistoryRecords.first { $0.id == id })
+    }
+
+    /// Writes one finished task that ran a screen-control session, and the session beside it.
+    func writeTaskWithAScreenRecord(id: String, sessionID: String) throws -> CompletedTaskRecord {
+        let journal = VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
+            encryption: LocalStorageEncryption(
+                keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
+            )
+        )
+        try journal.save(VisionSessionRecord(
+            id: sessionID,
+            goal: "do the thing on screen",
+            appDisplayName: "Notes",
+            startedAt: Date(timeIntervalSince1970: 1_772_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_772_000_060),
+            endReasonCode: "completed"
+        ))
+        return try writeTaskRecord(id: id, visionSessionID: sessionID)
+    }
+
+    /// The vision journal as the *file* holds it, for the same reason `taskHistoryOnDisk` exists:
+    /// a path that returns early leaves the published state saying whatever it said before.
+    func visionSessionsOnDisk() throws -> [String] {
+        try VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
+            encryption: LocalStorageEncryption(
+                keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
+            )
+        ).loadAll().map(\.id)
+    }
+
+    /// Answers the bulk route with a body of the test's choosing — the one response field the client
+    /// actually reads.
+    func answerBulkDeleteWith(tasksDeleted: Int, tasksNotFound: Int) {
+        network.set(.reply(
+            statusCode: 200,
+            headers: ["Content-Type": "application/json"],
+            body: Data("""
+            {"deleted_at":"2026-09-05T00:00:00Z","tasks_deleted":\(tasksDeleted),\
+            "tasks_not_found":\(tasksNotFound),"requests_deleted":1}
+            """.utf8)
+        ))
     }
 
     /// Task history as the *file* holds it, not as the view model last published it.

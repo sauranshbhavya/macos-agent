@@ -129,6 +129,52 @@ public struct SonnyBackendRequest: Sendable, Equatable {
     }
 }
 
+/// The body of `DELETE /v1/tasks` (SONNY-404, contract §4.6.1).
+///
+/// Snake-cased field name, matching the wire exactly, so the encoder needs no key strategy and the
+/// shape a reader sees here is the shape §4.6.1 documents.
+struct SonnyBulkTaskDeletionRequest: Encodable, Sendable {
+    // swiftlint:disable:next identifier_name
+    let task_ids: [String]
+}
+
+/// What `DELETE /v1/tasks` answered (SONNY-404, contract §4.6.1).
+///
+/// **Decoded leniently, and that is §8.1's rule rather than laziness.** A field this client cannot
+/// read is a field the gateway may have renamed or a body a proxy mangled, and either way the safe
+/// reading of "how many of these ids belong to somebody else" is *none of them known to be
+/// foreign* — which settles the obligation. The alternative, treating an unreadable body as
+/// "possibly foreign", would keep every bulk obligation forever the first time a response shape
+/// moved. `requests_deleted` is on the wire and deliberately not read here, for the reason
+/// SONNY-333 gives about the single-task delete: nothing renders it.
+public struct SonnyBulkTaskDeletion: Sendable, Equatable {
+    /// Submitted ids this account owns, or that the gateway has never heard of. Both are settled.
+    public let tasksDeleted: Int
+    /// Submitted ids the gateway knows under a *different* account.
+    public let tasksNotFound: Int
+
+    public init(tasksDeleted: Int, tasksNotFound: Int) {
+        self.tasksDeleted = tasksDeleted
+        self.tasksNotFound = tasksNotFound
+    }
+
+    static func decode(_ data: Data) -> SonnyBulkTaskDeletion {
+        struct Body: Decodable {
+            // swiftlint:disable:next identifier_name
+            let tasks_deleted: Int?
+            // swiftlint:disable:next identifier_name
+            let tasks_not_found: Int?
+        }
+        guard let body = try? JSONDecoder().decode(Body.self, from: data) else {
+            return SonnyBulkTaskDeletion(tasksDeleted: 0, tasksNotFound: 0)
+        }
+        return SonnyBulkTaskDeletion(
+            tasksDeleted: body.tasks_deleted ?? 0,
+            tasksNotFound: body.tasks_not_found ?? 0
+        )
+    }
+}
+
 public struct SonnyBackendResponse: Sendable, Equatable {
     public let statusCode: Int
     public let data: Data
@@ -935,6 +981,59 @@ public actor SonnyBackendClient {
         }
         guard let document = SonnyMetaDocument.decode(response.data) else { return }
         meta = document
+    }
+
+    // MARK: - Task deletions (SONNY-404, contract §4.6.1 and §4.6.2)
+
+    /// **Why these two live on the client while SONNY-333's single-task delete lives on
+    /// `SonnyTaskDeletionService`.** That one is a bare `send` whose body is deliberately never
+    /// decoded — nothing on this Mac consumes `requests_deleted`. These two own a response shape:
+    /// the bulk delete's answer decides whether a queued obligation is finished, and a call whose
+    /// caller must read its body is a call with a decoder, which is what this region is. They sit
+    /// together because the two routes arrived together and a reader looking for one wants the other
+    /// beside it.
+
+    /// `DELETE /v1/tasks` — several tasks in one request (contract §4.6.1).
+    ///
+    /// **The count of ids the gateway knows under another account is the whole reason this returns
+    /// anything.** §4.6 answers a single foreign id with a `404`, which
+    /// `SonnyTaskDeletionService` reads as "not deliverable by this session, never not deliverable"
+    /// and keeps. The batch cannot say that with a status code without stranding every id beside the
+    /// foreign one, so it says it with a number and the caller applies the same rule.
+    public func deleteTasks(ids: [String]) async throws -> SonnyBulkTaskDeletion {
+        let response = try await send(SonnyBackendRequest(
+            method: "DELETE",
+            path: "/v1/tasks",
+            body: try JSONEncoder().encode(SonnyBulkTaskDeletionRequest(task_ids: ids)),
+            authentication: .bearer,
+            // §9.3's "naturally idempotent" row, which this route joins: a second delete of the same
+            // ids succeeds having removed nothing. A key would stand in for a lost response that
+            // costs nothing to ask for again.
+            idempotencyKey: nil,
+            // §12's `auth, account, meta, health, delete` row.
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        ))
+        return SonnyBulkTaskDeletion.decode(response.data)
+    }
+
+    /// `DELETE /v1/tasks/{task_id}/screenshots` — that task's screenshots and nothing else
+    /// (contract §4.6.2).
+    ///
+    /// The body is not decoded, for the reason SONNY-333 gives about the single-task delete: nothing
+    /// on this Mac consumes `screenshots_deleted`, and decoding a field no caller reads invites a
+    /// later one to cache on it. A `200` is the whole answer — including the `200` a task the
+    /// gateway never stored gets, which §4.6 makes a success rather than a `404`.
+    public func deleteTaskScreenshots(id: String) async throws {
+        _ = try await send(SonnyBackendRequest(
+            method: "DELETE",
+            path: SonnyTaskDeletionService.path(forTaskID: id) + "/screenshots",
+            body: nil,
+            authentication: .bearer,
+            idempotencyKey: nil,
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        ))
     }
 
     // MARK: - Clock

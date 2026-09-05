@@ -6325,7 +6325,10 @@ private struct SettingsDataPage: View {
                         // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes)."
+                            // "from this Mac" is the founder decision of 2026-09-05 (SONNY-404):
+                            // this control is a promise about this Mac and not about the account,
+                            // and its words say so. `LocalDataDeletionCopy` carries the decision.
+                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac."
                         )
                     } trailing: {
                         Button {

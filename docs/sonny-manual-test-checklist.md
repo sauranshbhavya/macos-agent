@@ -3601,6 +3601,54 @@ about the whole account.
       windows now. **Report the count you saw, even if it is zero**, because a zero somebody
       watched for is worth more than a zero nobody looked at.
 
+### The other three delete buttons reach the server too (new 2026-09-05, SONNY-404)
+
+**What changed.** SONNY-333 made *one* button keep the founder rule that delete means deleted
+everywhere. Three other deletions still stopped at this Mac, and the founder settled all three on
+2026-09-05:
+
+- **Settings &rsaquo; Data &rsaquo; Delete Sonny local data** stays a promise about **this Mac**, and
+  now says so. Its words did not say which promise it was.
+- **Command Center &rsaquo; Memory &rsaquo; Task history &rsaquo; Delete** now deletes every row's
+  backend copy too, in **one** request naming all of them rather than one request per row.
+- **Delete what Sonny did on screen** now deletes that task's screenshots from the backend — and
+  only the screenshots. There is a new, narrower route for it, because the per-task delete would
+  have taken the command text and the model's replies with them, which is more than that button
+  says.
+
+**All three rows below need a signed-in build against a running gateway**, the same gate SONNY-134's
+and SONNY-333's rows above sit behind (SONNY-280's resume checklist, steps (1)–(5)). Reuse the same
+gateway and the same account.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. Delete what Sonny did on screen.** Run a
+      screen-control task so Sonny actually does something on screen, then open that task in Command
+      Center &rsaquo; Tasks and check `npm run support -- account <your account id>` shows content
+      for it. In the task's detail sheet press **Delete what Sonny did on screen**. **Read the
+      confirmation before pressing Delete**: it must say the screenshots go from this Mac *and* from
+      Sonny's servers, and that the task stays in your history. Confirm. Then look at the account
+      report again: the screenshots for that task must be gone while the **task's own row, its
+      command and the response are still there**. **What would be a finding:** the confirmation not
+      mentioning the servers, the whole task disappearing from the report, or the *What Sonny did on
+      screen* section still showing after the press.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. Task history, one request.** Run two or
+      three ordinary tasks so there are several rows, and confirm the backend kept them. Watch the
+      gateway's log, then in Command Center &rsaquo; Memory press **Delete** on the **Task history**
+      row and confirm. The log must show **one** `DELETE /v1/tasks` request, not one per task, and
+      the account report must show nothing left for any of those tasks. **What would be a finding:**
+      several delete requests instead of one, any task's content surviving, or a red error or storage
+      banner appearing that you did not press for.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. The whole wipe is about this Mac, and
+      says so.** Open Settings &rsaquo; Data. The line under **Delete Sonny local data** must end
+      "**from this Mac**". Press Delete and **read the confirmation before confirming**: it must also
+      say "from this Mac", and it must name **what Sonny's servers keep** among the things it does
+      *not* delete, beside generated files and API keys. Confirm it. Then check the account report:
+      the tasks the backend kept must **still be there**. **What would be a finding:** either
+      sentence not saying "from this Mac", the not-deleted list not mentioning the servers, or the
+      backend's copies disappearing — that last one would mean the wipe made a promise about the
+      account, which is the option the founder declined.
+
 ### Renaming one file, and being asked first (new 2026-09-04, SONNY-385)
 
 **Why these rows exist.** Renaming is destructive — it replaces a name the user chose, and nothing in

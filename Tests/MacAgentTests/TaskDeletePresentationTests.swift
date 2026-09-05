@@ -309,7 +309,13 @@ struct TaskDeletePresentationTests {
     func theScreenRecordConfirmationSaysWhatSurvives() {
         // The fact that distinguishes this action from the other one, in the one place a user is
         // deciding between them.
-        #expect(TaskDeletePresentation.screenRecordConfirmationMessage == "The task stays in your history.")
+        // **Both halves since SONNY-404** (founder decision 2026-09-05): this press now deletes the
+        // task's screenshots from Sonny's servers as well, through a route of its own, and a
+        // destructive control names what it destroys.
+        #expect(
+            TaskDeletePresentation.screenRecordConfirmationMessage
+                == "This deletes the screenshots from this Mac and from Sonny's servers. The task stays in your history."
+        )
         #expect(TaskDeletePresentation.screenRecordConfirmationTitle == "Delete what Sonny did on screen?")
     }
 

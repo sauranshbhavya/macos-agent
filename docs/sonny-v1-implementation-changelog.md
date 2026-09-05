@@ -170,6 +170,157 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/every-delete-reaches-the-server
+Status: in progress
+Date: 2026-09-05
+Tickets: SONNY-404 — the other three delete buttons reach the server too: the whole local-data wipe says which promise it is, the Memory Task-history row queues every row's server deletion as one bulk call, and "Delete what Sonny did on screen" gets a route that takes exactly that task's screenshots.
+Reviewed by: pending (per WORKFLOW.md step 7).
+
+**The three decisions this branch carries were the founder's, taken 2026-09-05 and recorded on
+SONNY-404, and none of them is reopenable here.** They also *reverse* the decision recorded on that
+ticket the day before, and the ticket's comments are append-only, so a reader meeting the 2026-09-04
+comment first will read the opposite of what shipped. The later comment is the live one:
+
+1. **Settings › Data › "Delete Sonny local data" is a promise about this Mac, not about the
+   account.** The control is named local data, account-wide deletion is a different promise that
+   `DELETE /v1/account` already keeps, and a privacy wipe must not depend on a network call. So the
+   queued server deletions the wipe abandons are **intended behaviour** rather than a residual, and
+   the words say which promise it is. The alternative — the wipe also deleting every server copy,
+   with new words, its own confirmation and a rule for a wipe performed signed out — was declined.
+   (The 2026-09-04 comment had taken exactly that alternative.)
+2. **"Delete what Sonny did on screen" gets a narrower server route.** Screenshots are the most
+   sensitive content the gateway holds and snapshot copies of them carry no expiry today. The
+   alternative — the button stays local and its words stop implying server reach — was declined.
+3. **Memory › Task history › Delete queues every row's server deletion, as one bulk call rather than
+   one call per row.** Follows from the 2026-08-16 rule that delete means deleted everywhere.
+
+**Why decision 3 could not be "enqueue one entry per row", which is the shape SONNY-333 left
+behind.** `PendingServerDeletionStore.maxItems` is 200 and `TaskHistoryStore.defaultMaxItems` is
+10,000, so one entry per row would hand 9,800 obligations to the cap's silent eviction — from the
+single press that asks for the most. The queue entry therefore names a *list* of task ids, and "one
+bulk call" and "one queue entry" are the same decision seen from the two ends. That changed the
+store's on-disk shape, which in this store is dangerous in a way it is not in the other thirteen: a
+decode failure here is *healed* by quarantining the file (PR #194's F1), so a reader that could not
+parse the old shape would have thrown every outstanding obligation away and reported nothing — the
+exact failure this whole feature exists to prevent, arriving through the door built to prevent it.
+`PendingServerDeletion` therefore has a hand-written `init(from:)` that reads the legacy `taskID`
+key, and `loadKeyed` re-derives every dictionary key from the value it decoded rather than trusting
+the key on disk.
+
+**The two scopes do not subsume one another, deliberately.** A task can owe both a screenshots-only
+delete and a whole-task delete — delete the screen record offline, then delete the task — and both
+are delivered. Neither order is a hazard: whichever lands second finds its content already gone and
+answers a success with a count of zero, which is §4.6's own rule that a delete already true is not
+an error. Collapsing them would mean deciding which ask wins, and there is no reading under which
+the narrower one should cancel the wider.
+
+**A partial-ownership bulk answer keeps the whole obligation rather than narrowing it.** §4.6
+reserves `404` for a task belonging to a different account, which SONNY-333 reads as "not
+deliverable by *this session*, never not deliverable"; the batch says the same thing with
+`tasks_not_found`, and any non-zero value keeps the entry. Narrowing the entry to the refused ids
+would need a fourth store door that rewrites an entry mid-pass, and what it would buy is a smaller
+request on a Mac that is already re-sending ids the gateway deletes a second time for free. The cost
+is one bulk request per launch until the other account signs in — exactly the cost SONNY-333
+accepted for the single-task case.
+
+**A body on a `DELETE` is a constraint on the host, and it is written into the contract rather than
+left here.** An intermediary that strips a `DELETE` request body turns every bulk delete into a
+`400` no client can avoid, so §4.6.1 names it beside §6.1's payload size and §12's wall-clock as
+something SONNY-125 has to prove of a candidate host. The alternative, `POST /v1/tasks/delete`,
+would have obliged §9.1's `Idempotency-Key` on an operation §9.3 already calls naturally idempotent.
+
+**The screenshot delete is an UPDATE to NULL and not a DELETE of a row**, because a row of
+`sonny.retained_content` holds the screenshot beside the request text and the served response. That
+is also why the record needed a migration of its own: `sonny.content_deletion`'s `reason` CHECK
+admitted four values and none of them was this one, and `content_rows`/`snapshot_rows` count rows
+*removed* — reusing them would have changed what those columns mean for every reader that predates
+this route.
+
+Spec sections covered: contract §4.1 (two rows), §4.6.1 and §4.6.2 (new), §4.7, §9.3, §12. No spec
+section is left partial.
+
+Files changed:
+- `server/src/db/migrations/0020_a_screenshot_can_be_deleted_without_the_task.sql` (new — the
+  `task_screenshots` reason and two counters of its own, with its `-- @rollback` section)
+- `server/src/content/store.ts` (`deleteContentForTasks`, `clearScreenshotsForTask`,
+  `foreignTaskIds`, and the two outcome types)
+- `server/src/routes/tasks.ts` (the two routes and their body schema)
+- `docs/sonny-backend-api-contract.md`
+- `server/test/content.db.test.ts`, `server/test/gate.test.ts`,
+  `server/test/migration-round-trip.db.test.ts`
+- `Sources/MacAgentCore/PendingServerDeletionStore.swift` (the entry's shape, the scoped enqueue and
+  removal doors, the re-keying load)
+- `Sources/MacAgentCore/SonnyTaskDeletionService.swift` (the four service doors and the delivery
+  pass's three shapes)
+- `Sources/MacAgentCore/SonnyBackendClient.swift` (one region: the two new calls and the bulk
+  delete's wire types)
+- `Sources/MacAgentCore/LocalDataDeletionService.swift` (the wipe's copy decision, recorded)
+- `Sources/MacAgent/AgentViewModel.swift` (`deleteScreenRecord`, and `deleteMemory`'s task-history
+  enqueue and withdrawal)
+- `Sources/MacAgent/TaskDeletePresentation.swift`, `Sources/MacAgent/ContentView.swift`,
+  `Sources/MacAgent/CommandCenterView.swift` (the three sentences)
+- `Tests/MacAgentTests/TaskDeletionReachesTheServerTests.swift`,
+  `Tests/MacAgentCoreTests/PendingServerDeletionStoreTests.swift`,
+  `Tests/MacAgentCoreTests/SonnyTaskDeletionServiceTests.swift`,
+  `Tests/MacAgentTests/TaskDeletePresentationTests.swift`,
+  `Tests/MacAgentTests/MemoryCommandCenterTests.swift`
+- `docs/sonny-manual-test-checklist.md`, and this entry
+
+Tests: figures recorded in this branch's closing comment on SONNY-404 and re-measured at the head
+that merges, per WORKFLOW.md step 7. Both halves are owed: this diff touches `Sources/`, `Tests/`
+and `server/`.
+
+Behavior added:
+- *Delete what Sonny did on screen* deletes that task's screenshots from the gateway too — the live
+  rows and every training-snapshot copy — through `DELETE /v1/tasks/{task_id}/screenshots`, and its
+  confirmation says so.
+- *Memory › Task history › Delete* queues every row's server deletion as one obligation and sends it
+  as one `DELETE /v1/tasks`.
+- Both surfaces describing the whole wipe say it deletes "from this Mac", and the confirmation names
+  what Sonny's servers keep among the things the press does *not* take.
+- The pending-deletion queue carries a scope and a list of ids, and reads a file written before it
+  did.
+
+Behavior preserved:
+- **`deleteTask` is untouched.** A single whole-task obligation still goes to
+  `DELETE /v1/tasks/{task_id}` and not to the bulk route: SONNY-333's path has been through four
+  review cycles and rerouting it would buy nothing.
+- **The four-outcome delivery taxonomy is unchanged** and is now shared by all three shapes through
+  one classifier, so a `404`, a `400`, a `200` and everything else mean on the new routes exactly
+  what they mean on the old one.
+- **The whole wipe still takes the queue file** with every other store, and still sends nothing.
+- **A Memory row that is not Task history queues nothing**, which is pinned rather than assumed.
+- The screen record's local half is unchanged: the task row and its `visionSessionID` stay, and a
+  deleted screen record is still indistinguishable from one that aged out.
+
+Architectural decisions / pitfalls discovered:
+- **A store whose decode failure heals is a store whose on-disk shape cannot change carelessly.**
+  Every other local store propagates a decode failure, so a shape change there fails loudly; this one
+  quarantines and starts fresh, so the same change would be silent data loss wearing the mask of a
+  feature working as designed. The legacy decoder and its test exist for that reason and not for
+  tidiness.
+- **The two new client calls live on `SonnyBackendClient` while SONNY-333's lives on
+  `SonnyTaskDeletionService`, and the asymmetry is deliberate rather than drift.** The kickoff's file
+  boundary put them there, and there is a reason that reads as one: the single delete's body is
+  never decoded, while the bulk delete's answer decides whether an obligation is finished — a call
+  whose caller must read its body is a call with a decoder.
+- **`SonnyTaskDeletionService.swift` was edited although the kickoff note's file list did not name
+  it.** The delivery pass is where an obligation becomes a request, so the note's own requirement —
+  two new calls — cannot land without it. Recorded here rather than assumed, per WORKFLOW.md step 5.
+
+Known limitations / deferred scope:
+- **The bulk route's `tasks_not_found` is a count and not a list**, so a mixed-ownership obligation
+  is retried whole. Stated above with what it costs.
+- **The bulk obligation is capped at 10,000 ids by the route** — the Mac's own history cap, so no
+  press this product can make exceeds it. A future history cap above 10,000 moves both numbers in
+  one change.
+- **Nothing surfaces what the queue owes**, unchanged from SONNY-333, and still on SONNY-109's list
+  along with the cap's silent eviction.
+
+Open questions: none.
+
+Next branch: per the coordinator's wave-6 order.
+
 ### Branch: fix/a-short-article-about-a-wall-is-served
 Status: complete
 Date: 2026-09-05

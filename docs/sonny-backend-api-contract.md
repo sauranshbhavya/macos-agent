@@ -531,6 +531,8 @@ here only so nobody adds a second one.
 | `POST /v1/search` | yes | Web search | SONNY-130 |
 | `POST /v1/screen/analyze` | yes | Screen control | SONNY-131 |
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
+| `DELETE /v1/tasks` | yes | Delete several tasks' retained content in one call | SONNY-404 |
+| `DELETE /v1/tasks/{task_id}/screenshots` | yes | Delete this task's screenshots and nothing else | SONNY-404 |
 | `POST /v1/billing/checkout` | yes | Where to send this account to subscribe | SONNY-211 |
 | `POST /v1/billing/webhook` | HMAC signature over the raw body, not a Bearer token | Subscription lifecycle from the payment provider | SONNY-211 |
 | `POST /v1/billing/portal` | yes | Where to send this account to manage an existing subscription | SONNY-216 |
@@ -784,6 +786,81 @@ Delete means deleted everywhere — the local record and the backend's retained 
 The same path serves a user's data-deletion request, so it is needed twice over. `DELETE /v1/account`
 reaches everything this reaches, plus the account record.
 
+### 4.6.1 `DELETE /v1/tasks`
+
+```json
+{ "task_ids": ["…", "…"] }
+```
+
+```json
+{ "deleted_at": "2026-09-05T09:41:07Z", "tasks_deleted": 2, "tasks_not_found": 0, "requests_deleted": 5 }
+```
+
+Everything 4.6 says about one task, said about several in one request (SONNY-404). It is an
+**additive** change under 8.1: a new endpoint, no existing path's behaviour altered, no field
+removed or renamed, no error `code` given a new meaning. The one thing 8.2 would have caught is
+absent by construction — neither route adds a value to an enum a client switches over.
+
+- **The Mac's *Memory › Task history › Delete* is what this exists for.** That control removes every
+  history row at once, and the founder decided on 2026-09-05 that it queues one bulk call rather
+  than one call per row. The client's queue is the reason it has to be one: it holds 200 obligations
+  and a history holds up to 10,000 rows, so one obligation per row would silently drop the
+  difference at the single press that asks for the most.
+- **`task_ids` holds 1 to 10,000 identifiers**, each 1 to 200 characters after trimming, and the
+  ceiling is the Mac's own history cap rather than a number chosen here. An empty array, a missing
+  field or a longer list is `400 request.invalid`. The body is under 6.1's 1 MiB default for every
+  route that does not name its own — roughly 400 KB at the ceiling.
+- **A `task_id` belonging to a different account is skipped and counted in `tasks_not_found`; the
+  call still succeeds.** 4.6 answers one foreign id with a `404`, and the batch equivalent of
+  refusing outright would let one stale id on a Mac two people have signed into strand every other
+  deletion in the client's queue for good. The client reads a non-zero `tasks_not_found` exactly the
+  way it reads 4.6's `404` — not deliverable by *this session*, never not deliverable — and keeps
+  the obligation.
+- **`tasks_deleted` counts the submitted ids this account owns or that this gateway has never heard
+  of.** Both are settled: 4.6's rule that a task with nothing stored is a success rather than a
+  `404`, applied per id. `requests_deleted` is 4.6's field summed across the batch.
+- **It records what the same deletions performed one at a time would record**: one
+  `sonny.content_deletion` row per task, with that task's own counts and its own snapshot lineage,
+  including a row of zeroes for a task that stored nothing. A summary row would make the record of a
+  wipe read differently from the record of the same act performed slowly.
+
+**It carries its body on a `DELETE`, and that is a constraint on the host rather than a detail.** An
+intermediary that strips a `DELETE` request body turns every call to this route into a
+`400 request.invalid` that no client can avoid — so it is one more thing SONNY-125 has to prove of a
+candidate host, beside 6.1's payload size and 12's wall-clock. The alternative considered was
+`POST /v1/tasks/delete`, which 9.1 would then oblige to carry an `Idempotency-Key` for an operation
+9.3 already calls naturally idempotent: a key whose only job would be to stand in for a lost response
+that costs nothing to ask for again.
+
+### 4.6.2 `DELETE /v1/tasks/{task_id}/screenshots`
+
+```json
+{ "task_id": "…", "deleted_at": "2026-09-05T09:41:07Z", "screenshots_deleted": 2 }
+```
+
+The narrowest of the three deletes: it clears this task's redacted screenshots — the live rows and
+every training-snapshot copy of them — and touches nothing else the task said (SONNY-404). Additive
+under 8.1 on the same terms as 4.6.1.
+
+- **It exists because 4.6 is too wide for the button that needed it.** The Mac's *Delete what Sonny
+  did on screen* removes one task's vision-session record and leaves the task, its command and its
+  result standing. Pressing 4.6's route there would have deleted the request text and the served
+  responses too, which is more than that control says. The founder decided on 2026-09-05 for this
+  route rather than for a button whose words stop claiming server reach, on the ground that
+  screenshots are the most sensitive content this gateway holds and that snapshot copies of them
+  carry no expiry today (10.3, and `expireSnapshots` skipping a NULL `expires_at`).
+- **A clear, not a delete.** The row survives with `screenshot` and `screenshot_media_type` set to
+  NULL; the media type goes with the image because a media type beside a NULL image describes
+  nothing and would be the one surviving trace of what was captured. `screenshots_deleted` counts
+  live rows cleared. The snapshot copies cleared beside them are in the gateway's own
+  `sonny.content_deletion` record rather than on the wire, under a `reason` of its own and counters
+  of its own — filed under `task` it would say the whole task was deleted, and counted in
+  `content_rows` it would change what that column means for every reader that predates this route.
+- **The three answers are 4.6's, unchanged**, because they are about ownership rather than about
+  what is removed: `404 resource.not_found` for a `task_id` belonging to a different account, `200`
+  with `screenshots_deleted: 0` for a task this gateway never stored, and the clear scoped by
+  account whatever the ownership read said.
+
 ### 4.7 Reconciling with spec §16.2
 
 §16.2 (spec lines 2103-2117) lists eleven initial endpoints. Eight of them assume §9's server-side
@@ -807,7 +884,8 @@ architecture there is no server-side task resource to create, read, feed context
 
 Added beyond §16.2: the auth endpoints (§16.3 requires them; §16.2 never listed them), `/v1/plan`,
 `/v1/research/synthesize`, `/v1/search`, `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account`,
-`GET /v1/meta` and `GET /v1/health`.
+`GET /v1/meta`, `GET /v1/health`, and SONNY-404's two narrower deletes, `DELETE /v1/tasks` and
+`DELETE /v1/tasks/{task_id}/screenshots`.
 
 **`DELETE /v1/tasks/{task_id}` reuses §16.2's path space for something else, and that is worth saying
 plainly.** There is no task *resource* on this server. `task_id` is a client-minted key that content
@@ -1488,6 +1566,7 @@ token is still what keeps that survivable rather than corrupting.
 | `POST /v1/auth/oauth/google`, `POST /v1/auth/oauth/apple` | **open** | These flows typically carry a single-use provider authorization code, in which case they behave like `email/verify` rather than like `email/start`. SONNY-129 settles it when it settles the body shape (3.6), and records which |
 | `POST /v1/auth/signout` | yes | Revoking an already-revoked family succeeds |
 | `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account` | yes | Naturally idempotent; a second delete succeeds with `requests_deleted: 0` |
+| `DELETE /v1/tasks`, `DELETE /v1/tasks/{task_id}/screenshots` | yes | Naturally idempotent for the same reason (SONNY-404). A repeat of the batch answers the same `tasks_not_found` and deletes nothing the first pass took; a repeat of the screenshot clear answers `screenshots_deleted: 0` |
 
 **Retry is decided by `code`, never by status.** Several statuses carry more than one code with
 opposite semantics, which is the whole reason section 7's taxonomy keys off `code` — and a client
@@ -1802,6 +1881,9 @@ own opaque transport timeout, which it cannot tell apart from a dead network.
 | `POST /v1/transcriptions` | 60 s | 75 s | 90 s |
 | `POST /v1/search` | 20 s | 25 s | 30 s |
 | auth, account, meta, health, delete | 10 s | 15 s | 20 s |
+
+SONNY-404's two deletes are in that last row and take no row of their own: they are the same
+database work as 4.6's, over more rows or over fewer columns, and neither calls a provider.
 
 The vision and synthesis routes get the longest budgets because they genuinely take longest: a vision
 call carries megabytes upstream and waits on a large model, and a session spends up to twelve of them

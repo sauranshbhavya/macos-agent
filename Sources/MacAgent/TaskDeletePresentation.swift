@@ -101,8 +101,17 @@ enum TaskDeletePresentation {
 
     static let screenRecordConfirmationTitle = "Delete what Sonny did on screen?"
 
-    /// States what survives, which is the fact that distinguishes this action from the other one.
-    static let screenRecordConfirmationMessage = "The task stays in your history."
+    /// States what this reaches and what survives — the two facts that distinguish this action from
+    /// the other one.
+    ///
+    /// **The reach is now both halves** (SONNY-404, founder decision 2026-09-05). This press deletes
+    /// the task's screenshots from the Mac's own journal *and* from Sonny's servers, through
+    /// `DELETE /v1/tasks/{task_id}/screenshots` — a route that exists because §4.6's takes a task's
+    /// whole content and this button names one part of it. Saying so is not the app explaining
+    /// itself: it is a destructive control naming what it destroys, which is the same thing the
+    /// whole wipe's dialog does and the same reason it says "from this Mac".
+    static let screenRecordConfirmationMessage =
+        "This deletes the screenshots from this Mac and from Sonny's servers. The task stays in your history."
 
     static let screenRecordConfirmButtonLabel = "Delete Screen Record"
 

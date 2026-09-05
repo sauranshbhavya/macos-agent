@@ -2419,7 +2419,10 @@ struct MemoryCommandCenterTests {
         }
 
         // What the dialog says that the page does not, and which is nobody else's to derive.
-        #expect(contentView.contains("Generated files and API keys are not deleted."))
+        // **Three items rather than two since SONNY-404** (founder decision 2026-09-05): this wipe
+        // is a promise about this Mac, so what Sonny's servers keep joins the list of what the press
+        // does *not* take. `EveryDeleteReachesTheServerTests` holds both surfaces' "from this Mac".
+        #expect(contentView.contains("Generated files, API keys, and what Sonny's servers keep are not deleted."))
     }
 
     /// **F3 — the whole wipe must not leave a row saying "Can't be read" about a file it just deleted.**

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// One task the user deleted on this Mac whose server-side copy has not been confirmed gone
@@ -12,23 +13,117 @@ import Foundation
 /// join is the whole reason this record can exist at all: the local row is gone by the time anything
 /// reads this, so the id is the only thing left that names the content on the server.
 public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable {
-    /// The task's id — `CompletedTaskRecord.id`, and the `{task_id}` of
-    /// `DELETE /v1/tasks/{task_id}`.
-    public var taskID: String
+    /// Which of the server's three delete routes settles this obligation (SONNY-404).
+    ///
+    /// **A scope rather than a route name**, so the file records what the user asked for rather than
+    /// which path this version of the app happened to call. The queue outlives the version that
+    /// wrote it, and a route can move; what the user pressed cannot.
+    public enum Scope: String, Codable, Sendable, CaseIterable {
+        /// Everything the server kept for these tasks — §4.6 for one, §4.6.1 for several. The
+        /// *Delete task* button and *Memory › Task history › Delete*.
+        case wholeTask
+        /// This task's screenshots and nothing else — §4.6.2. *Delete what Sonny did on screen*,
+        /// whose local half removes the vision-session record and leaves the task standing.
+        case screenshotsOnly
+    }
+
+    /// The tasks this obligation covers — `CompletedTaskRecord.id`, which is the backend's
+    /// `task_id` (contract §5.1). Never empty.
+    ///
+    /// **A list rather than one id, and the cap is the reason** (SONNY-404). *Task history › Delete*
+    /// removes every row at once, up to `TaskHistoryStore.defaultMaxItems` — ten thousand — and
+    /// `maxItems` here is two hundred. One entry per row would drop nine thousand eight hundred
+    /// obligations to the eviction below, silently, from the one press that asks for the most. The
+    /// founder's decision of 2026-09-05 that the press sends one bulk call and this shape are the
+    /// same decision seen from the two ends.
+    public var taskIDs: [String]
+
+    /// What the delete reached on the Mac, and therefore what it has to reach on the server.
+    public var scope: Scope
 
     /// When the user pressed Delete.
     ///
     /// Read for two things and neither is display: the total order the queue is delivered in, and
     /// which entry the cap drops when the queue is full. **Nothing renders it**, which is why it is
-    /// the only field here besides the key — a queue entry that carried the command text, or the
+    /// the only field here besides the keys — a queue entry that carried the command text, or the
     /// time a task ran, would be a record of the deleted task surviving the deletion.
     public var deletedAt: Date
 
-    public var id: String { taskID }
+    /// The dictionary key this entry is filed under. Derived, never stored.
+    ///
+    /// A single-task obligation keys on its own id, so pressing Delete twice on a row whose local
+    /// delete failed the first time still leaves one entry — the property SONNY-333 built and the
+    /// one this generalises rather than replaces. A many-task obligation keys on a digest of its
+    /// ids, so an identical press coalesces the same way while two different sets stay two
+    /// obligations. The scope is part of every key: a task can owe both a whole-task delete and a
+    /// screenshots-only one, and those are different asks.
+    public var id: String { Self.key(scope: scope, taskIDs: taskIDs) }
+
+    public init(taskIDs: [String], scope: Scope, deletedAt: Date) {
+        self.taskIDs = taskIDs
+        self.scope = scope
+        self.deletedAt = deletedAt
+    }
 
     public init(taskID: String, deletedAt: Date) {
-        self.taskID = taskID
-        self.deletedAt = deletedAt
+        self.init(taskIDs: [taskID], scope: .wholeTask, deletedAt: deletedAt)
+    }
+
+    static func key(scope: Scope, taskIDs: [String]) -> String {
+        guard taskIDs.count != 1 else {
+            return "\(scope.rawValue):\(taskIDs[0])"
+        }
+        return "\(scope.rawValue):#\(digest(of: taskIDs))"
+    }
+
+    /// A stable name for a *set* of task ids.
+    ///
+    /// Sorted first, so the same set named in a different order is the same obligation — the ids
+    /// arrive in whatever order the history file happened to hold them, and two presses over one
+    /// history must not queue two entries. SHA-256 rather than the ids joined, for the reason
+    /// `StandingWatcherEvaluator.digest(of:)` gives: the key stays a fixed small size whatever the
+    /// press covered, and a dictionary key naming ten thousand deleted tasks would be the deleted
+    /// tasks written down twice.
+    private static func digest(of taskIDs: [String]) -> String {
+        let joined = taskIDs.sorted().joined(separator: "\n")
+        return SHA256.hash(data: Data(joined.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskID
+        case taskIDs
+        case scope
+        case deletedAt
+    }
+
+    /// **Reads a file written before this store knew about scopes or about more than one id**
+    /// (SONNY-404). Such a file holds `taskID` and `deletedAt` and nothing else, and every entry in
+    /// it is a whole-task obligation, because that was the only kind there was.
+    ///
+    /// Written as a decoder rather than left to a `Codable` default because there is no such thing:
+    /// a missing required key is a decode failure, and a decode failure in *this* store is healed by
+    /// quarantining the file — so the upgrade would have thrown the user's outstanding obligations
+    /// away and reported nothing. That is the one failure this whole ticket exists to prevent,
+    /// arriving through the door built to prevent it.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        deletedAt = try container.decode(Date.self, forKey: .deletedAt)
+        scope = try container.decodeIfPresent(Scope.self, forKey: .scope) ?? .wholeTask
+        if let ids = try container.decodeIfPresent([String].self, forKey: .taskIDs) {
+            taskIDs = ids
+        } else {
+            taskIDs = [try container.decode(String.self, forKey: .taskID)]
+        }
+    }
+
+    /// Writes today's shape only. The legacy `taskID` is read and never written, so a file rewritten
+    /// once is a file in the current shape — and a reader older than SONNY-404 meeting it fails to
+    /// decode, which this store heals rather than propagates.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(taskIDs, forKey: .taskIDs)
+        try container.encode(scope, forKey: .scope)
+        try container.encode(deletedAt, forKey: .deletedAt)
     }
 }
 
@@ -61,10 +156,15 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
 /// class of thing, and the wipe's own copy says it is "a promise about the whole directory rather
 /// than about the parts a reader thinks of first". It is also consistent rather than a hole — after
 /// that wipe no task's server copy is deleted, including the hundreds the user never deleted
-/// individually, because "Delete Sonny local data" has never been a promise about the server. The
-/// bigger question it raises — whether that wipe, the Memory Task-history row's Delete and
-/// "Delete what Sonny did on screen" should reach the server too — is SONNY-404's, filed rather
-/// than answered here.
+/// individually, because "Delete Sonny local data" has never been a promise about the server.
+///
+/// **SONNY-404 answered the three questions this paragraph left open, and two of the three answers
+/// changed the product** (founder decisions, 2026-09-05). The wipe stays a promise about *this Mac*
+/// — so the abandonment above is intended behaviour rather than a residual, and both surfaces that
+/// describe the press now say "from this Mac" and name Sonny's servers among what it does not take.
+/// The Memory Task-history row's Delete queues every row's deletion, as one entry naming many ids
+/// and one bulk call. And "Delete what Sonny did on screen" got a route of its own, because
+/// `DELETE /v1/tasks/{task_id}` takes a task's whole content and that button names one part of it.
 ///
 /// On the shared `LocalStorageEncryption` pattern exactly: AES-GCM under the `SONNYENC1` header and
 /// the transparent legacy-plaintext migration every other store performs on its first load. There
@@ -245,6 +345,43 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// Keyed on the task id, so pressing Delete twice on a row whose local delete failed the first
     /// time leaves one entry rather than two.
     public func enqueue(taskID: String, deletedAt: Date = Date()) throws {
+        try enqueue(taskIDs: [taskID], scope: .wholeTask, deletedAt: deletedAt)
+    }
+
+    /// Records an obligation covering one task or many, in one of the two scopes (SONNY-404).
+    ///
+    /// **Many ids are one entry and not many, and the cap is why.** *Task history › Delete* names
+    /// every row the Mac holds — up to ten thousand — against a queue that keeps two hundred. As
+    /// separate entries the eviction below would take nine thousand eight hundred of them without
+    /// saying so, from the one press that asks for the most; as one entry it is one obligation the
+    /// cap counts once and one call the founder decided on.
+    ///
+    /// **Empty is a no-op rather than an error.** *Task history › Delete* pressed on an empty history
+    /// deletes nothing locally and owes nothing on the server, and an empty entry would be an
+    /// obligation naming nothing that every future pass would deliver as a request about no tasks.
+    ///
+    /// **The two scopes do not subsume one another, deliberately.** A task can owe both — the user
+    /// deletes its screen record offline and then deletes the task itself — and the two entries are
+    /// delivered independently. Neither order is a hazard: whichever lands second finds its content
+    /// already gone and answers a success with a count of zero, which is §4.6's own rule that a
+    /// delete which is already true is not an error. Collapsing them would mean deciding which ask
+    /// wins, and there is no reading under which the narrower one should cancel the wider.
+    public func enqueue(
+        taskIDs: [String],
+        scope: PendingServerDeletion.Scope,
+        deletedAt: Date = Date()
+    ) throws {
+        // Trimmed-empty rather than empty, matching the server's own `z.string().trim().min(1)`:
+        // an id of spaces names nothing the gateway will accept, so an obligation carrying one is an
+        // obligation no request can ever discharge. The id itself is kept as it was — this decides
+        // what to drop, not what to send.
+        let unique = Array(Set(taskIDs.filter {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }))
+        guard !unique.isEmpty else {
+            return
+        }
+        let entry = PendingServerDeletion(taskIDs: unique, scope: scope, deletedAt: deletedAt)
         lock.lock()
         defer { lock.unlock() }
         var entries = try loadKeyed()
@@ -252,8 +389,8 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         // `deletedAt` is left as the first press wrote it when an entry is already here. The field
         // orders the queue and decides what the cap drops, and re-stamping it would move a delivery
         // that has been owed for a week to the back of the queue and to the front of the survivors.
-        if entries[taskID] == nil {
-            entries[taskID] = PendingServerDeletion(taskID: taskID, deletedAt: deletedAt)
+        if entries[entry.id] == nil {
+            entries[entry.id] = entry
         }
         try write(capped(entries))
     }
@@ -261,9 +398,11 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     /// Everything still owed, **oldest first** — the order it is delivered in, so a delivery that
     /// stops part-way has taken the ones that have waited longest.
     ///
-    /// Ties break on the task id so the order is total: two deletions inside one second land on the
-    /// same `deletedAt`, because these files persist dates with whole-second `.iso8601` like every
-    /// other store here.
+    /// Ties break on the entry's own key so the order is total: two deletions inside one second land
+    /// on the same `deletedAt`, because these files persist dates with whole-second `.iso8601` like
+    /// every other store here. (The key was the task id until SONNY-404 gave an entry more than one
+    /// of those; it is `scope:id` for a single task and `scope:#digest` for a set, so it is still a
+    /// total order over the same population.)
     public func loadAll() throws -> [PendingServerDeletion] {
         lock.lock()
         defer { lock.unlock() }
@@ -272,20 +411,30 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
             if left.deletedAt != right.deletedAt {
                 return left.deletedAt < right.deletedAt
             }
-            return left.taskID < right.taskID
+            return left.id < right.id
         }
     }
 
     /// Forgets one obligation — because it was delivered, or because it never can be.
     ///
-    /// A task id that is not queued is a no-op rather than an error, matching every other
+    /// An obligation that is not queued is a no-op rather than an error, matching every other
     /// per-entry delete in this codebase.
+    public func remove(_ entry: PendingServerDeletion) throws {
+        try remove(key: entry.id)
+    }
+
+    /// Forgets the whole-task obligation for one id — the withdrawal `deleteTask` performs when its
+    /// local delete throws after the enqueue succeeded.
     public func remove(taskID: String) throws {
+        try remove(key: PendingServerDeletion.key(scope: .wholeTask, taskIDs: [taskID]))
+    }
+
+    private func remove(key: String) throws {
         lock.lock()
         defer { lock.unlock() }
         var entries = try loadKeyed()
         insideTheCriticalSection?()
-        guard entries.removeValue(forKey: taskID) != nil else {
+        guard entries.removeValue(forKey: key) != nil else {
             return
         }
         try write(entries)
@@ -355,7 +504,28 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
             }
             return [:]
         }
-        return decoded.migratingLegacyPlaintext(store: "pending server deletions", write: write)
+        return rekeyed(decoded.migratingLegacyPlaintext(store: "pending server deletions", write: write))
+    }
+
+    /// Files every decoded entry under the key its own contents give it.
+    ///
+    /// **The keys on disk are not trusted, and that is what makes the file's shape upgradable**
+    /// (SONNY-404). A file written before this store knew about scopes keys a whole-task obligation
+    /// under the bare task id; today's key is `wholeTask:<id>`. Re-deriving means the old file's
+    /// obligations arrive filed the way `enqueue` and `remove` look for them, rather than sitting in
+    /// the dictionary under names nothing will ever ask for again.
+    ///
+    /// **A collision keeps the older entry**, which is the same direction `enqueue` takes when an
+    /// obligation is already present: `deletedAt` orders delivery and decides what the cap drops, and
+    /// the older stamp is the one that has been waiting. Reachable only from a file two keys of which
+    /// name one obligation, which is a hand-edited file or a version that wrote both shapes.
+    private func rekeyed(
+        _ entries: [String: PendingServerDeletion]
+    ) -> [String: PendingServerDeletion] {
+        Dictionary(
+            entries.values.filter { !$0.taskIDs.isEmpty }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, second in first.deletedAt <= second.deletedAt ? first : second }
+        )
     }
 
     /// Whether this store can encrypt right now — in other words, whether it has a key at all.

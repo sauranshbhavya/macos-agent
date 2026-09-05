@@ -130,6 +130,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // a step here**, and the failure it produces when one is forgotten is legible: the assertion
       // says the head was some other file. 0018 is SONNY-211's and is rolled back only to get past
       // it; nothing below is about it.
+      expect(await down(client)).toBe("0020_a_screenshot_can_be_deleted_without_the_task");
       expect(await down(client)).toBe("0019_topping_up_happens_only_if_you_asked");
       expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
@@ -151,6 +152,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
         "0018_a_subscription_reaches_the_entitlement",
         "0019_topping_up_happens_only_if_you_asked",
+        "0020_a_screenshot_can_be_deleted_without_the_task",
       ]);
       // **Pin the MAPPING, not the set** (PR #171 review, F2). This asserted
       // `toEqual([1, 2, 3])` over the whole column, which checks that three numbers came out dense
@@ -203,6 +205,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
       // The rows have to predate the column, so this rolls 0017 back, writes them, and rolls
       // forward — the same door a deployment goes through, and the reason `issue_seq` is absent
       // from the INSERT below.
+      expect(await down(client)).toBe("0020_a_screenshot_can_be_deleted_without_the_task");
       expect(await down(client)).toBe("0019_topping_up_happens_only_if_you_asked");
       expect(await down(client)).toBe("0018_a_subscription_reaches_the_entitlement");
       expect(await down(client)).toBe("0017_the_latest_sign_in_code_is_the_last_one_issued");
@@ -219,6 +222,7 @@ describeDb("migrations 0016 and 0017 over a database that already holds rows", (
         "0017_the_latest_sign_in_code_is_the_last_one_issued",
         "0018_a_subscription_reaches_the_entitlement",
         "0019_topping_up_happens_only_if_you_asked",
+        "0020_a_screenshot_can_be_deleted_without_the_task",
       ]);
 
       // All three carry the sentinel, so `issue_seq` separates none of them and only the second key

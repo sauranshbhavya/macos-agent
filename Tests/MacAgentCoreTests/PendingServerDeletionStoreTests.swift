@@ -32,8 +32,111 @@ struct PendingServerDeletionStoreTests {
         // A second store over the same URL is the relaunch: nothing is carried in memory, so this
         // reads what was actually written. That is the whole reason this is a file at all.
         let reread = try makeStore(at: root).loadAll()
-        #expect(reread.map(\.taskID) == ["task-a"])
+        #expect(reread.flatMap(\.taskIDs) == ["task-a"])
         #expect(reread.first?.deletedAt == Self.epoch)
+    }
+
+    // MARK: - The three callers, and the two scopes (SONNY-404)
+
+    /// **A file written before this store knew about scopes still reads**, and that matters more
+    /// here than in any other store: a decode failure in this one is *healed* by quarantining the
+    /// file, so an upgrade that could not read the old shape would have thrown away every
+    /// outstanding obligation and reported nothing — the exact failure this feature exists to stop,
+    /// arriving through the door built to stop it.
+    @Test
+    func aQueueFileWrittenBeforeScopesExistedReadsAsWholeTaskObligations() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("pending-server-deletions.json")
+
+        // The shape SONNY-333 wrote: a task id and a date, keyed on the bare id, with no `scope` and
+        // no `taskIDs`. Written as string-valued dictionaries so the bytes are exactly that JSON —
+        // the date's ISO-8601 spelling included, which is what these files persist.
+        let legacy: [String: [String: String]] = [
+            "task-a": ["taskID": "task-a", "deletedAt": "2026-02-25T04:53:20Z"]
+        ]
+        try LocalStorageEncryption.shared.encode(legacy).write(to: fileURL, options: .atomic)
+
+        let queued = try makeStore(at: root).loadAll()
+        #expect(queued.count == 1)
+        #expect(queued.first?.taskIDs == ["task-a"])
+        #expect(queued.first?.scope == .wholeTask)
+        // And it is filed under today's key, so the doors that look for it find it: removing by task
+        // id — which is what a withdrawn delete does — takes this entry.
+        try makeStore(at: root).remove(taskID: "task-a")
+        #expect(try makeStore(at: root).loadAll().isEmpty)
+    }
+
+    /// **The Memory row's whole press is one entry, and that is what the cap counts.** Task history
+    /// holds up to ten thousand rows against a queue of two hundred, so one entry per row would have
+    /// the eviction drop the difference in silence, from the single press that asks for the most.
+    @Test
+    func aBulkObligationIsOneEntryHoweverManyTasksItNames() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids = (0..<(PendingServerDeletionStore.maxItems * 3)).map { "task-\($0)" }
+
+        try makeStore(at: root).enqueue(taskIDs: ids, scope: .wholeTask, deletedAt: Self.epoch)
+
+        let queued = try makeStore(at: root).loadAll()
+        #expect(queued.count == 1)
+        #expect(Set(try #require(queued.first?.taskIDs)) == Set(ids))
+    }
+
+    /// Keyed on its contents, so the same press twice is one obligation — the generalisation of
+    /// SONNY-333's "pressing Delete twice leaves one entry", not a replacement for it. Order does
+    /// not matter, because the ids arrive in whatever order the history file held them.
+    @Test
+    func theSameSetOfTasksEnqueuedTwiceIsOneObligation() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(at: root)
+
+        try store.enqueue(taskIDs: ["a", "b", "c"], scope: .wholeTask, deletedAt: Self.epoch)
+        try store.enqueue(taskIDs: ["c", "b", "a"], scope: .wholeTask, deletedAt: Self.epoch.addingTimeInterval(60))
+
+        let queued = try store.loadAll()
+        #expect(queued.count == 1)
+        // The first press's stamp survives, as it does for a repeated single-task press: the field
+        // orders delivery and decides what the cap drops.
+        #expect(queued.first?.deletedAt == Self.epoch)
+    }
+
+    /// **A task can owe both, and neither cancels the other.** The user deletes a task's screen
+    /// record offline and then deletes the task itself; those are two different asks, and there is
+    /// no reading under which the narrower one should suppress the wider.
+    @Test
+    func aTaskCanOweBothItsScreenshotsAndItsWholeContent() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(at: root)
+
+        try store.enqueue(taskIDs: ["task-a"], scope: .screenshotsOnly, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch.addingTimeInterval(60))
+
+        #expect(try store.loadAll().map(\.scope) == [.screenshotsOnly, .wholeTask])
+
+        // And a withdrawal names one of them. `remove(taskID:)` is the whole-task door — the one
+        // `deleteTask` calls when its local delete throws — so the screenshots obligation stays.
+        try store.remove(taskID: "task-a")
+        #expect(try store.loadAll().map(\.scope) == [.screenshotsOnly])
+    }
+
+    /// An obligation naming nothing is not written. It could never be discharged by any request, and
+    /// every pass for the rest of the file's life would carry it.
+    @Test
+    func anObligationNamingNoTasksIsNotRecordedAtAll() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(at: root)
+
+        try store.enqueue(taskIDs: [], scope: .wholeTask, deletedAt: Self.epoch)
+        try store.enqueue(taskIDs: ["", "  "], scope: .wholeTask, deletedAt: Self.epoch)
+
+        #expect(try store.loadAll().isEmpty)
+        // Written as an empty queue rather than not written at all is equally fine; what must not
+        // happen is an entry that names nothing.
+        #expect(try makeStore(at: root).loadAll().isEmpty)
     }
 
     @Test
@@ -100,10 +203,10 @@ struct PendingServerDeletionStoreTests {
         try store.enqueue(taskID: "b-same-second", deletedAt: Self.epoch)
         try store.enqueue(taskID: "a-same-second", deletedAt: Self.epoch)
 
-        #expect(try store.loadAll().map(\.taskID) == ["a-same-second", "b-same-second", "later"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["a-same-second", "b-same-second", "later"])
         // Twice, over a fresh store, because the hazard is an order that is stable within one load
         // and not between two.
-        #expect(try makeStore(at: root).loadAll().map(\.taskID) == ["a-same-second", "b-same-second", "later"])
+        #expect(try makeStore(at: root).loadAll().flatMap(\.taskIDs) == ["a-same-second", "b-same-second", "later"])
     }
 
     /// The bound. See `PendingServerDeletionStore.maxItems` for why it is the oldest that go.
@@ -123,9 +226,9 @@ struct PendingServerDeletionStoreTests {
 
         let queued = try store.loadAll()
         #expect(queued.count == PendingServerDeletionStore.maxItems)
-        #expect(!queued.map(\.taskID).contains("task-0"))
-        #expect(queued.first?.taskID == "task-1")
-        #expect(queued.last?.taskID == "task-\(PendingServerDeletionStore.maxItems)")
+        #expect(!queued.flatMap(\.taskIDs).contains("task-0"))
+        #expect(queued.first?.taskIDs == ["task-1"])
+        #expect(queued.last?.taskIDs == ["task-\(PendingServerDeletionStore.maxItems)"])
     }
 
     @Test
@@ -139,7 +242,7 @@ struct PendingServerDeletionStoreTests {
 
         try store.remove(taskID: "task-a")
 
-        #expect(try makeStore(at: root).loadAll().map(\.taskID) == ["task-b"])
+        #expect(try makeStore(at: root).loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
 
     /// A no-op rather than a throw, matching every other per-entry delete here — and it matters for
@@ -154,7 +257,7 @@ struct PendingServerDeletionStoreTests {
         try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
         try store.remove(taskID: "task-never-queued")
 
-        #expect(try store.loadAll().map(\.taskID) == ["task-a"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-a"])
     }
 
     /// **An undecodable file is set aside and the queue starts again** (PR #194 review, F1).
@@ -185,7 +288,7 @@ struct PendingServerDeletionStoreTests {
         // And the queue works again immediately — which is the point, since the alternative was
         // every future Delete failing to record its obligation.
         try store.enqueue(taskID: "task-b", deletedAt: Self.epoch)
-        #expect(try store.loadAll().map(\.taskID) == ["task-b"])
+        #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
 
     /// **A read failure that is not a decode failure must not heal.**
@@ -250,7 +353,7 @@ struct PendingServerDeletionStoreTests {
         #expect(throws: LocalStorageEncryptionError.self) { _ = try badKey.loadAll() }
         // The file is left exactly where it was, so the key that can open it still can.
         #expect(LocalDataQuarantine().quarantinedSiblings(of: good.fileURL).isEmpty)
-        #expect(try good.loadAll().map(\.taskID) == ["task-a"])
+        #expect(try good.loadAll().flatMap(\.taskIDs) == ["task-a"])
 
         // 3. No key at all — the case that walked past the guard, over a file that is provably fine.
         let unreachableKey = PendingServerDeletionStore(
@@ -262,7 +365,7 @@ struct PendingServerDeletionStoreTests {
         #expect(throws: (any Error).self) { _ = try unreachableKey.loadAll() }
         #expect(LocalDataQuarantine().quarantinedSiblings(of: good.fileURL).isEmpty)
         // And the obligation is still owed, read back through the key that works.
-        #expect(try good.loadAll().map(\.taskID) == ["task-a"])
+        #expect(try good.loadAll().flatMap(\.taskIDs) == ["task-a"])
     }
 
     /// **A wrong but valid-length key heals, and that is written down as a decision.**
@@ -300,7 +403,7 @@ struct PendingServerDeletionStoreTests {
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fileURL).count == 1)
         // Service is restored: the next Delete records its obligation instead of failing forever.
         try otherKey.enqueue(taskID: "task-b", deletedAt: Self.epoch)
-        #expect(try otherKey.loadAll().map(\.taskID) == ["task-b"])
+        #expect(try otherKey.loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
 
     /// **A quarantine that fails re-throws the decode error, not its own** (PR #194 cycle-3, R2).
@@ -352,8 +455,8 @@ struct PendingServerDeletionStoreTests {
         let queued = try store.loadAll()
         #expect(queued.count == PendingServerDeletionStore.maxItems)
         // `tie-a` is first in delivery order, so it is the oldest, so it is the one the cap takes.
-        #expect(!queued.map(\.taskID).contains("tie-a"))
-        #expect(queued.map(\.taskID).contains("tie-b"))
+        #expect(!queued.flatMap(\.taskIDs).contains("tie-a"))
+        #expect(queued.flatMap(\.taskIDs).contains("tie-b"))
     }
 
     /// **Every door holds the file's lock while it is between its load and its write**

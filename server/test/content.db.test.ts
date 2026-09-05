@@ -1130,6 +1130,208 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(await contentRows()).toHaveLength(1);
     });
 
+    /**
+     * `DELETE /v1/tasks` and `DELETE /v1/tasks/{task_id}/screenshots` (SONNY-404), driven end to end
+     * for the reason the block above gives: what distinguishes these two from the route above them
+     * is which rows survive, and that is the route's promise rather than the store's.
+     */
+    describe("SONNY-404's two narrower deletes, through the real app and the real tables", () => {
+      const deleteTasks = async (taskIds: unknown, user = SUPABASE_USER) =>
+        app().inject({
+          method: "DELETE",
+          url: "/v1/tasks",
+          headers: { authorization: `Bearer ${accessTokenFor(user)}` },
+          payload: { task_ids: taskIds },
+        });
+
+      const deleteScreenshots = async (taskId: string, user = SUPABASE_USER) =>
+        app().inject({
+          method: "DELETE",
+          url: `/v1/tasks/${taskId}/screenshots`,
+          headers: { authorization: `Bearer ${accessTokenFor(user)}` },
+        });
+
+      itUnderHangBackstop("deletes several of this account's tasks in one call", async () => {
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "b", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "keep", accountId: CONSENTING }));
+
+        const response = await deleteTasks(["a", "b"]);
+        expect(response.statusCode).toBe(200);
+        const body = JSON.parse(response.body) as {
+          tasks_deleted: number;
+          tasks_not_found: number;
+          requests_deleted: number;
+        };
+        expect(body).toMatchObject({ tasks_deleted: 2, tasks_not_found: 0, requests_deleted: 3 });
+
+        const rows = await contentRows();
+        expect(rows.map((row) => row["task_id"])).toEqual(["keep"]);
+      });
+
+      itUnderHangBackstop("records one deletion per task, exactly as the same deletes performed one at a time would", async () => {
+        // The property the bulk route promises beyond speed: the record of a wipe reads the same as
+        // the record of the same deletions performed slowly. A summary row would make the two paths
+        // look like different acts to anybody reading `sonny.content_deletion` a year later.
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        await deleteTasks(["a", "stored-nothing"]);
+
+        const deletions = await recentContentDeletions(client, { limit: 10 });
+        expect(deletions).toHaveLength(2);
+        expect(deletions.every((deletion) => deletion.reason === "task")).toBe(true);
+        const byTask = new Map(deletions.map((deletion) => [deletion.taskId, deletion.contentRows]));
+        expect(byTask.get("a")).toBe(1);
+        // Recorded even though it took nothing — §4.6 makes "there was nothing to delete" a success,
+        // and a record that only fired on a hit could not tell that apart from a delete that never
+        // ran.
+        expect(byTask.get("stored-nothing")).toBe(0);
+      });
+
+      itUnderHangBackstop("takes only the caller's own tasks and says how many were somebody else's", async () => {
+        // **§4.6's 404, at batch granularity.** The other account's content must survive, and the
+        // count is what the Mac reads to keep the obligation queued rather than settling it — the
+        // same "not deliverable by this session, never not deliverable" reading the single route's
+        // 404 already has.
+        await insertRetainedContent(client, content({ taskId: "mine", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "theirs", accountId: OTHER }));
+
+        const response = await deleteTasks(["mine", "theirs"]);
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({
+          tasks_deleted: 1,
+          tasks_not_found: 1,
+          requests_deleted: 1,
+        });
+
+        const rows = await contentRows();
+        expect(rows.map((row) => row["task_id"])).toEqual(["theirs"]);
+        expect(rows.map((row) => row["account_id"])).toEqual([OTHER]);
+      });
+
+      itUnderHangBackstop("refuses a batch that is empty or malformed, and deletes nothing", async () => {
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        for (const payload of [[], ["  "], "not-an-array"]) {
+          const response = await deleteTasks(payload);
+          expect(response.statusCode).toBe(400);
+          expect(JSON.parse(response.body).error.code).toBe("request.invalid");
+        }
+        expect(await contentRows()).toHaveLength(1);
+      });
+
+      itUnderHangBackstop("reaches the training snapshots the batch's tasks were copied into", async () => {
+        // The half the whole lineage exists for. `expireSnapshots` skips a NULL `expires_at`, which
+        // is every snapshot the builder makes, so a member the batch missed would sit there with no
+        // clock on it at all.
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        await insertRetainedContent(client, content({ taskId: "b", accountId: CONSENTING }));
+        const built = await buildTrainingSnapshot(client, { label: "bulk-corpus" });
+        expect(built.memberCount).toBe(2);
+
+        await deleteTasks(["a", "b"]);
+
+        const { rows } = await client.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM sonny.training_snapshot_member",
+        );
+        expect(rows[0]!.count).toBe("0");
+        const snapshots = await trainingSnapshots(client, { limit: 10 });
+        expect(snapshots[0]!.memberCount).toBe(0);
+        const deletions = await recentContentDeletions(client, { limit: 10 });
+        expect(deletions.every((deletion) => deletion.snapshotRows === 1)).toBe(true);
+      });
+
+      itUnderHangBackstop("deletes a task's screenshots and leaves everything else that task said", async () => {
+        // **The whole reason this route exists.** `DELETE /v1/tasks/{task_id}` would have taken the
+        // request text and the served response too, which is more than "Delete what Sonny did on
+        // screen" says.
+        await insertRetainedContent(client, content({ taskId: "seen", accountId: CONSENTING }));
+
+        const response = await deleteScreenshots("seen");
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({
+          task_id: "seen",
+          screenshots_deleted: 1,
+        });
+
+        const rows = await contentRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!["screenshot"]).toBeNull();
+        // The media type goes with the image: a media type beside a NULL image describes nothing
+        // and would be the one surviving trace of what was captured.
+        expect(rows[0]!["screenshot_media_type"]).toBeNull();
+        expect(rows[0]!["request_text"]).toBe("Decide the next action.");
+        expect(rows[0]!["response_body"]).not.toBeNull();
+      });
+
+      itUnderHangBackstop("clears the snapshot copies of those screenshots and keeps the members themselves", async () => {
+        await insertRetainedContent(client, content({ taskId: "seen", accountId: CONSENTING }));
+        const built = await buildTrainingSnapshot(client, { label: "screens-corpus" });
+        expect(built.memberCount).toBe(1);
+
+        await deleteScreenshots("seen");
+
+        const { rows } = await client.query<{ screenshot: Buffer | null; media: string | null }>(
+          `SELECT screenshot, screenshot_media_type AS media FROM sonny.training_snapshot_member`,
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.screenshot).toBeNull();
+        expect(rows[0]!.media).toBeNull();
+        // No member left the snapshot, so the count it describes has not changed.
+        const snapshots = await trainingSnapshots(client, { limit: 10 });
+        expect(snapshots[0]!.memberCount).toBe(1);
+      });
+
+      itUnderHangBackstop("records the clear under its own reason, with counts of its own", async () => {
+        await insertRetainedContent(client, content({ taskId: "seen", accountId: CONSENTING }));
+        await buildTrainingSnapshot(client, { label: "recorded-corpus" });
+
+        await deleteScreenshots("seen");
+
+        const { rows } = await client.query<{
+          reason: string;
+          task_id: string;
+          content_rows: number;
+          screenshots_cleared: number;
+          snapshot_screenshots_cleared: number;
+          snapshots_touched: string[];
+        }>(
+          `SELECT reason, task_id, content_rows, screenshots_cleared,
+                  snapshot_screenshots_cleared, snapshots_touched::text[] AS snapshots_touched
+             FROM sonny.content_deletion`,
+        );
+        expect(rows).toHaveLength(1);
+        // Filed under `task` it would have said the whole task was deleted, which is the one thing
+        // this route exists not to do; counted in `content_rows` it would have changed what that
+        // column means for every reader of this table, including readers that predate this route.
+        expect(rows[0]!.reason).toBe("task_screenshots");
+        expect(rows[0]!.task_id).toBe("seen");
+        expect(rows[0]!.content_rows).toBe(0);
+        expect(rows[0]!.screenshots_cleared).toBe(1);
+        expect(rows[0]!.snapshot_screenshots_cleared).toBe(1);
+        expect(rows[0]!.snapshots_touched).toHaveLength(1);
+      });
+
+      itUnderHangBackstop("answers 200 with nothing cleared for a task that stored no screenshots", async () => {
+        const response = await deleteScreenshots("never-stored-anything");
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body).screenshots_deleted).toBe(0);
+      });
+
+      itUnderHangBackstop("answers 404 for another account's task and leaves that task's screenshot where it is", async () => {
+        await insertRetainedContent(client, content({ taskId: "theirs", accountId: OTHER }));
+
+        const response = await deleteScreenshots("theirs");
+        expect(response.statusCode).toBe(404);
+        expect(JSON.parse(response.body).error.code).toBe("resource.not_found");
+
+        const rows = await contentRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!["screenshot"]).not.toBeNull();
+        // And nothing was recorded either: a refused request is not a deletion that took nothing.
+        expect(await recentContentDeletions(client, { limit: 10 })).toHaveLength(0);
+      });
+    });
+
     itUnderHangBackstop("closes an account and takes its content, its lineage and its stored responses with it", async () => {
       // **Requirement 8 and SONNY-319 through the real route**, which is the only place their
       // ordering is real: the account is closed first (so nothing can arrive behind the wipe), the

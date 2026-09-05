@@ -39,7 +39,11 @@ extension View {
             // fewer than the line on the page behind it, so the two surfaces describing one
             // irreversible press disagreed with each other as well as with the wipe. What stays
             // written here is the part that is this dialog's alone: what the press does *not* take.
-            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes). Generated files and API keys are not deleted.")
+            // **"from this Mac", and a third item in the not-deleted list** (SONNY-404, founder
+            // decision 2026-09-05). This wipe promises this Mac rather than the account, so the
+            // one place a person reads before pressing says which — and says that Sonny's servers
+            // keep what they keep, which is the part nobody could guess from the button's name.
+            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac. Generated files, API keys, and what Sonny's servers keep are not deleted.")
         }
     }
 }
