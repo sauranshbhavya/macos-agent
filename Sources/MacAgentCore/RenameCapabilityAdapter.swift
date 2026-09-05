@@ -233,10 +233,25 @@ public struct RenameCapabilityAdapter: CapabilityAdapter {
     /// **Both halves are required, and neither alone is right.** Differing only by case is not
     /// enough: on a case-*sensitive* volume `README.md` beside `readme.md` really is a second file,
     /// and exempting it would overwrite one the user never named. Identical file identity is not
-    /// enough either — a symbolic link at the destination pointing back at the source reports the
-    /// same identity while being a distinct thing `moveItem` will refuse. Requiring both confines
-    /// the exemption to the one situation it exists for, and every other shape falls through to the
-    /// refusal, which is the fail-closed direction.
+    /// enough either — **a hard link** reports the same identity as the file it is linked to while
+    /// being a second name the user can see in Finder, and `moveItem` refuses it. Requiring both
+    /// confines the exemption to the one situation it exists for, and every other shape falls
+    /// through to the refusal, which is the fail-closed direction.
+    ///
+    /// **This named a symbolic link until PR #200's F3, and that was false rather than loose.** A
+    /// symbolic link reports a *different* identity from its target, so it never reached this
+    /// guard's second half at all — the identity check already refuses it. Measured on this Mac,
+    /// Darwin 25.6.0, by `Tests/MacAgentCoreTests/RenameTests.swift`'s own fixtures rather than by
+    /// a probe that ran once: a symlink's `fileResourceIdentifier` differs from its target's, a
+    /// hard link's is equal, and `moveItem` throws `NSCocoaErrorDomain 516` onto either. So the
+    /// guard was right for a reason nobody had written down, while the reason that *was* written
+    /// down described a case it does not handle — which is the shape `CLAUDE.md`'s
+    /// claims-and-evidence section exists for, and it had reached the changelog too.
+    ///
+    /// **What dropping the case half would actually cost, stated because it is smaller than it
+    /// sounds:** `moveItem` still refuses a hard-linked destination, so the user gets Foundation's
+    /// wording instead of Sonny's. That is exactly the property `refuseCollision` above exists to
+    /// guarantee, which is why the half is kept and now held by a test.
     private func isTheSourceUnderAnotherSpelling(source: URL, destination: URL) -> Bool {
         guard destination.path.compare(source.path, options: .caseInsensitive) == .orderedSame else {
             return false

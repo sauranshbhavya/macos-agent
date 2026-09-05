@@ -360,6 +360,125 @@ struct RenameTests {
         }
     }
 
+    /// **The destination's whitelist check, which is the only thing stopping a rename from moving a
+    /// whitelist root out of the whitelist** (PR #200, F1).
+    ///
+    /// A whitelist root is inside its own whitelist — `containsPath` answers true when the candidate
+    /// *is* the root — so a rename step may legitimately name one as its `inputPath`. Its parent
+    /// folder is then outside every root, and the composed destination is outside with it. The
+    /// `validateOutputFile` call in `renameSpec` is what refuses that, and it is called for its
+    /// refusal alone with its canonical return value deliberately discarded, which is exactly what
+    /// makes it look removable. Deleting it survived the whole suite before this test existed, and
+    /// what it would allow is "rename my Documents folder to Docs" composing `~/Docs`, finding
+    /// nothing there, passing the collision check and the already-named check, and reaching
+    /// `moveItem` — which moves the user's whole Documents folder outside the boundary.
+    ///
+    /// **Two controls, because the refusal on its own does not say which check produced it.** The
+    /// first is the ordinary in-root rename, which previews. The second is the *source* half: the
+    /// same root passes `validateInsideWhitelist`, so this is not a step that fails before the
+    /// destination is ever composed.
+    @Test
+    func renamingTheWhitelistRootItselfIsRefusedBecauseTheDestinationWouldLeaveTheWhitelist() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("bytes", to: root.appendingPathComponent("scan1.pdf"))
+        let whitelist = PathWhitelist(roots: [root])
+        let executor = makeExecutor(root: root)
+
+        // Control one: the root really is inside its own whitelist, so the source half accepts it and
+        // the refusal below can only be coming from the destination.
+        #expect(try whitelist.validateInsideWhitelist(root.path).path == root.path)
+
+        #expect(throws: PathValidationError.self) {
+            _ = try executor.preview(plan: renamePlan(source: root, to: "Renamed"))
+        }
+
+        // Control two: an ordinary rename inside the root previews, so the refusal is about leaving
+        // the whitelist rather than about renaming at all.
+        #expect(try executor.preview(plan: renamePlan(source: root.appendingPathComponent("scan1.pdf"), to: "invoice.pdf")).count == 1)
+        // And nothing moved while all that was being refused.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["scan1.pdf"])
+    }
+
+    /// **A hard link is what the case half of the same-file exemption actually stops** (PR #200, F3).
+    ///
+    /// Two names for one inode report **equal** `fileResourceIdentifier`, so the identity half alone
+    /// would exempt a rename of one onto the other and hand the user Foundation's wording instead of
+    /// Sonny's. Their paths are not equal modulo case, so the case half refuses it — which is the
+    /// whole reason that half is required, and a reason that appeared nowhere in the code or the
+    /// record until this test.
+    ///
+    /// **The two facts are asserted rather than assumed**, because the outcome alone would pass for
+    /// the wrong reason: if identity happened to differ, the refusal would arrive from the identity
+    /// check and this test would say nothing about the case half at all.
+    @Test
+    func aRenameOntoAHardLinkOfTheSameFileIsStillRefused() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("a.txt")
+        let hardLink = root.appendingPathComponent("b.txt")
+        try write("shared bytes", to: source)
+        try FileManager.default.linkItem(at: source, to: hardLink)
+        let executor = makeExecutor(root: root)
+
+        // The premise: one inode, two names, equal identity — so identity alone would exempt this.
+        let sourceIdentity = try #require(
+            try source.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+        let linkIdentity = try #require(
+            try hardLink.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        )
+        #expect(sourceIdentity.isEqual(linkIdentity))
+        // And the case half's own question answers no, which is what refuses it.
+        #expect(source.path.compare(hardLink.path, options: .caseInsensitive) != .orderedSame)
+
+        #expect(
+            throws: AgentExecutionError.invalidPlan(
+                "There is already something called b.txt in \(root.path). Sonny will not replace it — pick a different name."
+            )
+        ) {
+            _ = try executor.preview(plan: renamePlan(source: source, to: "b.txt"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() == ["a.txt", "b.txt"])
+    }
+
+    /// **A dangling symbolic link occupies the destination, and `fileExists` cannot see it**
+    /// (PR #200, F4).
+    ///
+    /// `refuseCollision` probes with `attributesOfItem` rather than `fileExists` precisely because
+    /// the latter follows the link and reports a destination that is free. `moveItem` refuses either
+    /// way, so what the probe buys is Sonny's message instead of Foundation's — which is the whole
+    /// property that function's doc comment claims, and it was unasserted.
+    ///
+    /// The two probe answers are asserted directly, so the test fails on the *reason* and not only
+    /// on the refusal.
+    @Test
+    func aDanglingSymbolicLinkAtTheDestinationIsAnOccupiedDestination() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("scan1.pdf")
+        try write("bytes", to: source)
+        let dangling = root.appendingPathComponent("invoice-march.pdf")
+        try FileManager.default.createSymbolicLink(
+            at: dangling,
+            withDestinationURL: root.appendingPathComponent("nothing-here.pdf")
+        )
+        let executor = makeExecutor(root: root)
+
+        // The premise, and the reason the probe is not `fileExists`.
+        #expect(FileManager.default.fileExists(atPath: dangling.path) == false)
+        #expect((try? FileManager.default.attributesOfItem(atPath: dangling.path)) != nil)
+
+        #expect(
+            throws: AgentExecutionError.invalidPlan(
+                "There is already something called invoice-march.pdf in \(root.path). Sonny will not replace it — pick a different name."
+            )
+        ) {
+            _ = try executor.preview(plan: renamePlan(source: source, to: "invoice-march.pdf"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() == ["invoice-march.pdf", "scan1.pdf"])
+    }
+
     /// A rename outside the whitelist is refused by the whitelist, which is the door that already
     /// owns that question. Here so that a future change to `renameSpec` cannot quietly stop asking
     /// it — the containment check is the one thing between a rename and the whole filesystem.

@@ -111,10 +111,19 @@ extension AgentOperation {
 
         case .rename:
             // **Safe, and the reasoning is the collision rule rather than a judgement about how bad
-            // a second rename would be** (SONNY-385). Repeating a rename that already finished finds
-            // no source and fails; repeating one where the user has since put a new file at the old
-            // path finds the destination occupied and is refused by name. Neither outcome destroys
-            // anything, and neither reaches anyone but the user, which is this classification's bar.
+            // a second rename would be** (SONNY-385). Repeating a rename that already finished is
+            // refused with the collision message, naming the renamed file as the thing already
+            // there; repeating one where the user has since put a new file at the old path is
+            // refused the same way. Neither outcome destroys anything, and neither reaches anyone
+            // but the user, which is this classification's bar.
+            //
+            // **Which door answers, because this said "finds no source and fails" and that is the
+            // wrong one** (PR #200, F3's neighbour F7). A resume re-prepares before it runs, and
+            // `prepare` previews with `requiresExistingSource: false` — so the missing source is
+            // skipped, and `refuseCollision` fires on the renamed file now sitting at the
+            // destination. The not-found answer is `execute`'s, and a resumed run never reaches it.
+            // The classification is unchanged either way; the sentence was describing the second
+            // gate while the first one answers.
             //
             // It is also never a *silent* repeat, which is what this property is actually about:
             // `RenameCapabilityAdapter.assessRisk` raises an unconditional `.destructive`

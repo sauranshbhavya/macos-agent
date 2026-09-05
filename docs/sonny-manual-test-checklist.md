@@ -3524,10 +3524,13 @@ only so the third one collides with what row 2 asks for. Open the packaged app.
       the files in ~/Desktop/rename-check"*. Sonny must come back with a **question you can answer**
       — the clarification panel, with a field to type into — asking what each one should be called
       and saying it renames one at a time. Confirm **nothing in the folder has been renamed**, and
-      that the field really is there and typeable. Then answer it with a single rename ("rename
-      scan2.pdf to scan-two") and confirm that goes through the ordinary approval above. **What
-      would be a finding:** the files being renamed to anything at all; a plain red error instead of
-      a question; or a question with no way to answer it.
+      that the field really is there and typeable. Then answer it with a single rename, **spelling
+      the whole path the way the two rows above do** — *"rename ~/Desktop/rename-check/scan2.pdf to
+      scan-two"* — and confirm that goes through the ordinary approval above. A bare `scan2.pdf`
+      here would be resolved against your home folder, land on `~/scan2.pdf`, and be refused for
+      being outside the folders Sonny is allowed to touch, which is a refusal about the path and not
+      about this feature. **What would be a finding:** the files being renamed to anything at all; a
+      plain red error instead of a question; or a question with no way to answer it.
 
 ## 8. How to report back
 
