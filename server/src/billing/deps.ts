@@ -87,6 +87,22 @@ const BILLING_REQUIREMENTS: readonly (readonly [name: string, read: (config: Con
     ["BILLING_PLANS", (config) => (config.billingPlans === "" ? undefined : config.billingPlans)],
   ];
 
+/**
+ * The names above, and the one whose presence makes them required (SONNY-405).
+ *
+ * **Exported so that `scripts/deploy.sh` can be checked against this list rather than against a copy
+ * of it.** The defect that produced these two constants is what happens without that link: SONNY-216
+ * added `BILLING_PROVIDER_ACCESS_TOKEN` to the array above, nothing carried it -- or any of the
+ * others -- into the deploy script's passthrough, and the founders' three billing rows could not be
+ * run against the only local gateway this repository documents. `test/deploy-passthrough.test.ts`
+ * reads these two and fails until every one of them is forwarded, so a sixth requirement added here
+ * arrives at that test rather than at a founder's 404.
+ */
+export const BILLING_TRIGGER = "BILLING_PROVIDER";
+export const BILLING_REQUIREMENT_NAMES: readonly string[] = BILLING_REQUIREMENTS.map(
+  ([name]) => name,
+);
+
 export function billingDepsFrom(config: Config): BillingDeps | undefined {
   if (config.billingProvider === undefined) return undefined;
   const missing = BILLING_REQUIREMENTS.filter(([, read]) => read(config) === undefined).map(
