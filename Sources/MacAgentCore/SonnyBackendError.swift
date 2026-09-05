@@ -162,6 +162,24 @@ public struct SonnyBackendAPIError: Error, Equatable, Sendable {
     public let requestID: String?
     public let retryAfter: TimeInterval?
     public let envelopeSaysRetryable: Bool
+    /// §7.1's `upgrade_url`, present on `version.unsupported` and absent everywhere else.
+    ///
+    /// **The one field of the envelope that is displayed — as a destination, never as words**
+    /// (SONNY-204 added it to the contract for exactly this, SONNY-402 is what reads it). §8.3 puts
+    /// it in the *error* body rather than leaving it to `GET /v1/meta` because a client this old may
+    /// not be able to parse that document at all, so the refusal has to carry everything the app
+    /// needs to act.
+    ///
+    /// **Kept as the wire string rather than a `URL`**, so this type stays a faithful reading of the
+    /// envelope. ``ClientUpgradeLink/openable(_:)`` is the one place it becomes something the app
+    /// will open, and `ClientVersionState` is where the result is carried.
+    ///
+    /// **Defaulted to `nil`, which is the one default in this file and is argued rather than
+    /// assumed.** SONNY-240's rule against defaults is about a value that reaches the founder's real
+    /// data by silence; this is a wire field that is genuinely absent on twenty of the twenty-one
+    /// codes, and the production construction site — `SonnyBackendClient.errorEnvelope` — passes it
+    /// explicitly. Requiring it would edit a dozen fixtures to write `nil`.
+    public let upgradeURL: String?
 
     public init(
         code: SonnyBackendErrorCode,
@@ -169,7 +187,8 @@ public struct SonnyBackendAPIError: Error, Equatable, Sendable {
         message: String,
         requestID: String?,
         retryAfter: TimeInterval?,
-        envelopeSaysRetryable: Bool
+        envelopeSaysRetryable: Bool,
+        upgradeURL: String? = nil
     ) {
         self.code = code
         self.statusCode = statusCode
@@ -177,6 +196,7 @@ public struct SonnyBackendAPIError: Error, Equatable, Sendable {
         self.requestID = requestID
         self.retryAfter = retryAfter
         self.envelopeSaysRetryable = envelopeSaysRetryable
+        self.upgradeURL = upgradeURL
     }
 
     public var isRetryable: Bool {

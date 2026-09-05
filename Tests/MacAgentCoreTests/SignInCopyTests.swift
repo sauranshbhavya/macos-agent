@@ -45,6 +45,10 @@ struct SignInCopyTests {
         #expect(!SignInCopy.message(for: .outOfAllowance).contains("Try again"))
         #expect(SignInCopy.message(for: .notConfigured) == "Sign-in isn't available in this build.")
         #expect(SignInCopy.message(for: .signedOut) == "You're signed out. Sign in again.")
+        #expect(SignInCopy.message(for: .updateRequired) == "This version of Sonny is too old. Update to carry on.")
+        // Never "try again": a `410 version.unsupported` is not retryable and never becomes so by
+        // waiting, which is the whole reason it stopped falling through to `.unexpected`.
+        #expect(!SignInCopy.message(for: .updateRequired).contains("Try again"))
         #expect(SignInCopy.message(for: .unexpected) == "Sonny couldn't finish signing you in. Try again.")
         #expect(SignInCopy.signedOutLocallyOnly == "Signed out on this Mac. Sonny couldn't finish signing you out everywhere.")
     }
@@ -130,6 +134,13 @@ struct SignInCopyTests {
         ("server.error", SignInFailure.backendUnreachable),
         ("server.unavailable", SignInFailure.backendUnreachable),
         ("entitlement.required", SignInFailure.unexpected),
+        // **`version.unsupported` used to be in the arm above and is a named failure now**
+        // (SONNY-402). `server/src/version/gate.ts` is registered before the auth gate and covers
+        // every route, so this refusal really does arrive on the three unauthenticated sign-in
+        // routes — and `.unexpected`'s sentence invites a retry of the one code §9.3 defines as
+        // permanent. Its words are `ClientVersionCopy`'s, because the same build meets the same wall
+        // in the widget and in Command Center.
+        ("version.unsupported", SignInFailure.updateRequired),
         ("something.new_in_a_later_version", SignInFailure.unexpected)
     ])
     func everyBackendCodeMapsToOneNamedFailure(code: String, expected: SignInFailure) {

@@ -38,7 +38,11 @@ enum SonnyBackendFixtures {
         message: String = "Server-authored sentence the client must never display.",
         retryable: Bool = false,
         retryAfterSeconds: Double? = nil,
-        requestID: String = "req_abc"
+        requestID: String = "req_abc",
+        /// §7.1's one conditional field, present on `version.unsupported` alone (SONNY-204).
+        /// Omitted rather than written as null when absent, which is what `errorBody` does on the
+        /// server (`server/src/errors.ts` spreads the key in rather than assigning `undefined`).
+        upgradeURL: String? = nil
     ) -> Data {
         var error: [String: Any] = [
             "code": code,
@@ -47,7 +51,26 @@ enum SonnyBackendFixtures {
             "request_id": requestID
         ]
         error["retry_after_seconds"] = retryAfterSeconds ?? NSNull()
+        if let upgradeURL { error["upgrade_url"] = upgradeURL }
         return try! JSONSerialization.data(withJSONObject: ["error": error])
+    }
+
+    /// §8.3's `/v1/meta` document, as `server/src/routes/meta.ts` sends it.
+    static func metaDocumentJSON(
+        apiVersion: String = "1.0",
+        minimumSupportedClient: String = "1.0.0",
+        recommendedClient: String = "1.0.0",
+        upgradeURL: String = "https://sonny.example.com/download",
+        serverTime: String = "2026-09-04T09:41:07Z"
+    ) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "api_version": apiVersion,
+            "minimum_supported_client": minimumSupportedClient,
+            "recommended_client": recommendedClient,
+            "upgrade_url": upgradeURL,
+            "server_time": serverTime,
+            "entitlement_keys": []
+        ])
     }
 
     static func storedTokens(

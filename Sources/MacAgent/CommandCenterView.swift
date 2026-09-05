@@ -1020,7 +1020,12 @@ private struct CommandCenterAttentionPanel: View {
     private enum AttentionState {
         case permission(RiskApprovalRequest)
         case clarification(String)
+        /// §8.3's wall and §8.4's warning (SONNY-402). Two cases rather than one, because they sit
+        /// in two different places in the precedence and differ in nothing else — the panel below
+        /// draws both from the same value.
+        case tooOld(ClientVersionPrompt)
         case failure(String)
+        case updateAvailable(ClientVersionPrompt)
     }
 
     private var state: AttentionState? {
@@ -1030,8 +1035,23 @@ private struct CommandCenterAttentionPanel: View {
         if let question = viewModel.clarificationQuestion {
             return .clarification(question)
         }
+        // **The widget's own positions for these two, mirrored** (SONNY-402). The wall sits above
+        // the failure branch there and here, because a `410 version.unsupported` is the one refusal
+        // §9.3 defines as permanent and the failure row offers Retry; the warning sits last there
+        // and here, because everything still works in that band and it must not take the surface
+        // from anything about a task. The widget's chain has four screen-control states and a resume
+        // offer between them that this enum deliberately has no counterpart for — the mirroring is
+        // of the precedence, not of the panels (`.claude/rules/macagent-ui-conventions.md`).
+        if viewModel.isTooOldForThisBackend,
+           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
+            return .tooOld(prompt)
+        }
         if let error = viewModel.errorMessage, !viewModel.isRunning {
             return .failure(error)
+        }
+        if viewModel.showsUpdateAvailablePrompt,
+           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
+            return .updateAvailable(prompt)
         }
         return nil
     }
@@ -1046,6 +1066,8 @@ private struct CommandCenterAttentionPanel: View {
                     clarificationContent(question)
                 case .failure(let message):
                     failureContent(message)
+                case .tooOld(let prompt), .updateAvailable(let prompt):
+                    versionContent(prompt)
                 }
             }
             .padding(.horizontal, 12)
@@ -1067,6 +1089,10 @@ private struct CommandCenterAttentionPanel: View {
         case .failure:
             return SonnyTheme.danger
         default:
+            // Both version states take the warning tone rather than the danger one, including the
+            // wall: nothing has gone wrong and nothing is lost — this build has been outrun, and the
+            // press it asks for is an ordinary one. `.danger` is reserved on this panel for a run
+            // that failed and for the control that stops a session driving the screen.
             return SonnyTheme.warning
         }
     }
@@ -1207,6 +1233,45 @@ private struct CommandCenterAttentionPanel: View {
             }
             .buttonStyle(CommandCenterRowActionStyle())
             .disabled(!viewModel.canSendClarificationAnswer)
+        }
+    }
+
+    /// §8's two version states, in System A (SONNY-402).
+    ///
+    /// **Every word comes from `ClientVersionCopy.prompt(for:)` and none is written here.** The
+    /// widget's `WidgetVersionPanel` is the System B counterpart and reads the same value; the two
+    /// views cannot be shared, because neither token set may cross into the other's surface, so the
+    /// sentence is what has one owner —
+    /// `ScreenControlSessionPresentation`'s rule for the session line, applied to this state.
+    ///
+    /// The Update control appears only when the prompt carries a label, which is only when the state
+    /// carries a link this app will open (founder decision, 2026-09-04). Dismiss appears only on the
+    /// warning; the wall has no way out but updating.
+    @ViewBuilder
+    private func versionContent(_ prompt: ClientVersionPrompt) -> some View {
+        header(icon: "arrow.down.circle", title: prompt.title)
+
+        Text(prompt.message)
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .fixedSize(horizontal: false, vertical: true)
+
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+
+            if let dismissLabel = prompt.dismissLabel {
+                Button(dismissLabel) {
+                    viewModel.dismissUpdateAvailablePrompt()
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+            }
+
+            if let updateLabel = prompt.updateLabel {
+                Button(updateLabel) {
+                    viewModel.openClientVersionLink()
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+            }
         }
     }
 

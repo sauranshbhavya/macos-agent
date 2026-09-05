@@ -33,6 +33,17 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
     case notConfigured
     /// The stored session is gone — revoked, reused, or attributable to no live account.
     case signedOut
+    /// This build is below the deployment's `minimum_supported_client`. §7.2's `version.unsupported`
+    /// (SONNY-402).
+    ///
+    /// **Reachable on the sign-in routes, which is why it is here and not only in the app's own
+    /// version state.** `server/src/version/gate.ts` is registered *before* the auth gate and covers
+    /// every route, so a six-month-old build meets this refusal at the moment it tries to sign in.
+    /// Until this case existed the code fell into `.unexpected`, whose sentence is "Sonny couldn't
+    /// finish signing you in. Try again." — an invitation to retry a refusal that is defined as
+    /// permanent, and the exact non-answer §8.3 exists to replace with "a definite, actionable
+    /// state".
+    case updateRequired
     /// Anything this build does not recognise, including a `code` added after it shipped.
     case unexpected
 
@@ -72,8 +83,10 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
         case .providerUnavailable, .providerTimeout, .providerRejected, .serverError,
              .serverUnavailable:
             self = .backendUnreachable
+        case .versionUnsupported:
+            self = .updateRequired
         case .entitlementRequired, .entitlementExpired, .entitlementNoSubscription,
-             .requestTooLarge, .resourceNotFound, .idempotencyConflict, .versionUnsupported,
+             .requestTooLarge, .resourceNotFound, .idempotencyConflict,
              .unknown:
             // None of these is reachable on the three unauthenticated auth routes, and a code this
             // build has never heard of is not something to guess at in front of a user.
@@ -112,6 +125,10 @@ public enum SignInCopy {
             return "Sign-in isn't available in this build."
         case .signedOut:
             return "You're signed out. Sign in again."
+        case .updateRequired:
+            // One owner for the wall's sentence. The same condition reaches the sign-in sheet, the
+            // widget and Command Center, and two literals would be two sentences about one state.
+            return ClientVersionCopy.tooOldMessage
         case .unexpected:
             return "Sonny couldn't finish signing you in. Try again."
         }
