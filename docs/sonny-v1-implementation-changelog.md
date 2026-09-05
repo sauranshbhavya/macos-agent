@@ -214,7 +214,7 @@ Files changed:
 - `Sources/MacAgentCore/AgentActionExecutor.swift` — the clarification conversion in `prepare`, the shared `clarification(question:)` helper, and the rename workflow and its dispatch in `preview` and `execute`.
 - `Sources/MacAgentCore/PlanScopedResources.swift`, `Sources/MacAgentCore/ResumeRepeatSafety.swift`, `Sources/MacAgentCore/DefaultCapabilityAdapters.swift`.
 - `Sources/MacAgent/AgentActivityPresentation.swift` — the step's title.
-- `Tests/MacAgentCoreTests/RenameTests.swift` (new), `ConsequenceRuleTests.swift`, `ItemJobTests.swift`, `CapabilityRegistryTests.swift`, `EgressClassificationTests.swift`, `RunUnitProgressTests.swift`, `WorkspaceScopeTests.swift`, `PlannerBoundaryTests.swift`, `AgentPlanSchemaFixtureTests.swift`, `AutomationStoresTests.swift`, `SpokenPathTests.swift`.
+- `Tests/MacAgentCoreTests/RenameTests.swift` (new), `AgentPlanDecoderTests.swift`, `ConsequenceRuleTests.swift`, `ItemJobTests.swift`, `CapabilityRegistryTests.swift`, `EgressClassificationTests.swift`, `RunUnitProgressTests.swift`, `WorkspaceScopeTests.swift`, `PlannerBoundaryTests.swift`, `AgentPlanSchemaFixtureTests.swift`, `AutomationStoresTests.swift`, `SpokenPathTests.swift`.
 - `server/test/fixtures/agent-plan-schema.json` (regenerated), `server/test/anthropic.test.ts` (two numerals, under the ratified exception below).
 - `docs/sonny-manual-test-checklist.md`, `docs/sonny-v1-implementation-changelog.md`.
 
