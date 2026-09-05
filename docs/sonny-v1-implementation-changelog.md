@@ -266,9 +266,27 @@ Files changed:
   `Tests/MacAgentTests/MemoryCommandCenterTests.swift`
 - `docs/sonny-manual-test-checklist.md`, and this entry
 
-Tests: figures recorded in this branch's closing comment on SONNY-404 and re-measured at the head
-that merges, per WORKFLOW.md step 7. Both halves are owed: this diff touches `Sources/`, `Tests/`
-and `server/`.
+Tests: every figure below is stamped at **`75f0c7cf`**, the commit carrying all the code; the head is
+one docs-only commit above it, and the check a reader re-runs is
+`git diff --name-only 75f0c7cf HEAD -- Sources Tests Package.swift server | wc -l` -> 0 against the
+same command with no pathspec, which fires. Both halves are owed and both were run: this diff touches
+`Sources/`, `Tests/` and `server/`.
+
+- Flagged Swift suite (CLAUDE.md's exact command) — passed, **2946 tests in 199 suites, 8 known
+  issues**. Main's baseline at `6cc9e189` was 2929 in 198 with the same 8, so this branch adds 17
+  tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `75f0c7cf` (clean), whole
+  population recompiled, 141s.
+- `scripts/mutate` — **15 mutants, 15 killed, 0 survived, 0 unattributed**, in three runs because the
+  two halves take different suite commands: 9 app-half mutants, M6 re-run alone after its first
+  spelling failed to build (a build failure is not test evidence — the early `return` it ended the
+  function with left the `if` below it in expression position), and 5 gateway mutants under
+  `MUTATE_TEST_CMD` with a lane-named Postgres. Fourteen of the fifteen were killed by named tests;
+  every one names at least one.
+- `scripts/changelog-order` — **exit 0**, "in merge order, 175 entries, both eras".
+- Server half — `npm run build` exit 0, `npm test` exit 0 with **806 passed / 411 skipped**,
+  `npm run typecheck` exit 0, `npm run check:secrets` exit 0, and `npm run test:db` **1217 passed**
+  against a lane-named Postgres.
 
 Behavior added:
 - *Delete what Sonny did on screen* deletes that task's screenshots from the gateway too — the live
