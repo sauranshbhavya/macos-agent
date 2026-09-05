@@ -96,6 +96,21 @@ describeDb("migrations against a real Postgres", () => {
    * function bodies are all in it, so a migration whose only effect is a `CREATE OR REPLACE
    * FUNCTION` still registers.
    */
+  /**
+   * Triggers, columns, indexes, functions **and CHECK constraints**.
+   *
+   * **The last of those was added by SONNY-404, because a migration that moves only a constraint was
+   * invisible here.** `0021_a_wipe_leaves_the_account_open` widens one CHECK and adds no column,
+   * index, trigger or function, so rolling it back left this fingerprint byte-identical and the
+   * assertion below — that a rollback actually changes the schema — failed against a rollback that
+   * had worked perfectly. The direction that matters is the other one, though: without this arm a
+   * rollback that silently *kept* a constraint reads exactly like one that removed it, and a CHECK
+   * is the kind of schema change whose absence stays invisible until a row that should have been
+   * refused lands. `0020` moved a CHECK too and passed only because it added columns beside it.
+   *
+   * `contype = 'c'` is real CHECKs; NOT NULL is not a `pg_constraint` row on this server version, so
+   * this adds no noise that would make every column change register twice.
+   */
   const schemaFingerprint = async (): Promise<string> => {
     const { rows } = await client.query<{ line: string }>(
       `SELECT line FROM (
@@ -113,6 +128,11 @@ describeDb("migrations against a real Postgres", () => {
          SELECT 'function:' || p.proname || ':' || md5(p.prosrc)
            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'sonny'
+         UNION ALL
+         SELECT 'check:' || c.conrelid::regclass::text || '.' || c.conname || ':'
+                || pg_get_constraintdef(c.oid)
+           FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+          WHERE n.nspname = 'sonny' AND c.contype = 'c'
        ) parts ORDER BY line`,
     );
     return rows.map((r) => r.line).join("\n");
