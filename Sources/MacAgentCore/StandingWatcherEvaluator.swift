@@ -113,18 +113,43 @@ public enum StandingWatcherEvaluator {
 
     /// What one successful reading means.
     ///
-    /// The state machine, written out because it is the feature:
+    /// The state machine, written out because it is the feature. **Every branch compares against the
+    /// reading before it, not against the baseline** (SONNY-390):
     ///
-    /// - equal to the baseline — nothing has happened. Any candidate is dropped and the instability
-    ///   count resets, because a page that has come back to its baseline was churning rather than
-    ///   changing.
-    /// - different, with no candidate — the first sighting. Recorded, **not** notified.
-    /// - different, and equal to the candidate — the change held across two consecutive readings.
-    ///   Stop and tell the user.
-    /// - different, and different from the candidate — the page does not look the same twice. The new
-    ///   reading becomes the candidate and the instability count rises; at `maxUnstableReadings` the
-    ///   page is declared unwatchable rather than polled to the end of its lifetime and then reported
-    ///   as unchanged.
+    /// - equal to the previous reading, and equal to the baseline — the page held still. The
+    ///   instability count resets.
+    /// - equal to the previous reading, and different from the baseline — the change held across two
+    ///   consecutive readings. Stop and tell the user. This is the two-reading rule and it is
+    ///   untouched: a real change is still notified on the second identical reading.
+    /// - different from the previous reading — the page moved, and the instability count rises,
+    ///   whichever direction it moved in. At `maxUnstableReadings` the page is declared unwatchable
+    ///   rather than polled to the end of its lifetime.
+    ///
+    /// **A return to the baseline is a movement, and that is the whole of SONNY-390's change.** It
+    /// used to reset the count, so a page alternating between its baseline and one other reading was
+    /// never `.changed` — the two never land consecutively — and never `.unwatchable` either, because
+    /// every return reset the counter. It polled for its whole seven days and told the user nothing.
+    /// Counting the return makes it `.unwatchable` on the fourth check.
+    ///
+    /// **What forgives an ordinary page that wobbles, measured rather than assumed** (the corpus is
+    /// on SONNY-390: 21 archetypes plus two randomized populations at 2000 seeded trials each, one
+    /// watcher life of 672 checks apiece). The reset is on *any* pair of consecutive equal readings
+    /// rather than on a confirmed change alone, which is the shape `consecutiveFailures` already has.
+    /// The ticket's own proposal reset only on a confirmed pair, and that accumulates: a single
+    /// one-check wobble costs two increments — one leaving the baseline and one returning — so it
+    /// declared a page wobbling once a day unwatchable on check 193, and one wobbling once an hour on
+    /// check 9. With this reset every wobble rate from hourly to fortnightly reads exactly as it did
+    /// before the change.
+    ///
+    /// **Where it fails, since four consecutive differences is what it counts:** two one-off wobbles
+    /// separated by exactly one stable reading — `w`, baseline, `w`, baseline — end the watcher,
+    /// where the old rule carried it. That is 45 minutes of local alternation, and at check four it
+    /// is indistinguishable from a page that will alternate all week, so any rule meeting the
+    /// four-check requirement calls both unwatchable. Two *adjacent* wobbles are forgiven; two
+    /// wobbles two or more stable readings apart are forgiven.
+    ///
+    /// The candidate is still what a difference is recorded in, so `candidateDigest ?? baselineDigest`
+    /// is the previous reading and no new stored field was needed.
     public static func apply(
         reading: String,
         to watcher: StandingWatcher,
@@ -136,13 +161,17 @@ public enum StandingWatcherEvaluator {
         // A reading arrived, so whatever the last few checks did, the page is reachable.
         updated.consecutiveFailures = 0
 
-        guard reading != watcher.baselineDigest else {
-            updated.candidateDigest = nil
-            updated.unstableReadings = 0
-            return .unchanged(updated)
-        }
+        // The reading this one is compared against. It needs no field of its own: a difference is
+        // stored in the candidate and a baseline match clears it, so this expression names the last
+        // reading seen, and every branch below leaves it naming this one.
+        let previousReading = watcher.candidateDigest ?? watcher.baselineDigest
 
-        if reading == watcher.candidateDigest {
+        if reading == previousReading {
+            guard reading != watcher.baselineDigest else {
+                updated.candidateDigest = nil
+                updated.unstableReadings = 0
+                return .unchanged(updated)
+            }
             // Promoted. The baseline moves to the confirmed reading so the record the caller
             // notifies from describes the page as it now is, even though that record is about to be
             // deleted — a stopped watcher handed to a notifier should not still claim the old page.
@@ -152,17 +181,27 @@ public enum StandingWatcherEvaluator {
             return .stopped(updated, .changed)
         }
 
-        updated.candidateDigest = reading
-        // Set once and never cleared — `.expired`'s sentence reads it, and every other record of a
-        // difference on this type is reset by a reading equal to the baseline (F4).
-        if updated.firstDifferenceAt == nil {
-            updated.firstDifferenceAt = now
-        }
         updated.unstableReadings = watcher.unstableReadings + 1
+        let returnedToBaseline = reading == watcher.baselineDigest
+        if returnedToBaseline {
+            updated.candidateDigest = nil
+        } else {
+            updated.candidateDigest = reading
+            // Set once and never cleared — `.expired`'s sentence reads it, and the counter beside it
+            // is reset by any pair of equal readings (F4).
+            if updated.firstDifferenceAt == nil {
+                updated.firstDifferenceAt = now
+            }
+        }
+        // The guard is reached from both directions on purpose. Were it on the difference branch
+        // alone, an alternating page would spend its fourth increment on a baseline reading that
+        // could not stop it, and the ticket's four checks would be five.
         guard updated.unstableReadings < limits.maxUnstableReadings else {
             return .stopped(updated, .unwatchable)
         }
-        return .pending(updated)
+        // A reading equal to the baseline still reads as the page the user asked about, so it is
+        // `.unchanged` even though the count advanced. The single caller saves on both.
+        return returnedToBaseline ? .unchanged(updated) : .pending(updated)
     }
 
     /// What one failed reading means.

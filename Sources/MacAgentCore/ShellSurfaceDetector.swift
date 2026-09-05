@@ -240,7 +240,27 @@ struct ShellSurfaceDetector {
     /// pass that costs hundreds of milliseconds, inside a loop that already sleeps 800 ms between
     /// iterations. Signals that are fixed strings do use `String.contains`, which is not a prefilter
     /// — there the literal *is* the whole check, so there is nothing for it to drift from.
-    static func verdict(for text: String) -> ShellSurfaceVerdict {
+    static func verdict(for recognizedText: String) -> ShellSurfaceVerdict {
+        // **Folded before anything is matched** (SONNY-277). Every pattern below is exact over
+        // ASCII, and the recognizer that produces this text substitutes look-alikes from other
+        // scripts for Latin letters — SONNY-260 measured four of them in one reading. A look-alike
+        // inside `sudo` or inside a prompt's host name is a signal that does not fire, and the
+        // refusal needs two, so one lost signal can be the difference between refusing to act inside
+        // a shell and acting. `SecretTextDetector` folds two calls above this one in
+        // `LocalRedactionService.redactCapture` for the same reason; this closes the asymmetry.
+        //
+        // **Here rather than at the two call sites**, so that the property belongs to the detector
+        // and a third caller cannot arrive without it. Nothing maps back: a verdict carries signal
+        // names and no ranges, which is what makes this cheaper than the secret detector's fold.
+        //
+        // **What it is worth, stated rather than implied by its arrival.** Measured over the seven
+        // realistic capture sizes SONNY-260 pinned, the recognizer substituted *no* foldable scalar
+        // at any of them — so this is bought as a boundary property, not as a fix for a failure
+        // anybody has seen at a realistic size. Its measured cost is likewise zero: all 38 fixtures
+        // in `ShellSurfaceDetectorTests.corpus` produce the same verdict folded and unfolded. The
+        // figures and the control that fires are on SONNY-277.
+        let text = LatinConfusables.fold(recognizedText).text
+
         // Computed once and shared: two signals read it, and it is the most expensive thing here.
         let prompts = promptRanges(in: text)
 
@@ -305,7 +325,50 @@ struct ShellSurfaceDetector {
         for match in text.matches(of: arrowPrompt) { ranges.append(match.range) }
         for match in text.matches(of: powerShell) { ranges.append(match.range) }
         ranges.append(contentsOf: minimalPromptRanges(in: text))
+        ranges.append(contentsOf: sectionSignPromptRanges(in: text))
         return ranges
+    }
+
+    /// Address-form prompts whose terminating sigil is `\u{00A7}` rather than `$`, `%` or `#` — which
+    /// count only when the document holds at least ``minimumMinimalPromptLines`` of them.
+    ///
+    /// **Why the section sign is here at all** (SONNY-277). The measuring round rendered a terminal
+    /// panel at the seven realistic capture sizes SONNY-260 pinned and read it with the shipped
+    /// recognizer: at the three smallest font sizes — 12 pt and 13 pt — Vision reads the prompt's `%`
+    /// as U+00A7 SECTION SIGN, and the verdict collapsed from two signals to **none**, on a panel
+    /// with `sudo rm -rf .build` typed at it. A whole refusal lost to one glyph, at three sizes out
+    /// of seven. `sectionSignPanel` in the test corpus is that recognizer output verbatim. It is the
+    /// same defect as the look-alike fold in ``verdict(for:)``, arriving through a character no
+    /// letter fold can reach — `LatinConfusables` requires source and target to both be letters, and
+    /// `\u{00A7}` to `%` is symbol to symbol.
+    ///
+    /// **Why it is weaker evidence than the other three sigils, and gets the repetition rule that
+    /// `minimalPromptRanges` already applies for the same reason.** `\u{00A7}` is a live character in
+    /// ordinary prose — a section mark — and the address form is not specific enough to carry it
+    /// alone: "Write to counsel@acme.example about \u{00A7} 12 before Friday" has an address, a path-shaped
+    /// token and a section sign separated by spaces, which *is* the spaced form's shape. That
+    /// sentence is a fixture in the corpus, and it is how this was found — the first version of this
+    /// change admitted `\u{00A7}` into the three address patterns directly and that line gained a prompt.
+    ///
+    /// **The repetition costs nothing in the case this exists for, which is why it is the right
+    /// guard rather than a compromise.** A scrollback repeats its prompt, and the failure only
+    /// matters when *most* of a panel's prompts are misread: one misread sigil among four leaves
+    /// three ordinary `%` prompts that match without any of this. Measured on the three failing
+    /// sizes, the recognizer emitted 2, 3 and 4 section signs, so every one clears the floor.
+    ///
+    /// No trailing-bare-prompt requirement, unlike ``minimalPromptRanges``: that rule exists to tell
+    /// a comment block from a scrollback where the sigil is the *only* evidence, and here the
+    /// address and path in front of it have already done that work.
+    private static func sectionSignPromptRanges(in text: String) -> [Range<String.Index>] {
+        let colonForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]{0,80}\u{00A7}(?=[ \t]|$)/
+        let spacedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}[ \t]+\u{00A7}(?=[ \t]|$)/
+        let bracketedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}\]\u{00A7}(?=[ \t]|$)/
+
+        var hits: [Range<String.Index>] = []
+        for match in text.matches(of: colonForm) { hits.append(match.range) }
+        for match in text.matches(of: spacedForm) { hits.append(match.range) }
+        for match in text.matches(of: bracketedForm) { hits.append(match.range) }
+        return hits.count >= minimumMinimalPromptLines ? hits : []
     }
 
     /// Prompts that are nothing but a sigil — `$ `, `% ` — which are only prompts when they repeat

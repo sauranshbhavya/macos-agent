@@ -55,6 +55,11 @@ public struct StandingWatcherLimits: Equatable, Sendable {
     /// produce the two consecutive identical readings a notification needs, so without this it would
     /// poll to `maxLifetime` and then report "nothing changed", which is false. Saying "I cannot
     /// watch this one" is the honest answer and it is available within the hour.
+    ///
+    /// **Four is also what decides the one page SONNY-390's rule gets wrong**, so it is not a free
+    /// number to raise: two one-off wobbles separated by one stable reading are four consecutive
+    /// differences and end the watcher. Raising this forgives that page and delays the alternating
+    /// page the founders asked to catch in four checks; the two move together and always will.
     public var maxUnstableReadings: Int
 
     /// How long one check may be in flight before it is abandoned and counted as a failed reading.
@@ -196,27 +201,30 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
     /// rotation over a small pool of `k` variants supplies two consecutive equal readings with
     /// probability about `1/k` on each check while a candidate is held, and a watcher gets up to
     /// `maxLifetime / checkInterval` checks — so for a small pool a false "changed" is likely rather
-    /// than remote. `maxUnstableReadings` is the only thing racing it, and it is the weaker of the
-    /// two: it needs four consecutive readings each differing from the last, and any reading equal to
-    /// the baseline resets it — which a rotation whose pool includes the baseline's own variant
-    /// supplies regularly. The two mechanisms pull against each other and the reset weakens the one
-    /// that protects the user.
+    /// than remote. `maxUnstableReadings` is the only thing racing it.
     ///
-    /// **And a page alternating between the baseline and one other reading is neither.** It is never
-    /// `.changed`, because the two never land consecutively, and never `.unwatchable`, because every
-    /// return to the baseline resets the count — so it runs to `maxLifetime` and then says "It did
-    /// not change", which is the sentence `.unwatchable` exists to avoid.
+    /// **SONNY-390 made it the stronger of the two rather than the weaker.** The counter used to be
+    /// reset by any reading equal to the baseline, which a rotation whose pool includes the
+    /// baseline's own variant supplies regularly; it now counts a return to the baseline as the
+    /// movement it is, and resets only on two consecutive equal readings. Measured over 2000 seeded
+    /// trials of one 672-check watcher life per point, the false `changed` rate falls from 100.0% to
+    /// 84.6% at `k = 2`, from 78.2% to 52.9% at `k = 4` and from 39.1% to 28.6% at `k = 8` — the
+    /// page is stopped as unwatchable before the rotation gets its coincidence. The corpus is on
+    /// SONNY-390 and `StandingWatcherEvaluator.apply` carries the rule.
     ///
-    /// Whether to strengthen this — counting a reading that differs from the *previous* reading
-    /// toward instability rather than resetting on any baseline match, or requiring three consecutive
-    /// readings — is a founder decision recorded on SONNY-236 rather than a session's to take.
+    /// **A page alternating between the baseline and one other reading used to be neither.** It is
+    /// never `.changed`, because the two never land consecutively, and it used to be never
+    /// `.unwatchable` either, because every return to the baseline reset the count — so it ran to
+    /// `maxLifetime` and said "It did not change", the sentence `.unwatchable` exists to avoid. It
+    /// now stops as `.unwatchable` on the fourth check.
     ///
     /// The cost that is certain is stated rather than hidden: notification is one `checkInterval`
     /// later than the change.
     public var candidateDigest: String?
 
-    /// How many readings in a row have differed from the baseline and from each other. Reset by any
-    /// reading equal to the baseline, and by a promotion.
+    /// How many readings in a row have differed from the reading before them — in either direction,
+    /// so a return to the baseline counts (SONNY-390). Reset by any two consecutive readings that
+    /// agree, which includes a promotion.
     public var unstableReadings: Int
 
     /// How many checks in a row have failed to read the page at all. Reset by any successful read.
@@ -227,11 +235,10 @@ public struct StandingWatcher: Codable, Equatable, Sendable, Identifiable {
     /// **Set once and never cleared, which is the whole reason it is not derivable from the fields
     /// above** (founder decision on F4, PR #184). `.expired` may no longer assert "It did not change"
     /// when a difference was *ever* seen, and every candidate for answering that question is reset:
-    /// `candidateDigest` is cleared by any reading equal to the baseline, and so is
-    /// `unstableReadings`. The case F4 is about — a page alternating between the baseline and one
-    /// other reading — lands on either side of that reset depending on which of the two the last
-    /// check happened to see, so a sentence conditioned on them would be right about half the time,
-    /// which is worse than one that is consistently wrong.
+    /// `candidateDigest` is cleared by any reading equal to the baseline, and `unstableReadings` is
+    /// cleared by any two consecutive readings that agree. A page that wobbled once and settled has
+    /// both back at their initial values, so a sentence conditioned on them would be wrong about it,
+    /// and this field is what stays true.
     ///
     /// A date rather than a flag, the rule this record's other lifecycle facts follow: it answers
     /// "when" as well as "whether" at no extra cost, and a file written before this field existed

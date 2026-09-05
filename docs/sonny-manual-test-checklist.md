@@ -3203,6 +3203,27 @@ what you will see is the storage banner rather than a watcher.
       pass/fail — the design permits this, and how often it happens in practice is the thing nobody
       has measured. A page with a *visible clock* or a per-load nonce is the case the filter really
       does defeat, and is the better one to try first.
+- [ ] **(SONNY-390)** **An alternating page ends in "cannot watch" within four checks.** This is the
+      row SONNY-390 exists for, and it needs a page you control: put a file on a local web server (or
+      any page you can edit) and set a watcher on it. Then **alternate it** — edit it to a second
+      version, and on the next check edit it back to exactly the first, and keep swapping. At the
+      shortened `checkInterval: 30` a check is every thirty seconds, so swap the file every thirty
+      seconds and give yourself four swaps, about **two minutes**. **Expected: one notification
+      saying Sonny stopped watching it because the page reads differently every time** — the same
+      sentence the rotating-advertisement row above produces. **What would be a finding:** silence
+      (which is the bug this ticket fixes — before it, this page was never reported at all, for the
+      watcher's whole life), or a notification saying the page *changed*, or one saying it did *not*
+      change. Getting the timing exactly right is hard by hand; if you land a swap late and the same
+      version is read twice in a row, you will get a "changed" notification instead, which is correct
+      behaviour and not a finding — start again rather than reporting it.
+- [ ] **(SONNY-390)** **A page that wobbles once is still watched.** The other half, and the one that
+      would break if the forgiveness were wrong. Set a watcher on a page you control, leave it alone
+      for a minute, then change it **once** and change it straight back on the next check — one swap,
+      not a sequence. Then leave it alone for the rest of the ten minutes. **Expected: no
+      notification at all until the lifetime runs out**, and then the expiry sentence. **What would
+      be a finding:** a "reads differently every time" notification from that single wobble — that
+      would mean an ordinary page that flickers once gets abandoned, which is the cost this ticket
+      was required to avoid.
 - [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first seven checks say **nothing**.
       After the eighth — about **four minutes** at a 30-second interval — one notification says
       *Sonny stopped watching “…”. The page could not be read.* A notification per failed fetch is a
@@ -3690,6 +3711,35 @@ deployment has them, rather than reconstructing them later from a ticket.
       deliberately poor connection (macOS Network Link Conditioner, or a phone hotspot with one bar).
       **What would be a finding:** a normal-length command failing on a slow connection. That is the
       one way this change could hurt a real user, and it is the row worth spending the most care on.
+### Sonny refuses to drive a window showing a shell, even when the recognizer misreads it (new 2026-09-05, SONNY-277)
+
+**Needs a packaged build and screen control**, the same as every other screen-control row. What is
+being checked is a *refusal*, so the pass condition is Sonny declining to act — and Sonny is not
+allowed to explain why, so the only thing you will see is that it stops.
+
+The reason this row exists: the check reads the text the on-device recognizer returns, and at small
+font sizes that recognizer reads a terminal's `%` prompt sigil as a **section sign** (§). Measured on
+rendered panels, that happened at three of seven realistic capture sizes, and it took the whole
+refusal with it. The fix is measured against rendered text; **a real screen at your real font size is
+the thing no session can produce**, which is what makes this row worth a person's time rather than a
+formality.
+
+- [ ] **(SONNY-277)** **Refuse a small-font terminal.** Open a terminal — Terminal.app, iTerm, or a
+      VS Code panel — and **set its font as small as you comfortably can** (9–12 pt is the range
+      where this was measured; the smaller the better for this test). Have a prompt visible with a
+      command or two of scrollback above it. Then ask Sonny to do something that needs screen
+      control in that window. **Expected: Sonny does not act inside it.** **What would be a
+      finding:** Sonny going ahead and clicking or typing in that window.
+- [ ] **(SONNY-277)** **The same terminal at a normal font size.** Repeat the row above with the font
+      back at its usual size. **Expected: the same refusal.** This is the control — if the small-font
+      case refuses and this one does not, something is wrong in the opposite direction from the bug.
+- [ ] **(SONNY-277)** **An ordinary page still works.** Open a documentation page that *shows* shell
+      commands — any install guide with `$ npm install` in it — and ask Sonny to do something needing
+      screen control there. **Expected: Sonny acts normally.** **What would be a finding:** Sonny
+      refusing, which would mean the check has started reading pages *about* shells as shells. A
+      legal or academic page full of **§** section marks is the sharpest version of this test if you
+      have one to hand, because the section sign is exactly what this change taught the check to
+      read.
 
 ## 8. How to report back
 

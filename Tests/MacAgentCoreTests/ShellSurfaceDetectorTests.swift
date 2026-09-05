@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import MacAgentCore
@@ -488,10 +489,56 @@ struct ShellSurfaceDetectorTests {
         \u{276F} open the retro
         \u{276F} find owners
         \u{276F}
+        """),
+
+        // **The cost of admitting the section sign as a prompt sigil, bounded** (SONNY-277). It is
+        // accepted only in the address forms, so a legal document carrying section marks — including
+        // one whose last is bare, which is what `minimalPromptRanges` reads as a waiting prompt for
+        // `$` and `%` — stays invisible. This fixture is what would refuse if the sigil were added to
+        // the minimal set instead, and it is the reason it was not.
+        Fixture(name: "a legal page of section marks ending in a bare one (SONNY-277 adversarial)", signals: [], text: """
+        Terms of Service
+
+        \u{00A7} 4.1 The service is provided as is.
+
+        \u{00A7} 4.2 Liability is limited to fees paid.
+
+        \u{00A7}
+        """),
+
+        // A section mark on a line that also carries an address. Not a prompt: no path token sits
+        // between the address and the sigil, which is the guard PR #57 N1 put on the spaced form.
+        Fixture(name: "an address and a section mark in prose (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        The clause priya@acme.io cited is \u{00A7} 3 and it is 82% settled.
         """)
     ]
 
-    static var corpus: [Fixture] { mustRefuse + mustNotRefuse }
+    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
+    /// verbatim joined text of the 800x600 @ 13pt run in `ShellSurfaceLookAlikeFoldTests`, where
+    /// Vision read every `%` sigil as U+00A7 SECTION SIGN. Against the detector at `4a3d0ef6` it
+    /// produced **no signals at all** — a terminal panel with `sudo rm -rf .build` typed at it,
+    /// allowed.
+    static let sectionSignPanel = Fixture(
+        name: "a terminal panel whose sigils the recognizer read as section signs (SONNY-277)",
+        signals: [.interactivePrompt, .commandRunInAShell],
+        text: """
+        PROBLEMS
+        OUTPUT
+        TERMINAL
+        PORTS
+        sauransh@Mac macos-agent \u{00A7} ls
+        README.md Sources
+        Tests docs
+        sauransh@Mac macos-agent \u{00A7} sudo rm -rf .build
+        Password:
+        sauransh@Mac macos-agent \u{00A7} git status
+        On branch main
+        sauransh@Mac macos-agent \u{00A7}
+        """
+    )
+
+    static var corpus: [Fixture] { mustRefuse + mustNotRefuse + [sectionSignPanel] }
 
     // MARK: - The corpus, asserted
 
@@ -1095,5 +1142,152 @@ struct ShellSurfaceVerdictStructureTests {
 
     private static func coreFile(_ name: String) -> URL {
         coreDirectory.appendingPathComponent(name)
+    }
+}
+
+// MARK: - The look-alike fold (SONNY-277)
+
+/// **The measuring round SONNY-277 owes, and the check that keeps its answer true.**
+///
+/// The ticket asks two questions and forbids the change until both are answered: how often the
+/// on-device recognizer substitutes a cross-script look-alike inside a shell prompt or a command
+/// word at realistic capture sizes, and what folding those look-alikes back does to the two-signal
+/// threshold on ordinary pages. SONNY-260 had seen the substitution only at one oversized synthetic
+/// width, so "live gap or theoretical one" was genuinely open.
+///
+/// **The answer, measured here and recorded on the ticket: theoretical for letters, live for the
+/// sigil.** No foldable scalar was emitted at any of the seven realistic sizes — and at the three
+/// smallest the recognizer read the prompt's `%` as U+00A7 SECTION SIGN on every prompt line, which
+/// cost not one signal of two but the whole verdict. The fold is bought as a boundary property; the
+/// sigil is the fix for something that happens.
+///
+/// **Serialized for the reason `LocalRedactionLiveVisionTests` is** (PR #113 review, F5): every test
+/// below drives the shared on-device recognizer, and concurrent `VNRecognizeTextRequest`s stall the
+/// test process rather than failing it — which arrives as a timeout pointing at no assertion.
+@Suite(.serialized)
+struct ShellSurfaceLookAlikeFoldTests {
+    /// The seven realistic capture sizes SONNY-260 pinned for this same recognizer, with their font
+    /// sizes. A measurement at one oversized width is what left this question open, so the sweep is
+    /// the population and no single size is the answer.
+    static let captureSizes: [(name: String, width: Int, height: Int, fontSize: CGFloat)] = [
+        ("1280x800 @ 12pt", 1280, 800, 12),
+        ("1280x800 @ 14pt", 1280, 800, 14),
+        ("1440x900 @ 13pt", 1440, 900, 13),
+        ("1440x900 @ 26pt", 1440, 900, 26),
+        ("2560x1600 @ 26pt", 2560, 1600, 26),
+        ("2880x1800 @ 28pt", 2880, 1800, 28),
+        ("800x600 @ 13pt", 800, 600, 13)
+    ]
+
+    /// A terminal panel that must refuse: a prompt, and commands typed at it.
+    static let scrollback = [
+        "PROBLEMS   OUTPUT   TERMINAL   PORTS",
+        "sauransh@Mac macos-agent % ls",
+        "README.md  Sources  Tests  docs",
+        "sauransh@Mac macos-agent % sudo rm -rf .build",
+        "Password:",
+        "sauransh@Mac macos-agent % git status",
+        "On branch main",
+        "sauransh@Mac macos-agent %"
+    ]
+
+    /// **The frequency measurement, and the regression guard the sigil fix needs.**
+    ///
+    /// Renders the panel at each realistic size, reads it with the shipped recognizer, prints what
+    /// came back, and asserts that the panel is refused — which is the property that was false at
+    /// three of these seven sizes before this branch.
+    ///
+    /// **It asserts what is durable and prints what is not**, which is SONNY-260's rule after a
+    /// fixture was tuned until it passed. Vision improves, so asserting that it *misreads* a glyph
+    /// breaks on an OS update: the assertion is that a real terminal panel refuses however the sigil
+    /// came back, and the scalar counts go to the record. The `§` case is pinned separately and
+    /// exactly, on text the recognizer really produced, by `sectionSignPanel` in the corpus above.
+    @Test(arguments: ShellSurfaceLookAlikeFoldTests.captureSizes.map(\.name))
+    func aRealTerminalPanelIsRefusedAtEveryRealisticCaptureSize(sizeName: String) async throws {
+        let size = try #require(Self.captureSizes.first { $0.name == sizeName })
+        let lineHeight = size.fontSize * 1.6
+        let lines = Self.scrollback.enumerated().map { index, text in
+            (text: text, topLeft: CGPoint(x: 40, y: 40 + CGFloat(index) * lineHeight))
+        }
+        let png = ImageFixtures.renderedTextPNG(
+            width: size.width,
+            height: size.height,
+            lines: lines,
+            fontSize: size.fontSize
+        )
+
+        let observations = try await VisionImageTextRecognizer()
+            .recognizeText(inPNGData: png, pixelWidth: size.width, pixelHeight: size.height)
+        let joined = observations.map(\.string).joined(separator: "\n")
+
+        let nonASCII = joined.unicodeScalars.filter { $0.value >= 0x80 }
+        let foldable = zip(joined.unicodeScalars, LatinConfusables.fold(joined).text.unicodeScalars)
+            .filter { $0 != $1 }
+        let verdict = ShellSurfaceDetector.verdict(for: joined)
+
+        print("SHELL-FOLD-MEASUREMENT \(size.name): observations=\(observations.count) "
+            + "nonASCII=\(nonASCII.count) foldable=\(foldable.count) "
+            + "scalars=[\(nonASCII.map { String(format: "U+%04X", $0.value) }.joined(separator: " "))] "
+            + "signals=\(verdict.signals.map(\.rawValue))")
+
+        // The recognizer returned the panel at all — without this the verdict below is a claim about
+        // an empty string, and a recognizer that returned nothing would look like a detector defect.
+        #expect(observations.count >= Self.scrollback.count - 2, "the panel was read at \(size.name)")
+        #expect(verdict.showsShell, "a real terminal panel must refuse at \(size.name)")
+    }
+
+    /// **The cost measurement: what the fold does to the corpus of ordinary pages.**
+    ///
+    /// The fold turns non-ASCII letters into ASCII ones, so the risk it carries is manufacturing a
+    /// prompt or a command word out of another script — the false-refusal direction, the one that
+    /// stops a user's real work. Measured over the whole corpus rather than a chosen example: every
+    /// fixture's verdict must be identical folded and unfolded.
+    ///
+    /// This is not made vacuous by the fold now living inside `verdict(for:)`: folding is idempotent
+    /// on its own output, so a fixture whose folded and unfolded verdicts differ is still a fixture
+    /// the fold moved.
+    @Test(arguments: ShellSurfaceDetectorTests.corpus.map(\.name))
+    func theFoldChangesNoVerdictOnTheExistingCorpus(name: String) throws {
+        let fixture = try #require(ShellSurfaceDetectorTests.corpus.first { $0.name == name })
+        #expect(
+            ShellSurfaceDetector.verdict(for: LatinConfusables.fold(fixture.text).text).signals == fixture.signals,
+            "the fold moved \(fixture.name)"
+        )
+    }
+
+    /// The same question asked of text the corpus does not contain: ordinary prose in scripts the
+    /// fold reaches. None of it may gain a signal.
+    ///
+    /// **The control is the second half**, a Cyrillic string shaped like a prompt line, which folds
+    /// into one and *does* gain signals. Without it, "the fold changes nothing" would be satisfied by
+    /// a fold that never fires, and every assertion above it would be vacuous.
+    @Test
+    func foldingOrdinaryNonASCIIProseGainsNoSignalAndTheControlFires() {
+        let prose = [
+            "Documentation en fran\u{00E7}ais \u{2014} installez avec le gestionnaire de paquets.",
+            "\u{041F}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442}, \u{044D}\u{0442}\u{043E} \u{0441}\u{0442}\u{0440}\u{0430}\u{043D}\u{0438}\u{0446}\u{0430} \u{0434}\u{043E}\u{043A}\u{0443}\u{043C}\u{0435}\u{043D}\u{0442}\u{0430}\u{0446}\u{0438}\u{0438}.",
+            "\u{00DC}bersicht: 82% der Nutzer haben priya@acme.io 82% open gelesen.",
+            "Se\u{00F1}or Garc\u{00ED}a escribi\u{00F3}: el total es 50% m\u{00E1}s r\u{00E1}pido."
+        ]
+        for line in prose {
+            let scalars = line.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+            #expect(
+                ShellSurfaceDetector.verdict(for: line).signals.isEmpty,
+                "the fold gained a signal on ordinary prose: \(scalars)"
+            )
+        }
+
+        // The control: a prompt line with seven of its Latin letters replaced by the Cyrillic
+        // look-alikes SONNY-260 measured the recognizer emitting. Written as scalars deliberately —
+        // pasting the rendered characters is what `.claude/rules/macagentcore-conventions.md` bans.
+        let disguised = "\u{0455}\u{0430}ur\u{0430}nsh@M\u{0430}\u{0441} m\u{0430}\u{0441}os-\u{0430}gent % ls"
+        #expect(
+            ShellSurfaceDetector.verdict(for: disguised).signals == [.interactivePrompt, .commandRunInAShell],
+            "the fold must recover a panel the recognizer disguised"
+        )
+        #expect(ShellSurfaceDetector.verdict(for: disguised).showsShell, "and it refuses")
+        // And the same string with the fold's job undone by hand is what it looked like before: the
+        // Cyrillic letters are not in `[A-Za-z0-9._-]`, so no address form can match.
+        #expect(disguised.unicodeScalars.contains { $0.value >= 0x80 }, "precondition: it is disguised")
     }
 }
