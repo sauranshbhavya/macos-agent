@@ -2683,21 +2683,35 @@ pointed at it.
       sticking for the rest of the launch; or the panel appearing at all once you restart the gateway
       with `RECOMMENDED_CLIENT=1.0.0` and relaunch the app, which is the row's own control.
 
-- [ ] **(new 2026-09-04, SONNY-402) — the rollback: the wall comes down without quitting the app.**
-      The row above and the row above that, run back to back and **without relaunching in between**,
-      because what this checks is a running app changing its mind. Start with the wall's
-      configuration and leave the app open and showing **Update needed**. Now restart the gateway
-      with the warning's configuration — the minimum lowered to `1.0.0`, the recommendation left at
-      `2.0.0` — and, still without touching the app, run any command that reaches Sonny (a plan, a
-      screen task, anything that is not a purely local utility). **Expect:** the panel changes by
-      itself from **Update needed** to **Update available**, on both surfaces, and the **Not now**
-      button appears where there was none. Everything works again from that moment.
-      **This is the row a review found missing behaviour behind** (PR #202, F1): a served response
-      carrying `Sonny-Deprecation: true` could not take the wall down, and since the warning band is
-      exactly where every response is served *and* carries that header, there was no way back at
-      all — the wall has no dismiss control, so quitting the app was the only exit. **What would be
-      a finding:** the wall still showing after a successful command; the panel clearing all the way
-      to nothing instead of to the warning; or either surface changing while the other does not.
+**The rollback — a running app changing its mind — is deliberately not a row, and this is the second
+thing on this page that a local gateway cannot produce** (corrected 2026-09-04 after PR #202's
+cycle-3 verification measured it; the row that stood here is withdrawn rather than repaired).
+
+What it would have asked for: leave the app open behind the wall, restart the gateway with the
+warning's configuration, and — without relaunching — do something that reaches Sonny, expecting the
+panel to change by itself to **Update available**. **The setup above cannot deliver that, and the row
+would have reported correct code as broken.** A running app's only way out of the wall is a *served*
+response, and on `./scripts/deploy.sh local` with no Supabase credentials there is none to be had:
+the app builds exactly four unauthenticated requests — `/v1/auth/email/start`,
+`/v1/auth/email/verify`, `/v1/auth/refresh` and `/v1/meta` — and that gateway answers `404` to the
+first three because the auth routes are not mounted, while `/v1/meta` is called only at launch and
+on a `410`, neither of which happens after a rollback. Everything else the app sends is
+`Authorization`-bearing and comes back `401`, which is a *failing* response, so the wall correctly
+stays up — and "the wall still showing after a successful command" was the first item in the
+withdrawn row's own list of what would be a finding. Worse, a bearer request answered
+`auth.unauthenticated` clears this Mac's session, so following the row would have signed the founder
+out. Exporting the sign-in section's `SUPABASE_*` names is not enough either: the auth routes then
+mount, but a plan needs a model credential to be *served* rather than answered `502`, which is
+non-`2xx` again.
+
+**On a real deployment this recovers by itself and needs no row**, which is why nothing in the app
+was changed for it. Every served response clears the wall, and the token refresh is one:
+`performRefresh` sends `/v1/auth/refresh` through the same path every other request takes, so a
+walled app whose access token is expiring gets a served `200` and the wall comes down before the
+user does anything. What is left unproven by hand is only the rollback *on this rig*, and it is held
+by tests instead — `whatOneResponseDoesToAStandingWall` runs all four status/header combinations
+from a standing wall, and `aServedResponseCarryingTheHeaderTakesTheWallDownToTheWarning` is the
+rollback end to end.
 
 **One case is deliberately not a row, because a correctly configured gateway cannot produce it.** If
 the upgrade URL is not `http` or `https`, the app shows the message with no button — the founder's
