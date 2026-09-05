@@ -87,10 +87,32 @@ struct LineCommentMayNotOpenABlockTests {
         !MacAgentSource.strippingBlockComments(line + "\n" + sentinel).contains(sentinel)
     }
 
+    /// The live verdict both population checks reach, extracted so a selftest can drive it on a
+    /// known-bad input.
+    ///
+    /// **Weakening it in place is the mutant a clean tree could not otherwise catch.** PR #199's
+    /// reviewer softened `offenders.isEmpty` to `offenders.count >= 0` and the whole suite passed
+    /// (R1, SURVIVED): the walk, the population floors and the message were all intact and only the
+    /// predicate had gone. `theVerdictRejectsANonEmptyOffenderList` drives this function over a
+    /// non-empty list inside `withKnownIssue`, which fails when no issue is recorded — so a weakened
+    /// predicate fails every run, on a clean tree, with no battery.
+    ///
+    /// **Deleting the assertion outright is a different mutant and stays unkillable, which is an
+    /// answer rather than a gap.** An assertion that would pass, removed from a tree that satisfies
+    /// it, is unobservable by construction, and no fixture changes that; the reviewer's R6 measured
+    /// it surviving. What holds that direction is W5 — restore the real defect and the verdict fires.
+    static func verdictHolds(offenders: [String]) -> Bool {
+        offenders.isEmpty
+    }
+
     /// Every line of `source` that is a line comment leaving a span open, with its 1-based number.
     ///
     /// The selection is `MacAgentSource.read`'s own filter — trimmed text beginning with a double
-    /// slash — so this scan examines exactly the lines that reader treats as comments.
+    /// slash — applied to the **raw** line. `read` applies it after stripping, so the two are not
+    /// identical: measured over the five trees, 0 lines become comment-prefixed only after the strip
+    /// (the direction that would be a coverage gap) and 170 raw comment-prefixed lines are not
+    /// comment-prefixed after it, all downstream of the two `Tests/` string-literal spans, where
+    /// scanning more is safe. The same test, on the raw line.
     static func spanOpeningLineComments(in source: String) -> [(number: Int, text: String)] {
         source
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -178,7 +200,7 @@ struct LineCommentMayNotOpenABlockTests {
         )
 
         #expect(
-            offenders.isEmpty,
+            Self.verdictHolds(offenders: offenders),
             """
             A line comment opens a block-comment span its own line never closes, at:
             \(offenders.joined(separator: "\n"))
@@ -187,6 +209,94 @@ struct LineCommentMayNotOpenABlockTests {
             present in the file and pass. Rewrite the comment so the delimiter is not adjacent: a \
             markdown bold reads the same written as _edit_, and a shell glob can be written with the \
             path split or the whole command wrapped in backticks without the star touching a slash.
+            """
+        )
+    }
+
+    // MARK: - The guard: no file the reader scans ends with a span open (SONNY-409 F1)
+
+    /// Whether `source` ends with a block-comment span still open, decided by the real stripper.
+    ///
+    /// **The per-line probe answers a different question, and the gap between them is a live hole.**
+    /// It evaluates each line from depth 0 and looks only at comment-prefixed lines, while
+    /// `MacAgentSource.read` strips a whole file in one pass and does not care where an opener sits.
+    /// So a *code* line carrying a trailing note that opens a span blinds `read` from that line to
+    /// end of file exactly as `EditWorkspaceCapabilityAdapter.swift:417` did, and the per-line
+    /// selection never examines it. PR #199's reviewer demonstrated that rather than arguing it:
+    /// mutant R4 put a trailing note whose glob carries an opener into a shipping target, hid
+    /// `var plannerSelectionKey: String { "SONNY_PLANNER" }` behind it, and **all 2856 tests
+    /// passed** while `ClientNamesNoProviderScanTests` was reading a truncated file. R5, the same
+    /// token with the note removed, was killed by name — so the scan works and R4's survival was
+    /// the blinding.
+    static func leavesASpanOpenAtEndOfFile(_ source: String) -> Bool {
+        !MacAgentSource.strippingBlockComments(source + "\n" + sentinel).contains(sentinel)
+    }
+
+    /// The 1-based line that opened the span still hanging at end of file: the line after the last
+    /// prefix of the file that was balanced.
+    ///
+    /// Asks the same question as the check above, of a growing prefix, rather than counting
+    /// delimiters — a count is what reads a vitest glob as two opens and one close. It runs only for
+    /// a file already known to end unbalanced, so the prefix walk costs nothing on a green tree.
+    static func lineOpeningTheUnclosedSpan(in source: String) -> Int? {
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        var lastBalanced = 0
+        for index in lines.indices
+        where !leavesASpanOpenAtEndOfFile(lines[...index].joined(separator: "\n")) {
+            lastBalanced = index + 1
+        }
+        return lastBalanced < lines.count ? lastBalanced + 1 : nil
+    }
+
+    /// **No file of the two trees `MacAgentSource.read` actually reads ends with a span open.**
+    ///
+    /// This is the guard; the per-line refusal above is the diagnostic that names the comment. The
+    /// trees are `appSourceFiles()` and `coreSourceFiles()` — taken from `MacAgentSource` itself
+    /// rather than restated, so the scan cannot drift from what the reader reads.
+    ///
+    /// **Scoping it to those two trees is what dissolves the conflict the per-line narrowing was
+    /// built around.** Blinding is only live where something strips block comments, which is these
+    /// two directories and nowhere else; both string-literal residuals that made a wider check
+    /// awkward sit in `Tests/`, which no stripper reads. So this closes the comment door, the
+    /// code-line door and SONNY-413's literal door at once, for the only region where any of them
+    /// bites, and it needs no string-literal parsing to do it.
+    ///
+    /// Measured across this branch: **0 offending files at the head, 1 at `2856840`** —
+    /// `EditWorkspaceCapabilityAdapter.swift`, the defect the ticket was filed for.
+    @Test
+    func noSourceFileTheReaderScansEndsWithABlockCommentSpanOpen() throws {
+        let appFiles = try MacAgentSource.appSourceFiles()
+        let coreFiles = try MacAgentSource.coreSourceFiles()
+
+        // Both trees, named rather than inferred from a total: a floor alone would be satisfied by
+        // one large tree while the other went unread.
+        #expect(!appFiles.isEmpty, "Sources/MacAgent yielded no files")
+        #expect(!coreFiles.isEmpty, "Sources/MacAgentCore yielded no files")
+
+        var offenders: [String] = []
+        var filesRead = 0
+        for url in appFiles + coreFiles {
+            filesRead += 1
+            let text = try String(contentsOf: url, encoding: .utf8)
+            guard Self.leavesASpanOpenAtEndOfFile(text) else { continue }
+            let opener = Self.lineOpeningTheUnclosedSpan(in: text).map(String.init) ?? "unknown line"
+            let relative = url.path.hasPrefix(Self.repositoryRoot.path + "/")
+                ? String(url.path.dropFirst(Self.repositoryRoot.path.count + 1))
+                : url.lastPathComponent
+            offenders.append("\(relative):\(opener)")
+        }
+        #expect(filesRead > 150, "the scan read \(filesRead) files, too few to be both shipping trees")
+
+        #expect(
+            Self.verdictHolds(offenders: offenders),
+            """
+            A block-comment span is still open at end of file, opened at:
+            \(offenders.joined(separator: "\n"))
+            Everything after that line is invisible to MacAgentSource.read, so every scan built on \
+            it — the provider-name scan, the entitlement scans, the sign-in scans — searches a \
+            truncated file and passes. The opener may be in a doc comment, in a note trailing a \
+            line of code, or inside a string literal; this check does not care which, because the \
+            reader does not either.
             """
         )
     }
@@ -238,8 +348,8 @@ struct LineCommentMayNotOpenABlockTests {
     }
 
     /// An opening delimiter inside a string literal on a code line is a different class and is not
-    /// examined: `TestSourceTree.swift:146` holds the token as data, and this scan reads only
-    /// comment-prefixed lines.
+    /// examined: `TestSourceTree.swift:147` at this head holds the token as data, and this scan
+    /// reads only comment-prefixed lines.
     @Test
     func theRefusalDoesNotReadAStringLiteralOnACodeLine() {
         let literal = "    static let typeScriptCommentPrefixes = [\"//\", \"\(Self.spanOpen)\", \"*\"]"
@@ -390,6 +500,19 @@ struct LineCommentMayNotOpenABlockTests {
     }
 
     /// The mirror SONNY-417 asks for: an ordinary line comment, behind no block at all, still drops.
+    /// **The verdict's strength, held on every run rather than by a battery nobody re-runs.**
+    ///
+    /// `withKnownIssue` fails when its body records *no* issue, so this arm passes only while
+    /// ``verdictHolds(offenders:)`` genuinely rejects a non-empty list. Soften the predicate — the
+    /// reviewer's R1 made it `offenders.count >= 0` — and the expectation below stops failing, the
+    /// known issue never arrives, and this test goes red on a clean tree.
+    @Test
+    func theVerdictRejectsANonEmptyOffenderList() {
+        withKnownIssue("the verdict must reject a non-empty offender list") {
+            #expect(Self.verdictHolds(offenders: ["Sources/MacAgentCore/Planted.swift:1 — planted"]))
+        }
+    }
+
     @Test
     func aLineCommentOutsideAnyBlockStillDrops() throws {
         let text = try Self.readingFixture(
