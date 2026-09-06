@@ -1097,12 +1097,17 @@ describe("the numbers this ticket is held to", () => {
     // `idempotencyStore` and the request carries no `Idempotency-Key`, so `preHandler` takes the
     // unguaranteed branch and there is no claim here to end. A comment describing state the test
     // cannot see is worse than no comment: it is what a later reader trusts instead of looking.
-    // The claim is covered in `idempotency.db.test.ts`, where a store exists.
+    // The claim is covered by `RELEASES the idempotency key when the body read times out`, below in
+    // this file, which builds an app with an `idempotencyStore` and sends the key. **Not by
+    // `idempotency.db.test.ts`**, which an earlier version of this line pointed at and which has no
+    // transcription case at all — the same defect this comment exists to correct, one size smaller.
     //
-    // **Fake timers rather than a shortened deadline**, so the test drives the real 30 s constant
-    // instead of a value only tests use. Advancing the clock is what fires the route's timer; a
-    // sleep-then-assert would be the wall-clock bet CLAUDE.md forbids, and at 30 s it would also be
-    // the slowest test in the suite.
+    // **Fake timers rather than a shortened deadline**, so the test drives the real
+    // `BODY_READ_DEADLINE_MS` instead of a value only tests use. Advancing the clock is what fires
+    // the route's timer; a sleep-then-assert would be the wall-clock bet CLAUDE.md forbids, and at
+    // ninety seconds it would also be, by a wide margin, the slowest test in the suite. The constant
+    // is not spelled here on purpose — it moved once already, from 30 s to 90 s — and the test reads
+    // it, so this comment cannot go stale against it again.
     const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
     const app = build();
     // **The request stream, captured so the release can be asserted and not just the answer.** A
@@ -1302,8 +1307,10 @@ describe("the numbers this ticket is held to", () => {
     // satisfy the line above and leave nothing for the process's own work between the two.
     expect(CLAIM_LEASE_SECONDS * 1000 - worstCaseMs).toBeGreaterThanOrEqual(15_000);
 
-    // And the JSON routes, which were already inside it and are the reason 15 s is the margin used:
-    // `synthesize` and `screenAnalyze` are the longest at 105 s against the same 120 s lease.
+    // And the JSON routes, which were already inside the lease: `synthesize` and `screenAnalyze` are
+    // the longest at 105 s, which is 75 s inside a 180 s lease. **They are no longer the reason the
+    // margin is 15 s** — the transcription row is, being the tight one — and this comment said they
+    // were while quoting the pre-F4 numbers.
     for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
       expect(deadlines.total, route).toBeLessThanOrEqual(CLAIM_LEASE_SECONDS * 1000 - 15_000);
     }
@@ -1456,9 +1463,11 @@ describe("the numbers this ticket is held to", () => {
 
     const body = JSON.parse(raw.slice(raw.indexOf("\r\n\r\n") + 4));
     expect(Object.keys(body)).toEqual(["error"]);
-    // §7.2 names no case for "you took too long to send your request", and `errors.ts`' rule for a
-    // 4xx it does not name individually is `request.invalid` — the same answer the route-level
-    // deadline gives, so the two doors cannot disagree.
+    // **§7.2 names this case now** — `request.timeout`, 408, retryable — which is PR #208's F1, and
+    // `errors.ts`' `classify` is where that row is implemented. The same answer the route-level
+    // deadline gives, because both call `classify`, so the two doors cannot disagree. (This comment
+    // said §7.2 named no such case and that the answer was therefore `request.invalid`, which was
+    // the pre-F1 reading and sat directly above the two lines below asserting the opposite.)
     expect(body.error.code).toBe("request.timeout");
     expect(body.error.retryable).toBe(true);
     expect(body.error.retry_after_seconds).toBe(null);

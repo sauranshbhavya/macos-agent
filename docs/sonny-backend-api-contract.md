@@ -1448,13 +1448,25 @@ but while both run the provider can be called twice for one key, which is what t
 above exists to avoid. The interval that has to fit inside the lease is the whole request, from the
 claim to the response being sent.
 
-**Every route's interval is now bounded, and each bound sits inside the lease** (SONNY-322). The JSON
-routes are bounded by section 12's total deadline, 105 s at the longest against a 120 s lease.
-`POST /v1/transcriptions` was the one that was not: its body is `multipart/form-data` read inside the
-handler, after the claim is taken and outside the deadline the route applies to its upstream call, so
-a stalled upload held its claim indefinitely. That read now has a 30 s bound of its own, and 30 + 75
-is 105 — the same fifteen seconds of margin the other routes already had. The gateway states the
-arithmetic in one place rather than leaving the lease a constant with nothing behind it.
+**Every route's interval is now bounded, and each bound sits inside the lease** (SONNY-322). **This
+paragraph is where that arithmetic lives**; section 12 states the upload bound as a timeout and points
+back here rather than repeating the derivation, and the gateway's own code cites this section from
+both constants. The lease is **180 seconds**.
+
+- The **JSON routes** are bounded by section 12's total deadline — 105 s at the longest, so 75 s
+  inside the lease.
+- **`POST /v1/transcriptions`** was the one that was not: its body is `multipart/form-data` read
+  inside the handler, after the claim is taken and outside the deadline the route applies to its
+  upstream call, so a stalled upload held its claim indefinitely. That read has a **90 s** bound of
+  its own, and **90 + 75 = 165** — fifteen seconds inside the lease, which is the tightest of the two
+  and the one the lease is sized for.
+
+**The 90 is section 12's client timeout for that route, and the lease was sized to fit it** (founders,
+2026-09-05). The first version of this had a 30 s bound derived the other way round — the lease held
+fixed at 120 and the upload solved for — which inverted section 12's governing rule on the one route
+where the upload is the slow part, the server giving up at a third of the budget its own client waits.
+The direction of the derivation is the part worth carrying: the lease answers to nothing outside the
+gateway, so it is the side that moves.
 
 **What that does not do is close the fourth bullet outright, and the earlier version of this
 paragraph implied it did.** It said "a stalled upload is the one shape that can reach this", which
@@ -1823,10 +1835,10 @@ timeout in the table above (founders, 2026-09-05). It is the one route whose bod
 handler rather than parsed before it, so it is the one route where the upload is not already covered
 — and it is bounded precisely, on a timer the gateway owns, because the server-wide bound above is
 enforced far too coarsely to hold anything. The 90 does not come from the deadlines in this table:
-those bound a handler and this bounds an upload, and the two are added rather than compared. The
-first version of this bound was 30 seconds, derived from the gateway's own idempotency lease with
-that lease held fixed, which inverted this section's governing rule on this one route — the server
-gave up at a third of the budget its own client waits. The lease moved instead.
+those bound a handler and this bounds an upload, and the two are **added** rather than compared.
+**What they are added for, and against what, is section 9.2's**, which carries that arithmetic and is
+the section the gateway's code cites from both constants; it is not restated here, because two copies
+of a derivation are two things to keep in step and this document has already had them disagree.
 
 Three rules alongside the table:
 

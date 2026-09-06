@@ -53,10 +53,14 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  * consumed by `request.parts()` **inside** the handler, so the read happens *after* the `preHandler`
  * hook takes the claim and *outside* `withDeadlines`, which `routes/model.ts` applies to the upstream
  * call alone. `routes/model.ts` runs that read under `BODY_READ_DEADLINE_MS` (90 s) and destroys
- * the request stream when it elapses, so 90 s + 75 s = 165 s, fifteen seconds under this lease — the
- * same margin the JSON routes already had. `model/limits.ts` derives that 30 s from this constant,
- * and `model.test.ts` asserts the inequality rather than any of the three numbers alone, so a later
- * change to one of them cannot quietly reopen this.
+ * the request stream when it elapses, so 90 s + 75 s = 165 s, fifteen seconds under this lease. **It
+ * is the tighter of the two rows above and the one this lease is sized for**: the JSON routes sit 75
+ * seconds inside it. (An earlier version of this sentence said "the same margin the JSON routes
+ * already had", which was true when both were fifteen and stopped being true when this constant rose
+ * to 180.) **`model/limits.ts` derives its 90 s from §12's client timeout for the route, not from
+ * this constant** — this one moved to make room for it, which is the opposite of what this sentence
+ * used to say. `model.test.ts` asserts the inequality and the margin rather than all three numbers,
+ * so a later change to one of them cannot quietly reopen this.
  *
  * **`app.ts`'s `requestTimeout` is not what holds this, and it is worth saying why**, because it is
  * the obvious candidate. It bounds receipt of a request rather than a handler, and it is enforced on

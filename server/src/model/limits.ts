@@ -146,7 +146,9 @@ export const DEADLINE_MS = {
  *     body read (90 s) + this route's total deadline (75 s) = 165 s  <  CLAIM_LEASE_SECONDS (180 s)
  *
  * Fifteen seconds of margin — the same margin §12 gives this route between its upstream and total
- * deadlines, and the same margin the JSON routes have always had against the lease.
+ * deadlines. **The JSON routes sit 75 seconds inside the lease rather than fifteen**, so this row is
+ * the tight one and the one the lease is sized for; an earlier version of this line said the margins
+ * were the same, which was true only while the lease was 120.
  * `idempotency/store.ts` states the relationship from the lease's side and carries the cost the
  * founders accepted with it: a process killed mid-request now holds its key for a minute longer
  * before a repeat can take it.

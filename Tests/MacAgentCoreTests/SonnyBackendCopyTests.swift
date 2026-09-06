@@ -263,7 +263,7 @@ struct SonnyBackendCopyTests {
     private static let everyWireCode: [SonnyBackendErrorCode] = [
         .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .authCodeInvalid,
         .authCodeExpired, .authCodeUsed, .entitlementRequired, .entitlementExpired,
-        .limitRate, .limitSpend, .requestInvalid, .requestTooLarge, .providerUnavailable,
+        .limitRate, .limitSpend, .requestInvalid, .requestTimeout, .requestTooLarge, .providerUnavailable,
         .providerTimeout, .providerRejected, .serverError, .serverUnavailable,
         .resourceNotFound, .idempotencyConflict, .versionUnsupported, .unknown("brand.new"),
     ]
