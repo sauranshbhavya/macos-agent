@@ -22,7 +22,7 @@ browser would.
 | `simonwillison-botbouncer.html` | `https://simonwillison.net/2006/Dec/19/botbouncer/` | 200 | 13 942 | SONNY-256's reported page. A link-blog post, 1 110 visible characters, one sentence of which mentions a CAPTCHA service. Refused by SONNY-245's rule. |
 | `hackernews-paywall-comment.html` | `https://news.ycombinator.com/item?id=9997770` | 200 | 3 469 | The same class from a different template. A comment page, 327 visible characters, whose body is one comment asking for a reference not behind a paywall. |
 
-## Why these four
+## Why these six
 
 The Wikipedia article matches the old rule twice and is guarded by nothing: `captcha` appears inside
 a `<script>` config naming Wikipedia's own edit-form CAPTCHA, and `subscription required` inside the
@@ -64,7 +64,7 @@ suite asserts 523 because that is what it reads.
 `sciencedirect-captcha-challenge.html` had the fetching machine's own public IP printed in it, in
 the gate's "IP Address:" line. It is replaced by `203.0.113.42`, from RFC 5737's documentation
 range — three characters shorter than the original, which is the whole difference between this file
-and the 1 207 700 bytes that arrived. Nothing else in any of the four files is altered.
+and the 1 207 700 bytes that arrived. Nothing else in any of the six files is altered — the two SONNY-256 pages are byte-for-byte as fetched, with no redaction of any kind.
 
 ## Refreshing them
 

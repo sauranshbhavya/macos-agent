@@ -54,8 +54,9 @@ import SwiftSoup
 /// 1's limit is what serves it. It is a fixture, not a corpus entry, so none of the counts above
 /// include it.
 ///
-/// Four pages are saved verbatim under `Tests/Fixtures/WebResearch/` and
-/// `RestrictedContentDetectorTests` runs both the old rule and this one over every one of them.
+/// Six pages are saved verbatim under `Tests/Fixtures/WebResearch/` and
+/// `RestrictedContentDetectorTests` runs both the pre-SONNY-245 rule and this one over every one of
+/// them. SONNY-256 added the last two; that README is the index.
 ///
 /// **Why the corroboration is a character count and not "did the extractor find an article".**
 /// That was the first design, and it is worse: `SwiftSoupReadableWebExtractor` throws
@@ -76,6 +77,26 @@ import SwiftSoup
 ///   and it was refused, while a 2 166-character post on the same blog, same template, same subject,
 ///   was served. **SONNY-256 closed that**, and the split between `wallSpeechPhrases` and
 ///   `subjectPhrases` is the whole of the fix.
+/// - **Given up, and it is not only "a bare noun" — an earlier version of this bullet said it was**
+///   (PR #210 review, F2). The class is *any* wall in the 200-to-2 000 band whose visible text
+///   carries a subject noun and none of `wallSpeechPhrases`. Measured over 14 real gate wordings
+///   placed in ordinary nav and footer chrome, **5 lose the refusal SONNY-245 gave them**: "Please
+///   complete the CAPTCHA below to continue", "Access denied. Please solve the CAPTCHA below to
+///   continue to this page", "Access denied. Please solve the CAPTCHA to prove you're not a bot",
+///   "Subscription required. This content is available to subscribers only", and "This article is
+///   behind our paywall. Members can read it in full". **Three of those five are full instructions
+///   to the reader about this page's access**, which is `wallSpeechPhrases`' own definition of wall
+///   speech — they are served because they use the noun, not because they are bare nouns. (A sixth,
+///   "Checking your browser before accessing this website", is served by SONNY-245 too, so it is not
+///   a loss from this split.)
+///
+///   **Two mitigations, both measured rather than reasoned.** Below `contentlessVisibleTextLimit`
+///   all **14 of 14** are still refused — 8 on visible text, 6 on markup — so shrinking the wall's
+///   own page does not get past this. And `SwiftSoupReadableWebExtractor` throws `noReadableContent`
+///   on **all five** of the newly-served pages, so **no note is written from any of them**: the user
+///   gets a different error, not a summarised wall. That is the same distinction this comment
+///   already draws for Instagram and Tumblr below, and it is most of the answer to how bad the trade
+///   is.
 /// - **Accepted, knowingly:** a gate that renders its own form and chrome, where the only trace is
 ///   a vendor script. The measured instances are **LinkedIn's feed** (HTTP 200, 703 visible
 ///   characters, and the extractor gets 556 characters of "article" out of the sign-in chrome) and
@@ -162,7 +183,10 @@ public enum RestrictedContentDetector {
     /// speaks at 3 884 characters — 1.9 times this limit — by repeating one short message in ten
     /// languages. It is harmless today for two reasons that are not this limit: its wording matches
     /// none of the seven phrases, and it answers 403. Cloudflare's common "Verifying you are human"
-    /// likewise does not match `verify you are human`.
+    /// did not match `verify you are human` either, and **that half is closed**: SONNY-256 added
+    /// `verifying you are human` to `wallSpeechPhrases`, measured against a corpus sampled on the
+    /// wording itself. Glassdoor is untouched by that — its length, not its wording, is the reason
+    /// it sits above this limit.
     public static let interstitialVisibleTextLimit = 2_000
 
     /// Markup evidence needs the page to show a reader essentially nothing.
@@ -181,20 +205,40 @@ public enum RestrictedContentDetector {
     /// **Wall speech**: a phrase that addresses *this reader* about *this page's* access. Only a
     /// wall issues one, so it is what visible-text evidence is searched for.
     ///
-    /// `you are human` replaces SONNY-245's `verify you are human` and is strictly wider — it also
-    /// matches "confirm you are human", "prove you are human" and Cloudflare's "Verifying you are
-    /// human", which `interstitialVisibleTextLimit`'s own doc comment names as a wall this check
-    /// used to miss. `you are a human` is the article variant, and it is ScienceDirect's actual
-    /// wording: "please confirm you are a human by completing the captcha challenge below".
+    /// **Widening this list is its own decision with its own false-refusal risk**, and SONNY-245
+    /// said so before SONNY-256 deleted the sentence and proved it. SONNY-256's split — visible text
+    /// for speech, markup for nouns — is about the *evidence*. Every entry here is *coverage*, and
+    /// coverage is where the risk lives. PR #210's F1 is the worked example: the first version of
+    /// this list added `you are human`, `you are a human` and `are you a robot`, cleared by a corpus
+    /// whose comment pages had been sampled on the three nouns the split *removes* and never on the
+    /// wordings it *adds*, so no counterexample could appear in it. Measured afterwards over 224
+    /// pages including 70 sampled on the added wordings themselves, those three matched **17, 18 and
+    /// 6 innocent in-band pages** — a Hacker News comment about turning down a company ("if you are
+    /// human you will do from time to time") refused as a CAPTCHA gate, and a complaint *about*
+    /// robot walls refused as one, which is the exact failure SONNY-256 exists to end.
     ///
-    /// Nothing here was added speculatively. `to continue reading` was tested against the corpus
-    /// and rejected — it matches a Hacker News comment — and five further paywall wordings that
-    /// matched nothing on either side were left out rather than added on the strength of no
-    /// evidence.
+    /// **The rule for adding an entry, so the next one is not cleared the same way: it matches zero
+    /// innocent in-band pages across a corpus sampled on the wording itself.** That is what admits
+    /// the entries below and what excluded those three. It also excluded `prove you are human` (6
+    /// innocent, 0 walls), `prove you are a human` (2, 0) and `verify you are a human` (3, 0), which
+    /// PR #210's review proposed — the distinction the data draws is not the verb but the *person*.
+    /// A wall says what the challenge does: "completing the CAPTCHA **proves** you are human",
+    /// "**verifying** you are human", "please **confirm** you are a human". A reader discussing walls
+    /// uses the infinitive: "how do you **prove** you are human?".
+    ///
+    /// **`verify you are human` is SONNY-245's own and is kept unchanged, including its cost.** It
+    /// matches 5 innocent pages in that corpus, and SONNY-245's rule refuses all 5 as well — so they
+    /// are pre-existing behaviour rather than this split's. Removing it would narrow SONNY-245's
+    /// coverage, which is the decision the warning above says has to be made on its own terms, and
+    /// it is not SONNY-256's to make.
     static let wallSpeechPhrases: [(phrase: String, reason: String)] = [
-        ("you are human", "CAPTCHAs"),
-        ("you are a human", "CAPTCHAs"),
-        ("are you a robot", "CAPTCHAs"),
+        ("verify you are human", "CAPTCHAs"),
+        ("verifying you are human", "CAPTCHAs"),
+        ("verifying you are a human", "CAPTCHAs"),
+        ("confirm you are human", "CAPTCHAs"),
+        ("confirm you are a human", "CAPTCHAs"),
+        ("proves you are human", "CAPTCHAs"),
+        ("proves you are a human", "CAPTCHAs"),
         ("please log in", "login walls"),
         ("sign in to continue", "login walls"),
         ("subscribe to continue", "paywalls")
