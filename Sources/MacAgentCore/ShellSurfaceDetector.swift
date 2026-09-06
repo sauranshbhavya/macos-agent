@@ -398,7 +398,12 @@ struct ShellSurfaceDetector {
     /// No trailing-bare-prompt requirement, unlike ``minimalPromptRanges``: that rule exists to tell
     /// a comment block from a scrollback where the sigil is the *only* evidence, and here the
     /// address and path in front of it have already done that work.
-    private static func sectionSignPromptRanges(in text: String) -> [Range<String.Index>] {
+    /// Internal rather than `private` **for its ordering test alone** — the same reason
+    /// ``shellCommandNames`` is internal. Nothing outside this file calls it, and
+    /// `theSectionSignRangesComeBackInDocumentOrder` is the one caller in `Tests/`: the property it
+    /// pins has no observable consequence through ``verdict(for:)``, which carries signal names and
+    /// no ranges, so a test that could reach it through the public surface does not exist.
+    static func sectionSignPromptRanges(in text: String) -> [Range<String.Index>] {
         let colonForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]{0,80}\u{00A7}(?=[ \t]|$)/
         let spacedForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}[ \t]+\u{00A7}(?=[ \t]|$)/
         let bracketedForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}\]\u{00A7}(?=[ \t]|$)/
@@ -415,7 +420,24 @@ struct ShellSurfaceDetector {
         for hit in hits {
             byIdentity[identityAtHost(of: text[hit]), default: []].append(hit)
         }
-        return byIdentity.values.filter { $0.count >= minimumMinimalPromptLines }.flatMap { $0 }
+        // **Sorted because grouping through a `Dictionary` made the order per-process** (PR #209
+        // cycle 2, N7). Swift seeds `Dictionary` hashing per process, so `values` enumerates the
+        // identity groups in a different order on every run, and `flatMap` inherited that: the same
+        // document returned its section-sign ranges in a different order run to run.
+        //
+        // **No verdict depended on it, which is why this is a sort and not a bug fix.** `promptRanges`
+        // has one consumer, and both of its uses are order-insensitive — `!prompts.isEmpty`, and
+        // `hasCommandRunInAShell` returning true on the first prompt line that begins with a command.
+        // What was wrong is that nothing said they had to stay that way, and run-to-run
+        // nondeterminism inside a refusal boundary is the kind of thing that is cheap now and
+        // expensive to diagnose the day some future signal reads the first range and reports it.
+        //
+        // Every other producer in ``promptRanges`` appends in document order already, so this makes
+        // the whole list consistent rather than only this branch of it.
+        return byIdentity.values
+            .filter { $0.count >= minimumMinimalPromptLines }
+            .flatMap { $0 }
+            .sorted { $0.lowerBound < $1.lowerBound }
     }
 
     /// The `identity@host` a prompt match opens with — leading whitespace dropped, then everything up

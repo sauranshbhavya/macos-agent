@@ -1416,6 +1416,51 @@ struct ShellSurfaceLookAlikeFoldTests {
         #expect(folded == fixture.text, "this corpus is ASCII; a fixture that folds needs its own pin")
     }
 
+    /// **The section-sign ranges come back in document order** (PR #209 cycle 2, N7).
+    ///
+    /// Grouping the hits by `identity@host` put them through a `Dictionary`, and Swift seeds
+    /// `Dictionary` hashing per process — so `values` enumerated the groups in a different order on
+    /// every run and `flatMap` inherited it. The same document returned its ranges in a different
+    /// order run to run, inside a refusal boundary.
+    ///
+    /// **The fixture is built so this test can fail, which is the whole difficulty of pinning it.**
+    /// One identity group returns in insertion order whatever the dictionary does, so a
+    /// single-identity document would pass with the sort deleted and assert nothing. This document
+    /// has **two** groups of two, interleaved, so the two possible group orders give `[1,3,2,4]` and
+    /// `[2,4,1,3]` by position and neither is ascending — only the sort produces `[1,2,3,4]`.
+    ///
+    /// **Repeated in-process, and that is a deliberate limit rather than thoroughness.** The hash
+    /// seed is fixed for a process, so re-running inside one cannot vary the group order; what this
+    /// arm actually pins is that the result is stable and ascending, and the cross-process half is
+    /// what the sort makes unnecessary to test. The mutant that deletes the sort is what shows the
+    /// assertion bites, and it is in the branch's plan as S8.
+    @Test
+    func theSectionSignRangesComeBackInDocumentOrder() {
+        let document = """
+        alice@host1 dir \u{00A7} ls
+        bob@host2 dir \u{00A7} ls
+        alice@host1 dir \u{00A7} pwd
+        bob@host2 dir \u{00A7} pwd
+        """
+
+        let ranges = ShellSurfaceDetector.sectionSignPromptRanges(in: document)
+
+        // Four hits across two qualifying identity groups — the precondition that makes the order
+        // assertion below capable of failing.
+        #expect(ranges.count == 4, "two identity groups of two, or this test asserts nothing")
+        #expect(
+            Set(ranges.map { String(document[$0]).prefix(5) }).count == 2,
+            "the two groups really are distinct identities"
+        )
+
+        let ascending = zip(ranges, ranges.dropFirst()).allSatisfy { $0.lowerBound < $1.lowerBound }
+        #expect(ascending, "section-sign ranges must be in document order")
+
+        // Stable across calls in this process, which is what a caller reading position would rely on.
+        let again = ShellSurfaceDetector.sectionSignPromptRanges(in: document)
+        #expect(again == ranges, "the same document must return the same order")
+    }
+
     /// The same question asked of text the corpus does not contain: ordinary prose in scripts the
     /// fold reaches. None of it may gain a signal.
     ///
