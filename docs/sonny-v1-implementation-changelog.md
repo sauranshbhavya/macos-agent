@@ -606,6 +606,66 @@ an idle machine, arriving inside the test written to close a defect. It awaits e
 handle now, which returns exactly when that wipe has finished and decremented the count; there is no
 wall clock left in it.
 
+**Rebased onto `main` at `31c83196` (PRs #203 through #211), 2026-09-06 — every figure above is
+superseded by the block below, and none was translated across the hop.** `CLAUDE.md`'s rule is that a
+rebase replays onto a moved base, so a pre-rebase number was never true of the new tree.
+
+**The eleven SHAs the rounds above stamp are orphaned rather than repointed.** They resolve in this
+clone and `git merge-base --is-ancestor <sha> HEAD` exits **1** for every one of `75f0c7cf`,
+`e17187e2`, `0c086ab3`, `710d5e00`, `de04effb`, `88d7eebd`, `0fd87d1e`, `910e20e3`, `e788f2a3`,
+`777f8140` and `cb89077b`, while the old base `6cc9e189` exits 0 because it is still an ancestor of
+`main`. That is the convention working: a branch SHA records *when* a measurement was taken, and a
+rebase throws the head away rather than moving the tree, so the figures beside those stamps are true
+of that branch at that moment and of nothing else.
+
+**What the hop met, and what it did not.** Outside `docs/` the branch and the merged range share
+exactly four files, and **none of them conflicted** — git merged all four, because this branch's hunks
+and the range's sit in disjoint regions. So the patch survived byte-for-byte rather than by a
+resolution, which is stronger than expected and is measured rather than asserted:
+`git diff 6cc9e189 cb89077b -- <tree> | git patch-id --stable` against
+`git diff 31c83196 HEAD -- <tree>` gives one id twice for **`Sources`** (`cf5a4d85…`, 1680 diff
+lines both sides), **`Tests`** (`2629cbe2…`, 1747) and **`server`** (`b81e9cb9…`, 1340), and two
+different ids for **`docs`** (`061faafc…` against `f9781da1…`, 702 both sides) — which is the control
+firing, since the changelog conflict is the one thing that was resolved by hand.
+
+**The four shared files carry both sides, checked rather than assumed**, because `CLAUDE.md`'s rebase
+gotcha is that two files can be individually merge-clean and jointly incoherent. `server/src/app.ts`
+keeps PR #208's `REQUEST_TIMEOUT_MS`, `clientErrorResponse` and `clientErrorHandler` and takes this
+branch's registrar rename; **the classifier stays the single source for both error doors** —
+`classify` is called at the socket door and at the reply door and this branch reimplements neither.
+`server/src/routes/auth.ts` keeps the shared `providerUnavailable` answer and takes the one-line
+`"account"` reason. `server/src/idempotency/store.ts` keeps `CLAIM_LEASE_SECONDS = 180` and takes the
+optional `claimedAtOrBefore` bound. `server/test/gate.test.ts` keeps PR #206's billing routes and
+takes this branch's three. In `docs/`, every changelog entry is kept with this branch's above
+PR #210's, every contract row is kept — §14's dated table is byte-identical to `main`'s, this branch
+adding no row to it — and every checklist section is kept.
+
+**Re-measured at `c5f61cfc`, the rebased head, with nothing carried:**
+
+- Flagged Swift suite — **exit 0**, **2995 tests in 200 suites, 8 known issues**;
+  `grep -cE 'recorded an issue'` over its log → **0**. `main` at `31c83196` is the new baseline and
+  the merged range brought its own tests, so the pre-rebase 2961 in 199 says nothing about this tree.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `c5f61cfc` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, **183 entries**, both eras.
+- Server — `npm run build`, `npm run typecheck` and `npm run check:secrets` all exit 0
+  (`clean (629 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `npm test` **exit 0,
+  820 passed / 430 skipped (1250)**; `npm run test:db` **exit 0, 1250 passed (1250)** against a
+  lane-named Postgres.
+- **Migrations `0020` and `0021` up and down against that Postgres**, with a control that fires:
+  `up` exit 0 and the CHECK carries all six reasons with both counters `NOT NULL DEFAULT 0`;
+  inserting `reason = 'not_a_reason'` is refused by the constraint; with one row of each new reason
+  present, `down` 0021 exits 0, the `account_content` row is gone and the CHECK is back to five;
+  `down` 0020 exits 0, the `task_screenshots` row is gone, the CHECK is back to four and both columns
+  are dropped; `up` again exits 0 and the six-value CHECK returns.
+- `scripts/mutate` — **29 mutants, 29 killed, 0 survived, 0 unattributed**, at `c5f61cfc`, in two
+  runs (20 app-half, 9 gateway). **The whole of both plans was re-run and nothing was carried**, the
+  two that were carried last round included: the merged range moved `server/src/idempotency/store.ts`
+  and `server/src/routes/auth.ts`, which the gateway killers reach through `buildApp`, and
+  `Tests/MacAgentTestSupport/BackendStubURLProtocol.swift`, which every Swift behaviour test here
+  drives — step 5's fourth condition, the killer driving a helper the range moved, which no
+  file-level check over the mutants' own targets can see.
+
 Next branch: per the coordinator's wave-6 order.
 
 ### Branch: fix/a-short-article-about-a-wall-is-served
