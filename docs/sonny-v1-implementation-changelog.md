@@ -170,6 +170,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: docs/six-rules-move-into-the-file-every-session-reads
+Status: complete — SONNY-372, SONNY-265, SONNY-400, SONNY-397 and SONNY-410's four items landed; SONNY-371 closed as a duplicate of SONNY-410's zsh item, per the founder decision of 2026-09-05 recorded on it. Two of SONNY-410's six items are outside this lane's contract and are named under *Known limitations* below rather than left unsaid.
+Date: 2026-09-05
+Tickets: **SONNY-372** — three siblings of the clean-zero family, and the control rule above them. **SONNY-265** — a disagreement between two careful measurements is the finding. **SONNY-400** — the cheap end of the same family, a capital letter and a line wrap. **SONNY-397** — a held sample entering downstream of the mechanism it holds. **SONNY-410** — two review-process rules into `WORKFLOW.md` step 7, plus the zsh `path` trap and the bytes-versus-characters note into `CLAUDE.md`. **SONNY-371** — duplicate, closed with a pointer at the bullet that absorbed it.
+Reviewed by: coordinator-verified directly against the real diff, per `WORKFLOW.md` step 7's right-sizing for records; no fresh-session reviewer, routed that way in the coordinator's kickoff note on SONNY-372 on 2026-09-05.
+
+Spec sections covered: none — this branch adds no product behavior. Its entire product is that six rules which existed only in changelog entries, ticket comments and cross-session messages now sit in the two files every session actually reads.
+
+Files changed: `CLAUDE.md` (six new bullets — five in *Claims and evidence*, one in *Non-obvious gotchas*), `WORKFLOW.md` (two new paragraphs in step 7), `docs/sonny-v1-implementation-changelog.md` (this entry). No file outside those three: `git diff --name-only d14eba65..HEAD` lists exactly the three.
+
+Tests: none owed and none run. The diff touches no `Sources/`, no `Tests/` and no `server/` path, so it is `WORKFLOW.md` step 7's docs-only exemption from the Swift suite and `scripts/warnings` — both of which provably cannot see it — and it starts no Postgres. What the diff *can* break is the changelog, so the check it owes is `scripts/changelog-order`: **exit 0, 180 entries, both eras**, against a baseline of **exit 0, 179 entries** measured at `d14eba65`, this branch's base. The one new entry is this one.
+
+Behavior added: none — no code changes.
+
+Behavior preserved (required, no blanket claims):
+
+- **The bullets that reference their neighbours by position still resolve, and this was the branch's one real hazard.** *Claims and evidence* carries a chain of them — the exit-code rule saying "the rule above", the ERE-`\b` rule saying "the rule directly above", the clean-zero rule saying "two bullets above" and "one bullet above", and the `$sha:server` rule saying "the rule directly above names" — so the five new bullets all went in **after** that chain ends rather than inside it, and every one of those five references its own neighbours by name or as "above" rather than by count.
+- **The *Non-obvious gotchas* pair that describes itself as a mirror still is one.** The shared-marker-scan bullet says "the gotcha directly below" and the `try #require` bullet says the slash-star gotcha is "two bullets up"; both still resolve.
+- **`WORKFLOW.md` step 7's own back-references.** The reviewer-probe paragraph says the reviewers-never-implement rule "above" and still sits directly beneath it — the two new paragraphs went in after the probe paragraph, not between the two.
+- **The changelog's ordering and its two eras.** This entry is inserted newest-first directly under `## Entries`, which `scripts/changelog-order` confirms.
+
+Architectural decisions / pitfalls discovered:
+
+- **Two landing spots were decided by the ticket rather than by the kickoff note, and both are stated rather than resolved silently** (`WORKFLOW.md` step 4). The kickoff note on SONNY-372 groups SONNY-397 under *Claims and evidence* and sends SONNY-410's bytes-versus-characters note to the gotchas; each ticket's own text says the opposite — SONNY-397 asks to sit "beside the shared-marker scan entry it is a sibling of", which is in the gotchas, and SONNY-410's comment says the bytes note "belongs with the write-the-command rule", which is in *Claims and evidence*. Both were placed as their own tickets ask. The net effect is the same two sections; only which rule goes where differs, and either is a one-line move if the coordinator disagrees.
+- **A run of bullets that reference each other by position is an insertion hazard with no mechanical guard, and this branch tripped it before catching it.** The gotcha for SONNY-397 was first placed between the shared-marker scan and the slash-star gotcha — which are a declared mirror pair ("the gotcha directly below") — and that insertion simultaneously pushed the slash-star gotcha out of reach of the `try #require` bullet's "two bullets up". Nothing fails, nothing is red, and the file simply starts lying about itself. It was found by enumerating every positional reference in the file first (`grep -noE '(directly |two |three |one )?(bullets?|gotchas?|entry|rule|sentence) (directly )?(above|below|up)' CLAUDE.md`) rather than by reading around the insertion point, which is the enumerate-before-you-subtract rule pointed at a file's cross-references. The fix was to move the new bullet *above* the pair, where it breaks nothing, rather than to renumber an existing sentence — the `try #require` bullet already records surviving one such renumbering, and a second would have been a second thing to keep true.
+- **A citation counting a population its own file belongs to inflated its own number, in the paragraph that adds the rule.** The new `WORKFLOW.md` rule cites `grep -c -i 'worktree list' WORKFLOW.md` → 1 at `d14eba65`, and its first draft went on to predict that "the same command answers 2 from here on". It answers **3**: the paragraph names the command once in its own prose and again inside the citation, and both land on separate lines. This is `CLAUDE.md`'s ninth write-the-command defect arriving in a file that documents it, and the remedy taken is the one that rule gives — the 1 is written as a reading at a commit, and the 3 is measured rather than predicted.
+- **Re-wrapping the new `WORKFLOW.md` prose split a cited command across a newline, which is exactly the defect SONNY-400 lands in this same branch.** An automatic re-wrap at the file's ~99-column width put `` `grep `` at the end of one line and `-c -i 'worktree list' WORKFLOW.md` at the start of the next, so a line-based search for the command it cites would have answered a clean zero in the branch whose whole subject is that clean zero. The paragraph is now wrapped by hand so that both `` `git worktree list` `` and the full cited command sit on one line each. **The general point is the one SONNY-400 makes and this branch had to learn twice**: in a wrapped file, a command or a phrase in prose is only findable if the wrapping is chosen to keep it whole. `CLAUDE.md`'s two edited sections use one-line bullets and so cannot hit this; `WORKFLOW.md` wraps and can.
+- **The verification for a docs branch of this shape is a grep pair, not a build.** Every rule added was searched for in the file it landed in twice — once as written and once with the newlines folded (`tr '\n' ' '`) — because a phrase that wraps is precisely what a line-based search cannot find, and because a search that has not been shown able to find something is not a measurement. The pairs and their counts are on the tickets' closing comments.
+
+Known limitations / deferred scope:
+
+- **Two of SONNY-410's six items are not in this branch, and the ticket is left open for them rather than closed as complete.** They were outside the lane's named contract, which scoped SONNY-410 here to its two review-process rules and its two `CLAUDE.md` notes. The two remaining: whether a bounded check on `gh api`'s `-f`, `-F` and `--input` is worth adding to the attribution guard — a founder decision deferred onto this ticket on 2026-09-03, with `scripts/no-attribution prs` as the honest cover meanwhile — and PR #195's F9, that neither `scripts/no-attribution` nor its selftest is named in step 5's owed verification or step 7's review list, where `scripts/warnings`, `scripts/mutate` and `scripts/changelog-order` all are. The second is a `WORKFLOW.md` edit this branch could physically have made and deliberately did not: it was not in the contract, and by this repository's own reasoning the naming is what keeps a tool alive, so it deserves the decision rather than a session's judgment. Both are recorded on SONNY-410's closing comment; neither is a silent backlog.
+
+Open questions: none.
+
+Next branch: per the coordinator's wave order.
+
 ### Branch: fix/short-pages-look-alikes-and-alternating-pages
 Status: two of three tickets complete — **SONNY-390** and **SONNY-277** Done; **SONNY-256** not started and handed back, see "Known limitations" below. From `main` at `4a3d0ef6`, **rebased once at merge time onto `d14eba65`**. Two review cycles (fourteen findings at `b6650db6`, three above the bar; seven more at `bf63496f`, one of them a live survivor), a fix round and a records round on top of them, then N7 taken and the hop.
 Date: 2026-09-05
@@ -234,6 +271,7 @@ Known limitations / deferred:
 Open questions: none for the two tickets taken. SONNY-256's own open question stands as its ticket states it.
 
 Next: SONNY-256, on its own lane or a successor session on this branch.
+
 ### Branch: fix/the-gateway-closes-four-auth-doors
 Status: partial — SONNY-311 and SONNY-322 complete, one fix round and one records sweep after PR #208's review applied on top, then rebased onto `main` at `a8f30f16`; SONNY-237 and SONNY-238 not started and handed back untouched (the lane stopped at its ninety-minute mark per `WORKFLOW.md` step 5, at a green tree between tickets, which is that rule's expected shape rather than a failure)
 Date: 2026-09-05
