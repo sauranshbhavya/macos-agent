@@ -246,9 +246,9 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// takes (SONNY-233).
     ///
     /// **A list rather than a name, because a store is a *file* and a file can hold more than one
-    /// kind of thing** (SONNY-236). Twelve of the thirteen return one phrase and always will; the
-    /// thirteenth holds unfinished tasks and standing watchers in one file, and naming only the
-    /// first would put the second inside an irreversible press with nothing on screen to say so.
+    /// kind of thing** (SONNY-236). Every store but one returns a single phrase and always will;
+    /// `resumableTasks` holds unfinished tasks and standing watchers in one file, and naming only
+    /// the first would put the second inside an irreversible press with nothing on screen to say so.
     /// The alternative — one phrase reading "unfinished tasks and standing watchers" — keeps the
     /// property's old shape and produces "…, common output locations, and unfinished tasks and
     /// standing watchers", two conjunctions deep at the end of the one sentence in the product that
@@ -279,9 +279,9 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     /// routines* and *saved workspaces*; `clipboardHistorySettings`, *clipboard history settings*
     /// there and *clipboard settings* here; and `outputLocations`, *where your outputs usually go*
     /// there and *common output locations* here. **A banner names a thing standing alone and this
-    /// sentence puts it mid-list among twelve others**, so the two want different lengths — "saved"
-    /// distributes over the whole list here and cannot in a banner, and a sentence naming thirteen
-    /// things has no room for a clause. Neither vocabulary is the other's to restore.
+    /// sentence puts it mid-list among all the others**, so the two want different lengths — "saved"
+    /// distributes over the whole list here and cannot in a banner, and a sentence naming every
+    /// store has no room for a clause. Neither vocabulary is the other's to restore.
     public var deletionCopyNames: [String] {
         switch self {
         case .visionSessionJournal:

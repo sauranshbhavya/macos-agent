@@ -557,7 +557,7 @@ struct LocalStorageSecurityTests {
     /// words that describe it.
     ///
     /// **And the words themselves, by value** (PR #155 review, F1). Completeness and correctness are
-    /// different claims: a sentence can name all thirteen stores and name one of them wrongly, and
+    /// different claims: a sentence can name every store and name one of them wrongly, and
     /// until the table below existed nothing in the suite could tell the difference.
     @Test
     func theWipesOwnSentenceNamesEveryStoreItDeletes() {
@@ -771,7 +771,7 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
     // The thirteenth (row 13, SONNY-210): what a task was partway through. Created *and written to*
     // here, which is the whole point of this helper — the journal's own line above records what it
     // cost to list a store the fixture never wrote, and the only test that runs
-    // `deleteAllLocalData()` over real files would otherwise exercise twelve of thirteen.
+    // `deleteAllLocalData()` over real files would otherwise cover one store fewer.
     let resumableTaskStore = ResumableTaskStore(
         fileURL: root.appendingPathComponent("resumable-tasks.json"),
         encryption: encryption

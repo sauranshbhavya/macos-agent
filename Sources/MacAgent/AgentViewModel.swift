@@ -926,9 +926,10 @@ final class AgentViewModel: ObservableObject {
         /// store it speaks for.
         ///
         /// **This enum is the *banner's* population, and no longer the Memory row's** (PR #110
-        /// fix-round review). It has eleven cases against `LocalStore`'s thirteen — the vision
-        /// session journal and Shortcut run history have none — and while a row's damaged state was
-        /// derived from here, the Task history row could never leave `.readable` on their account.
+        /// fix-round review). It has fewer cases than `LocalStore` has stores — the vision session
+        /// journal, Shortcut run history and the pending-deletion queue have none — and while a
+        /// row's damaged state was derived from here, the Task history row could never leave
+        /// `.readable` on their account.
         /// `canDelete` collapsed to `count > 0`, so an empty task history beside an unreadable
         /// `shortcuts-run-history.json` reproduced the founder's original dead end exactly, inside
         /// the branch whose whole outcome is that an unreadable memory is clearable. The row and its
@@ -1047,8 +1048,8 @@ final class AgentViewModel: ObservableObject {
     /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds the population: in
     /// `Sources/`, exactly two files mention this method — the one declaring it and `main.swift` —
     /// and **each mentions it exactly once**, because the file set alone would permit a second
-    /// factory written inside *this* file (PR #109 re-check). A wrapper that builds the thirteen
-    /// stores **inline**, naming this method not at all, is a third door that check cannot see — and
+    /// factory written inside *this* file (PR #109 re-check). A wrapper that builds the stores
+    /// **inline**, naming this method not at all, is a third door that check cannot see — and
     /// it is not hypothetical: the reviewer wrote one and passed every check in that suite. It is
     /// closed by `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory`, which holds that
     /// `Sources/` constructs an `AgentViewModel` in exactly one place, the function below, and that
@@ -1225,11 +1226,11 @@ final class AgentViewModel: ObservableObject {
         // is what a fixture with no interest in watchers passes; the shipping app's live one is named
         // in `atItsRealStoreLocations()` beside the fourteen store locations.
         standingWatcherObserver: any StandingWatcherObserving,
-        // **The thirteenth store arrives inside this**, which is why it is required too even though
-        // it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are the real
-        // `clipboard-history.json` *and* the real system pasteboard, so a fixture that left this out
-        // had a monitor that would have copied the developer's actual clipboard into the developer's
-        // real file. Six of the fifteen fixtures left it out (SONNY-240).
+        // **The clipboard-history store arrives inside this**, which is why it is required too even
+        // though it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are
+        // the real `clipboard-history.json` *and* the real system pasteboard, so a fixture that left
+        // this out had a monitor that would have copied the developer's actual clipboard into the
+        // developer's real file. Six of the fifteen fixtures left it out (SONNY-240).
         clipboardHistoryMonitor: ClipboardHistoryMonitor,
         // Not a store, and required for a worse reason than the stores are: its default is the real
         // file list, and this service *deletes* what it is given. All fifteen fixtures already
