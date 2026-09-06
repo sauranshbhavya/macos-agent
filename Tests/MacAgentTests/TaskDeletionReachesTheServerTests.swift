@@ -784,10 +784,15 @@ struct EveryDeleteReachesTheServerTests {
     /// still calling the gateway and still about to delete every store — the window the claim exists
     /// to close, re-opened by pressing twice.
     ///
-    /// **The signal is the second wipe's own request, not a sleep.** The chain serialises them, so
-    /// the second request can only exist once the first wipe has finished; polling for it is
-    /// polling for the exact state this test is about, and on the mutant the claim is already false
-    /// when it arrives.
+    /// **The signal is each wipe's own handle, and there is no wall clock in it at all.** Awaiting
+    /// the first press's task returns exactly when that wipe has finished and decremented the count,
+    /// which is the instant this test is about; the second is still blocked on the gateway, so the
+    /// claim must still be held whichever of the two continuations the main actor runs next.
+    ///
+    /// **It was written as a poll for the second wipe's request and that was wrong** — the poll's
+    /// backstop is a deadline, so a loaded full-suite run failed it while the same test passed under
+    /// a filter, which is the shape `CLAUDE.md` calls a test that only finds a defect on an idle
+    /// machine. The handles remove the dependency rather than widening the number.
     @Test
     func aSecondPressInsideTheWindowDoesNotReleaseTheFirstWipesClaim() async throws {
         let fixture = try TaskDeletionFixture()
@@ -795,20 +800,23 @@ struct EveryDeleteReachesTheServerTests {
         fixture.blockTheGateway()
 
         fixture.viewModel.deleteLocalData()
+        let firstWipe = fixture.viewModel.localDataWipeForTests
         fixture.viewModel.deleteLocalData()
+        let secondWipe = fixture.viewModel.localDataWipeForTests
         #expect(fixture.viewModel.isDeletingLocalData)
 
-        // Let exactly one request through: the first wipe finishes, the second starts and blocks.
+        // Let exactly one request through: the first wipe finishes, the second is still blocked.
         fixture.releaseTheGateway(1)
-        try await fixture.waitUntilRequestsSeen(2)
+        await firstWipe?.value
 
-        // The second wipe is running. Before this round the first wipe's completion had already set
-        // the flag false, and the run doors — and Settings' Delete — were open again.
+        // Before this round the first wipe's completion had already set the flag false, and the run
+        // doors — and Settings' Delete — were open again while the second wipe was still draining,
+        // still calling the gateway and still about to delete every store.
         #expect(fixture.viewModel.isDeletingLocalData)
         #expect(!fixture.viewModel.isRunning)
 
         fixture.releaseTheGateway(1)
-        await fixture.viewModel.localDataWipeForTests?.value
+        await secondWipe?.value
         // And it is released once the last one finishes, or the control never comes back.
         #expect(!fixture.viewModel.isDeletingLocalData)
     }
@@ -1227,21 +1235,6 @@ private struct TaskDeletionFixture {
 
     func releaseTheGateway(_ requests: Int) { network.open(requests) }
 
-    /// Waits until the stub has recorded this many requests.
-    ///
-    /// **A real signal rather than a sleep**: the thing being waited for is that a later request
-    /// exists, which is a state the stub publishes. The deadline is a backstop reachable only by a
-    /// genuine failure, and it records an issue rather than hanging.
-    func waitUntilRequestsSeen(_ count: Int, timeout: TimeInterval = 60) async throws {
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while seen.all.count < count {
-            if Date() > deadline {
-                Issue.record("only \(seen.all.count) of \(count) requests were seen — treat as genuinely stuck.")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 
     func tearDown() {
         if let host {

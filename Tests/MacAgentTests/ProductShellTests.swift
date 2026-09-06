@@ -1045,6 +1045,10 @@ struct ProductShellTests {
             // it from `clearInMemoryLocalDataState` — which the wipe calls *mid-sequence* — would
             // drop the claim while the sequence still had steps left. Not local data either.
             "isDeletingLocalData",
+            // The count the claim is derived from (SONNY-404, PR #207's cycle-3). Same group and
+            // the same reason: it belongs to the wipe that is running, and the wipe clearing its own
+            // bookkeeping mid-sequence is what cycle 3 measured going wrong.
+            "localDataWipesInFlight",
             // A monotone count of finished delivery passes, for the test that cannot wait on the
             // handle above (PR #194 cycle-3). Not local data and not task state — it counts
             // background work since launch, so a wipe has nothing to find in it and resetting it
