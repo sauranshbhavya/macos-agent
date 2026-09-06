@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { errorBody } from "../errors.js";
 import type { WithConnection } from "../db/connection.js";
 import { accountForSupabaseUser } from "./attribution.js";
+import { isProviderSessionRevoked } from "./denylist.js";
 import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./token.js";
 
 /**
@@ -36,18 +37,25 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * and collapsing 404 into 401 would make every client's "no such route" indistinguishable from
  * "sign in again".
  *
- * **The residual, stated rather than papered over.** A Supabase access token is self-contained, so
- * this gateway can verify it without asking the provider — which is the point — and equally cannot
- * un-issue one. Signing out revokes the *refresh* family at the provider; an access token already in
- * the user's hands stays valid until its own `exp` **plus `EXPIRY_SKEW_TOLERANCE_SECONDS`** — one
- * hour on Supabase's default, and thirty seconds more than that here. The tolerance is deliberate
- * and `clock.ts` argues for it; naming `exp` alone would understate the window this gate leaves
- * open by exactly the amount this gate itself adds (PR #104's adversarial review, F9). What
- * this gate does cover is the account: `DELETE /v1/account` closes it, and every subsequent request
- * with any token naming it is refused on the attribution step below, immediately. Closing the
- * remaining window means a denylist of revoked sessions consulted per request, which is a table, a
- * migration and a dependency on Supabase's `session_id` claim — filed rather than built here, and
- * recorded in `server/README.md`.
+ * **Three things are asked of the database, and the order is deliberate.** A Supabase access token
+ * is self-contained, so this gateway verifies it without asking the provider — which is the point —
+ * and equally cannot un-issue one. What it *can* know locally is what it has been told, and it is
+ * told two things. `DELETE /v1/account` closes the account, and every later request with any token
+ * naming it is refused at the attribution step below. `POST /v1/auth/signout` revokes a session, and
+ * `auth/denylist.ts` records it so that the token already in the user's hand stops verifying here —
+ * that is SONNY-237, and it is consulted *before* attribution, because a signed-out session is
+ * refused whether or not the account behind it still resolves, and because the answers differ:
+ * `auth.token_revoked` with "this session was signed out" is not "this session no longer belongs to
+ * an active account". Both run inside the one connection this hook leases, and
+ * `DENYLIST_EXEMPT_ROUTES` below is the one route the first of them is skipped for.
+ *
+ * **The residual, stated rather than papered over, and it is now narrow.** Supabase's `session_id`
+ * claim is `omitempty`, and a token carrying none cannot be denylisted: it stays valid until its own
+ * `exp` **plus `EXPIRY_SKEW_TOLERANCE_SECONDS`** — one hour on Supabase's default, and thirty
+ * seconds more than that here. The tolerance is deliberate and `clock.ts` argues for it; naming
+ * `exp` alone would understate the window by exactly the amount this gate itself adds (PR #104's
+ * adversarial review, F9). `routes/auth.ts` logs a sign-out that had no session to record rather
+ * than letting it look complete, and `server/README.md` states the window that is left.
  */
 
 /**
@@ -86,6 +94,32 @@ export const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The routes a denylisted session may still reach, because refusing them would refuse the very act
+ * that denylisted it (SONNY-237).
+ *
+ * **One route, and it is not a convenience.** `POST /v1/auth/signout` records the row and *then*
+ * calls the provider. When that call answers `502 provider.unavailable` or `504 provider.timeout` —
+ * both retryable under §9.3, and both meaning the refresh-token family is still live — the caller is
+ * told to try again. Without this exemption the retry meets the row the first attempt wrote, is
+ * refused `401` at the gate, and the provider-side revocation can never be reached by anyone: the
+ * one path to it is closed by the local half having succeeded. That is a worse state than the defect
+ * this ticket fixes, and it is reachable on the first provider blip rather than in theory.
+ *
+ * **What it costs is nothing an attacker wants.** A denylisted token reaching this route can sign
+ * the same session out again — recording a row that already exists and asking the provider to revoke
+ * a family it was already asked about. Every other route stays refused, which is the whole of what
+ * the denylist is for. `POST /v1/auth/refresh` needs no entry: it is public, carries no bearer
+ * header at all, and is authenticated by the refresh token the sign-out revoked at the provider.
+ *
+ * **Method and path, and a route not in `PUBLIC_ROUTES`**: this is the narrower exemption of the
+ * two — the gate still verifies the token, still attributes the caller, and still refuses a closed
+ * account here. Only the denylist consult is skipped.
+ */
+export const DENYLIST_EXEMPT_ROUTES: ReadonlySet<string> = new Set([
+  "POST /v1/auth/signout",
+]);
+
+/**
  * **`HEAD` is judged as the `GET` it mirrors.** Fastify generates a `HEAD` route for every `GET` one
  * (`exposeHeadRoutes`, on by default), so `HEAD /v1/health` is a real route whose method is not
  * `GET` — and a liveness probe using `HEAD`, which is what several of them do, would otherwise meet
@@ -106,6 +140,20 @@ export interface AuthenticatedCaller {
    * provider. `POST /v1/auth/signout` is that route.
    */
   readonly accessToken: string;
+  /**
+   * The verified `session_id` claim, or `undefined` when the token carries none (SONNY-237).
+   *
+   * Carried for the one route that acts on it: `POST /v1/auth/signout` records it on the denylist,
+   * so the token it was presented with stops verifying here. Taken from the verdict rather than
+   * re-parsed, for the reason `accessToken` is taken from the header rather than re-read — a second
+   * reading is a second thing that can disagree with the first.
+   */
+  readonly providerSessionId: string | undefined;
+  /**
+   * The verified `exp`, as an instant. What decides how long a denylist row for this session has to
+   * be kept: `auth/denylist.ts`'s `denylistedUntil` adds the tolerance this gate grants past it.
+   */
+  readonly accessTokenExpiresAt: Date;
 }
 
 declare module "fastify" {
@@ -148,6 +196,7 @@ const REFUSAL_CODE: Record<TokenRefusal, string> = {
   issuer: "auth.unauthenticated",
   audience: "auth.unauthenticated",
   subject: "auth.unauthenticated",
+  session: "auth.unauthenticated",
   not_yet_valid: "auth.unauthenticated",
   expired: "auth.token_expired",
 };
@@ -245,9 +294,32 @@ export function registerAuthGate(app: FastifyInstance, deps?: GateDeps): void {
       );
     }
 
-    const owner = await deps.withConnection((client) =>
-      accountForSupabaseUser(client, verdict.token.supabaseUserId),
-    );
+    // **One connection, two questions, and the denylist is asked first** (SONNY-237). Both reads sit
+    // inside a single `withConnection` so a protected request still checks a connection out once —
+    // the property the docstring above claims about the pool. The consult is skipped entirely for a
+    // token carrying no session claim, because there is nothing to look it up by.
+    const consultDenylist = !DENYLIST_EXEMPT_ROUTES.has(`${request.method} ${routeUrl}`);
+    const owner = await deps.withConnection(async (client) => {
+      const session = verdict.token.providerSessionId;
+      if (consultDenylist && session !== undefined && (await isProviderSessionRevoked(client, session))) {
+        return "session_revoked" as const;
+      }
+      return accountForSupabaseUser(client, verdict.token.supabaseUserId);
+    });
+    if (owner === "session_revoked") {
+      // **`auth.token_revoked`, the same code a closed account gets, and for the same client
+      // behaviour**: §7.2 makes it "clears the Keychain entry, opens sign-in", which is exactly
+      // right for a token whose session was signed out. Refreshing would not help — the refresh
+      // family went with the sign-out — so `auth.token_expired`, the one retryable 401, would put
+      // the client into a loop against a session that is over.
+      request.log.info(
+        { route: `${request.method} ${routeUrl}` },
+        "access token presented for a signed-out session",
+      );
+      return reply.status(401).send(
+        errorBody("auth.token_revoked", "This session has been signed out.", request.id),
+      );
+    }
     if (!("accountId" in owner)) {
       // **`auth.token_revoked`, matching what `POST /v1/auth/refresh` already answers for the same
       // two states**, so the two surfaces cannot disagree about what a closed or ambiguous account
@@ -272,6 +344,8 @@ export function registerAuthGate(app: FastifyInstance, deps?: GateDeps): void {
       accountId: owner.accountId,
       supabaseUserId: verdict.token.supabaseUserId,
       accessToken: presented,
+      providerSessionId: verdict.token.providerSessionId,
+      accessTokenExpiresAt: verdict.token.expiresAt,
     };
     return undefined;
   });

@@ -1,9 +1,7 @@
-import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { Config } from "../src/config.js";
-import type { WithConnection } from "../src/db/connection.js";
 import {
   BODY_LIMIT_BYTES,
   DEADLINE_MS,
@@ -15,6 +13,7 @@ import {
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * `POST /v1/screen/analyze` — the screen-control route (SONNY-131), contract §4.5.
@@ -58,17 +57,7 @@ class UnusedAuthProvider implements AuthProvider {
  * SONNY-134's — so anything else reaching this is the route doing something this ticket did not
  * build. It throws rather than returning empty rows, so that is a red test rather than a silent one.
  */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query from the screen route: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from the screen route" });
 
 function build(overrides: Partial<Config> = {}) {
   return buildApp(

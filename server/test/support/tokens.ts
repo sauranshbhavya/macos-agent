@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { SupabaseJwtPolicy } from "../../src/auth/token.js";
 
 /**
@@ -64,14 +64,37 @@ export function signToken(
 }
 
 /**
+ * A distinct provider-side session id per Supabase user, derived so it is stable within a run and
+ * different between users (SONNY-237).
+ *
+ * **One fixed literal was here before the denylist existed, and it would now be a shared-state
+ * hazard rather than a detail.** Signing one user out records their `session_id`, and with a single
+ * literal that row would deny every *other* user's token in the same test file — a suite failing for
+ * a reason nothing in it names. The digest keeps the two suites that sign two callers in honest, and
+ * `sessionId` below is how a test that wants two sessions for one user gets them.
+ *
+ * A UUID because Supabase's is one (`internal/api/token.go:311` reads the claim with
+ * `uuid.FromString`) and because `verifyAccessToken` refuses one that is not.
+ */
+export function providerSessionFor(supabaseUserId: string): string {
+  const digest = createHash("sha256").update(`session:${supabaseUserId}`).digest("hex");
+  return [
+    digest.slice(0, 8), digest.slice(8, 12), `4${digest.slice(13, 16)}`,
+    `8${digest.slice(17, 20)}`, digest.slice(20, 32),
+  ].join("-");
+}
+
+/**
  * The claim set Supabase issues for a signed-in user, as far as this gateway reads it.
  *
- * `role` and `session_id` are carried because real tokens carry them and a verifier that broke on an
- * unknown claim would break in production; nothing here reads either.
+ * `role` is carried because real tokens carry it and a verifier that broke on an unknown claim would
+ * break in production; nothing reads it. **`session_id` used to be in that sentence and no longer
+ * is** — SONNY-237 reads it, `auth/gate.ts` consults a denylist on it, and it is the one claim here
+ * whose value changes what a request is answered.
  */
 export function claimsFor(
   supabaseUserId: string,
-  options: { now?: Date; lifetimeSeconds?: number } = {},
+  options: { now?: Date; lifetimeSeconds?: number; sessionId?: string } = {},
 ): Record<string, unknown> {
   const now = options.now ?? new Date();
   const issued = Math.floor(now.getTime() / 1000);
@@ -80,7 +103,7 @@ export function claimsFor(
     sub: supabaseUserId,
     aud: TEST_JWT_POLICY.audience,
     role: "authenticated",
-    session_id: "3f1d0c8e-1c5a-4a9f-9f6b-2b6f5f2a77aa",
+    session_id: options.sessionId ?? providerSessionFor(supabaseUserId),
     iat: issued,
     exp: issued + (options.lifetimeSeconds ?? 3600),
   };
@@ -89,7 +112,7 @@ export function claimsFor(
 /** A well-formed, correctly signed token for this user. The baseline every forgery deviates from. */
 export function accessTokenFor(
   supabaseUserId: string,
-  options: { now?: Date; lifetimeSeconds?: number } = {},
+  options: { now?: Date; lifetimeSeconds?: number; sessionId?: string } = {},
 ): string {
   return signToken({ alg: "HS256", typ: "JWT" }, claimsFor(supabaseUserId, options));
 }

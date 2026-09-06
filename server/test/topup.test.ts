@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
@@ -23,11 +22,11 @@ import type {
   TopUpOrder,
 } from "../src/billing/provider.js";
 import { polarProvider, readPolarDelivery, TOPUP_CHARGE_TIMEOUT_MS } from "../src/billing/polar.js";
-import type { WithConnection } from "../src/db/connection.js";
 import type { ClaimOutcome, KeyStore, StoredResponse } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * Topping up happens only if you asked (SONNY-215).
@@ -726,17 +725,7 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's attribution query and refuses everything else, as the other suites' does. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query outside the credit store: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "outside the credit store" });
 
 /** Grants every claim and remembers nothing — `credit.test.ts`'s, and for its stated reason. */
 const alwaysClaims: KeyStore = {

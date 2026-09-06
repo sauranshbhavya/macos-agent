@@ -573,16 +573,31 @@ the next is a tuning signal for the third. `auth.token_revoked` is the same code
 `POST /v1/auth/refresh` already answers for a closed or ambiguous account, so the two surfaces cannot
 disagree about what that state means.
 
-### An access token outlives a sign-out, and this is the bound on it
+### A sign-out stops the token, and this is what is left over
 
 A Supabase access token is self-contained. That is what lets this gateway verify one without a
-network round trip to the provider on every request — and it is equally why it cannot un-issue one.
-Signing out revokes the **refresh** family at the provider, so no new access token can be minted; the
-one already in the user's hand keeps verifying until its own `exp` **plus the 30-second skew
-tolerance** — so **one hour and thirty seconds** on Supabase's default lifetime. The extra thirty
-seconds are this gateway's own (`src/auth/clock.ts`, one-directional by design), which is exactly why
-they belong in the number: quoting `exp` alone would understate the window by the amount the gate
-adds to it.
+network round trip to the provider on every request — and it is equally why it cannot **un-issue**
+one. Signing out revokes the **refresh** family at the provider, so no new access token can be
+minted, and it used to leave the one already in the user's hand verifying until its own `exp`
+**plus the 30-second skew tolerance** — **one hour and thirty seconds** on Supabase's default
+lifetime. On a shared or borrowed Mac that was a working session left behind by someone who pressed
+Sign out.
+
+**A gateway that cannot un-issue a token can still stop honouring one, and since SONNY-237 it does.**
+`POST /v1/auth/signout` records the token's `session_id` claim in `sonny.revoked_provider_session`
+and `src/auth/gate.ts` consults that table on every authenticated request, so the presented token is
+refused `401 auth.token_revoked` immediately rather than at its expiry. A row is kept until the token
+would have expired anyway — its `exp` plus the same 30 seconds, because that is how long the gate
+accepts it for — and is then pruned by the next sign-out. No scheduler and no configurable
+retention: the table is bounded by the sign-outs of one token lifetime.
+
+**Two things are deliberately not covered, and both are narrow.** `POST /v1/auth/signout` itself
+stays reachable with a denylisted token: the row is written before the provider is called, so
+without that exemption a retry of a sign-out the provider answered `502` to would meet its own row
+at the gate and the provider-side revocation could never be reached. And Supabase declares
+`session_id` `omitempty` — a token carrying none cannot be keyed on, so it keeps verifying for the
+hour and thirty seconds above. The route logs when that happens rather than letting the sign-out look
+complete; GoTrue's own `/logout` handles the same shape by signing the user out globally.
 
 What *is* closed, on every single request: a token naming a **closed or deleted account** is refused,
 because attribution reads live state rather than remembering a decision. So `DELETE /v1/account`
@@ -598,9 +613,10 @@ and joining it here would let a token minted for one attribute to the account ag
 inverse. At Supabase those tokens keep working until they expire, which is SONNY-237's window above
 and not this one.
 
-Closing the remaining window means a denylist of revoked sessions consulted per request — a table, a
-migration, and a dependency on Supabase's `session_id` claim being present. Filed as **SONNY-237**
-rather than built into SONNY-203, which owns verification and the gate.
+The denylist above is what closed the rest of it (**SONNY-237**), and it was filed rather than built
+into SONNY-203 for the reason its own ticket gives: a table, a migration, and a dependency on
+Supabase's `session_id` claim, which is one thing more than "verify the token and gate every
+protected route".
 
 **Rotating `SUPABASE_JWT_SECRET` signs everyone out.** One secret is accepted, not an ordered list
 like the provider credentials below, so tokens signed with the previous one stop verifying the moment

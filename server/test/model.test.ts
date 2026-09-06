@@ -1,11 +1,9 @@
 import { connect } from "node:net";
 import { Readable } from "node:stream";
-import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { Config } from "../src/config.js";
-import type { WithConnection } from "../src/db/connection.js";
 import {
   BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS,
 } from "../src/model/limits.js";
@@ -14,6 +12,7 @@ import { REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * The four credential-bearing routes SONNY-130 moved behind this gateway.
@@ -58,17 +57,7 @@ class UnusedAuthProvider implements AuthProvider {
  * SONNY-134's — so anything else reaching this is a route doing something this ticket did not build.
  * It throws rather than returning empty rows, so that would be a red test rather than a silent one.
  */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query from a model route: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from a model route" });
 
 function build(overrides: Partial<Config> = {}) {
   return buildApp(

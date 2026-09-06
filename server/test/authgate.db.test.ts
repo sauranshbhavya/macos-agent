@@ -73,6 +73,12 @@ describeDb("the gate, attributing a verified token to an account", () => {
   beforeEachUnderHangBackstop(async () => {
     await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
     await client.query("TRUNCATE sonny.identity, sonny.account CASCADE");
+    // **The denylist survives a `CASCADE` on the account tree, because it references it**
+    // **nowhere** (SONNY-237). A sign-out records the token's `session_id`, and
+    // `support/tokens.ts` derives one id per Supabase user — so without this line a sign-out
+    // in one test denies the same user's token in every test after it, and the file fails
+    // with 401s naming nothing.
+    await client.query("TRUNCATE sonny.revoked_provider_session");
     provider = new SigningInProvider();
   });
 

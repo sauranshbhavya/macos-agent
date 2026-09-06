@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
@@ -18,7 +17,6 @@ import {
   type CreditCatalogue,
 } from "../src/credit/catalogue.js";
 import { creditPlanKeyFor } from "../src/credit/store.js";
-import type { WithConnection } from "../src/db/connection.js";
 import { periodStart } from "../src/entitlement/period.js";
 import { claimFactsFor, unprovisioned, type EntitlementRecord } from "../src/entitlement/store.js";
 import { METERED_ROUTES, type MeteringEvent } from "../src/metering/event.js";
@@ -28,6 +26,7 @@ import { testConfig } from "./support/config.js";
 import { catalogueOf, fakeCreditStore, TEST_CREDIT_PLANS } from "./support/credit.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * The credit/allowance model, and the one number a user tracks (SONNY-212).
@@ -481,17 +480,7 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's attribution query and refuses everything else, as the other suites' does. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query outside the credit store: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "outside the credit store" });
 
 /**
  * A `KeyStore` that grants every claim and remembers nothing.

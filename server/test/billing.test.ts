@@ -1,4 +1,3 @@
-import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
@@ -16,13 +15,13 @@ import {
   verifyWebhookSignature,
 } from "../src/billing/webhook-signature.js";
 import { ConfigError } from "../src/config.js";
-import type { WithConnection } from "../src/db/connection.js";
 import { claimFactsFor, unprovisioned } from "../src/entitlement/store.js";
 import { isPublicRoute } from "../src/auth/gate.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * The subscription webhook and the checkout link, driven through the whole real app (SONNY-211).
@@ -72,17 +71,7 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's attribution query and refuses everything else, as the other suites' does. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query outside the billing store: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "outside the billing store" });
 
 /**
  * A `BillingStore` that records what it was asked and grants nothing.

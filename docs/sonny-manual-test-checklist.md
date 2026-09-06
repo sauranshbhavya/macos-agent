@@ -4005,6 +4005,26 @@ formality.
       `show_permission_readiness` tool). **Expected:** the account line it reports matches the
       Settings page exactly — same state word, same sentence. **What would be a finding:** the two
       disagreeing, which would mean the tool and the page are reading different answers.
+- [ ] **(SONNY-237, waits on SONNY-192)** **Signing out on one Mac really ends that session.** Against
+      a deployed gateway, sign in on two Macs with the same account. On the first Mac press Sign out.
+      Expected: the first Mac is signed out as usual, and the **second Mac keeps working** — its own
+      session is untouched. **What would be a finding:** the second Mac being signed out too, or
+      asking you to sign in again, which would mean one sign-out is ending every session.
+
+- [ ] **(SONNY-237, waits on SONNY-192)** **Sign out, then sign back in, and nothing is stuck.**
+      Against a deployed gateway: sign out, then immediately sign in again with an emailed code and
+      run one ordinary command. Expected: it all works, at the speed you are used to. **What would be
+      a finding:** the new session being refused, or anything answering "sign in again" straight
+      after you did. (This row is here because the gateway now keeps a short-lived record of every
+      signed-out session, and a record that outlived the session it named would lock the user out of
+      the account they just signed back into.)
+
+- [ ] **(SONNY-237, waits on SONNY-192)** **Signing out while the login service is unreachable still
+      signs you out of the Mac, and the retry works.** Against a deployed gateway whose Supabase
+      project is blocked, sign in and then press Sign out. Expected: the Mac signs you out; the app
+      may tell you the server-side half did not happen. Unblock the project and sign out again from a
+      fresh sign-in. Expected: that one succeeds. **What would be a finding:** the second sign-out
+      failing, or the app getting stuck on a sign-out it can never complete.
 
 ## 8. How to report back
 

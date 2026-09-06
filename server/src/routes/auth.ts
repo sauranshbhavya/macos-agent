@@ -6,6 +6,7 @@ import {
 } from "../auth/codes.js";
 import { accountForSupabaseUser } from "../auth/attribution.js";
 import { expiryFields } from "../auth/clock.js";
+import { denylistedUntil, revokeProviderSession } from "../auth/denylist.js";
 import { callerOf } from "../auth/gate.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
@@ -689,11 +690,23 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * caller is attributable to a live account. What this route does with the token is the one
    * legitimate use of the raw string: hand it back to the provider that issued it.
    *
-   * **What signing out does and does not end.** It revokes the refresh-token family, so no new
-   * access token can be minted; the access token in the user's hand stays valid until its own `exp`
-   * plus `EXPIRY_SKEW_TOLERANCE_SECONDS`, because it is self-contained and this gateway verifies it
-   * locally rather than asking the provider. `auth/gate.ts` states that residual in full, tolerance
-   * included (PR #104's adversarial review, F9).
+   * **What signing out does and does not end.** It revokes the refresh-token family at the provider,
+   * so no new access token can be minted — and, since SONNY-237, it also records the token's
+   * `session_id` on this gateway's own denylist, so the access token already in the user's hand
+   * stops verifying here rather than surviving to its own `exp` plus
+   * `EXPIRY_SKEW_TOLERANCE_SECONDS`. That is the half a local verifier can do: it cannot un-issue a
+   * self-contained token, and it can stop honouring one it has been told about. What is left is a
+   * token carrying no `session_id` at all, which is a shape Supabase mints and this route logs;
+   * `auth/gate.ts` and `auth/denylist.ts` state it.
+   *
+   * **The denylist row is written before the provider is called, and unconditionally.** Three
+   * reasons, in the order they decide it. The local half is the one this gateway can guarantee, and
+   * it is the user-visible property of the ticket — the token stops working *here*. It must survive
+   * the provider failing: a `502` or a `504` from the call below leaves the refresh family live, and
+   * a user who pressed Sign out should not also keep a working access token because the provider was
+   * unreachable. And a `ProviderRejected` — the token was already invalid — is a session that is over
+   * either way, so there is no outcome of that call for which the row is wrong. The database is
+   * demonstrably reachable at this point, because the gate read it for this very request.
    *
    * **An unreachable provider answers `502 provider.unavailable` and not `204`, and that was a
    * decision rather than a copy of the route above** (SONNY-311, whose own text asked for one).
@@ -715,9 +728,31 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * today, so what changes is that the arm is now reached with the accurate code.
    */
   app.post("/v1/auth/signout", async (request, reply) => {
+    const caller = callerOf(request);
+    const providerSession = caller.providerSessionId;
+    if (providerSession === undefined) {
+      // **Logged rather than silent, because a sign-out that recorded nothing looks identical to one
+      // that did.** GoTrue omits `session_id` when there is none and then logs the user out globally
+      // whatever scope was asked for, so the provider half is if anything wider here; the gateway
+      // half is the one that cannot happen, and this token keeps verifying to its own expiry.
+      request.log.warn(
+        { requestId: request.id },
+        "sign-out could not deny the presented access token: it carries no session_id claim, so it " +
+          "keeps verifying until its own expiry",
+      );
+    } else {
+      await deps.withConnection((client) =>
+        revokeProviderSession(
+          client,
+          providerSession,
+          denylistedUntil(caller.accessTokenExpiresAt),
+          now(),
+        ),
+      );
+    }
     try {
       await withDeadlines(AUTH_DEADLINES, (signal) =>
-        deps.provider.signOut(callerOf(request).accessToken, signal),
+        deps.provider.signOut(caller.accessToken, signal),
       );
     } catch (error) {
       if (error instanceof ProviderRejected) {
