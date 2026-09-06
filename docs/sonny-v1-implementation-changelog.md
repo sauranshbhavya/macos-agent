@@ -448,6 +448,78 @@ passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
   `aBulkDeleteThatReachedSomebodyElsesTaskKeepsTheObligation`, is this branch's own and is the test
   written for that property.
 
+**Second fix round, 2026-09-05: an obligation belongs to the account that pressed it.** PR #207's
+fresh review found five things above the bar and seven residuals. F1 is the one that mattered and it
+was a cross-account data-loss path, reachable with no unusual action: the obligation the wipe left
+behind named **no account and no time**, nothing cleared the queue on a session change, and the
+launch sweep delivered with whatever token was current — so a wipe pressed offline by one user,
+followed by a second signing in on the same Mac, deleted the **second** user's everything, silently;
+and the same obligation, delivered days later, reached content the first user created after the
+press. The per-task obligations were never exposed to this, and the reason is the point: §4.6's
+`404` refuses a task id the gateway knows under another account, which is a bound the account-wide
+scope has no id to carry. Three parts, each pinned by a test that fails on the tree as it was and by
+a mutant:
+
+- **Every queued obligation carries the account it was pressed under**, and is delivered only under a
+  session for that account. The Supabase user id, which is an *account* identifier and says nothing
+  about what the user did. A per-task entry with no account — a file written before the field — is
+  delivered as before, because §4.6's `404` is exactly the protection SONNY-333 designed for it.
+  Reading it synchronously needed a seam: `SonnyBackendClient` is an `actor`, and the enqueue runs
+  before the local deletes, so `SonnyTaskDeletionService` takes an `accountIdentity` closure the app
+  wires to the token store. SONNY-333 looked at this same wall and dropped the stamp for it.
+- **The account-wide obligation carries the instant of the press**, and `DELETE /v1/account/content`
+  gained an optional `?before=` that bounds what it deletes — additive under §8.1's "may add an
+  optional request field", with its own line in **§4.6.3** and §4.1. Each table is bounded on its own
+  notion of when the content happened: `occurred_at`, `source_occurred_at`, `claimed_at`. An
+  unparseable value is a `400` rather than a fall-through to "no bound".
+- **A session change discards what the outgoing account owed, with the reason recorded.** Delivering
+  first is impossible after the fact — signing out clears the tokens — so the discard is the honest
+  half of that pair, wired at `main.swift`'s `sessionDidChange`. **Signing *out* keeps them**: the
+  account that owns them may sign back in, and the per-entry gate holds them safe until it does.
+- **A wipe pressed with nobody signed in records nothing at all**, and says so: an obligation that
+  cannot name whose content it is about is precisely the one that deletes the next account. The
+  outcome sentence has three states now rather than two, and the third tells the user to sign in.
+
+**F2: the obligation is written on both paths.** `deleteAllLocalData` collects failures and throws
+only *after* deleting everything it could, and the queue is one of the files it deletes — so a wipe
+that failed on any single file landed in the `catch` with the queue already gone and step 4 never
+reached. The server held everything, the Mac owed nothing, and the sentence named only a local file:
+the state the founder's condition forbids, through the failure branch. The review named
+`aPartialWipeKeepsTheMemoryPagesSentenceForTheFileStillOnDisk` as the test already driving that
+throw, and it now reads both halves of the message and what the queue holds afterwards.
+
+**F3: the wipe holds a claim across the whole sequence.** The `!isRunning` guard was read on the
+press while the body then awaited a drain and a server call — the client's whole multi-attempt budget
+on a 20-second route — before touching a file, and a *scheduled routine* sets `isRunning` from a
+timer with nobody watching. `isDeletingLocalData` is set synchronously at the press and read by
+`start()`, which is the door every caller passes through and where `isRunning` is set.
+
+**F4 and F5 are records, corrected in place.** The checklist section's preamble told the founder the
+superseded decision directly above the corrected row that asks them to confirm the opposite, and its
+row count was stale; the two Behavior bullets above stated the superseded wipe as shipped and are now
+struck through inside their own corrections, so a sweep for the old wording finds it labelled as
+history rather than finding nothing. R1 through R6 are swept in the same round — **R5 among them**:
+the confirmation's middle sentence was how-it-works copy before a press, and what happens when the
+servers cannot be reached is said *afterwards*, by the outcome sentence, in the state it happened in.
+**R7 is not this branch's** and is filed as SONNY-426.
+
+**Second fix round's figures, stamped at `910e20e3`, which is the head.** Every earlier stamp in this
+entry passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2958 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` is 2929 in 198 with the same 8, so the branch adds 29 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `910e20e3` (clean).
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- Server — `npm run build`, `npm run typecheck`, `npm run check:secrets` and `npm test` all exit 0,
+  with **806 passed / 419 skipped**; `npm run test:db` **exit 0, 1225 passed**.
+- `scripts/mutate` — **27 mutants, 27 killed, 0 survived, 0 unattributed** (18 app-half, 9 gateway).
+  **Nothing was carried**: `git diff --name-only 0c086ab3 HEAD -- <file>` answers 1 for every file the
+  two plans target *and* for the killers' own file and the helper they drive, so the whole plan was
+  re-run. Nine mutants are new. **One survived on the first pass and is worth keeping**: X2 sent a
+  far-future bound, which satisfied a test asserting only that the query *contains* `before=` while
+  deleting exactly what an unbounded delete would — the defect the parameter exists to stop, passing
+  the test written for it. The assertion reads the instant now and X2 dies.
+
 Next branch: per the coordinator's wave-6 order.
 
 ### Branch: fix/a-short-article-about-a-wall-is-served
