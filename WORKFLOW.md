@@ -587,6 +587,41 @@ probe in the branch instead of transcribing it, and a probe that will not reprod
 hand back rather than a test to make pass. (`CLAUDE.md`'s Claims and evidence section carries the
 general rule.)
 
+**An implementing lane may tell a reviewing session that its anchor moved, and what the delta is,
+and nothing else.** Everything else — findings, fix-round routing, and anything at all that could
+shape what the reviewer looks at or concludes — goes through the coordinator, and the lane tells
+the coordinator it has sent the fact. What was already written is only half of this and reads as
+the opposite: "Step 0" above instructs the *reviewer* to stop and re-anchor when the remote head
+moves before its findings are filed, and says nothing about who may tell it that the head moved,
+while the bullet above routes every post-close round through the user without carving out a fact
+that is not a round. A session reading only those two concludes it must stay silent and let the
+reviewer discover the move for itself, which is the outcome nobody wants. **Why interrupting beats
+waiting, which is the part that makes this more than etiquette:** on the instance that produced the
+rule, the two lines that had moved were precisely the two a reviewer at the old tree would have
+raised — a changelog entry reporting a PR body as unfixed, and an open question the founder had
+since answered — and both were already closed. Separating an already-fixed finding from a live one
+costs more than re-reading a two-line diff, which is the same reasoning Step 0 gives for
+re-anchoring in the first place. (Founder-confirmed 2026-09-03, on
+`chore/no-attribution-in-the-history` while PR #195 was open: a review worktree sat detached at
+`1b3006a`, the lane's push moved the branch to `538466c`, the lane sent the bare fact and told the
+coordinator, and the coordinator confirmed that was the right call and stated the rule it follows.
+Both SHAs are branch heads and SONNY-407's rewrite has since taken them non-ancestral, which is
+§8's convention working. Recorded on SONNY-410 and written here 2026-09-05.)
+
+**Before pushing to a branch with an open PR, check whether a review is anchored to it.**
+`git worktree list` shows a detached worktree at that branch's head while a review is live, and
+that is the whole check. Before this rule was written, this file mentioned that command exactly
+once: `grep -c -i 'worktree list' WORKFLOW.md` → **1** at `d14eba65`, and that one hit is step
+3's worktree-lifecycle bullet, which is about auditing worktrees rather than about pushing. The
+same command answers **3** here, because this paragraph names the command once in its own prose
+and again in that citation — the difference is this rule arriving, not the file drifting, and it
+is the reason the 1 is written as a reading at a commit rather than as a claim about the file. A
+review pinned at a head that then moves is not wrong; it is reviewing a tree one step behind, and
+the cost is the reviewer's time separating a stale finding from a live one. When the check says a
+review is live the push is still the lane's to make — step 5's standing authorization is
+untouched, and holding work back to keep a review still is not what this asks for — and what the
+lane then owes is the one sentence the rule above allows. (SONNY-410, same instance.)
+
 **Review cycles are capped at three: the initial review, one fix round, one re-check.** The
 re-check is the last word **on finding things**; what may continue past it is verification of
 a named fix, under the scoped-round rule below. Anything still outstanding below the bar of
