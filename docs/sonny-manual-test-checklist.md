@@ -3678,6 +3678,38 @@ account you can sign in as.
       content disappearing — that is one user's press deleting another user's everything, which is
       what this row exists to catch.
 
+### The fourth unfinished-task control, and the words that told it apart (new 2026-09-06, SONNY-426)
+
+**What changed, and what deliberately did not.** SONNY-404 made three delete buttons reach the
+servers. A fourth control was filed as a candidate — Command Center &rsaquo; Memory &rsaquo;
+Unfinished tasks &rsaquo; **Delete** — and the answer is that it reaches no server, because an
+unfinished task's saved progress is not something Sonny's servers ever held under a name this Mac
+still knows. Nothing about what any button sends changed. **What changed is one sentence.** The
+confirmation on that Delete used to read *"Sonny stops offering to carry on with this task"*, which
+is exactly what the widget's **&times;** promises — and the &times; deliberately keeps the task, so
+the one control that throws an unfinished task's work away was describing the effect of the one that
+does not.
+
+**These rows need no gateway and no account** — nothing here talks to a server, which is half of what
+they are checking.
+
+- [ ] **(new 2026-09-06, SONNY-426) — needs only the app. The Delete says the work goes.** Start a
+      task that will not finish (the easiest is to ask Sonny to open a page and quit the app while it
+      is running), reopen Sonny, and go to Command Center &rsaquo; Memory &rsaquo; **Unfinished
+      tasks**. Press **Delete** on the row and **read the confirmation before pressing anything
+      else.** Expected: it says *"This deletes the unfinished task, so Sonny can't carry on with it.
+      Anything it already did is not undone."* Confirm, and the task is gone from the list. **What
+      would be a finding:** a confirmation that only says Sonny stops offering — that is the old
+      wording, and it describes the &times; rather than this press.
+- [ ] **(new 2026-09-06, SONNY-426) — needs only the app. The two controls still say different
+      things, and still do different things.** Leave a second unfinished task in place. When the
+      widget offers to carry it on, hover the **&times;** — the tooltip must read **"Don't ask
+      again"** — and press it. Relaunch Sonny. Expected: the offer never comes back for that task,
+      **and the task is still listed under Memory &rsaquo; Unfinished tasks**, where Continue and
+      Delete both still work. **What would be a finding:** the &times; removing the task from that
+      list. That would make it a delete with no undo, which is the thing the 2026-08-25 decision was
+      taken to prevent.
+
 ### Renaming one file, and being asked first (new 2026-09-04, SONNY-385)
 
 **Why these rows exist.** Renaming is destructive — it replaces a name the user chose, and nothing in

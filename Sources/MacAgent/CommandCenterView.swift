@@ -5135,7 +5135,12 @@ enum MemoryDeletionCopy {
         case .approvedApps:
             return "Sonny asks again the next time it needs to control this app."
         case .resumableTasks:
-            return "Sonny stops offering to carry on with this task. Anything it already did is not undone."
+            // **It says the work goes, because the work goes** (SONNY-426). This read "Sonny stops
+            // offering to carry on with this task", which is the promise the widget's cross makes —
+            // and the cross keeps the record precisely so the founder's decision of 2026-08-25 held:
+            // no control in the widget may lose work irreversibly. This one is the control that
+            // does, it is the only one, and its confirmation described the other one's effect.
+            return "This deletes the unfinished task, so Sonny can't carry on with it. Anything it already did is not undone."
         case .routines, .workspaces, .taskHistory:
             // Unreachable: the sheet opens for the cases above only, and these three are deleted
             // from their own pages.

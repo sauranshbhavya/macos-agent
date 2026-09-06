@@ -3474,6 +3474,38 @@ struct MemoryCommandCenterTests {
         #expect(MemoryDeletionCopy.message(for: .taskHistory).contains("Files those tasks created are not deleted"))
     }
 
+    /// **The two controls that act on one unfinished task have to say different things, because they
+    /// do different things** (SONNY-426).
+    ///
+    /// The widget's cross stops the offer and keeps the record — the founder's decision of
+    /// 2026-08-25, taken so that no control in the widget can lose work irreversibly. This Delete is
+    /// the control that loses it, and it is the only one. Its confirmation used to read "Sonny stops
+    /// offering to carry on with this task", which is the cross's promise word for word, so the one
+    /// press that throws an unfinished task's progress away described the effect of the press that
+    /// does not.
+    ///
+    /// **By value, not by a completeness or a `contains` check**, for the reason
+    /// `theWipesOwnSentenceNamesEveryStoreItDeletes` gives about the wipe's own sentence: a check
+    /// that only asks whether words are present sees a missing one and never a wrong one, and this
+    /// is text a person reads immediately before an irreversible press. The cross's own label is
+    /// pinned by value in `ResumeOfferPresentationTests` and is deliberately not re-pinned here —
+    /// one fact, one home.
+    @Test
+    func theUnfinishedTaskDeletesConfirmationSaysTheWorkGoesRatherThanEchoingTheCross() {
+        let confirmation = MemoryDeletionCopy.entryMessage(for: .resumableTasks)
+
+        #expect(
+            confirmation
+                == "This deletes the unfinished task, so Sonny can't carry on with it. Anything it already did is not undone."
+        )
+        // The per-type sentence this now parallels, which has always named the deletion.
+        #expect(MemoryDeletionCopy.message(for: .resumableTasks).hasPrefix("This deletes every unfinished task"))
+        // The wording that was wrong, held as a regression pin rather than as a general negative:
+        // this sentence really did open with the cross's promise until SONNY-426, so what is
+        // forbidden here is something the tree held rather than something it never could.
+        #expect(!confirmation.hasPrefix("Sonny stops offering"))
+    }
+
     @Test
     func routinesAndWorkspacesCarryNoNewestTimestampBecauseNeitherRecordHasOne() async throws {
         let fixture = try makeMemoryFixture()

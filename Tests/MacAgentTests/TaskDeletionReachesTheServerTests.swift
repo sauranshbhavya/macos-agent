@@ -462,6 +462,62 @@ struct EveryDeleteReachesTheServerTests {
         #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
     }
 
+    // MARK: - The two unfinished-task controls, which reach no server (SONNY-426, 2026-09-06)
+
+    /// **The widget's cross deletes nothing, so it owes nothing** (SONNY-426).
+    ///
+    /// SONNY-426 was filed reading this as a fourth delete door of the kind SONNY-404 routed. It is
+    /// not a delete door at all: the founders' decision of 2026-08-25 is that the cross stops the
+    /// offer and keeps the record, taken so that no control in the widget can lose work
+    /// irreversibly. The property is an absence — no queue entry, no request — and an absence is
+    /// exactly what a later change removes without anyone noticing, which is why it is written down
+    /// rather than left to be inferred from the code reading as if it does nothing.
+    @Test
+    func decliningAnUnfinishedTaskReachesTheServerNotAtAll() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeResumableTask(id: "unfinished-a")
+        #expect(fixture.viewModel.resumeOffer?.id == "unfinished-a")
+
+        fixture.viewModel.declineResumeOffer()
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.seen.all.isEmpty)
+        // The record survives, declined — the half of the decision that makes the absence correct
+        // rather than a gap. A cross that had deleted it would owe what a delete owes.
+        #expect(try fixture.resumableTasksOnDisk() == ["unfinished-a"])
+        #expect(try fixture.resumableTaskIsDeclinedOnDisk("unfinished-a"))
+        #expect(fixture.viewModel.resumeOffer == nil)
+    }
+
+    /// **Memory › Unfinished tasks › Delete removes a checkpoint that names nothing on any server**
+    /// (SONNY-426, from review-207's residual R7).
+    ///
+    /// The three doors SONNY-404 routed each hold §5.1's `task_id`. A `ResumableTask` holds no
+    /// backend key at all, and the run's wire id — `currentTaskID`, re-minted at every dispatch —
+    /// lives on the task-history row, which this press leaves standing. So the server's copy stays
+    /// reachable through the doors that do name it, and queueing here would delete the server's copy
+    /// of a task the user can still open on the Tasks page.
+    ///
+    /// **The row on disk is the load-bearing assertion**, for `taskHistoryOnDisk`'s reason: an
+    /// enqueue added here would be invisible to a published-state check, and the point of this test
+    /// is what the press did *not* reach.
+    @Test
+    func theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        _ = try fixture.writeTaskRecord(id: "task-a")
+        let unfinished = try fixture.writeResumableTask(id: "unfinished-a")
+
+        fixture.viewModel.deleteResumableTask(unfinished)
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.seen.all.isEmpty)
+        #expect(try fixture.resumableTasksOnDisk() == [])
+        #expect(try fixture.taskHistoryOnDisk() == ["task-a"])
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
     // MARK: - The whole wipe is a promise about the account (SONNY-404 fix round, 2026-09-05)
 
     /// **The whole press, on the path where everything works.** The queue is drained, the account's
@@ -1128,6 +1184,63 @@ private struct TaskDeletionFixture {
         // taking the head of the list gives a test with two rows whichever one the sort happened to
         // put on top, which is how this helper silently handed the same record back twice.
         return try #require(viewModel.taskHistoryRecords.first { $0.id == id })
+    }
+
+    /// Writes one unfinished task the widget will offer to carry on with, and hands it back as
+    /// Memory's Unfinished tasks row would (SONNY-426).
+    ///
+    /// One `.openURL` step, because `mayBeOfferedForResume` requires every remaining step to be
+    /// `.safeToRepeat` and a record the offer withholds cannot exercise the cross at all.
+    ///
+    /// **Dated from now rather than from the fixed instant `writeTaskRecord` uses**, because this
+    /// store has an idle expiry and that one does not: `ResumableTaskStore.loadAll` drops a record
+    /// nobody came back to, so a fixture timestamp months in the past is written and then never
+    /// read back — which reads as the view model failing to publish rather than as the store doing
+    /// its job.
+    func writeResumableTask(id: String) throws -> ResumableTask {
+        let now = Date()
+        let task = ResumableTask(
+            id: id,
+            command: "open the page",
+            plan: AgentPlan(
+                summary: "Open the page.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(
+                        id: "url",
+                        operation: .openURL,
+                        description: "Open the page.",
+                        targetURL: "https://example.com/page"
+                    )
+                ]
+            ),
+            startedAt: now.addingTimeInterval(-60),
+            updatedAt: now
+        )
+        try resumableTaskStore().save(task)
+        viewModel.refreshResumableTasks()
+        return try #require(viewModel.resumableTasks.first { $0.id == id })
+    }
+
+    /// The unfinished tasks as the *file* holds them, for `taskHistoryOnDisk`'s reason: a path that
+    /// returns early leaves the published list saying whatever it said before.
+    func resumableTasksOnDisk() throws -> [String] {
+        try resumableTaskStore().loadAll().map(\.id)
+    }
+
+    /// Whether the file records this task as declined — the cross's whole effect, and the thing that
+    /// has to survive a press that deletes nothing.
+    func resumableTaskIsDeclinedOnDisk(_ id: String) throws -> Bool {
+        try resumableTaskStore().loadAll().first { $0.id == id }?.isDeclined ?? false
+    }
+
+    private func resumableTaskStore() -> ResumableTaskStore {
+        ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json"),
+            encryption: LocalStorageEncryption(
+                keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
+            )
+        )
     }
 
     /// Writes one finished task that ran a screen-control session, and the session beside it.
