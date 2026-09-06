@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from "fastify";
 import {
   optionalEntitlementSigningKey,
   requireClientVersionPolicy,
@@ -61,6 +61,113 @@ export const API_VERSION = "1.0";
  * 2026-08-21 move to a VM makes possible (`docs/sonny-row-12-host-decision.md` §12.2).
  */
 export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
+
+/**
+ * How long a caller may take to deliver a whole request, in milliseconds (SONNY-322).
+ *
+ * **Fastify's default is `0`, which disables it, and that is not a choice this repository made** —
+ * measured rather than read off the documentation: a bare `Fastify()` reports
+ * `server.requestTimeout === 0`, where Node's own default for the same property is `300000`. So
+ * Fastify turns Node's bound off and nothing turned it back on. With it off, nothing anywhere
+ * bounds how long a request may take to arrive: a caller that opens a socket, sends headers
+ * declaring a body and then sends the body one byte at a time — or never — holds a connection and a
+ * Fastify request forever. That is available to any authenticated caller and, on the public sign-in
+ * routes, to an unauthenticated one.
+ *
+ * **What this bounds is receiving the request, not running the handler**, which is the half that
+ * decides the number. Measured at Fastify 5.12.1 / Node v22.23.1 with `requestTimeout: 2000`: a body
+ * dribbled in over six seconds was refused `408`, a request whose declared body never arrived at all
+ * was refused `408`, and a handler that slept for five seconds returned `200`. So this is not a
+ * second copy of §12's total deadlines and cannot be read as one; `model/limits.ts` owns those.
+ *
+ * **120 seconds, and the reason is §12 rather than a guess.** §12's longest *client* timeout is 120 s
+ * (`screen/analyze` and `research/synthesize`). Past that instant no Sonny client is still waiting
+ * for any route's answer, so a request whose body is still arriving at 120 s is one nobody will read
+ * — refusing it costs a real caller nothing, and letting it run is the whole defect. A tighter
+ * number would buy nothing, for the reason below.
+ *
+ * **This is a coarse backstop and not a deadline, which is measured and is the reason the claim
+ * lease is fixed at the route instead of here.** Node checks for expired connections on a sweep —
+ * `server.connectionsCheckingInterval`, which reads `30000` on this runtime — so the refusal lands
+ * tens of seconds after the configured instant, and not monotonically in it. Three readings at
+ * Fastify 5.12.1 / Node v22.23.1, timed to the first response byte rather than to the socket
+ * closing (`keepAliveTimeout` is `72000` here, and timing the close measures that instead): a
+ * `requestTimeout` of 2000 answered `408` at 89955 ms, one of 5000 at 90003 ms, and one of 35000 at
+ * 60003 ms. **So this value cannot hold any interval to within a minute**, which is exactly why
+ * `CLAIM_LEASE_SECONDS`' guarantee is not built on it — `routes/model.ts` bounds the multipart body
+ * read itself, on a timer this process owns, and `idempotency/store.ts` states the arithmetic.
+ */
+export const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * §7.1's envelope on the one class of response Fastify answers without a route (SONNY-322).
+ *
+ * **Turning `requestTimeout` on introduces a response shape this server did not previously
+ * produce**, and the shape Fastify produces for it is its own: measured, a timed-out request was
+ * answered `{"error":"Request Timeout","message":"Client Timeout","statusCode":408}`, which shares
+ * no field with §7.1's `{error: {code, message, retryable, retry_after_seconds, request_id}}`. That
+ * is the same defect `errors.ts` and `frameworkErrors` exist to close one layer up, arriving through
+ * a door neither of them watches — a client error is raised on the socket before any request object
+ * exists, so `setErrorHandler` and `frameworkErrors` are both downstream of it and neither runs.
+ * Left alone it would make this file's own claim below — that with `frameworkErrors` "every response
+ * this server can produce carries contract §7.1's envelope" — false the moment the timeout fires.
+ *
+ * **The classification is Fastify's and the answer is `classify`'s, which is the whole fix** (PR
+ * #208's F3). The first version of this function wrote one fixed `408` whatever arrived, because it
+ * was written for the timeout and replaced `defaultClientErrorHandler` outright. Fastify's own
+ * handler classifies three ways, and losing that told a malformed request it had been too slow:
+ * measured over real sockets, `HPE_INVALID_HEADER_TOKEN`, `HPE_HEADER_OVERFLOW` and
+ * `HPE_INVALID_METHOD` all came back `408 Request Timeout` with "Request was not delivered in
+ * time." — a statement about something that did not happen, and, for the malformed case, a status
+ * contradicting §7.2's own table, which assigns *Malformed request* to **400**.
+ *
+ * So the status is decided the way Fastify decides it, and the body is decided by `errors.ts`'s
+ * `classify` — the same function `setErrorHandler` and `frameworkErrors` use one layer up. **"Two
+ * doors, one answer" is now literally true**: both doors call the same mapping, rather than this one
+ * reimplementing a rule and drifting from it. A status `classify` does not name individually still
+ * lands on its generic-4xx arm, exactly as it would through the other door.
+ *
+ * **`request_id` is empty here and that is honest.** `genReqId` runs per *request*, and this fires
+ * on a socket that never completed one, so there is no id to quote — inventing one would put a join
+ * key into a support lookup that names nothing. The bytes are written by hand because that is the
+ * whole of what this seam offers: a socket, not a reply.
+ */
+export function clientErrorResponse(error?: { code?: string | undefined }): string {
+  const mapped = classify({ statusCode: clientErrorStatus(error) } as FastifyError);
+  const body = JSON.stringify(
+    errorBody(mapped.code, mapped.message, "", { retryable: mapped.retryable }),
+  );
+  return [
+    `HTTP/1.1 ${mapped.status} ${CLIENT_ERROR_REASON[mapped.status] ?? "Bad Request"}`,
+    "Content-Type: application/json; charset=utf-8",
+    `Content-Length: ${Buffer.byteLength(body)}`,
+    `Sonny-Api-Version: ${API_VERSION}`,
+    "Connection: close",
+    "",
+    body,
+  ].join("\r\n");
+}
+
+/**
+ * Fastify's own three-way classification of a `clientError`, kept rather than replaced.
+ *
+ * Read off `defaultClientErrorHandler` in fastify 5.12.1: `ERR_HTTP_REQUEST_TIMEOUT` is the request
+ * timeout, `HPE_HEADER_OVERFLOW` is a header block past Node's `maxHeaderSize`, and everything else
+ * — a bad request line, an invalid header token, an unparseable method — is a malformed request.
+ * The statuses are Fastify's; what each one *says* is `classify`'s.
+ */
+function clientErrorStatus(error?: { code?: string | undefined }): number {
+  if (error?.code === "ERR_HTTP_REQUEST_TIMEOUT") return 408;
+  if (error?.code === "HPE_HEADER_OVERFLOW") return 431;
+  return 400;
+}
+
+/** The reason phrases for the three statuses above. Cosmetic — no client reads them. */
+const CLIENT_ERROR_REASON: Readonly<Record<number, string>> = {
+  400: "Bad Request",
+  408: "Request Timeout",
+  431: "Request Header Fields Too Large",
+};
 
 /**
  * `auth` is optional so a deployment that mounts no auth route needs no provider, no rate-limit salt
@@ -218,6 +325,32 @@ export function buildApp(
     genReqId: () => randomUUID(),
 
     bodyLimit: DEFAULT_BODY_LIMIT_BYTES,
+
+    // SONNY-322. See `REQUEST_TIMEOUT_MS` for what this bounds, what it does not, and why the
+    // number is §12's longest client timeout rather than one of its server deadlines.
+    requestTimeout: REQUEST_TIMEOUT_MS,
+
+    /**
+     * The envelope on a request that never became one. `clientErrorResponse` carries the argument.
+     *
+     * **The early return is Fastify's and is kept** (PR #208's F3). Its own handler returns without
+     * writing when the connection is already gone — a reset peer, or a socket something else has
+     * destroyed — and a write to either is a wasted syscall at best. The first version of this
+     * dropped that guard; in practice `socket.writable` was already false in those cases, so the
+     * behaviour was the same, but the guard was doing real work in Fastify and nothing replaced it.
+     *
+     * **`end` rather than `destroy`, said accurately** — an earlier version of this comment claimed
+     * the socket "is destroyed after the write", which `socket.end()` does not do: it is a graceful
+     * half-close that flushes the answer first and lets the peer see it. Measured on this runtime
+     * the connection does end up destroyed and `getConnections()` answers 0, which is why the wrong
+     * word cost nothing; `Connection: close` is the statement to the caller, and `end` is what
+     * makes sure the caller receives it before the socket goes.
+     */
+    clientErrorHandler: (error, socket) => {
+      if (error.code === "ECONNRESET" || socket.destroyed) return;
+      if (socket.writable) socket.end(clientErrorResponse(error));
+      else socket.destroy();
+    },
 
     /**
      * Off unless a proxy is actually in front, which is a per-environment fact.

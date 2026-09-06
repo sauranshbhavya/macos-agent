@@ -95,6 +95,18 @@ class FakeProvider implements AuthProvider {
    * `401 auth.token_revoked`.
    */
   liveRefreshToken = "rt";
+  /**
+   * The provider could not be reached at all — a 429, a 5xx, a timeout, a socket failure or an
+   * unparseable 200, which is the set `auth/supabase.ts` raises `ProviderUnavailable` for.
+   *
+   * **Separate from `accept`, and that separation is the whole of SONNY-311.** `accept = false`
+   * models the provider *answering* and refusing, which is `ProviderRejected`; this models it not
+   * answering. Before this flag no test could tell a route that distinguishes them from one that
+   * does not, and two routes did not: `refresh` and `signout` let `ProviderUnavailable` past their
+   * `catch` into a `500 server.error`. Checked before `accept` in each method below, because a
+   * provider that cannot be reached has not refused anything.
+   */
+  unreachable = false;
   async sendEmailCode(email: string) { this.sent.push(email); return { providerRequestId: "p1" }; }
   /**
    * **Declared with the interface's parameters even though this body ignores them** (PR #87 sixth
@@ -106,11 +118,13 @@ class FakeProvider implements AuthProvider {
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
+    if (this.unreachable) throw new ProviderUnavailable("supabase verifyEmailCode could not be reached");
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
     this.liveRefreshToken = this.session.refreshToken;
     return this.session;
   }
   async refresh(presented: string): Promise<VerifiedSession> {
+    if (this.unreachable) throw new ProviderUnavailable("supabase refresh could not be reached");
     if (!this.accept) throw new ProviderRejected("refresh rejected");
     if (presented !== this.liveRefreshToken) {
       throw new ProviderRejected("refresh token was already rotated away");
@@ -133,6 +147,7 @@ class FakeProvider implements AuthProvider {
    */
   async signOut(accessToken: string) {
     this.signedOutTokens.push(accessToken);
+    if (this.unreachable) throw new ProviderUnavailable("supabase signOut could not be reached");
     if (!this.accept) throw new ProviderRejected("already gone");
   }
   async signOutAllForUser(id: string) {
@@ -1193,6 +1208,87 @@ describeDb("the auth endpoints", () => {
       })).statusCode).toBe(204);
       await app.close();
     });
+
+    itUnderHangBackstop(
+      "answers 502 provider.unavailable on all THREE routes when the provider cannot be reached",
+      async () => {
+        // **SONNY-311, asserted as one test over three routes because the defect was a
+        // disagreement rather than two independent bugs.** `email/verify` answered `502
+        // provider.unavailable`; `refresh` and `signout` let `ProviderUnavailable` past their
+        // `catch`, so it reached Fastify's error handler and `errors.ts` classified it `500
+        // server.error`. Three routes on the same branch of the same file, one condition, two
+        // answers. Splitting this into two tests would let a future change fix one route and leave
+        // the neighbours disagreeing again, which is exactly what happened once.
+        //
+        // Each status AND each code is asserted, because they can come apart: a 502 carrying
+        // `server.error` and a 500 carrying `provider.unavailable` are both reachable defects, and
+        // §7.2 is a table of pairs.
+        const app = build();
+        await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "down@example.com" } });
+        // Signed in BEFORE the provider goes down, because `signout` is a protected route: the gate
+        // needs a live account to attribute the token to, and an account is created by verifying.
+        await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "down@example.com", code: "1" } });
+
+        provider.unreachable = true;
+
+        const verify = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "down@example.com", code: "1" },
+        });
+        expect(verify.statusCode).toBe(502);
+        expect(verify.json().error.code).toBe("provider.unavailable");
+
+        const refreshed = await app.inject({
+          method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" },
+        });
+        expect(refreshed.statusCode).toBe(502);
+        expect(refreshed.json().error.code).toBe("provider.unavailable");
+
+        const out = await app.inject({ method: "POST", url: "/v1/auth/signout", headers: signedIn() });
+        expect(out.statusCode).toBe(502);
+        expect(out.json().error.code).toBe("provider.unavailable");
+
+        // §7.2 case 5's own column, and the field a client keys its backoff off. It was already
+        // `true` on the 500 these two used to answer, so a test asserting only the status and the
+        // code would pass on a fix that dropped it.
+        for (const response of [verify, refreshed, out]) {
+          expect(response.json().error.retryable).toBe(true);
+          // §7.1's envelope, whole. `provider.unavailable` carries no `Retry-After`: §9.3 has the
+          // client back off on its own schedule, and inventing a number here would be this gateway
+          // scheduling against an outage it cannot see the end of.
+          expect(response.json().error.retry_after_seconds).toBe(null);
+          expect(typeof response.json().error.request_id).toBe("string");
+        }
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "still answers 204 on sign-out when the provider REJECTS, which is not the same event",
+      async () => {
+        // The other half of SONNY-311's decision, and the reason `signout` could not simply copy
+        // its neighbour. `ProviderRejected` means the family is already gone — the state the caller
+        // asked for — so it is swallowed and the answer is 204. `ProviderUnavailable` means nobody
+        // knows and probably not, so it is a 502. A route that collapsed the two would either
+        // strand a signed-out user on a retryable error or assert a revocation that never happened.
+        //
+        // Pinned here beside the 502 rather than trusting the older idempotence test above, because
+        // what makes this a pair is that the same route answers differently to two provider
+        // failures, and nothing asserted the two together.
+        const app = build();
+        await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "rej@example.com" } });
+        await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "rej@example.com", code: "1" } });
+
+        provider.accept = false;
+        expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: signedIn() })).statusCode)
+          .toBe(204);
+
+        provider.unreachable = true;
+        expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: signedIn() })).statusCode)
+          .toBe(502);
+        await app.close();
+      },
+    );
 
     itUnderHangBackstop("hands the provider the token the caller presented, not a rewritten one", async () => {
       // The one legitimate use of the raw access token: giving it back to the provider that issued

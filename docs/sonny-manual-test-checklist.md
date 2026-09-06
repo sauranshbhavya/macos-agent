@@ -3640,6 +3640,57 @@ from the source Mac, with the user account included. Install and open Sonny ther
       would be broken, but it would mean the prediction above is wrong, and we would want to know
       before a real user meets it rather than after.
 
+### Gateway hardening — two auth doors (new 2026-09-05, SONNY-311 and SONNY-322)
+
+**Every row here waits on a deployed gateway (SONNY-192), and that is stated rather than left to be
+discovered.** Both changes are server-side, in a gateway that runs nowhere yet: `./scripts/deploy.sh
+staging` and `production` are still stubs that exit 3. Nothing in the packaged Mac app changed and
+nothing about these rows can be checked by opening it, so **please do not attempt them until a host
+exists** — an attempt now would either exercise nothing or exercise a local container, which is not
+what these rows are asking about. They are written down now so that whoever runs the first real
+deployment has them, rather than reconstructing them later from a ticket.
+
+- [ ] **(SONNY-311, waits on SONNY-192)** **Signing out while the login service is unreachable says
+      so, instead of blaming Sonny.** Against a deployed gateway whose Supabase project is
+      unreachable (block it at the network, or point the gateway at a project reference that does not
+      resolve), press **Sign out** in the app. Expected: you are signed out **on this Mac** — that
+      half is unconditional and must still happen — and the failure is reported as Sonny not being
+      able to reach the login service, not as something going wrong on Sonny's side. **What would be
+      a finding:** being told an internal error occurred, or being left apparently signed in.
+- [ ] **(SONNY-311, waits on SONNY-192)** **The same for a session refresh.** With the same gateway,
+      leave the app running until it next refreshes its session (or force it by waiting out the
+      access token's hour). Expected: the same "could not reach" character of message, and a retry
+      that succeeds once the provider is reachable again. **What would be a finding:** the app
+      signing you out and sending you to the sign-in screen — a temporary outage must not cost you
+      your session.
+- [ ] **(SONNY-322, waits on SONNY-192)** **A stalled upload gives up instead of hanging forever.**
+      This one is a terminal check against the deployed gateway rather than an app action, because no
+      app control can produce it. Open a request to `POST /v1/transcriptions` that sends its headers
+      and then stops sending the body — `curl` with `--limit-rate 1` against a few megabytes will do
+      it, or `nc` with a hand-written multipart preamble and no ending. Expected: the connection is
+      refused after about **ninety seconds** with a `408`, the JSON body has the same shape every
+      other Sonny error has — an `error` object with `code`, `message`, `retryable`,
+      `retry_after_seconds` and `request_id` — and that `code` reads **`request.timeout`** with
+      `retryable: true`. **What would be a finding:** the connection sitting open indefinitely; a
+      reply whose body has a `statusCode` field at the top level, which would mean the framework
+      answered rather than Sonny; or a `code` of `request.invalid`, which is the malformed-request
+      code and the thing PR #208's review caught — it tells the app not to retry a condition a retry
+      would clear.
+- [ ] **(SONNY-322, waits on SONNY-192)** **A malformed request is not told it was too slow.** Same
+      terminal, same deployed gateway. Send a request with a header name containing a space —
+      `printf 'GET /v1/health HTTP/1.1\r\nHost: h\r\nBad Header: x\r\n\r\n' | nc <host> <port>`.
+      Expected: `400 Bad Request` with `code` `request.invalid`. **What would be a finding:** a `408`,
+      or the words "not delivered in time" — a statement about something that did not happen, which
+      is what this answered before the fix round.
+- [ ] **(SONNY-322, waits on SONNY-192)** **An ordinary voice command still works, and is not the
+      thing that got cut off.** The bound above is 90 seconds for the upload itself — raised from 30
+      by the founders on 2026-09-05, precisely so this row is unlikely to fail. On a normal
+      connection, hold the push-to-talk hotkey, say a real command of a few seconds, and let it run.
+      Expected: it transcribes and acts exactly as before. Then, if you can, try the same on a
+      deliberately poor connection (macOS Network Link Conditioner, or a phone hotspot with one bar).
+      **What would be a finding:** a normal-length command failing on a slow connection. That is the
+      one way this change could hurt a real user, and it is the row worth spending the most care on.
+
 ## 8. How to report back
 
 For each real finding, give me:

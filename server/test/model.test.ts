@@ -1,10 +1,16 @@
+import { connect } from "node:net";
+import { Readable } from "node:stream";
 import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { Config } from "../src/config.js";
 import type { WithConnection } from "../src/db/connection.js";
-import { BODY_LIMIT_BYTES, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS } from "../src/model/limits.js";
+import {
+  BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS,
+} from "../src/model/limits.js";
+import { CLAIM_LEASE_SECONDS, type KeyStore } from "../src/idempotency/store.js";
+import { REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
@@ -1078,6 +1084,401 @@ describe("the numbers this ticket is held to", () => {
     // The other five numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
     // matching `total` here. `ModelRouteNumbersTests` asserts them against these same literals, so
     // the two halves of §12's table cannot move independently without one of the two failing.
+  });
+
+  it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {
+    // **SONNY-322's user-visible half, over the real route.** A caller that opens a request, sends
+    // the multipart preamble and then stops holds a socket and a Fastify request with nothing to end
+    // either. This is that request.
+    //
+    // **What this test does NOT exercise is the idempotency claim, and saying so is the point**
+    // (PR #208's F2). Its first version opened by naming the claim — the hook takes one in
+    // `preHandler`, before this route's body is read — and the app it builds passes no
+    // `idempotencyStore` and the request carries no `Idempotency-Key`, so `preHandler` takes the
+    // unguaranteed branch and there is no claim here to end. A comment describing state the test
+    // cannot see is worse than no comment: it is what a later reader trusts instead of looking.
+    // The claim is covered by `RELEASES the idempotency key when the body read times out`, below in
+    // this file, which builds an app with an `idempotencyStore` and sends the key. **Not by
+    // `idempotency.db.test.ts`**, which an earlier version of this line pointed at and which has no
+    // transcription case at all — the same defect this comment exists to correct, one size smaller.
+    //
+    // **Fake timers rather than a shortened deadline**, so the test drives the real
+    // `BODY_READ_DEADLINE_MS` instead of a value only tests use. Advancing the clock is what fires
+    // the route's timer; a sleep-then-assert would be the wall-clock bet CLAUDE.md forbids, and at
+    // ninety seconds it would also be, by a wide margin, the slowest test in the suite. The constant
+    // is not spelled here on purpose — it moved once already, from 30 s to 90 s — and the test reads
+    // it, so this comment cannot go stale against it again.
+    const calls = stubUpstream(() => jsonResponse({ text: "should never be reached" }));
+    const app = build();
+    // **The request stream, captured so the release can be asserted and not just the answer.** A
+    // mutation battery is why this is here: deleting the `once("finish", …)` destroy from the route
+    // left the whole suite green (W7 survived at `222d2578`), because every assertion below is about
+    // the response and the defect is about what happens to the connection afterwards — a caller
+    // answered 408 and then left holding the socket is the occupancy this ticket removes, arriving
+    // one line later than the version it replaced.
+    let raw: { destroyed: boolean } | undefined;
+    app.addHook("onRequest", async (request) => { raw = request.raw; });
+    const boundary = "SonnyTestBoundary-stalled";
+    // A body that begins correctly and never ends: the preamble and the opening of the audio part,
+    // with no terminating boundary and no `end()`. `content-length` is deliberately not set, so the
+    // stream is what decides when the body is over — which is never.
+    const stalled = new Readable({ read() { /* nothing more will ever arrive */ } });
+    stalled.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="meta"\r\n` +
+        `Content-Type: application/json\r\n\r\n` +
+        `{"task_id":"t","retention":"standard"}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="audio"; filename="voice.m4a"\r\n` +
+        `Content-Type: audio/mp4\r\n\r\n`,
+    );
+    stalled.push("partial-audio-bytes-and-then-silence");
+
+    vi.useFakeTimers();
+    try {
+      const pending = app.inject({
+        method: "POST",
+        url: "/v1/transcriptions",
+        headers: {
+          authorization: authorization(),
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: stalled,
+      });
+      // Let the handler reach its body read and register the deadline before the clock moves.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BODY_READ_DEADLINE_MS + 1);
+      const response = await pending;
+
+      // The status and the code, because they can come apart: `errors.ts` maps an unnamed 4xx to
+      // `request.invalid`, and a 400 carrying the same code would look identical in a body-only
+      // assertion while telling the client the body was malformed rather than late.
+      expect(response.statusCode).toBe(408);
+      // **`request.timeout`, not `request.invalid`, and the code is what the client acts on**
+      // (PR #208's F1). `SonnyBackendError` decides retryability from the code rather than from the
+      // envelope for every code but one, and it hard-codes `request.invalid` as not retryable and
+      // renders it as "Sonny couldn't send this one" — so the old answer told a user on a slow link
+      // a dead end for a condition a retry clears. No `retryable` value could have moved that,
+      // which is why this asserts the code and not only the flag.
+      expect(response.json().error.code).toBe("request.timeout");
+      expect(response.json().error.retryable).toBe(true);
+      // And no upstream call was made for a body that never arrived — the whole reason §9.2's
+      // fourth bullet cares about this interval.
+      expect(calls).toHaveLength(0);
+
+      // **The connection is released, which is the half the answer does not prove.** Ordered after
+      // the response is read on purpose: the destroy is hung off the reply's `finish`, because
+      // destroying the request first takes the response with it, so a check made any earlier would
+      // assert the bug rather than the fix.
+      expect(raw?.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await app.close();
+    }
+  });
+
+  it("RELEASES the idempotency key when the body read times out, so the retry it invites re-runs", async () => {
+    // **PR #208's F2, and the half the branch's first version could not see.** The claim is taken in
+    // a `preHandler` hook, before this route's body is read, so the 408 the deadline answers passes
+    // through `onSend` with a live claim in hand. `request.invalid` was outside `RELEASE_ON_CODES`,
+    // so that answer was **stored**: the key held a timeout for twenty-four hours and the caller's
+    // next attempt — the complete, valid upload the user is waiting on — was replayed a stale 408
+    // with no upstream call. That is `fingerprint.ts`' "a wrong answer to a correct request, not a
+    // repeat of a right one", reached through a purely transient condition.
+    //
+    // The store is `AppOverrides.idempotencyStore`, which exists so the flagged `npm test` can cover
+    // §9.2 without a database. It models the two behaviours this test turns on: a completed key
+    // replays, a released key is claimable again.
+    const completed = new Map<string, { status: number; body: Buffer }>();
+    const released: string[] = [];
+    const store: KeyStore = {
+      claim: async ({ accountScope, key }) => {
+        const stored = completed.get(`${accountScope}/${key}`);
+        if (stored) {
+          return {
+            kind: "replay",
+            response: {
+              status: stored.status, body: stored.body,
+              contentType: "application/json", requestId: "original",
+            },
+          };
+        }
+        return { kind: "claimed", token: "token-1" };
+      },
+      complete: async ({ accountScope, key }, response) => {
+        completed.set(`${accountScope}/${key}`, { status: response.status, body: response.body });
+      },
+      release: async ({ accountScope, key }) => { released.push(`${accountScope}/${key}`); },
+    };
+    const calls = stubUpstream(() => jsonResponse({
+      text: "Open Safari",
+      usage: { type: "tokens", input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+    }));
+    const app = buildApp(
+      testConfig({ credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }] }),
+      { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+      { entitlementStore: fakeEntitlementStore(), idempotencyStore: store },
+    );
+    const key = "a-key-the-caller-will-reuse";
+    const boundary = "SonnyTestBoundary-claimed";
+
+    const stalled = new Readable({ read() { /* nothing more will ever arrive */ } });
+    stalled.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="meta"\r\n` +
+        `Content-Type: application/json\r\n\r\n` +
+        `{"task_id":"t","retention":"standard"}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="audio"; filename="voice.m4a"\r\n` +
+        `Content-Type: audio/mp4\r\n\r\n`,
+    );
+    stalled.push("partial-audio-bytes-and-then-silence");
+
+    vi.useFakeTimers();
+    try {
+      const pending = app.inject({
+        method: "POST",
+        url: "/v1/transcriptions",
+        headers: {
+          authorization: authorization(),
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+          "idempotency-key": key,
+        },
+        payload: stalled,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BODY_READ_DEADLINE_MS + 1);
+      const timedOut = await pending;
+      expect(timedOut.statusCode).toBe(408);
+      expect(timedOut.json().error.code).toBe("request.timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Half one: the answer was released rather than stored. Both directions asserted, because a
+    // store that recorded neither would satisfy a check on `completed` alone.
+    expect(released).toEqual([`${ACCOUNT}/${key}`]);
+    expect(completed.size).toBe(0);
+
+    // Half two, and the one a user actually meets: the same key, carrying the complete body this
+    // time, genuinely re-runs. Under the defect this answered 408 with zero upstream calls.
+    const good = multipartBody({ task_id: "t", retention: "standard" }, Buffer.from("real-audio"));
+    const retried = await app.inject({
+      method: "POST",
+      url: "/v1/transcriptions",
+      headers: {
+        authorization: authorization(),
+        "content-type": good.contentType,
+        "idempotency-key": key,
+      },
+      payload: good.payload,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().text).toBe("Open Safari");
+    expect(calls).toHaveLength(1);
+    await app.close();
+  });
+
+  it("keeps the transcription body read plus its handler INSIDE the idempotency lease", () => {
+    // **SONNY-322's whole point, asserted as the inequality rather than as three literals.** The
+    // claim on an `Idempotency-Key` is taken in a `preHandler` hook, and on this one route the body
+    // is `multipart/form-data` read inside the handler — so the interval the lease has to cover is
+    // the body read PLUS the rest of the handler, and until this ticket the body read was bounded by
+    // nothing at all. §9.2's fourth bullet promises a key in flight is never a second upstream call,
+    // and only a bound on that interval makes it unreachable.
+    //
+    // Asserting the relationship rather than the numbers is deliberate: each of the three is
+    // separately defensible and any one of them may move, and what must survive the move is that the
+    // sum stays under the lease. A test pinning `30_000` would go red on a change that is fine and
+    // stay green on the change that is not — raising the lease's two inputs while leaving the lease.
+    const worstCaseMs = BODY_READ_DEADLINE_MS + DEADLINE_MS.transcriptions.total;
+    expect(worstCaseMs).toBeLessThan(CLAIM_LEASE_SECONDS * 1000);
+
+    // **The bound is §12's client timeout for this route, which is the derivation the founders
+    // chose on 2026-09-05** (PR #208's F4). The first version solved this inequality with the lease
+    // held fixed and got 30 s, which inverted §12's governing rule — the gateway giving up at a
+    // third of the budget its own client waits, on the one route where the upload is the slow part.
+    // The 90 is the number that answers to something outside this repository; the lease is the one
+    // that moved. Pinned as a literal because §12's table lives on the Swift side and nothing here
+    // can read it, so this assertion is the only thing standing between the two.
+    expect(BODY_READ_DEADLINE_MS).toBe(90_000);
+
+    // The margin is real rather than incidental — a sum one millisecond under the lease would
+    // satisfy the line above and leave nothing for the process's own work between the two.
+    expect(CLAIM_LEASE_SECONDS * 1000 - worstCaseMs).toBeGreaterThanOrEqual(15_000);
+
+    // And the JSON routes, which were already inside the lease: `synthesize` and `screenAnalyze` are
+    // the longest at 105 s, which is 75 s inside a 180 s lease. **They are no longer the reason the
+    // margin is 15 s** — the transcription row is, being the tight one — and this comment said they
+    // were while quoting the pre-F4 numbers.
+    for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
+      expect(deadlines.total, route).toBeLessThanOrEqual(CLAIM_LEASE_SECONDS * 1000 - 15_000);
+    }
+  });
+
+  it("bounds a request's delivery at §12's longest CLIENT timeout, not at one of its server deadlines", () => {
+    // **SONNY-322.** Fastify's default is `0`, which disables the bound; nothing else anywhere
+    // bounds how long a caller may take to deliver a request, which is a connection-occupancy shape
+    // available to an unauthenticated caller on the sign-in routes.
+    //
+    // 120 s is §12's longest *client* timeout (`screen/analyze` and `research/synthesize`). Past it
+    // no Sonny client is still waiting for any answer, so a body still arriving then is one nobody
+    // will read. It is deliberately NOT one of §12's server deadlines: this bounds receiving the
+    // request and not running the handler, measured — with `requestTimeout: 2000` a handler that
+    // slept five seconds still returned 200.
+    expect(REQUEST_TIMEOUT_MS).toBe(120_000);
+
+    // It has to sit above every server-side total deadline, or a legitimate slow request would be
+    // cut off mid-handler on a route whose own deadline had not yet elapsed.
+    for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
+      expect(REQUEST_TIMEOUT_MS, route).toBeGreaterThan(deadlines.total);
+    }
+    // And above the route-level body-read bound, which is the tighter of the two and the one that
+    // actually holds the lease's arithmetic.
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(BODY_READ_DEADLINE_MS);
+
+    // **The constant reaching the server, which is a separate claim from the constant's value.** A
+    // mutation battery is what makes this worth writing: deleting the `requestTimeout` line from
+    // `app.ts`'s options block leaves every assertion above green, because they all read the
+    // exported number rather than the server built from it. `server.requestTimeout` is readable
+    // before `listen`, so this costs nothing.
+    const app = build();
+    expect(app.server.requestTimeout).toBe(REQUEST_TIMEOUT_MS);
+    // Fastify's own default, restated so the line above is visibly not asserting a default: a bare
+    // instance reports 0, which is the disabled state this ticket exists to leave.
+    expect(app.server.requestTimeout).not.toBe(0);
+  });
+
+  it("wires the client-error handler, so a socket-level refusal carries §7.1's envelope", async () => {
+    // The other half of the wiring, and the same lesson: `clientErrorResponse()` can be perfect and
+    // reach nothing. Fastify installs it as a `clientError` listener on the raw server, so emitting
+    // that event is what proves the handler is attached — nothing else in the suite can reach a
+    // failure that happens before a request object exists.
+    const app = build();
+    const written: string[] = [];
+    let ended = false;
+    const socket = {
+      writable: true,
+      end: (chunk?: string) => { if (chunk !== undefined) written.push(chunk); ended = true; },
+      destroy: () => { ended = true; },
+    };
+    app.server.emit("clientError", Object.assign(new Error("timeout"), { code: "ERR_HTTP_REQUEST_TIMEOUT" }), socket);
+
+    expect(ended).toBe(true);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toBe(clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" }));
+    // Fastify's own default handler answers `{"error":"Request Timeout","message":"Client Timeout",
+    // "statusCode":408}`. Asserting the absence of that shape is what tells a wired handler from an
+    // unwired one, since both end the socket with a 408 status line.
+    expect(written[0]).not.toContain('"statusCode"');
+    expect(written[0]).toContain('"request_id"');
+  });
+
+  it("classifies a client error the way Fastify does, inside §7.1's envelope", async () => {
+    // **PR #208's F3.** The first version of `clientErrorHandler` replaced Fastify's outright and
+    // wrote one fixed 408 whatever arrived, so a malformed request was told it had been too slow and
+    // a header block over the runtime's limit lost its 431 — two existing response classes moved
+    // silently. Fastify classifies three ways and the statuses are now its; what each one *says* is
+    // `errors.ts`' `classify`, the same function the other two error doors use.
+    //
+    // **Over a real socket, not `app.inject`.** These failures happen before a request object
+    // exists, which is the whole reason the handler takes a socket — `inject` never reaches them.
+    const app = build();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+    const port = address.port;
+
+    const speak = (raw: string): Promise<string> =>
+      new Promise((resolve) => {
+        const socket = connect(port, "127.0.0.1");
+        let seen = "";
+        socket.on("connect", () => socket.write(raw));
+        socket.on("data", (chunk) => { seen += chunk.toString(); });
+        socket.on("close", () => resolve(seen));
+        socket.on("error", () => resolve(seen));
+      });
+
+    try {
+      // A header name containing a space is not a token, so the parser refuses the message itself.
+      const malformed = await speak("GET /v1/health HTTP/1.1\r\nHost: h\r\nBad Header: x\r\n\r\n");
+      expect(malformed.split("\r\n")[0]).toBe("HTTP/1.1 400 Bad Request");
+      const malformedBody = JSON.parse(malformed.slice(malformed.indexOf("\r\n\r\n") + 4));
+      // §7.2's second block assigns *Malformed request* to 400 `request.invalid`, and `errors.ts`
+      // implements exactly that one layer up. Before the fix this was a 408 saying the request had
+      // not been delivered in time — a statement about something that did not happen.
+      expect(malformedBody.error.code).toBe("request.invalid");
+      expect(malformedBody.error.retryable).toBe(false);
+
+      // A header block past the runtime's `maxHeaderSize`, which is 16 KiB by default.
+      const huge = `GET /v1/health HTTP/1.1\r\nHost: h\r\nX-Big: ${"a".repeat(40_000)}\r\n\r\n`;
+      const overflowed = await speak(huge);
+      expect(overflowed.split("\r\n")[0]).toBe("HTTP/1.1 431 Request Header Fields Too Large");
+      const overflowedBody = JSON.parse(overflowed.slice(overflowed.indexOf("\r\n\r\n") + 4));
+      expect(overflowedBody.error.code).toBe("request.invalid");
+
+      // And every one of them carries the envelope rather than Fastify's `{statusCode,…}` shape.
+      for (const body of [malformedBody, overflowedBody]) {
+        expect(Object.keys(body)).toEqual(["error"]);
+        expect(body.error.retry_after_seconds).toBe(null);
+        expect(body.error.request_id).toBe("");
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("answers the TIMEOUT class with the retryable code, and only that class", () => {
+    // The third of Fastify's three, asserted at the function rather than over a socket because
+    // provoking a real request timeout costs the runtime's thirty-second sweep. The pairing is what
+    // matters: the timeout is the one client error that is retryable, and the other two are not.
+    const timedOut = clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" });
+    expect(timedOut.split("\r\n")[0]).toBe("HTTP/1.1 408 Request Timeout");
+    const timedOutBody = JSON.parse(timedOut.slice(timedOut.indexOf("\r\n\r\n") + 4));
+    expect(timedOutBody.error.code).toBe("request.timeout");
+    expect(timedOutBody.error.retryable).toBe(true);
+
+    // The control that makes the line above mean something: an error that is NOT the timeout must
+    // not get the timeout's answer. Before the fix every one of these was a 408.
+    for (const code of ["HPE_INVALID_HEADER_TOKEN", "HPE_HEADER_OVERFLOW", "HPE_INVALID_METHOD", undefined]) {
+      const other = clientErrorResponse(code === undefined ? undefined : { code });
+      expect(other.split("\r\n")[0], code ?? "no code").not.toBe("HTTP/1.1 408 Request Timeout");
+      const body = JSON.parse(other.slice(other.indexOf("\r\n\r\n") + 4));
+      expect(body.error.code, code ?? "no code").toBe("request.invalid");
+      expect(body.error.retryable, code ?? "no code").toBe(false);
+    }
+  });
+
+  it("answers a client error with §7.1's envelope rather than Fastify's own", () => {
+    // **Turning `requestTimeout` on introduced a response shape this server did not produce**, and
+    // Fastify's is `{"error":"Request Timeout","message":"Client Timeout","statusCode":408}` — which
+    // shares no field with §7.1's envelope. It arrives on a socket before any request object exists,
+    // so `setErrorHandler` and `frameworkErrors` are both downstream of it and neither runs, which
+    // is why `app.ts` states the envelope guarantee and this asserts it.
+    const raw = clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" });
+    const [statusLine, ...rest] = raw.split("\r\n");
+    expect(statusLine).toBe("HTTP/1.1 408 Request Timeout");
+    expect(rest).toContain("Connection: close");
+    expect(rest).toContain("Content-Type: application/json; charset=utf-8");
+
+    const body = JSON.parse(raw.slice(raw.indexOf("\r\n\r\n") + 4));
+    expect(Object.keys(body)).toEqual(["error"]);
+    // **§7.2 names this case now** — `request.timeout`, 408, retryable — which is PR #208's F1, and
+    // `errors.ts`' `classify` is where that row is implemented. The same answer the route-level
+    // deadline gives, because both call `classify`, so the two doors cannot disagree. (This comment
+    // said §7.2 named no such case and that the answer was therefore `request.invalid`, which was
+    // the pre-F1 reading and sat directly above the two lines below asserting the opposite.)
+    expect(body.error.code).toBe("request.timeout");
+    expect(body.error.retryable).toBe(true);
+    expect(body.error.retry_after_seconds).toBe(null);
+    // Empty rather than invented: `genReqId` runs per request and this fires on a socket that never
+    // completed one, so there is no id to quote in a support lookup.
+    expect(body.error.request_id).toBe("");
+
+    // The declared length has to be the real one, or the client reads a truncated body or hangs
+    // waiting for bytes that never come.
+    const declared = rest.find((h) => h.startsWith("Content-Length: "));
+    expect(declared).toBe(`Content-Length: ${Buffer.byteLength(raw.slice(raw.indexOf("\r\n\r\n") + 4))}`);
   });
 
   it("caps a recording at three minutes, which is the number the Mac's refusal is built from", () => {

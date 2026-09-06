@@ -490,6 +490,14 @@ refresh token. Rotation, overlap and reuse detection are in 3.3.
 `POST /v1/auth/signout` — no body. Revokes this session's refresh-token family server-side and
 returns `204`. The client clears its Keychain entry and touches nothing else (3.3).
 
+**A provider that cannot be reached answers `502 provider.unavailable` here, not `204`** (SONNY-311).
+`204` would assert a revocation that did not happen: the family is still live at the provider, so a
+refresh token in someone else's hands can still mint access tokens against the project. A provider
+that *rejects* the token is different and still answers `204` — an already-invalid token means the
+family is already gone, which is the state the caller asked for. The client clears this Mac either
+way, so the `502` strands nobody; what it adds is that the client can tell the two apart. `refresh`
+answers the same `502` for the same condition, which `email/verify` already did.
+
 `GET /v1/health` — liveness and a build identifier, unauthenticated. Its shape was SONNY-126's, and
 that ticket closed on 2026-08-21 having built it: `{ "status", "version", "environment" }` with
 `Cache-Control: no-store` (updated 2026-08-26, SONNY-288;
@@ -1203,6 +1211,7 @@ Also part of the taxonomy:
 | Case | Status | `code` | Notes |
 |---|---|---|---|
 | Malformed request | 400 | `request.invalid` | Includes a missing `retention` (2.4.2) |
+| Request body did not arrive in time | 408 | `request.timeout` | **Retryable** (SONNY-322). The gateway bounds how long a caller may take to deliver a request — section 12 — and this is what it answers when that bound is passed. **Its own code rather than `request.invalid`, because the two need opposite behaviour from a client**: this is a transient network condition and sending the same body again may well succeed, where `request.invalid` means a request that was wrong and will be wrong again. Reachable on `POST /v1/transcriptions` from the route's own body-read bound, and on any route from the server-wide delivery bound. Retryable **with the same key** — 9.2's release set carries it, so the answer is not stored and a repeat genuinely re-runs |
 | Unknown or foreign task id | 404 | `resource.not_found` | Never means "nothing was stored" (4.6) |
 | Idempotency key reused with a different body | 409 | `idempotency.conflict` | Section 9 |
 | Account already holds a live subscription | 409 | `entitlement.already_subscribed` | `POST /v1/billing/checkout` only (SONNY-211). A server-side guard against a second subscription on one account, not a state an ordinary client should reach — the app knows its own entitlement and should not offer Subscribe. Client copy is SONNY-136's |
@@ -1436,9 +1445,36 @@ the machinery and none of the promise.
 what stops a process killed mid-request from holding its key forever. A holder past it keeps its own
 consistency — a superseded holder's write is refused rather than landing on its successor's claim —
 but while both run the provider can be called twice for one key, which is what the fourth bullet
-above exists to avoid. The interval that has to fit inside the lease is the whole request, and on
-`POST /v1/transcriptions` the multipart body read is not bounded by anything today, so a stalled
-upload is the one shape that can reach this.
+above exists to avoid. The interval that has to fit inside the lease is the whole request, from the
+claim to the response being sent.
+
+**Every route's interval is now bounded, and each bound sits inside the lease** (SONNY-322). **This
+paragraph is where that arithmetic lives**; section 12 states the upload bound as a timeout and points
+back here rather than repeating the derivation, and the gateway's own code cites this section from
+both constants. The lease is **180 seconds**.
+
+- The **JSON routes** are bounded by section 12's total deadline — 105 s at the longest, so 75 s
+  inside the lease.
+- **`POST /v1/transcriptions`** was the one that was not: its body is `multipart/form-data` read
+  inside the handler, after the claim is taken and outside the deadline the route applies to its
+  upstream call, so a stalled upload held its claim indefinitely. That read has a **90 s** bound of
+  its own, and **90 + 75 = 165** — fifteen seconds inside the lease, which is the tightest of the two
+  and the one the lease is sized for.
+
+**The 90 is section 12's client timeout for that route, and the lease was sized to fit it** (founders,
+2026-09-05). The first version of this had a 30 s bound derived the other way round — the lease held
+fixed at 120 and the upload solved for — which inverted section 12's governing rule on the one route
+where the upload is the slow part, the server giving up at a third of the budget its own client waits.
+The direction of the derivation is the part worth carrying: the lease answers to nothing outside the
+gateway, so it is the side that moves.
+
+**What that does not do is close the fourth bullet outright, and the earlier version of this
+paragraph implied it did.** It said "a stalled upload is the one shape that can reach this", which
+was a subtraction claim the code's own neighbouring comment already contradicted: the JSON routes'
+margin is fifteen seconds, not infinity. Bounding the upload removes the *unbounded* shape and leaves
+the bounded ones. **The case the lease actually exists for is untouched by any deadline**: a process
+killed mid-request runs no timer at all, so its claim is still taken over on expiry, and the fencing
+token is still what keeps that survivable rather than corrupting.
 
 ### 9.3 What is safe to retry
 
@@ -1459,8 +1495,8 @@ that retried on status would retry `provider.rejected`, a 502 whose retry is gua
 identically.
 
 - Retryable: `limit.rate` (after `Retry-After`), `provider.unavailable`, `provider.timeout`,
-  `server.error`, `server.unavailable`, `client.offline`, and `auth.token_expired` after exactly one
-  refresh.
+  `request.timeout`, `server.error`, `server.unavailable`, `client.offline`, and
+  `auth.token_expired` after exactly one refresh.
 - Not retryable: `request.invalid`, `auth.unauthenticated`, `auth.token_revoked`,
   `entitlement.required`, `entitlement.expired`, `limit.spend`, `request.too_large`,
   `provider.rejected`, `resource.not_found`, `idempotency.conflict` on a differing body, and
@@ -1781,6 +1817,29 @@ how long a large vision model actually takes — and neither is read off any hos
 ticket's own scoped requirements already ask for both measurements; this is the contract stating what
 the answers have to clear.
 
+**One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
+Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying
+option by default, and this project had never turned it back on — so a caller that sent headers and
+then dribbled or withheld the body held a connection indefinitely, which is reachable without signing
+in on the sign-in routes. The gateway now bounds request delivery at **120 seconds**, which is the
+longest client timeout in the table above: past that instant no client is still waiting for any
+route's answer, so no request a shipping client would have waited for is refused. It bounds receiving
+the request and not running the handler, so it neither replaces nor constrains any deadline in the
+table, and it is enforced coarsely — the runtime checks for expired connections on a sweep, so the
+refusal lands tens of seconds late. A caller cut off this way gets `408 request.timeout` carrying section
+7.1's envelope, which 7.2 marks retryable and 9.2's release set keeps unstored, so the retry it
+invites genuinely re-runs.
+
+**`POST /v1/transcriptions` bounds its own body read at 90 seconds**, which is that route's client
+timeout in the table above (founders, 2026-09-05). It is the one route whose body is read inside its
+handler rather than parsed before it, so it is the one route where the upload is not already covered
+— and it is bounded precisely, on a timer the gateway owns, because the server-wide bound above is
+enforced far too coarsely to hold anything. The 90 does not come from the deadlines in this table:
+those bound a handler and this bounds an upload, and the two are **added** rather than compared.
+**What they are added for, and against what, is section 9.2's**, which carries that arithmetic and is
+the section the gateway's code cites from both constants; it is not restated here, because two copies
+of a derivation are two things to keep in step and this document has already had them disagree.
+
 Three rules alongside the table:
 
 - **Cancellation beats every timeout.** The emergency stop and any user cancellation cut the client
@@ -1954,3 +2013,6 @@ record rather than a tidy list.
 | 2026-09-03 | **4.1 gains three routes — two new and one that was missing — 5.4 grows two fields, and 7.2 gains three codes.** `PUT /v1/account/credits/auto-top-up` records a user's consent to automatic charges and changes nothing else; `POST /v1/account/credits/top-up` is the one route in this contract that **moves money**, and it refuses on the absence of that consent before it reads anything else. **The third row is a correction rather than an addition**: `GET /v1/account/credits` has been served since SONNY-212 and was never listed in 4.1, which is a gap in the one table 2.2 names as the single source of truth for which endpoints carry a Bearer token and from which `server/src/auth/gate.ts`'s deny-by-default list is derived — the same invariant the 2026-08-30 row states, failing quietly in the other direction. It is listed now, beside the two routes that would otherwise have documented a feature whose read half was undocumented. **5.4's body grows `credits.topped_up` and an `auto_top_up` object**, both additive under 2.1, and the section's bullet reading *"the Mac reads the run count and ignores it"* is corrected: it stopped being true at SONNY-213, whose step boundary reads `credits.remaining` because the run count cannot answer whether a session already spending its own run has actually run out. **7.2 gains `topup.not_permitted` (409), `topup.declined` (402) and `topup.unconfirmed` (502, not retryable).** The first is one code for five refusals — no pack configured, no consent, not actually low, the period's attempts spent, no customer at the provider — because a client does nothing different about any of them and what separates them is what an operator needs, which the route logs. The second is its own status because "your card" and "your settings" are different problems with different fixes, and a later surface could not recover the distinction if they were collapsed here. The third is **not** `provider.unavailable`, and the difference is the whole of why it exists: the charge may have gone through, so a client told to retry would buy a second pack to recover from a first one it cannot see. **No existing shape moved**: no endpoint, request body, response body, header, size limit or timeout changed, no existing `code` changed meaning, and 5.3's claim is byte-identical — the allowance is not on it, for the reason 5.4 already gives. | SONNY-215 |
 | 2026-09-04 | **5.4 grows `auto_top_up.price` and `last_top_up`, and one sentence about §9 is corrected.** Both fields are additive under 2.1 and carry the founders' decision of 2026-09-03: the switch that authorises a standing charge names what it costs, and the account section carries a record of the last charge — a price and a date, with no per-charge confirmation and nothing explaining why either is there. Money crosses as **minor units and an ISO 4217 code**, never a formatted string, because a symbol and a decimal separator are locale decisions and §7.1 makes the words the client's. **The correction is to the top-up route's idempotency sentence**, which said a retry "replays the stored answer rather than buying a second pack" without qualification (PR #196's F5): that is true of the codes §9.2 stores and false of `server.error`, which `idempotency/hook.ts` releases. What actually stops a second charge is not the key — an order this gateway created and has not resolved is resolved by the account's next attempt rather than replaced (PR #196's F1) — and the sentence now says so. **No existing shape moved**: no endpoint, request body, header, size limit or timeout changed, no existing `code` changed meaning, and 5.3's claim is byte-identical. | SONNY-215 |
 | 2026-09-05 | **4.1 gains one route, and nothing else in this document moves.** `GET /v1/billing/payment-state` answers `{ "payment": "current" | "past_due" }` for the authenticated caller's own account, from `sonny.entitlement.past_due_since` and no provider call (SONNY-380). **It exists because 5.3's claim cannot say this and deliberately will not.** §16.4 keeps every capability through a payment failure's grace window on purpose, so the claim minted for a customer whose card was declined is byte-identical to a healthy one's — `plan` and `capabilities`, which `entitlement/store.ts` returns on every path — and the Mac read `Active` for the length of the window, the provider's own dunning email being the customer's only notice. Adding a status field to the claim was **offered and declined** (SONNY-216, 2026-08-31, restated by the founders 2026-09-05): the claim is 4.1 and 5.3, 8.2 items 1–3 make changing its shape a `/v2` question, and that is not a trade worth making for a status word. So the word travels on its own route, **unsigned — and it is affordable to be unsigned only because it decides nothing**: no capability, gate or refusal reads it, `admitRequest` and `claimFactsFor` are untouched, and a caller who forged it would change a word on one line and a label on one control on their own screen. **Additive under 8.1** — a new endpoint, no request field, no response field on an existing shape, no `code`, no size limit and no deadline moved, and 5.3's claim is byte-identical. **The one bound this row sets for later**: `payment` is a wire enum, so 8.2 item 7 governs it. The Mac carries the required unknown fallback from this route's first release and renders an unrecognised value as *nothing about payment*, falling back to what the claim proves — which is the right answer for a value an old build cannot interpret and the wrong one if the new value means something worse than `past_due`. So a third value needs 8.4's deprecation ladder behind it rather than a minor bump. **Client timeout is the auth row's 20 s** (§12), unchanged: this route makes no outbound call and is one indexed `SELECT`. | SONNY-380 |
+| 2026-09-05 | **No shape moved and no code was added; two routes now answer a code this table already assigned them.** `POST /v1/auth/refresh` and `POST /v1/auth/signout` answered `500 server.error` when the auth provider could not be reached, where 7.2 case 5 assigns `502 provider.unavailable` — and their neighbour `POST /v1/auth/email/verify`, on the same branch of the same file, already answered it correctly (SONNY-311). Three routes, one condition, two answers. **This is the implementation being brought to the document rather than the document changing**: 7.2's case 5 row is untouched, `provider.unavailable` means what it has always meant, and no endpoint, request body, response body, header, size limit or timeout moved. It is logged because it is caller-observable — a status and a `code` change on two routes — and because 3.6's sign-out paragraph now states a second answer that paragraph did not have. **`retryable` was already `true` on the `500`**, so a client keying off that field was never stranded and nothing in a client's behaviour has to change; `SonnyBackendError` already carries `providerUnavailable`, and the Mac's sign-out already clears the Mac whether or not the call succeeds, reporting a server-side failure as `clearedLocallyOnly`. What was wrong is the code, the disagreement between neighbours, and — on sign-out — a `500` that read as Sonny breaking when the login service was down. The condition became reachable when SONNY-307 landed the concrete Supabase adapter; before it, every `AuthProvider` was a test fake and none raised it from these two methods. | SONNY-311 |
+| 2026-09-05 | **12 gains a request-delivery bound, and 9.2's lease paragraph is corrected — no shape a client sends or receives moved.** Nothing bounded how long a caller could take to deliver a request: the framework disables the option by default and this project had never set it, so a caller that sent headers and then withheld the body held a connection, a request and — on `POST /v1/transcriptions` alone — an idempotency claim, indefinitely, and the sign-in routes make that reachable without an account (SONNY-322). Delivery is now bounded at **120 s**, which is 12's own longest *client* timeout, so nothing a shipping client would still have been waiting for is refused; the bound is on receiving a request and not on running a handler, so no server deadline in 12's table moved and 8.1's rule about deadlines is not engaged. The transcription route's body read gains a 30 s bound of its own, which is what makes 9.2's lease arithmetic true rather than assumed: 30 + 75 = 105 against a 120 s lease, the same fifteen seconds of margin the JSON routes already had. **The correction is to 9.2's closing paragraph**, which read *"a stalled upload is the one shape that can reach this"* — a subtraction claim the gateway's own adjacent comment already contradicted, since the JSON routes' margin is fifteen seconds rather than infinity. Bounding the upload removes the unbounded shape and leaves the bounded ones, and the case the lease exists for — a process killed mid-request, which runs no timer — is untouched. **One new response is observable**: a request cut off for late delivery answers `408` carrying 7.1's envelope with the existing `request.invalid`, which is the rule 7.2 already applies to a 4xx it does not name individually; **no code was added to 7.2** and no existing `code` changed meaning. | SONNY-322 |
+| 2026-09-05 | **7.2 gains `request.timeout` (408, retryable), 9.3 lists it, 12 gains a per-route upload bound, and two client-error statuses are put back.** Corrections to the SONNY-322 row above, from PR #208's review, landing in the same branch before either merged. **F1:** the delivery bound answered `408 request.invalid`, which is the code this contract assigns a *malformed* request — and the Mac decides retryability from the code, so a body that was merely late was told it could not be retried and rendered as a request Sonny could not send. `request.timeout` is a **narrowing of the `request.*` family** under 8.1, and the Mac maps it in the same branch, so no shipped client meets an unknown code. **F2:** that answer was also outside 9.2's release set, so it was stored and replayed for twenty-four hours — a complete, valid retry under the same key got a day-old timeout with no upstream call, which is precisely the "wrong answer to a correct request" 9.2's first decision exists to prevent. It is in the release set now. **F3:** the socket-level handler answered `408` to **every** client error, so a malformed request was told it had been too slow and a header block over the runtime's limit lost its `431` — two existing response classes had silently moved, which the row above did not record. The framework's three-way classification is restored inside 7.1's envelope, and both doors now call one mapping rather than each implementing a rule. **F4, the founders' decision of 2026-09-05:** `POST /v1/transcriptions`' body-read bound rises from 30 s to **90 s**, this section 12's own client timeout for that route, because the first derivation held the gateway's internal idempotency lease fixed and solved for the upload — inverting 12's governing rule on the one route where the upload is the slow part, and refusing a three-minute recording on a weak connection. The lease rose to 180 s to make room, at the same 15-second margin; the accepted cost is that a process killed mid-request holds its key a minute longer. **No request shape, response shape, header or size limit changed**, and no existing `code` changed meaning. | SONNY-322 |

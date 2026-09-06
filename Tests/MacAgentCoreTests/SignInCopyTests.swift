@@ -180,9 +180,12 @@ struct SignInCopyTests {
     /// caller outside this module can act on it.
     @Test
     func theRetryableAndNotRetryableListsAreExactlyTheContracts() {
+        // §9.3's own retryable list, mirrored. `request.timeout` joined it when SONNY-322 added the
+        // code (PR #208's F1): a body that did not arrive in time is the one failure in this set the
+        // client resolves by sending the identical request again.
         let retryable: Set<String> = [
-            "limit.rate", "provider.unavailable", "provider.timeout", "server.error",
-            "server.unavailable"
+            "limit.rate", "provider.unavailable", "provider.timeout", "request.timeout",
+            "server.error", "server.unavailable"
         ]
         for wire in Self.everyWireCode {
             let code = SonnyBackendErrorCode(wire: wire)
@@ -248,7 +251,7 @@ struct SignInCopyTests {
     static let everyWireCode = [
         "auth.unauthenticated", "auth.token_expired", "auth.token_revoked", "auth.code_invalid",
         "auth.code_expired", "auth.code_used", "entitlement.required", "entitlement.expired",
-        "limit.rate", "limit.spend", "request.invalid", "request.too_large",
+        "limit.rate", "limit.spend", "request.invalid", "request.timeout", "request.too_large",
         "provider.unavailable", "provider.timeout", "provider.rejected", "server.error",
         "server.unavailable", "resource.not_found", "idempotency.conflict", "version.unsupported"
     ]

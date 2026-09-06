@@ -98,6 +98,26 @@ export function classify(error: FastifyError): {
     };
   }
 
+  // **§7.2's `request.timeout`, and the reason it is not `request.invalid`** (SONNY-322, PR #208's
+  // F1). A request whose body did not finish arriving is a transient *network* condition, and the
+  // client's whole behaviour keys off `code`: `request.invalid` is hard-coded on the Mac as not
+  // retryable and renders as "Sonny couldn't send this one", which reads as a malformed request
+  // nobody can act on. Every clause of that is wrong here — the request was well formed, it is the
+  // network rather than Sonny, the user can act on it, and a retry would plausibly succeed.
+  //
+  // **Retryable, and that flag is not what makes the client retry** — `SonnyBackendError` consults
+  // the envelope's flag for `idempotency.conflict` alone and decides every other code from the code
+  // itself. The flag is set because §7.2's table sets it for this row and a client keying off it
+  // must not be told the opposite of what the code means.
+  if (status === 408) {
+    return {
+      status: 408,
+      code: "request.timeout",
+      message: "Request was not delivered in time.",
+      retryable: true,
+    };
+  }
+
   // §7.2's second table: malformed request. Covers a bad JSON body and a failed schema check.
   if (status === 400) {
     return {
