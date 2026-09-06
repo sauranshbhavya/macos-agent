@@ -827,6 +827,35 @@ describeDb("a subscription reaches the entitlement", () => {
     expect(claimFactsFor(record, NOW)).toEqual({ plan: "paid", capabilities: [] });
   });
 
+  itUnderHangBackstop("anOperatorRestoreEndsAnOutstandingPaymentFailure", async () => {
+    // **The direction `anOperatorRevokeEndsAnOutstandingPaymentFailure` cannot reach** (PR #206's
+    // F7). That test drives `setRevoked(…, true)`, so a mutant keying the clearing on the flag —
+    // clear when revoking, leave it when restoring — passes the whole suite, and R7 cannot catch it
+    // either because R7 reverts the *whole* statement and the revoke arm alone kills it. This is
+    // the row the two versions actually differ on: `past_due_since` set, `revoked_at` null, reached
+    // by `entitlements restore <account-id>`, which is a first-class operator command.
+    await apply(event({ state: "past_due" }));
+    const beforeRestore = await readEntitlement(client, account);
+    expect(beforeRestore.revokedAt).toBeNull();
+    expect(beforeRestore.pastDueSince).not.toBeNull();
+
+    // `false` is the CLI's `restore`, not an internal edge.
+    expect(await setRevoked(client, account, false)).toBe(true);
+
+    expect(await paymentStateFor(client, account)).toBe("current");
+    const record = await readEntitlement(client, account);
+    expect(record.pastDueSince).toBeNull();
+    expect(record.graceUntil).toBeNull();
+    // **And the half that makes the restore mean anything.** `claimFactsFor` compares `grace_until`
+    // against the instant it is given, so a deadline left behind would empty the capabilities the
+    // restore exists to hand back — read a day past the window, so this distinguishes a *cleared*
+    // deadline from a merely distant one.
+    expect(claimFactsFor(record, new Date(NOW.getTime() + GRACE_MS + 86_400_000))).toEqual({
+      plan: "paid",
+      capabilities: ["screen_control"],
+    });
+  });
+
   itUnderHangBackstop("onePastDueAccountDoesNotMakeAnotherOnePastDue", async () => {
     // The predicate takes no provider, deliberately (`paymentStateFor` says why), so the account id
     // is the only thing narrowing it — and a read that dropped that clause would answer `past_due`

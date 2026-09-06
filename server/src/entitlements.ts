@@ -177,11 +177,21 @@ export async function setRevoked(
             -- column set makes the line read Past due with an Update payment control for an
             -- account the operator has just ended -- the opposite of what they did. Un-revoking:
             -- an operator restoring access is grant's case under another name, and the reasoning
-            -- there applies word for word. Unconditional rather than keyed on the revoked flag,
-            -- because the keyed version is unreachable anyway: a past_due delivery clears
-            -- revoked_at and writeFor's ended arm clears past_due_since, so no row this gateway
-            -- writes holds both. The state only exists because an operator made it, and both
-            -- operator doors now close it.
+            -- there applies word for word.
+            --
+            -- Unconditional rather than keyed on the revoked flag, and the two versions DO differ
+            -- on a row that exists (PR #206's F7). The reason first written here was that the
+            -- keyed version is unreachable, on the grounds that no row this gateway writes carries
+            -- revoked_at and past_due_since together -- which is true, and is about the wrong set.
+            -- Where the two differ is any row with past_due_since set that reaches this with
+            -- revoked false: a row written by writeFor's past_due arm is exactly that, revoked_at
+            -- null and past_due_since set, and restore <account-id> is a first-class operator
+            -- command that reaches it. So the keyed version is reachable, and clearing is the
+            -- intended answer there too, for the un-revoking reason above: an operator restoring a
+            -- past-due account is comping it, and a grace deadline left behind would have
+            -- claimFactsFor empty the capabilities the restore exists to hand back.
+            -- anOperatorRestoreEndsAnOutstandingPaymentFailure is what holds that direction; R7
+            -- cannot, because it reverts the whole statement and the revoke test alone kills it.
             past_due_since = NULL,
             grace_until = NULL,
             updated_at = now()
