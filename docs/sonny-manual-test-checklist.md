@@ -3902,6 +3902,17 @@ formality.
       fails where it used to work — the deadlines added here sit in front of every one of these
       calls, so this row is what says they bound only the failures.
 
+- [ ] **(SONNY-425, waits on SONNY-192)** **Deleting an account still finishes, and still answers,
+      when the provider is unreachable.** Against a deployed gateway whose Supabase project is
+      blocked, sign in on a throwaway account and delete it from the app. Expected: the deletion
+      completes and the app signs you out; the account is gone. It may take up to about fifteen
+      seconds, which is the point — this route now waits for its own clean-up rather than answering
+      early. **What would be a finding:** an error where the deletion used to succeed, or the app
+      hanging for a minute or more. (The defect behind this row is invisible from the app: the route
+      used to answer early and leave its clean-up writing to a database connection it had already
+      handed back, which shows up as another request's data going wrong rather than as anything on
+      this screen. PR #212's F1.)
+
 ## 8. How to report back
 
 For each real finding, give me:
