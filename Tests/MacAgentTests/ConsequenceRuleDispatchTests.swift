@@ -211,10 +211,23 @@ struct ConsequenceRuleDispatchTests {
         #expect(fixture.viewModel.hasVisibleWidgetPanel)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         // Still a real render — the deletion result is showing, so an uncleared trace would be
         // visible underneath it rather than merely resident.
-        #expect(fixture.viewModel.finalSummary == "Deleted 0 local data files.")
+        // The second sentence is SONNY-404's fix round: this fixture's backend client is hermetic
+        // and configured with no environment, so the wipe cannot reach a gateway and says so rather
+        // than reporting a silent success. What this test is about is the trace underneath, which is
+        // unaffected either way.
+        // The fixture is signed out and its client is hermetic, so the press reaches nothing and
+        // records nothing — the third state SONNY-404's second fix round added, which tells the user
+        // to sign in rather than promising a retry that could never name their account.
+        #expect(fixture.viewModel.finalSummary == LocalDataDeletionCopy.outcome(
+            deletedFileCount: 0,
+            serverCopy: .strandedWithNoSession
+        ))
         #expect(fixture.viewModel.hasVisibleWidgetPanel)
         #expect(fixture.viewModel.ranWithoutAskingTrace == nil)
     }

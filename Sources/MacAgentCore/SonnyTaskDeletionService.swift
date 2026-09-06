@@ -52,11 +52,32 @@ public struct PendingServerDeletionDelivery: Equatable, Sendable {
 public struct SonnyTaskDeletionService: Sendable {
     private let client: SonnyBackendClient
     private let store: PendingServerDeletionStore
+    private let accountIdentity: @Sendable () -> String?
 
-    public init(client: SonnyBackendClient, store: PendingServerDeletionStore) {
+    /// **`accountIdentity` is a synchronous seam, and it has to be** (SONNY-404, PR #207's F1).
+    ///
+    /// Every obligation now carries the account it was pressed under, and the enqueue that records
+    /// one runs *before* the local deletes — synchronously, which is the ordering the whole feature
+    /// turns on. `SonnyBackendClient` is an `actor`, so `restoredIdentity()` is reachable only
+    /// through an `await`, and awaiting it here would make the enqueue asynchronous. SONNY-333
+    /// looked at exactly this and dropped the account stamp for that reason; the answer is a
+    /// closure the app wires to a synchronous read of the token store rather than to the actor.
+    ///
+    /// **Required, not defaulted.** A default here would be a fixture silently reading the
+    /// developer's own Keychain, which is the hazard `SonnyBackendClient.init`'s own doc calls one
+    /// step worse than a defaulted local store.
+    public init(
+        client: SonnyBackendClient,
+        store: PendingServerDeletionStore,
+        accountIdentity: @escaping @Sendable () -> String?
+    ) {
         self.client = client
         self.store = store
+        self.accountIdentity = accountIdentity
     }
+
+    /// The account a press is being made under, right now. `nil` when nobody is signed in.
+    public var currentAccountID: String? { accountIdentity() }
 
     /// Records that this task's server copy is owed, synchronously, before the local records go.
     ///
@@ -64,7 +85,7 @@ public struct SonnyTaskDeletionService: Sendable {
     /// view model holds one collaborator for this feature instead of a store and a service that
     /// have to be kept pointing at the same file.
     public func recordDeletedTask(id: String, deletedAt: Date = Date()) throws {
-        try store.enqueue(taskID: id, deletedAt: deletedAt)
+        try store.enqueue(taskID: id, accountID: accountIdentity(), deletedAt: deletedAt)
     }
 
     /// Withdraws an obligation recorded a moment ago, because the local delete it was recorded for
@@ -81,7 +102,157 @@ public struct SonnyTaskDeletionService: Sendable {
     /// they were told the delete had not happened — content taken on the strength of a press that
     /// visibly did not work.
     public func withdrawDeletedTask(id: String) throws {
-        try store.remove(taskID: id)
+        try store.remove(taskID: id, accountID: accountIdentity())
+    }
+
+    /// Records that several tasks' server copies are owed as **one** obligation (SONNY-404).
+    ///
+    /// *Command Center › Memory › Task history › Delete* removes every history row at once, and the
+    /// founder decided on 2026-09-05 that it queues one bulk call rather than one call per row. One
+    /// entry is the same decision at the store: the queue keeps two hundred entries and a history
+    /// keeps ten thousand rows, so one entry per row would have the cap drop the difference in
+    /// silence — from the single press that asks for the most.
+    ///
+    /// An empty list records nothing; `PendingServerDeletionStore.enqueue` says why.
+    public func recordDeletedTasks(ids: [String], deletedAt: Date = Date()) throws {
+        try store.enqueue(
+            taskIDs: ids,
+            scope: .wholeTask,
+            accountID: accountIdentity(),
+            deletedAt: deletedAt
+        )
+    }
+
+    /// Withdraws the obligation `recordDeletedTasks` wrote, because the local delete it was recorded
+    /// for did not happen. The pair to it, exactly as `withdrawDeletedTask` is to
+    /// `recordDeletedTask`, and for the reason on that method.
+    public func withdrawDeletedTasks(ids: [String]) throws {
+        try store.remove(PendingServerDeletion(
+            // **Trimmed-empty, matching `enqueue`** (PR #207's R3). Filtering on `isEmpty` here while
+            // the enqueue filtered on trimmed-empty gave the two different id sets for a
+            // whitespace-only id, so the digest differed and the withdrawal missed the entry it was
+            // written to remove. Unreachable today — every id is a `UUID().uuidString` — and the two
+            // sides of a keyed pair disagreeing about their key is not a thing to leave standing.
+            taskIDs: Array(Set(ids.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })),
+            scope: .wholeTask,
+            accountID: accountIdentity(),
+            deletedAt: Date()
+        ))
+    }
+
+    /// Records that this task's **screenshots** are owed — not the task (SONNY-404).
+    ///
+    /// *Delete what Sonny did on screen* removes the task's vision-session record and leaves the
+    /// task, its command and its result standing. `DELETE /v1/tasks/{task_id}` would take all three
+    /// on the server, which is more than the button says, so the founder decided on 2026-09-05 for a
+    /// narrower route and this is the obligation that reaches it.
+    public func recordDeletedScreenRecord(taskID: String, deletedAt: Date = Date()) throws {
+        try store.enqueue(
+            taskIDs: [taskID],
+            scope: .screenshotsOnly,
+            accountID: accountIdentity(),
+            deletedAt: deletedAt
+        )
+    }
+
+    /// The withdrawal pair to `recordDeletedScreenRecord`.
+    public func withdrawDeletedScreenRecord(taskID: String) throws {
+        try store.remove(PendingServerDeletion(
+            taskIDs: [taskID],
+            scope: .screenshotsOnly,
+            accountID: accountIdentity(),
+            deletedAt: Date()
+        ))
+    }
+
+    // MARK: - Settings' whole wipe (SONNY-404)
+
+    /// Delivers whatever the queue still owes, and says whether it emptied it.
+    ///
+    /// **This is the drain the founder's decision of 2026-09-04 names**, and its place in the wipe
+    /// is *before the queue file is removed*. Everything it fails to deliver is either subsumed by
+    /// the account-wide delete that follows it or, in the one case that is neither, abandoned — see
+    /// `AgentViewModel.deleteLocalData`, which is where that cost is written down.
+    @discardableResult
+    public func drainBeforeAWipe() async -> PendingServerDeletionDelivery {
+        await deliverPendingDeletions()
+    }
+
+    /// The instant a press should be bounded at — **the server's clock, not this Mac's**
+    /// (SONNY-404, PR #207's cycle-3, G1).
+    ///
+    /// The cutoff is compared against `occurred_at` on the gateway's own rows, so a Mac whose clock
+    /// is wrong bounds the deletion at the wrong instant. Running behind, the immediate wipe
+    /// under-deletes while reporting that the servers' copy is gone; running ahead, the queued
+    /// obligation's cutoff sits in the future, which is the over-deletion `?before=` was added to
+    /// prevent. `SonnyBackendClient.serverNow()` exists for exactly this (§3.5's offset) and is what
+    /// `EntitlementService` and `SonnyAccountService` already read.
+    ///
+    /// **It is the Mac's clock plus a correction, so it is never unavailable**: with no observation
+    /// yet the offset is zero and this is `Date()`, which is what the press used before.
+    ///
+    /// **The wire truncates it toward the past by up to a second**, deliberately and harmlessly:
+    /// §2.1's format carries no fractional seconds, so a bound of `…00.750` goes out as `…00Z`. The
+    /// error is always in the under-deleting direction, which is the safe one for a bound whose job
+    /// is to stop a delayed delete reaching too far.
+    public func instantToBoundAPressAt() async -> Date {
+        await client.serverNow()
+    }
+
+    /// Deletes everything the gateway retains for this account, leaving the account open.
+    ///
+    /// **Not queued first and then delivered**, unlike every other delete in this file, because the
+    /// wipe has to *know* whether it worked: the words it shows the user differ, and a press that
+    /// could not reach the gateway has to say so rather than report a silent success. So this is the
+    /// attempt, and the caller records the obligation only when it fails.
+    public func deleteEverythingUnderTheAccount(before cutoff: Date) async -> Bool {
+        do {
+            try await client.deleteAccountContent(before: cutoff)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Records that the account's server-side content is still owed, after a wipe could not reach
+    /// the gateway. **Names no task**, which is what makes the queue file safe to leave behind.
+    ///
+    /// **It refuses when nobody is signed in, and that refusal is the fix for a data-loss path**
+    /// (PR #207's F1). An obligation that cannot name whose content it is about is an obligation
+    /// that deletes whoever's content happens to be there when it is finally delivered — user A
+    /// presses the wipe signed out, user B signs in on the same Mac, and B's everything goes.
+    /// Nothing is recorded instead, and `deleteLocalData` says so in words the user can act on.
+    ///
+    /// **`deletedAt` is the press, and the delivery carries it as a cutoff** (`before` on §4.6.3),
+    /// so an obligation delivered days later cannot reach content the press never covered.
+    ///
+    /// Returns whether an obligation was recorded, so the caller's sentence can be true.
+    @discardableResult
+    public func recordOwedAccountContentDeletion(deletedAt: Date = Date()) throws -> Bool {
+        guard let accountID = accountIdentity() else {
+            return false
+        }
+        try store.enqueue(
+            taskIDs: [],
+            scope: .everythingUnderTheAccount,
+            accountID: accountID,
+            deletedAt: deletedAt
+        )
+        return true
+    }
+
+    /// Discards every queued obligation that is not this account's, and says how many went
+    /// (SONNY-404, PR #207's F1). See `PendingServerDeletionStore.discardObligationsNotBelongingTo`.
+    @discardableResult
+    public func discardObligationsForOtherAccounts() throws -> Int {
+        guard let accountID = accountIdentity() else {
+            // Nobody is signed in, so there is no "other account" to be a wrong one: the obligations
+            // stay, and the account that owns them delivers them when it signs back in.
+            return 0
+        }
+        return try store.discardObligationsNotBelongingTo(accountID: accountID)
     }
 
     /// What is still owed, oldest first. Read by tests and by nothing in the product — the queue has
@@ -156,13 +327,13 @@ public struct SonnyTaskDeletionService: Sendable {
         // this is precisely the shape where that mistake reads as working code that quietly keeps
         // going after it was told to stop.
         pass: for entry in owed {
-            switch await attemptDelete(taskID: entry.taskID) {
+            switch await attempt(entry) {
             case .settled:
                 delivered += 1
-                try? store.remove(taskID: entry.taskID)
+                try? store.remove(entry)
             case .neverDeliverable:
                 undeliverable += 1
-                try? store.remove(taskID: entry.taskID)
+                try? store.remove(entry)
             case .notThisSession:
                 // Kept, and the pass carries on: this is about the account rather than the network.
                 continue
@@ -191,6 +362,135 @@ public struct SonnyTaskDeletionService: Sendable {
         case notNow
     }
 
+    /// Sends whichever request settles this obligation, and reads its answer under the same four
+    /// outcomes (SONNY-404).
+    ///
+    /// The three shapes and why each takes the route it does:
+    ///
+    /// - **one task, whole** — `DELETE /v1/tasks/{task_id}`, untouched from SONNY-333. The bulk
+    ///   route would serve it, and using it here would rewrite the one delete path this repository
+    ///   has already reviewed four times over for a saving of nothing.
+    /// - **many tasks, whole** — `DELETE /v1/tasks`, one call. The founder's decision of 2026-09-05.
+    /// - **one task, screenshots only** — `DELETE /v1/tasks/{task_id}/screenshots`.
+    /// - **the whole account** — `DELETE /v1/account/content`, which names no task and takes
+    ///   everything the other two could have named. Settings' wipe leaves this one behind when it
+    ///   could not reach the gateway.
+    private func attempt(_ entry: PendingServerDeletion) async -> AttemptOutcome {
+        guard deliverable(entry) else {
+            // Kept, not dropped, and the pass carries on — the same answer §4.6's `404` earns, in
+            // the same words: not deliverable by *this* session, never not deliverable.
+            return .notThisSession
+        }
+        switch entry.scope {
+        case .wholeTask:
+            guard entry.taskIDs.count > 1 else {
+                guard let only = entry.taskIDs.first else {
+                    // An entry naming nothing. `enqueue` refuses to write one and `loadKeyed` drops
+                    // one it reads, so this is unreachable; it settles rather than sticking, because
+                    // an obligation about no tasks is one no request could ever discharge.
+                    return .settled
+                }
+                return await attemptDelete(taskID: only)
+            }
+            return await attemptBulkDelete(taskIDs: entry.taskIDs)
+        case .screenshotsOnly:
+            guard let only = entry.taskIDs.first else {
+                return .settled
+            }
+            return await attemptScreenshotsDelete(taskID: only)
+        case .everythingUnderTheAccount:
+            // The press's own instant, carried as the cutoff — see `recordOwedAccountContentDeletion`.
+            return await attemptAccountContentDelete(before: entry.deletedAt)
+        }
+    }
+
+    /// **Whether this session may deliver this obligation at all** (SONNY-404, PR #207's F1).
+    ///
+    /// Two rules, and the difference between them is which protection each scope already had:
+    ///
+    /// - **`.everythingUnderTheAccount` requires an exact match.** It carries no task id, so §4.6's
+    ///   `404` — the thing that refuses a per-task delete aimed at somebody else's task — has
+    ///   nothing to fire on, and the route takes its account from the bearer token. The account
+    ///   recorded at the press is the only bound there is, so it is enforced here.
+    /// - **A per-task obligation with no account is delivered as before.** That is a file written
+    ///   before this field existed, and §4.6's `404` is exactly the protection SONNY-333 designed
+    ///   for it and it still works. One with an account is held to it, which is strictly tighter.
+    private func deliverable(_ entry: PendingServerDeletion) -> Bool {
+        let current = accountIdentity()
+        guard let stamped = entry.accountID else {
+            return PendingServerDeletion.namesTasks(entry.scope)
+        }
+        return stamped == current
+    }
+
+    /// `DELETE /v1/account/content` — everything this account has stored, account left open.
+    ///
+    /// **The one obligation whose four outcomes read differently, and only in the `404` arm.** There
+    /// is no id on this path, so `resource.not_found` cannot mean "belongs to another account"; if
+    /// the gateway ever answered it, it would mean the route is not there, which no future session
+    /// changes either. It goes through the shared classifier anyway rather than being special-cased
+    /// — `.notThisSession` keeps the entry, which is the safe direction for an obligation about a
+    /// user's whole account, and a special case here would be a fourth reading of a taxonomy whose
+    /// value is that there are three places it is written and one place it is decided.
+    private func attemptAccountContentDelete(before cutoff: Date) async -> AttemptOutcome {
+        do {
+            try await client.deleteAccountContent(before: cutoff)
+            return .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
+        }
+    }
+
+    /// **`tasks_not_found` is read as the batch's `404`, and the entry is kept whole.**
+    ///
+    /// §4.6's `404` means "belongs to a different account", which SONNY-333 keeps rather than drops
+    /// because a Mac two people have signed into raises it for an entry the other one owes. The
+    /// batch says the same thing with a count, so the same rule applies: any foreign id and the
+    /// obligation stays.
+    ///
+    /// **Kept whole rather than narrowed to the ids that were refused**, which the gateway could
+    /// have reported and deliberately does not. Narrowing would need a fourth store door that
+    /// rewrites an entry mid-pass, and what it would buy is a smaller request on a Mac that is
+    /// already re-sending ids the gateway will delete a second time for free. The cost of not
+    /// narrowing is one bulk request per launch until the other account signs in — which is exactly
+    /// the cost SONNY-333 accepted for the single-task case, in the same words.
+    private func attemptBulkDelete(taskIDs: [String]) async -> AttemptOutcome {
+        do {
+            let outcome = try await client.deleteTasks(ids: taskIDs)
+            return outcome.tasksNotFound > 0 ? .notThisSession : .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
+        }
+    }
+
+    private func attemptScreenshotsDelete(taskID: String) async -> AttemptOutcome {
+        do {
+            try await client.deleteTaskScreenshots(id: taskID)
+            return .settled
+        } catch let error as SonnyBackendError {
+            return Self.outcome(for: error)
+        } catch {
+            return .notNow
+        }
+    }
+
+    /// The four-outcome classification, in one place so the three routes cannot drift apart
+    /// (SONNY-404). Every sentence justifying it is on `deliverPendingDeletions()`.
+    private static func outcome(for error: SonnyBackendError) -> AttemptOutcome {
+        switch error {
+        case .api(let api) where api.code == .resourceNotFound:
+            return .notThisSession
+        case .api(let api) where api.code == .requestInvalid:
+            return .neverDeliverable
+        default:
+            return .notNow
+        }
+    }
+
     private func attemptDelete(taskID: String) async -> AttemptOutcome {
         do {
             _ = try await client.send(SonnyBackendRequest(
@@ -209,14 +509,7 @@ public struct SonnyTaskDeletionService: Sendable {
             ))
             return .settled
         } catch let error as SonnyBackendError {
-            switch error {
-            case .api(let api) where api.code == .resourceNotFound:
-                return .notThisSession
-            case .api(let api) where api.code == .requestInvalid:
-                return .neverDeliverable
-            default:
-                return .notNow
-            }
+            return Self.outcome(for: error)
         } catch {
             // `send` throws `SonnyBackendError` and nothing else, so this arm is unreachable. It
             // answers "not now" rather than dropping the entry, because an unrecognised failure is

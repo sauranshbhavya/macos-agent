@@ -92,11 +92,23 @@ describe("which routes the gate challenges", () => {
     const protectedRoutes = routes.filter((route) => !isPublicRoute(route.method, route.url));
     expect(protectedRoutes.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
       "DELETE /v1/account",
+      // SONNY-404's account-scoped sibling, challenged for the sharpest reason on this list after
+      // the account close itself: an unauthenticated caller reaching it would delete every task an
+      // account has ever stored, and it carries no identifier at all — the account it acts on is
+      // the one the gate established, which is exactly why the gate has to have run.
+      "DELETE /v1/account/content",
       // SONNY-134's, and it arrives here the same way as every other: `routes/tasks.ts` mentions
       // auth nowhere. It is the one route a user can call to destroy their own retained content,
       // so being challenged is not a formality — an unauthenticated caller could otherwise delete
       // any task whose client-minted id they could guess.
+      // SONNY-404's two, arriving the same way and challenged for the same reason as the route
+      // above them. The bulk one is the sharpest of the three: an unauthenticated caller reaching
+      // it would delete a whole account's retained content in one request, and it carries its ids
+      // in a body rather than a path, which is not a difference the gate cares about — the hook
+      // runs before the body is parsed at all.
+      "DELETE /v1/tasks",
       "DELETE /v1/tasks/:task_id",
+      "DELETE /v1/tasks/:task_id/screenshots",
       // SONNY-135's, arriving the same way as everything below it — and it is also the route that
       // found the scan's own defect: its path sits *under* `DELETE /v1/account`, so Fastify prints
       // it as a child node and the parser read it as `GET /entitlements`, a path nothing serves.

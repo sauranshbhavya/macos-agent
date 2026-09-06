@@ -293,6 +293,9 @@ struct StandingWatcherRunTests {
         #expect(observer.callCount == 1, "the check must be in flight for this to test anything")
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
         #expect(try fixture.store.loadWatchers().isEmpty, "precondition: the wipe took the file")
         #expect(FileManager.default.fileExists(atPath: fixture.store.fileURL.path) == false)
 

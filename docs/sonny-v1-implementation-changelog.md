@@ -170,6 +170,504 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/every-delete-reaches-the-server
+Status: in progress
+Date: 2026-09-05
+Tickets: SONNY-404 — the other three delete buttons reach the server too: the whole local-data wipe says which promise it is, the Memory Task-history row queues every row's server deletion as one bulk call, and "Delete what Sonny did on screen" gets a route that takes exactly that task's screenshots.
+Reviewed by: pending (per WORKFLOW.md step 7).
+
+**The three decisions this branch carries were the founder's, taken 2026-09-05 and recorded on
+SONNY-404, and none of them is reopenable here.** They also *reverse* the decision recorded on that
+ticket the day before, and the ticket's comments are append-only, so a reader meeting the 2026-09-04
+comment first will read the opposite of what shipped. The later comment is the live one:
+
+1. **Settings › Data › "Delete Sonny local data" is a promise about this Mac, not about the
+   account.** The control is named local data, account-wide deletion is a different promise that
+   `DELETE /v1/account` already keeps, and a privacy wipe must not depend on a network call. So the
+   queued server deletions the wipe abandons are **intended behaviour** rather than a residual, and
+   the words say which promise it is. The alternative — the wipe also deleting every server copy,
+   with new words, its own confirmation and a rule for a wipe performed signed out — was declined.
+   (The 2026-09-04 comment had taken exactly that alternative.)
+2. **"Delete what Sonny did on screen" gets a narrower server route.** Screenshots are the most
+   sensitive content the gateway holds and snapshot copies of them carry no expiry today. The
+   alternative — the button stays local and its words stop implying server reach — was declined.
+3. **Memory › Task history › Delete queues every row's server deletion, as one bulk call rather than
+   one call per row.** Follows from the 2026-08-16 rule that delete means deleted everywhere.
+
+**Why decision 3 could not be "enqueue one entry per row", which is the shape SONNY-333 left
+behind.** `PendingServerDeletionStore.maxItems` is 200 and `TaskHistoryStore.defaultMaxItems` is
+10,000, so one entry per row would hand 9,800 obligations to the cap's silent eviction — from the
+single press that asks for the most. The queue entry therefore names a *list* of task ids, and "one
+bulk call" and "one queue entry" are the same decision seen from the two ends. That changed the
+store's on-disk shape, which in this store is dangerous in a way it is not in the other thirteen: a
+decode failure here is *healed* by quarantining the file (PR #194's F1), so a reader that could not
+parse the old shape would have thrown every outstanding obligation away and reported nothing — the
+exact failure this whole feature exists to prevent, arriving through the door built to prevent it.
+`PendingServerDeletion` therefore has a hand-written `init(from:)` that reads the legacy `taskID`
+key, and `loadKeyed` re-derives every dictionary key from the value it decoded rather than trusting
+the key on disk.
+
+**The two scopes do not subsume one another, deliberately.** A task can owe both a screenshots-only
+delete and a whole-task delete — delete the screen record offline, then delete the task — and both
+are delivered. Neither order is a hazard: whichever lands second finds its content already gone and
+answers a success with a count of zero, which is §4.6's own rule that a delete already true is not
+an error. Collapsing them would mean deciding which ask wins, and there is no reading under which
+the narrower one should cancel the wider.
+
+**A partial-ownership bulk answer keeps the whole obligation rather than narrowing it.** §4.6
+reserves `404` for a task belonging to a different account, which SONNY-333 reads as "not
+deliverable by *this session*, never not deliverable"; the batch says the same thing with
+`tasks_not_found`, and any non-zero value keeps the entry. Narrowing the entry to the refused ids
+would need a fourth store door that rewrites an entry mid-pass, and what it would buy is a smaller
+request on a Mac that is already re-sending ids the gateway deletes a second time for free. The cost
+is one bulk request per launch until the other account signs in — exactly the cost SONNY-333
+accepted for the single-task case.
+
+**A body on a `DELETE` is a constraint on the host, and it is written into the contract rather than
+left here.** An intermediary that strips a `DELETE` request body turns every bulk delete into a
+`400` no client can avoid, so §4.6.1 names it beside §6.1's payload size and §12's wall-clock as
+something SONNY-125 has to prove of a candidate host. The alternative, `POST /v1/tasks/delete`,
+would have obliged §9.1's `Idempotency-Key` on an operation §9.3 already calls naturally idempotent.
+
+**The screenshot delete is an UPDATE to NULL and not a DELETE of a row**, because a row of
+`sonny.retained_content` holds the screenshot beside the request text and the served response. That
+is also why the record needed a migration of its own: `sonny.content_deletion`'s `reason` CHECK
+admitted four values and none of them was this one, and `content_rows`/`snapshot_rows` count rows
+*removed* — reusing them would have changed what those columns mean for every reader that predates
+this route.
+
+Spec sections covered: contract §4.1 (two rows), §4.6.1 and §4.6.2 (new), §4.7, §9.3, §12. No spec
+section is left partial.
+
+Files changed:
+- `server/src/db/migrations/0020_a_screenshot_can_be_deleted_without_the_task.sql` (new — the
+  `task_screenshots` reason and two counters of its own, with its `-- @rollback` section)
+- `server/src/content/store.ts` (`deleteContentForTasks`, `clearScreenshotsForTask`,
+  `foreignTaskIds`, and the two outcome types)
+- `server/src/routes/tasks.ts` (the two routes and their body schema)
+- `docs/sonny-backend-api-contract.md`
+- `server/test/content.db.test.ts`, `server/test/gate.test.ts`,
+  `server/test/migration-round-trip.db.test.ts`
+- `Sources/MacAgentCore/PendingServerDeletionStore.swift` (the entry's shape, the scoped enqueue and
+  removal doors, the re-keying load)
+- `Sources/MacAgentCore/SonnyTaskDeletionService.swift` (the four service doors and the delivery
+  pass's three shapes)
+- `Sources/MacAgentCore/SonnyBackendClient.swift` (one region: the two new calls and the bulk
+  delete's wire types)
+- `Sources/MacAgentCore/LocalDataDeletionService.swift` (the wipe's copy decision, recorded)
+- `Sources/MacAgent/AgentViewModel.swift` (`deleteScreenRecord`, and `deleteMemory`'s task-history
+  enqueue and withdrawal)
+- `Sources/MacAgent/TaskDeletePresentation.swift`, `Sources/MacAgent/ContentView.swift`,
+  `Sources/MacAgent/CommandCenterView.swift` (the three sentences)
+- `Tests/MacAgentTests/TaskDeletionReachesTheServerTests.swift`,
+  `Tests/MacAgentCoreTests/PendingServerDeletionStoreTests.swift`,
+  `Tests/MacAgentCoreTests/SonnyTaskDeletionServiceTests.swift`,
+  `Tests/MacAgentTests/TaskDeletePresentationTests.swift`,
+  `Tests/MacAgentTests/MemoryCommandCenterTests.swift`
+- `docs/sonny-manual-test-checklist.md`, and this entry
+
+Tests (first round; the fix round's figures are below its own paragraph): every figure in this block
+is stamped at **`75f0c7cf`**, the commit carrying that round's code; that round's head was
+`e17187e2`, one docs-only commit above it
+(`git diff --name-only 75f0c7cf e17187e2 -- Sources Tests Package.swift server | wc -l` -> 0 against
+the same command with no pathspec -> 1, which fires). Both halves are owed and both were run: this
+diff touches `Sources/`, `Tests/` and `server/`.
+
+- Flagged Swift suite (CLAUDE.md's exact command) — passed, **2946 tests in 199 suites, 8 known
+  issues**. Main's baseline at `6cc9e189` was 2929 in 198 with the same 8, so this branch adds 17
+  tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `75f0c7cf` (clean), whole
+  population recompiled, 141s.
+- `scripts/mutate` — **15 mutants, 15 killed, 0 survived, 0 unattributed**, in three runs because the
+  two halves take different suite commands: 9 app-half mutants, M6 re-run alone after its first
+  spelling failed to build (a build failure is not test evidence — the early `return` it ended the
+  function with left the `if` below it in expression position), and 5 gateway mutants under
+  `MUTATE_TEST_CMD` with a lane-named Postgres. Fourteen of the fifteen were killed by named tests;
+  every one names at least one.
+- `scripts/changelog-order` — **exit 0**, "in merge order, 175 entries, both eras".
+- Server half — `npm run build` exit 0, `npm test` exit 0 with **806 passed / 411 skipped**,
+  `npm run typecheck` exit 0, `npm run check:secrets` exit 0, and `npm run test:db` **1217 passed**
+  against a lane-named Postgres.
+
+Behavior added:
+- *Delete what Sonny did on screen* deletes that task's screenshots from the gateway too — the live
+  rows and every training-snapshot copy — through `DELETE /v1/tasks/{task_id}/screenshots`, and its
+  confirmation says so.
+- *Memory › Task history › Delete* queues every row's server deletion as one obligation and sends it
+  as one `DELETE /v1/tasks`.
+- ~~Both surfaces describing the whole wipe say it deletes "from this Mac", and the confirmation
+  names what Sonny's servers keep among the things the press does *not* take.~~ **Superseded by the
+  fix round below** (2026-09-05): decision 1 was reversed back, so both surfaces say "from this Mac
+  **and from Sonny's servers**" and the confirmation names **your account** among what the press
+  leaves alone. The struck sentence is kept rather than replaced, so a sweep for the old wording
+  finds it labelled as history. (PR #207's F5.)
+- The pending-deletion queue carries a scope and a list of ids, and reads a file written before it
+  did.
+
+Behavior preserved:
+- **`deleteTask` is untouched.** A single whole-task obligation still goes to
+  `DELETE /v1/tasks/{task_id}` and not to the bulk route: SONNY-333's path has been through four
+  review cycles and rerouting it would buy nothing.
+- **The four-outcome delivery taxonomy is unchanged** and is now shared by all three shapes through
+  one classifier, so a `404`, a `400`, a `200` and everything else mean on the new routes exactly
+  what they mean on the old one.
+- ~~**The whole wipe still takes the queue file** with every other store, and still sends nothing.~~
+  **Superseded by the fix round below**: it still takes the queue file, and it now drains it first,
+  sends `DELETE /v1/account/content`, and writes back one account-scoped obligation when it could
+  not. (PR #207's F5.)
+- **A Memory row that is not Task history queues nothing**, which is pinned rather than assumed.
+- The screen record's local half is unchanged: the task row and its `visionSessionID` stay, and a
+  deleted screen record is still indistinguishable from one that aged out.
+
+Architectural decisions / pitfalls discovered:
+- **A store whose decode failure heals is a store whose on-disk shape cannot change carelessly.**
+  Every other local store propagates a decode failure, so a shape change there fails loudly; this one
+  quarantines and starts fresh, so the same change would be silent data loss wearing the mask of a
+  feature working as designed. The legacy decoder and its test exist for that reason and not for
+  tidiness.
+- **The two new client calls live on `SonnyBackendClient` while SONNY-333's lives on
+  `SonnyTaskDeletionService`, and the asymmetry is deliberate rather than drift.** The kickoff's file
+  boundary put them there, and there is a reason that reads as one: the single delete's body is
+  never decoded, while the bulk delete's answer decides whether an obligation is finished — a call
+  whose caller must read its body is a call with a decoder.
+- **`SonnyTaskDeletionService.swift` was edited although the kickoff note's file list did not name
+  it.** The delivery pass is where an obligation becomes a request, so the note's own requirement —
+  two new calls — cannot land without it. Recorded here rather than assumed, per WORKFLOW.md step 5.
+
+Known limitations / deferred scope:
+- **The bulk route's `tasks_not_found` is a count and not a list**, so a mixed-ownership obligation
+  is retried whole. Stated above with what it costs.
+- **The bulk obligation is capped at 10,000 ids by the route** — the Mac's own history cap, so no
+  press this product can make exceeds it. A future history cap above 10,000 moves both numbers in
+  one change.
+- **Nothing surfaces what the queue owes**, unchanged from SONNY-333, and still on SONNY-109's list
+  along with the cap's silent eviction.
+
+Open questions: none.
+
+**Fix round, 2026-09-05: the first of the three decisions above was reversed back, and the wipe now
+reaches the account.** Both founders restored the decision of **2026-09-04** — "Delete Sonny local
+data" is a promise about the **account** — and recorded that the 2026-09-05 answer this entry was
+first written against was a coordinator's error: the settled question had been re-asked as an
+enumerated option without the standing decision being named. The second and third answers stand
+untouched, and no line of the screenshots route or the bulk route moved in this round.
+
+**What the press does now**, in the order the steps have to run in:
+
+1. **Drains the queue**, before the file holding it is removed — the founder's own condition on this
+   decision, in those words.
+2. **Deletes everything the gateway retains for the account** — `DELETE /v1/account/content`,
+   contract **§4.6.3**, a new route, additive under §8.1 and with a row of its own in §4.1 and §9.3.
+   Live content, every training-snapshot copy, and the response bodies §9.2 keeps for twenty-four
+   hours. **The account stays open**: closing it is `DELETE /v1/account`, a different promise with no
+   control in the app today.
+3. **Deletes every local file, the queue among them**, so no task id survives the press whatever
+   happened above it.
+4. **Only if step 2 failed, writes one obligation back** — `.everythingUnderTheAccount`, the queue's
+   third scope, which **names no task**. That is what makes it safe to be the one thing a privacy
+   wipe leaves on disk, and what makes it *sufficient* is that it is strictly wider than every
+   obligation step 3 just discarded: an account-wide delete reaches everything each per-task
+   obligation named.
+5. **Says once and plainly what happened**, including what is still on the servers and what will
+   happen to it. `LocalDataDeletionCopy.outcome` owns both sentences.
+
+**Why a new route rather than a `scope` on the bulk one**, which the coordinator's note offered as
+the shape to weigh first. Extending `DELETE /v1/tasks` would have made `task_ids` optional, and on a
+delete route an absent or empty body would then be one typo away from meaning *everything* — the most
+expensive possible misreading, and one a 400 currently prevents. A separate path is also
+unambiguously additive under §8.1's first bullet, gets its own §4.1 row and its own line in the
+deny-by-default gate scan, and reads correctly beside `DELETE /v1/account`: the two paths differ by
+exactly the thing that differs in the promise.
+
+**Why the record needed migration `0021`.** `sonny.content_deletion.reason` already carries `account`
+for a *closed* account's wipe. Filing this act under that value would be the closest wrong answer
+available — `sonny.account.deleted_at` distinguishes them only until the user does close the account,
+at which point every earlier content wipe reads as a close. So `account_content` is its own reason,
+and `deleteContentForAccount` takes the reason as a required parameter rather than a defaulted one,
+on this repository's own recorded ground that a defaulted parameter is a decision nobody reads.
+
+**The press waits on the network now, and that is the decision reversing rather than an oversight.**
+The superseded reading argued a privacy wipe must not depend on a network call; the standing decision
+requires it to, because it is promising something only the network can deliver. What it must not do
+is fail silently, which is what step 5 exists for. `deleteLocalData()` is therefore an asynchronous
+entry point with a chained handle, and eleven existing tests across four suites had to await it —
+they were asserting on a press that had not finished.
+
+**The one obligation this press really does abandon, stated rather than left to be found:** an entry
+the drain kept on a `404`, which §4.6 reserves for a task belonging to a *different* account signed
+into the same Mac. The account-wide delete cannot reach it, and the queue file cannot keep it,
+because keeping it would mean leaving behind a file that names a task. It is the cost of the rule
+that whatever survives the wipe names nothing the user did.
+
+**Files this round added or changed on top of the list above:**
+`server/src/db/migrations/0021_a_wipe_leaves_the_account_open.sql` (new),
+`server/src/routes/tasks.ts` (the account-scoped sibling, and `registerTaskRoutes` renamed
+`registerContentDeletionRoutes` because it no longer registers only task routes),
+`server/src/content/store.ts`, `server/src/routes/auth.ts` (one call site, naming its reason),
+`server/src/app.ts` (the renamed registrar), `docs/sonny-backend-api-contract.md`,
+`server/test/{content.db,gate,migration-round-trip.db}.test.ts`,
+`Sources/MacAgentCore/{PendingServerDeletionStore,SonnyTaskDeletionService,SonnyBackendClient,LocalDataDeletionService}.swift`,
+`Sources/MacAgent/{AgentViewModel,ContentView,CommandCenterView}.swift`,
+`Tests/MacAgentTestSupport/RecordedBackendRequests.swift`,
+`Tests/MacAgentTests/{TaskDeletionReachesTheServerTests,MemoryCommandCenterTests,ProductShellTests,ConsequenceRuleDispatchTests,StandingWatcherRunTests}.swift`,
+and `docs/sonny-manual-test-checklist.md`, whose wipe row is **corrected in place** rather than
+joined by a second, with a parenthesis saying it briefly asked the opposite.
+
+**One defect the round's own verification found, in this round's own work.** `npm run test:db` failed
+on `migrate.db.test.ts`'s "a rollback actually changes the schema": migration `0021` widens one CHECK
+and adds no column, index, trigger or function, and that test's schema fingerprint read triggers,
+columns, indexes and functions only — so a rollback that had worked perfectly was indistinguishable
+from one that had done nothing. The fingerprint now reads CHECK constraints too, and the direction
+that matters is the other one: without that arm a rollback which silently *kept* a constraint reads
+exactly like one that removed it. `0020` moved a CHECK as well and passed only because it added
+columns beside it.
+
+**Fix round's figures, stamped at `710d5e00`, which is the head.** Every earlier stamp in this entry
+passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2950 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` was 2929 in 198 with the same 8, so the branch now adds 21 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `710d5e00` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- Server — `npm run build`, `npm run typecheck`, `npm run check:secrets` and `npm test` all exit 0,
+  with **806 passed / 416 skipped**; `npm run test:db` **exit 0, 1222 passed** against a lane-named
+  Postgres.
+- `scripts/mutate` — **19 mutants, 19 killed, 0 survived, 0 unattributed**, at `0c086ab3`, in two
+  runs (12 app-half, 7 gateway). **Nothing was carried**: every mutant's target file moved in this
+  round, which is the first of step 5's four conditions and is measured rather than argued —
+  `git diff --name-only 75f0c7cf HEAD -- <each target>` answers 1 for all five files the plans point
+  at, and the killers' own file (`TaskDeletionReachesTheServerTests.swift`) and the helper they drive
+  (`RecordedBackendRequests.swift`) moved as well. Three mutants are new and are the ones this round
+  is about — the drain skipped, the server reach skipped, and the wipe leaving a file that names
+  tasks — plus two on the new route: its record filed as an account close, and its delete not scoped
+  to the caller's account.
+- **One killer name is worth flagging rather than leaving to be noticed.** M8 lists
+  `twoCallersAtOnceMakeOneRequest`, which the coordinator's kickoff says is not a kill until
+  lane-420 lands. M8's verdict does not rest on it: its other killer,
+  `aBulkDeleteThatReachedSomebodyElsesTaskKeepsTheObligation`, is this branch's own and is the test
+  written for that property.
+
+**Second fix round, 2026-09-05: an obligation belongs to the account that pressed it.** PR #207's
+fresh review found five things above the bar and seven residuals. F1 is the one that mattered and it
+was a cross-account data-loss path, reachable with no unusual action: the obligation the wipe left
+behind named **no account and no time**, nothing cleared the queue on a session change, and the
+launch sweep delivered with whatever token was current — so a wipe pressed offline by one user,
+followed by a second signing in on the same Mac, deleted the **second** user's everything, silently;
+and the same obligation, delivered days later, reached content the first user created after the
+press. The per-task obligations were never exposed to this, and the reason is the point: §4.6's
+`404` refuses a task id the gateway knows under another account, which is a bound the account-wide
+scope has no id to carry. Three parts, each pinned by a test that fails on the tree as it was and by
+a mutant:
+
+- **Every queued obligation carries the account it was pressed under**, and is delivered only under a
+  session for that account. The Supabase user id, which is an *account* identifier and says nothing
+  about what the user did. A per-task entry with no account — a file written before the field — is
+  delivered as before, because §4.6's `404` is exactly the protection SONNY-333 designed for it.
+  Reading it synchronously needed a seam: `SonnyBackendClient` is an `actor`, and the enqueue runs
+  before the local deletes, so `SonnyTaskDeletionService` takes an `accountIdentity` closure the app
+  wires to the token store. SONNY-333 looked at this same wall and dropped the stamp for it.
+- **The account-wide obligation carries the instant of the press**, and `DELETE /v1/account/content`
+  gained an optional `?before=` that bounds what it deletes — additive under §8.1's "may add an
+  optional request field", with its own line in **§4.6.3** and §4.1. Each table is bounded on its own
+  notion of when the content happened: `occurred_at`, `source_occurred_at`, `claimed_at`. An
+  unparseable value is a `400` rather than a fall-through to "no bound".
+- **A session change discards what the outgoing account owed, with the reason recorded.** Delivering
+  first is impossible after the fact — signing out clears the tokens — so the discard is the honest
+  half of that pair, wired at `main.swift`'s `sessionDidChange`. **Signing *out* keeps them**: the
+  account that owns them may sign back in, and the per-entry gate holds them safe until it does.
+- **A wipe pressed with nobody signed in records nothing at all**, and says so: an obligation that
+  cannot name whose content it is about is precisely the one that deletes the next account. The
+  outcome sentence has three states now rather than two, and the third tells the user to sign in.
+
+**F2: the obligation is written on both paths.** `deleteAllLocalData` collects failures and throws
+only *after* deleting everything it could, and the queue is one of the files it deletes — so a wipe
+that failed on any single file landed in the `catch` with the queue already gone and step 4 never
+reached. The server held everything, the Mac owed nothing, and the sentence named only a local file:
+the state the founder's condition forbids, through the failure branch. The review named
+`aPartialWipeKeepsTheMemoryPagesSentenceForTheFileStillOnDisk` as the test already driving that
+throw, and it now reads both halves of the message and what the queue holds afterwards.
+
+**F3: the wipe holds a claim across the whole sequence.** The `!isRunning` guard was read on the
+press while the body then awaited a drain and a server call — the client's whole multi-attempt budget
+on a 20-second route — before touching a file, and a *scheduled routine* sets `isRunning` from a
+timer with nobody watching. `isDeletingLocalData` is set synchronously at the press and read by
+`start()`, which is the door every caller passes through and where `isRunning` is set.
+
+**F4 and F5 are records, corrected in place.** The checklist section's preamble told the founder the
+superseded decision directly above the corrected row that asks them to confirm the opposite, and its
+row count was stale; the two Behavior bullets above stated the superseded wipe as shipped and are now
+struck through inside their own corrections, so a sweep for the old wording finds it labelled as
+history rather than finding nothing. R1 through R6 are swept in the same round — **R5 among them**:
+the confirmation's middle sentence was how-it-works copy before a press, and what happens when the
+servers cannot be reached is said *afterwards*, by the outcome sentence, in the state it happened in.
+**R7 is not this branch's** and is filed as SONNY-426.
+
+**Second fix round's figures, stamped at `910e20e3`, which is the head.** Every earlier stamp in this
+entry passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2958 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` is 2929 in 198 with the same 8, so the branch adds 29 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `910e20e3` (clean).
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- Server — `npm run build`, `npm run typecheck`, `npm run check:secrets` and `npm test` all exit 0,
+  with **806 passed / 419 skipped**; `npm run test:db` **exit 0, 1225 passed**.
+- `scripts/mutate` — **27 mutants, 27 killed, 0 survived, 0 unattributed** (18 app-half, 9 gateway).
+  **Nothing was carried**: `git diff --name-only 0c086ab3 HEAD -- <file>` answers 1 for every file the
+  two plans target *and* for the killers' own file and the helper they drive, so the whole plan was
+  re-run. Nine mutants are new. **One survived on the first pass and is worth keeping**: X2 sent a
+  far-future bound, which satisfied a test asserting only that the query *contains* `before=` while
+  deleting exactly what an unbounded delete would — the defect the parameter exists to stop, passing
+  the test written for it. The assertion reads the instant now and X2 dies.
+
+**Fourth round, 2026-09-05: the claim is held per chain, and the cutoff reads the server's clock.**
+Review-207's cycle 3 found F1, F2, F4 and F5 held and R1 to R6 swept, and **F3 held for one press and
+not for two** — a defect above the bar in production code left by the fix round itself, which is what
+the founders' 2026-08-21 directive reserves one extra cycle for. This round is scoped to it and to
+the reviewer's G1; G2 and G3 are recorded below rather than fixed.
+
+**F3's second half.** `isDeletingLocalData` was set by every press and cleared by every completion,
+so a second press chained behind the first had the *first* wipe's completion drop the claim while the
+second was still draining, still calling the gateway and still about to delete every store — the
+exact window the claim exists to close, re-opened by pressing twice. And Settings' Delete was
+`.disabled(viewModel.isRunning)` alone, so it stayed pressable for the whole of it, because
+`isRunning` is false during a wipe. Three changes:
+
+- **The claim is owned by the chain, not by a task.** `localDataWipesInFlight` goes up before the
+  press returns and down as each wipe ends, and `isDeletingLocalData` is derived from it and from
+  nothing else — so only the last wipe can release it.
+- **The control is disabled while the claim is held**, which is what makes a second press unreachable
+  through the product.
+- **A model-level refusal was considered and rejected**, and the reasoning is at the code: returning
+  early from a second press would drop a press the user made, and it would make the property
+  untestable in the bargain — with no second wipe there is no chain, so nothing could tell a claim
+  released by the last wipe from one released by the first, which is the defect itself.
+
+**G1: the cutoff is the gateway's clock, not this Mac's.** `?before=` is compared against
+`occurred_at` on the gateway's own rows, so a skewed Mac bounds the deletion at the wrong instant —
+running behind, the immediate wipe under-deletes while reporting the servers' copy gone; running
+ahead, the queued obligation's cutoff sits in the future, which is the over-deletion the parameter
+was added to prevent. `SonnyBackendClient.serverNow()` exists for exactly this (§3.5's offset) and is
+what `EntitlementService` and `SonnyAccountService` already read; it is `public` now and reached
+through `SonnyTaskDeletionService.instantToBoundAPressAt()`. **It is the Mac's clock plus a
+correction, so it is never unavailable**: with no observation yet the offset is zero and the value is
+`Date()`, which is what the press used before. **The wire truncates it toward the past by up to a
+second** — §2.1's format carries no fractional seconds, so a bound of `…00.750` goes out as `…00Z` —
+and that error is always in the under-deleting direction, which is the safe one for a bound whose job
+is to stop a delayed delete reaching too far.
+
+Known limitations, recorded rather than fixed (coordinator's routing, 2026-09-05):
+
+- **G2 — the session-change discard destroys a pre-field entry the delivery gate would have kept.**
+  `discardObligationsNotBelongingTo` filters `accountID != accountID`, and `nil != "A"` is true, so a
+  per-task obligation written before that field existed is discarded on the first explicit sign-in —
+  including a sign-in as the same account — while `deliverable` one screen away deliberately keeps
+  exactly that entry, because §4.6's `404` protects it. Not fixed because pre-field files exist only
+  on Macs that ran builds from before this branch, which today means the founders' own, and the
+  window closes at the first successful sweep.
+- **G3 — pressing Allow during a wipe is silent where `start()` logs.** `approvePendingRun`'s guard
+  returns without a line, so the "refused rather than raced, and it says so" property holds at one
+  run door and not the other. A silence in a rare window; recorded because the comment two screens
+  above it calls that class of silence out by name.
+
+**Fourth round's figures, stamped at `777f8140`, which is the head.** Every earlier stamp in this
+entry passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2961 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` is 2929 in 198 with the same 8, so the branch adds 32 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `777f8140` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- **The server half is carried, with the proof rather than the assertion.**
+  `git diff --name-only 910e20e3 HEAD -- server | wc -l` -> **0**, and
+  `git rev-parse 910e20e3:server 777f8140:server` prints
+  `a0f65233115d698bb5600876af87bfc6148b77b5` twice while the same command over `Sources` prints two
+  different hashes — so the control fires. This round's changes are which clock the *client* reads
+  and how the *client* holds a claim; §4.6.3's `before` parameter is last round's and did not move.
+  The carried figures are `npm run build`, `npm run typecheck`, `npm run check:secrets` and
+  `npm test` all exit 0 with 806 passed / 419 skipped, and `npm run test:db` exit 0 with 1225 passed,
+  at `910e20e3`.
+- `scripts/mutate` — **18 mutants, 18 killed, 0 survived, 0 unattributed**, at `777f8140`. Two are
+  new: **Y1**, the claim released by whichever wipe finishes rather than the last, killed by
+  `aSecondPressInsideTheWindowDoesNotReleaseTheFirstWipesClaim`; and **Y2**, the cutoff taken from
+  this Mac's wall clock, killed by `theCutoffIsTheServersClockAndNotThisMacs`. **Two verdicts were
+  carried and the rest re-run**: `W3` and `M9`, whose target files (`LocalDataDeletionService.swift`,
+  `PendingServerDeletionStore.swift`) and killing tests (`LocalStorageSecurityTests.swift`,
+  `PendingServerDeletionStoreTests.swift`) all answer 0 to
+  `git diff --name-only 910e20e3 HEAD -- <file> | wc -l`, and whose killers scan neither a population
+  nor a fixture this round moved. The gateway plan's nine are carried on the tree-identity proof
+  above. Everything else was re-run, `X2` and `X6` among them, because `AgentViewModel.swift`,
+  `SonnyTaskDeletionService.swift` and the killers' own file all moved.
+
+**One defect this round found in its own work.** The two-press test was first written as a poll for
+the second wipe's request with a sixty-second backstop, and a loaded full-suite run failed it while
+the same test passed under a filter — the shape `CLAUDE.md` names a test that only finds a defect on
+an idle machine, arriving inside the test written to close a defect. It awaits each press's own task
+handle now, which returns exactly when that wipe has finished and decremented the count; there is no
+wall clock left in it.
+
+**Rebased onto `main` at `31c83196` (PRs #203 through #211), 2026-09-06 — every figure above is
+superseded by the block below, and none was translated across the hop.** `CLAUDE.md`'s rule is that a
+rebase replays onto a moved base, so a pre-rebase number was never true of the new tree.
+
+**The eleven SHAs the rounds above stamp are orphaned rather than repointed.** They resolve in this
+clone and `git merge-base --is-ancestor <sha> HEAD` exits **1** for every one of `75f0c7cf`,
+`e17187e2`, `0c086ab3`, `710d5e00`, `de04effb`, `88d7eebd`, `0fd87d1e`, `910e20e3`, `e788f2a3`,
+`777f8140` and `cb89077b`, while the old base `6cc9e189` exits 0 because it is still an ancestor of
+`main`. That is the convention working: a branch SHA records *when* a measurement was taken, and a
+rebase throws the head away rather than moving the tree, so the figures beside those stamps are true
+of that branch at that moment and of nothing else.
+
+**What the hop met, and what it did not.** Outside `docs/` the branch and the merged range share
+exactly four files, and **none of them conflicted** — git merged all four, because this branch's hunks
+and the range's sit in disjoint regions. So the patch survived byte-for-byte rather than by a
+resolution, which is stronger than expected and is measured rather than asserted:
+`git diff 6cc9e189 cb89077b -- <tree> | git patch-id --stable` against
+`git diff 31c83196 HEAD -- <tree>` gives one id twice for **`Sources`** (`cf5a4d85…`, 1680 diff
+lines both sides), **`Tests`** (`2629cbe2…`, 1747) and **`server`** (`b81e9cb9…`, 1340), and two
+different ids for **`docs`** (`061faafc…` against `f9781da1…`, 702 both sides) — which is the control
+firing, since the changelog conflict is the one thing that was resolved by hand.
+
+**The four shared files carry both sides, checked rather than assumed**, because `CLAUDE.md`'s rebase
+gotcha is that two files can be individually merge-clean and jointly incoherent. `server/src/app.ts`
+keeps PR #208's `REQUEST_TIMEOUT_MS`, `clientErrorResponse` and `clientErrorHandler` and takes this
+branch's registrar rename; **the classifier stays the single source for both error doors** —
+`classify` is called at the socket door and at the reply door and this branch reimplements neither.
+`server/src/routes/auth.ts` keeps the shared `providerUnavailable` answer and takes the one-line
+`"account"` reason. `server/src/idempotency/store.ts` keeps `CLAIM_LEASE_SECONDS = 180` and takes the
+optional `claimedAtOrBefore` bound. `server/test/gate.test.ts` keeps PR #206's billing routes and
+takes this branch's three. In `docs/`, every changelog entry is kept with this branch's above
+PR #210's, every contract row is kept — §14's dated table is byte-identical to `main`'s, this branch
+adding no row to it — and every checklist section is kept.
+
+**Re-measured at `c5f61cfc`, the rebased head, with nothing carried:**
+
+- Flagged Swift suite — **exit 0**, **2995 tests in 200 suites, 8 known issues**;
+  `grep -cE 'recorded an issue'` over its log → **0**. `main` at `31c83196` is the new baseline and
+  the merged range brought its own tests, so the pre-rebase 2961 in 199 says nothing about this tree.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `c5f61cfc` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, **183 entries**, both eras.
+- Server — `npm run build`, `npm run typecheck` and `npm run check:secrets` all exit 0
+  (`clean (629 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `npm test` **exit 0,
+  820 passed / 430 skipped (1250)**; `npm run test:db` **exit 0, 1250 passed (1250)** against a
+  lane-named Postgres.
+- **Migrations `0020` and `0021` up and down against that Postgres**, with a control that fires:
+  `up` exit 0 and the CHECK carries all six reasons with both counters `NOT NULL DEFAULT 0`;
+  inserting `reason = 'not_a_reason'` is refused by the constraint; with one row of each new reason
+  present, `down` 0021 exits 0, the `account_content` row is gone and the CHECK is back to five;
+  `down` 0020 exits 0, the `task_screenshots` row is gone, the CHECK is back to four and both columns
+  are dropped; `up` again exits 0 and the six-value CHECK returns.
+- `scripts/mutate` — **29 mutants, 29 killed, 0 survived, 0 unattributed**, at `c5f61cfc`, in two
+  runs (20 app-half, 9 gateway). **The whole of both plans was re-run and nothing was carried**, the
+  two that were carried last round included: the merged range moved `server/src/idempotency/store.ts`
+  and `server/src/routes/auth.ts`, which the gateway killers reach through `buildApp`, and
+  `Tests/MacAgentTestSupport/BackendStubURLProtocol.swift`, which every Swift behaviour test here
+  drives — step 5's fourth condition, the killer driving a helper the range moved, which no
+  file-level check over the mutants' own targets can see.
+
+Next branch: per the coordinator's wave-6 order.
+
 ### Branch: fix/a-short-article-about-a-wall-is-served
 Status: complete
 Date: 2026-09-05

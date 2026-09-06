@@ -28,7 +28,7 @@ import { postgresMeteringStore, type MeteringStore } from "./metering/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import { registerContent } from "./content/hook.js";
 import { postgresContentStore, type ContentStore } from "./content/store.js";
-import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerContentDeletionRoutes } from "./routes/tasks.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
 import { describeRouting, modelProvidersFrom } from "./model/providers.js";
@@ -571,7 +571,7 @@ export function buildApp(
    * idempotency hook nor the metering hook — both are `POST`-only — which is why nothing about
    * metering's shape changes on this branch.
    */
-  registerTaskRoutes(app, auth ? { withConnection: auth.withConnection } : undefined);
+  registerContentDeletionRoutes(app, auth ? { withConnection: auth.withConnection } : undefined);
 
   /**
    * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),

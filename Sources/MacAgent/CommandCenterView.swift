@@ -6325,7 +6325,13 @@ private struct SettingsDataPage: View {
                         // cannot reach the tree without appearing here.
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes)."
+                            // **"and from Sonny's servers" is the founder decision of 2026-09-04,
+                            // restated 2026-09-05** (SONNY-404): this control is a promise about the
+                            // account. It read "from this Mac" for one round, under a reversal that
+                            // was a coordinator's error. `LocalDataDeletionCopy` carries the whole
+                            // decision; the confirmation behind this row says what happens when the
+                            // servers cannot be reached.
+                            detail: "Deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers."
                         )
                     } trailing: {
                         Button {
@@ -6334,7 +6340,13 @@ private struct SettingsDataPage: View {
                             Label("Delete", systemImage: "trash")
                         }
                         .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
-                        .disabled(viewModel.isRunning)
+                        // **`isDeletingLocalData` as well as `isRunning`** (SONNY-404, PR #207's
+                        // cycle-3, F3). The press became asynchronous when the wipe started reaching
+                        // the gateway, and it spans up to the client's whole multi-attempt budget on
+                        // a 20-second route — throughout which this control stayed pressable,
+                        // because `isRunning` is false during a wipe. A second press inside that
+                        // window is what re-opened the window the claim exists to close.
+                        .disabled(viewModel.isRunning || viewModel.isDeletingLocalData)
                         .help("Delete local Sonny data")
                     }
 

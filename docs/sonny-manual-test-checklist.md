@@ -3601,6 +3601,83 @@ about the whole account.
       windows now. **Report the count you saw, even if it is zero**, because a zero somebody
       watched for is worth more than a zero nobody looked at.
 
+### The other three delete buttons reach the server too (new 2026-09-05, SONNY-404)
+
+**What changed.** SONNY-333 made *one* button keep the founder rule that delete means deleted
+everywhere. Three other deletions still stopped at this Mac, and the founders settled all three:
+
+- **Settings &rsaquo; Data &rsaquo; Delete Sonny local data** is a promise about **the account**, and
+  now says so. It deletes what this Mac holds *and* what Sonny's servers keep for the account, and
+  **your account stays open**. *(This bullet said the opposite for part of 2026-09-05 — "stays a
+  promise about this Mac" — under a reversal both founders undid the same day. Corrected 2026-09-05.)*
+- **Command Center &rsaquo; Memory &rsaquo; Task history &rsaquo; Delete** now deletes every row's
+  backend copy too, in **one** request naming all of them rather than one request per row.
+- **Delete what Sonny did on screen** now deletes that task's screenshots from the backend — and
+  only the screenshots. There is a new, narrower route for it, because the per-task delete would
+  have taken the command text and the model's replies with them, which is more than that button
+  says.
+
+**All five rows below need a signed-in build against a running gateway**, the same gate SONNY-134's
+and SONNY-333's rows above sit behind (SONNY-280's resume checklist, steps (1)–(5)). Reuse the same
+gateway and the same account. One of them needs a gateway you can stop, and one needs a **second**
+account you can sign in as.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. Delete what Sonny did on screen.** Run a
+      screen-control task so Sonny actually does something on screen, then open that task in Command
+      Center &rsaquo; Tasks and check `npm run support -- account <your account id>` shows content
+      for it. In the task's detail sheet press **Delete what Sonny did on screen**. **Read the
+      confirmation before pressing Delete**: it must say the screenshots go from this Mac *and* from
+      Sonny's servers, and that the task stays in your history. Confirm. Then look at the account
+      report again: the screenshots for that task must be gone while the **task's own row, its
+      command and the response are still there**. **What would be a finding:** the confirmation not
+      mentioning the servers, the whole task disappearing from the report, or the *What Sonny did on
+      screen* section still showing after the press.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway. Task history, one request.** Run two or
+      three ordinary tasks so there are several rows, and confirm the backend kept them. Watch the
+      gateway's log, then in Command Center &rsaquo; Memory press **Delete** on the **Task history**
+      row and confirm. The log must show **one** `DELETE /v1/tasks` request, not one per task, and
+      the account report must show nothing left for any of those tasks. **What would be a finding:**
+      several delete requests instead of one, any task's content surviving, or a red error or storage
+      banner appearing that you did not press for.
+
+- [ ] **(new 2026-09-05, corrected 2026-09-05 after the fix round, SONNY-404) — needs a local
+      gateway. The whole wipe is about the account, and says so.** *(This row asked the opposite for
+      part of one day: the wipe was briefly built as a promise about this Mac, and both founders
+      restored the account reading. Run the row as it stands below.)* Run two or three ordinary tasks
+      and confirm the backend kept them with `npm run support -- account <your account id>`. Open
+      Settings &rsaquo; Data. The line under **Delete Sonny local data** must end "**from this Mac and
+      from Sonny's servers**". Press Delete and **read the confirmation before confirming**: it must
+      say the same thing, then say what happens if Sonny can't reach the servers right now, and then
+      name **your account** among the things it does *not* delete, beside generated files and API
+      keys. Confirm it. The message that appears must say the copy on Sonny's servers is deleted
+      too. Then check the account report: **nothing** the backend kept for those tasks may be left,
+      and **you must still be signed in and able to run a task** — the account stays open. **What
+      would be a finding:** either sentence still saying only "from this Mac", the confirmation not
+      mentioning what happens when the servers are unreachable, any of the backend's copies
+      surviving, or being signed out afterwards.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway you can stop. The wipe never fails
+      silently.** Run one ordinary task and confirm the backend kept it. Now **stop the gateway** (or
+      turn off Wi-Fi) and press **Delete Sonny local data**, confirming it. The message must say, in
+      plain words, that Sonny couldn't reach its servers, that their copy is **still there**, and
+      that Sonny deletes it the next time it can — never just "Deleted N local data files." Start the
+      gateway again, quit Sonny and reopen it, then check the account report: that task's content
+      must now be **gone**, deleted by the sweep at launch. **What would be a finding:** a message
+      that says only how many local files went, or the backend's copy still being there after the
+      relaunch.
+
+- [ ] **(new 2026-09-05, SONNY-404) — needs a local gateway you can stop and a second account. The
+      wipe never deletes somebody else's data.** Signed in as account **A** with the gateway running,
+      run one ordinary task and confirm the backend kept it. **Stop the gateway**, press **Delete
+      Sonny local data** and confirm it; the message must say the servers' copy is still there. Now
+      **start the gateway**, sign out of A, and **sign in as a second account B** that has run at
+      least one task of its own (confirm with the account report that B's content is there). Quit
+      Sonny and reopen it. **B's content must still be there, untouched.** Then sign back in as A,
+      quit and reopen, and A's content must now be gone. **What would be a finding:** any of B's
+      content disappearing — that is one user's press deleting another user's everything, which is
+      what this row exists to catch.
+
 ### Renaming one file, and being asked first (new 2026-09-04, SONNY-385)
 
 **Why these rows exist.** Renaming is destructive — it replaces a name the user chose, and nothing in

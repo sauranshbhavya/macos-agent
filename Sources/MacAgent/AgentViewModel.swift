@@ -606,6 +606,9 @@ final class AgentViewModel: ObservableObject {
     /// state and leaves a test unable to await the pass its own press produced, to save background
     /// work that is already serialized and bounded.
     private var pendingServerDeletionDelivery: Task<Void, Never>?
+    /// Settings' whole wipe in flight (SONNY-404). Chained the way the delivery pass is, and for the
+    /// same reason: both write the queue file.
+    private var localDataWipe: Task<Void, Never>?
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
     /// Row 19's seam. `UnmanagedMemoryPolicyProvider` is the only implementation that ships, so this
@@ -1056,7 +1059,14 @@ final class AgentViewModel: ObservableObject {
     /// `outputLocationStore:` parameter. The clipboard monitor likewise gets the same settings store
     /// the view model does, so the switch the user sees and the switch the monitor obeys are one
     /// object.
-    static func atItsRealStoreLocations(backendClient: SonnyBackendClient) -> AgentViewModel {
+    /// **`accountIdentity` is the shipping app's synchronous read of who is signed in**
+    /// (SONNY-404, PR #207's F1), and it reads the Keychain directly rather than the client actor
+    /// because the enqueue it serves must stay synchronous. `SonnyTaskDeletionService.init` carries
+    /// the whole argument.
+    static func atItsRealStoreLocations(
+        backendClient: SonnyBackendClient,
+        accountIdentity: @escaping @Sendable () -> String?
+    ) -> AgentViewModel {
         let whitelist = PathWhitelist()
         let clipboardHistorySettingsStore = ClipboardHistorySettingsStore(
             fileURL: ClipboardHistorySettingsStore.realFileURL()
@@ -1098,6 +1108,7 @@ final class AgentViewModel: ObservableObject {
             // The one client the process holds, built in `main.swift` beside the real Keychain and
             // passed to `SonnyAccountModel` as well — one client, one session, one refresh guard.
             backendClient: backendClient,
+            accountIdentity: accountIdentity,
             whitelist: whitelist
         )
     }
@@ -1232,6 +1243,14 @@ final class AgentViewModel: ObservableObject {
         // server's overlap rule allows one, which §3.3 reads as theft. `SonnyAccountModel` states
         // the same rule for the same object, and `main.swift` builds the one instance both share.
         backendClient: SonnyBackendClient,
+        // Who is signed in, read synchronously (SONNY-404, PR #207's F1).
+        //
+        // **Defaulted to "nobody", and that direction is the safe one** — the opposite of the store
+        // parameters SONNY-350 stripped their defaults from. A defaulted store resolved to the
+        // user's real files; this resolves to *no account*, under which nothing is owed to any
+        // server and the wipe records no obligation at all. A fixture that inherits it behaves as a
+        // signed-out Mac, which is what a fixture with no session is.
+        accountIdentity: @escaping @Sendable () -> String? = { nil },
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
@@ -1280,7 +1299,13 @@ final class AgentViewModel: ObservableObject {
         self.pendingServerDeletionStore = pendingServerDeletionStore
         self.taskDeletionService = SonnyTaskDeletionService(
             client: backendClient,
-            store: pendingServerDeletionStore
+            store: pendingServerDeletionStore,
+            // **The synchronous account read** (SONNY-404, PR #207's F1). Every obligation carries
+            // the account it was pressed under, and the enqueue runs before the local deletes, so
+            // this cannot be an `await` on the client actor — `SonnyTaskDeletionService.init` says
+            // why in full. It reads the token store the client itself was built over, which is the
+            // same Keychain answer without the actor hop.
+            accountIdentity: accountIdentity
         )
         self.standingWatcherObserver = standingWatcherObserver
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
@@ -2072,6 +2097,11 @@ final class AgentViewModel: ObservableObject {
     ///   equivalent typed command would have produced. It is not a way past anything, and there is
     ///   nowhere in this function or the next where it could become one — the only thing it changes
     ///   is who wrote the plan.
+    /// **The wipe's claim is read here, not in `dispatch`** (SONNY-404, PR #207's F3). This is where
+    /// `isRunning` is set, so it is the door every caller passes through — `dispatch`, the widget,
+    /// the row actions, the clarification resume and the approval path all end here. Settings' whole
+    /// wipe deletes every store and clears the in-memory state a run holds, and it now spans a
+    /// server round trip, so a run started inside that window loses its files under it.
     func start(
         autoExecute: Bool = false,
         origin: TaskOrigin = .commandCenter,
@@ -2112,6 +2142,12 @@ final class AgentViewModel: ObservableObject {
         // command: a silently dropped real command, an "Enter a natural-language command first"
         // failure, and a blank "Untitled task" history record instead of what was typed.
         let submittedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isDeletingLocalData else {
+            // Refused rather than raced, and it says so rather than doing nothing (PR #207's F3).
+            logStore.append(.observe, "Not started: Sonny is deleting your data.")
+            return
+        }
+
         // Set here, synchronously, not inside `performStart` — `CommandCenterRunningIndicator`
         // needs a correct "what's actually running" label the instant `isRunning` flips true, not
         // a render or two later once the scheduled `Task` catches up.
@@ -3863,6 +3899,30 @@ final class AgentViewModel: ObservableObject {
     /// timeout.
     private(set) var completedServerDeletionPasses = 0
 
+    /// A session changed — deliver what the new account can, and discard what belongs to nobody
+    /// here (SONNY-404, PR #207's F1).
+    ///
+    /// **The second half of "deliver what you can for the old account, or discard with a recorded
+    /// reason".** The first half is impossible after the fact: signing out clears the tokens, so
+    /// there is nothing left to authenticate the outgoing account's obligations with. So this
+    /// discards them and says so in the log, which is the record.
+    ///
+    /// **It only discards when somebody is signed in**, so signing out keeps everything: the account
+    /// that owns those obligations may sign back in, and the per-entry delivery gate is what holds
+    /// them safe until it does. Signing *in* as a different account is the moment the old ones stop
+    /// being deliverable at all, and that is when they go.
+    func settlePendingServerDeletionsForSessionChange() {
+        let discarded = (try? taskDeletionService.discardObligationsForOtherAccounts()) ?? 0
+        if discarded > 0 {
+            let noun = discarded == 1 ? "deletion" : "deletions"
+            logStore.append(
+                .observe,
+                "Discarded \(discarded) queued server \(noun) belonging to an account that is no longer signed in."
+            )
+        }
+        sweepPendingServerDeletions()
+    }
+
     /// The launch sweep (SONNY-333): everything a previous run could not deliver, tried again.
     ///
     /// **Needs no session restore to have happened first.** `SonnyBackendClient` reads the Keychain
@@ -3905,16 +3965,60 @@ final class AgentViewModel: ObservableObject {
     /// agrees with the file, and this delete does not touch task history — the row is byte-identical
     /// afterwards. Calling it anyway would decrypt and decode the whole history file (130 ms at the
     /// cap, measured at `36cef9e`) to reload records that did not change.
+    ///
+    /// ## The server's copy of the screenshots (SONNY-404)
+    ///
+    /// The gateway holds the redacted captures this task sent to `POST /v1/screen/analyze`, and
+    /// every training-snapshot member copied from them. Until this ticket this button reached none
+    /// of it, and it could not be fixed by pressing `DELETE /v1/tasks/{task_id}` — that route takes
+    /// a task's *whole* retained content, so it would have deleted the command text and the
+    /// responses too, which is more than the button says. The founder decided on 2026-09-05 for a
+    /// narrower route, `DELETE /v1/tasks/{task_id}/screenshots`, and the confirmation this button
+    /// raises now names what it reaches.
+    ///
+    /// **The enqueue goes first, and the reason is `deleteTask`'s reason in a milder form.** The
+    /// task row survives this press, so the id is not destroyed the way it is there — but the
+    /// *button* does not survive it: `showsScreenRecordDeleteAction` is offered only for a screen
+    /// record that reads back, so once the journal entry is gone there is nothing left to press
+    /// again. A local delete that ran first with the enqueue then failing would leave the
+    /// screenshots on the server with no control in the product able to ask for them again.
+    ///
+    /// So the two throws are handled the same way `deleteTask` handles its own: an enqueue that
+    /// throws aborts with the screen record intact, and a local delete that throws withdraws the
+    /// obligation it had just recorded — because an entry left queued for a delete the user was told
+    /// had failed would have the next launch take the server's screenshots for a record they can
+    /// still open.
     func deleteScreenRecord(for record: CompletedTaskRecord) {
         guard let visionSessionID = record.visionSessionID else {
+            return
+        }
+        guard let id = record.id, !id.isEmpty else {
+            // The same refusal `deleteTask` makes, in the same words and for the same reason: an id
+            // is what names the server's copy, and without one this press cannot keep the promise
+            // its confirmation now makes. Unreachable in practice — `loadAll()` backfills the id —
+            // so the message points at the retry that fixes it.
+            setError("Could not delete this task's screen record: its saved copy has no identifier yet. Try again in a moment.")
+            return
+        }
+
+        do {
+            try taskDeletionService.recordDeletedScreenRecord(taskID: id)
+        } catch {
+            setError("Could not delete this task's screen record: \(error.localizedDescription)")
             return
         }
 
         do {
             try visionSessionJournalStore.delete(id: visionSessionID)
         } catch {
+            // `try?` for `deleteTask`'s reason: the user is already being told the delete did not
+            // happen, and a second sentence about bookkeeping is not something they can act on.
+            try? taskDeletionService.withdrawDeletedScreenRecord(taskID: id)
             setError("Could not delete this task's screen record: \(error.localizedDescription)")
+            return
         }
+
+        deliverPendingServerDeletions()
     }
 
     func refreshClipboardHistoryNotice() {
@@ -3954,25 +4058,173 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Settings' whole wipe — **a promise about the account, not about this Mac** (SONNY-404,
+    /// founder decision 2026-09-04, restated 2026-09-05).
+    ///
+    /// The press deletes what this Mac holds *and* what the gateway retains for the account: every
+    /// task's stored content, every training-snapshot copy of it, and the response bodies the
+    /// idempotency store holds. **The account itself stays open** — closing it is
+    /// `DELETE /v1/account`, a different promise with no control in the app today.
+    ///
+    /// ## The order, and why each step is where it is
+    ///
+    /// 1. **Drain the queue**, before the file holding it is removed. That is the cost the founder
+    ///    accepted with this decision, in those words.
+    /// 2. **Delete the account's server-side content.** Before the local wipe, so that a press which
+    ///    succeeds leaves *nothing* behind on either side, and so that a press which fails still has
+    ///    every local file intact when it decides what to tell the user.
+    /// 3. **Delete every local file**, the queue among them — so no task id survives this press
+    ///    whatever happened above it.
+    /// 4. **Only if step 2 failed, record one obligation**: everything under this account. It is the
+    ///    single thing the wipe may leave on disk, and it is safe to leave because it *names no
+    ///    task* — a queue file holding it carries nothing about what the user did.
+    /// 5. **Say once, plainly, what happened** — including, when the gateway could not be reached,
+    ///    what is still on the servers and what will happen to it.
+    ///
+    /// **The account-wide obligation is strictly wider than every per-task one**, which is what
+    /// makes step 3 safe: an undelivered per-task obligation is not abandoned by the wipe, it is
+    /// subsumed. If step 2 succeeded there is nothing left to owe at all.
+    ///
+    /// **The one obligation that really is abandoned, stated rather than left to be found**: an
+    /// entry the drain kept on a `404`, which §4.6 reserves for a task belonging to a *different*
+    /// account — a Mac two people have signed into. The account-wide delete cannot reach it, because
+    /// it is not this account's, and the queue file goes; so the other user's copy survives. Keeping
+    /// it would mean leaving a file that names a task, which is the one thing this press must not
+    /// do. Recorded here as the cost of the rule rather than answered.
+    ///
+    /// **The press now waits on the network, and that is the decision reversing.** Under the
+    /// superseded 2026-09-05 reading a privacy wipe could not depend on a network call; under the
+    /// standing decision it must, because it is promising something the network is the only way to
+    /// keep. What it must not do is fail *silently*, which is what step 5 exists for.
     func deleteLocalData() {
         guard !isRunning else {
             setError("Stop the current run before deleting local data.")
             return
         }
+        // Chained rather than overlapped, for `deliverPendingServerDeletions`' reason: two wipes over
+        // one queue file is a lost-update race, and the chain also means a second press reads the
+        // file the first one left.
+        // **The claim is taken here, synchronously, and held for the whole sequence** (PR #207's
+        // F3). The guard above is read on the press; the body below is a scheduled `Task` that then
+        // awaits a drain and a server call — up to the client's whole multi-attempt budget on a
+        // 20-second route — before it touches a file. Nothing re-checked in that window, so a
+        // scheduled routine could start inside it and have every store deleted underneath it, its
+        // `activeTaskScope` dropped, and its result overwritten by the wipe's own sentence on the
+        // channel SONNY-201 reserves for a failure. `isDeletingLocalData` is what the run doors
+        // refuse on, and it is set before the press returns rather than inside the task.
+        //
+        // **Counted rather than flagged, because the flag was released per press and not per chain**
+        // (PR #207's cycle-3, F3's second half). Each wipe cleared it when *its own* body finished,
+        // so a second press chained behind the first had the first's completion drop the claim while
+        // the second was still draining, still calling the gateway and still about to delete every
+        // store — the exact window this flag was added to close, re-opened by pressing twice. The
+        // count goes up before the press returns and down as each wipe ends, so the claim is held
+        // until the **last** one finishes.
+        localDataWipesInFlight += 1
+        isDeletingLocalData = true
+        let previous = localDataWipe
+        localDataWipe = Task { @MainActor in
+            await previous?.value
+            await self.performLocalDataWipe()
+            self.localDataWipesInFlight -= 1
+            self.isDeletingLocalData = self.localDataWipesInFlight > 0
+        }
+    }
 
+    /// How many wipes are between their press and their last step (SONNY-404, PR #207's F3).
+    ///
+    /// **The claim's owner is the chain, not a task.** `isDeletingLocalData` is derived from this and
+    /// from nothing else, so the only way to release it is for every wipe to have finished. A
+    /// `Bool` set by each press and cleared by each completion is what cycle 3 measured releasing the
+    /// claim mid-sequence.
+    ///
+    /// Two presses are unreachable through the product now — the control is disabled while the claim
+    /// is held — and the count is what keeps the model right if a press ever arrives another way.
+    ///
+    /// **A model-level refusal was the other option and it was rejected**, though the surface-level
+    /// one (the disabled control) ships beside this. Returning early from a second press would drop
+    /// a press the user made, and it would make the property untestable in the bargain: with no
+    /// second wipe there is no chain, so nothing could tell a claim released by the last wipe from
+    /// one released by the first, which is precisely the defect cycle 3 found. Chaining keeps the
+    /// second press honoured, keeps two wipes off one queue file, and leaves the release observable.
+    private var localDataWipesInFlight = 0
+
+    /// Whether Settings' whole wipe is running right now (SONNY-404, PR #207's F3).
+    ///
+    /// **A claim rather than a mood.** The wipe deletes every store and clears the in-memory state a
+    /// run is holding, so a run that starts inside it loses its files and its scope. The three doors
+    /// that start a run refuse while this is true, which is the "hold the claim" half of the fix;
+    /// the wipe's own `!isRunning` guard is the other direction and is unchanged.
+    ///
+    /// `private(set)` and published: the run doors read it, and a test needs to see the window.
+    @Published private(set) var isDeletingLocalData = false
+
+    /// The wipe in flight, for tests. `nil` when none has been started.
+    ///
+    /// Internal for the reason `pendingServerDeletionDeliveryForTests` is: the press is asynchronous
+    /// now and there is no other surface to observe it settle through.
+    var localDataWipeForTests: Task<Void, Never>? {
+        localDataWipe
+    }
+
+    private func performLocalDataWipe() async {
+        // The instant the press covers. Everything below carries it: the server delete bounds itself
+        // at or before it, and the obligation left behind carries it so a delivery days later cannot
+        // reach content the press never covered (PR #207's F1).
+        //
+        // **The server's clock, not this Mac's** (PR #207's cycle-3, G1). It is compared against
+        // `occurred_at` on the gateway's rows, so a skewed Mac bounds the deletion at the wrong
+        // instant in whichever direction it is skewed. `instantToBoundAPressAt()` carries the whole
+        // argument, including the sub-second truncation the wire format applies.
+        let pressedAt = await taskDeletionService.instantToBoundAPressAt()
+        // Stopped first, before anything else: the poll timer can write a clipboard entry between
+        // the wipe and the refresh, and the network steps below make that window seconds wide rather
+        // than milliseconds.
+        stopClipboardHistoryMonitoring()
+
+        // Step 1 — the drain, before the queue file goes.
+        await taskDeletionService.drainBeforeAWipe()
+        // Step 2 — the account's server-side content, bounded at the press.
+        let serverCopyIsGone = await taskDeletionService.deleteEverythingUnderTheAccount(before: pressedAt)
+
+        // Step 3 — every local file, the queue among them. **The result is captured rather than the
+        // whole tail living inside the `do`** (PR #207's F2). `deleteAllLocalData` collects failures
+        // and throws only *after* deleting everything it could, and the queue is one of the files it
+        // deletes — so a wipe that failed on any single file used to land in a `catch` with the
+        // queue already gone and step 4 never reached. The server held everything, the Mac owed
+        // nothing, and the sentence the user read named only a local file: the exact state the
+        // founder's condition forbids, arriving through the failure branch.
+        var deletedFileCount = 0
+        var localFailure: String?
         do {
-            stopClipboardHistoryMonitoring()
-            let result = try localDataDeletionService.deleteAllLocalData()
+            deletedFileCount = try localDataDeletionService.deleteAllLocalData().deletedFileCount
             clearInMemoryLocalDataState()
-            let noun = result.deletedFileCount == 1 ? "local data file" : "local data files"
-            let message = "Deleted \(result.deletedFileCount) \(noun)."
+        } catch {
+            localFailure = error.localizedDescription
+        }
+
+        // Step 4 — the one obligation the wipe may leave, **on both paths**, and only when it is
+        // owed. `try?` because the user is about to be told the servers' copy is still there either
+        // way, and a second sentence about bookkeeping is not something they could act on; the
+        // residue if it fails is the retry, not the promise, since pressing Delete again re-attempts
+        // everything.
+        var serverCopyIsOwed = false
+        if !serverCopyIsGone {
+            serverCopyIsOwed = (try? taskDeletionService.recordOwedAccountContentDeletion(deletedAt: pressedAt)) ?? false
+        }
+
+        // Step 5 — one sentence, covering both halves, on every path.
+        let message = LocalDataDeletionCopy.outcome(
+            deletedFileCount: deletedFileCount,
+            localFailure: localFailure,
+            serverCopy: serverCopyIsGone ? .deleted : (serverCopyIsOwed ? .owed : .strandedWithNoSession)
+        )
+        localDataDeletionStatusMessage = message
+        if localFailure == nil {
             errorMessage = nil
-            localDataDeletionStatusMessage = message
             finalSummary = message
             logStore.append(.observe, message)
-        } catch {
-            let message = "Could not delete local data: \(error.localizedDescription)"
-            localDataDeletionStatusMessage = message
+        } else {
             setError(message)
         }
         // After either branch, because the failure branch is the one where both matter: a wipe that
@@ -4263,6 +4515,38 @@ final class AgentViewModel: ObservableObject {
             stopClipboardHistoryMonitoring()
         }
 
+        // **The server's copies, owed before anything local goes** (SONNY-404). This row deletes
+        // every task-history row at once, and the founder decision of 2026-09-05 is that it queues
+        // every one of those tasks' server deletions — as one bulk call rather than one call per
+        // row. It is the same ordering `deleteTask` uses and for the same reason: the ids are
+        // carried by the rows and by nothing else, so a local delete that ran first and an enqueue
+        // that then failed would destroy the only remaining name for the server's copies,
+        // permanently and silently. An enqueue that throws aborts with everything intact.
+        //
+        // **The ids come from the file with the published list as the fallback**, and the fallback
+        // is the point: `taskHistoryRecords` is what the row's own count was built from, so if the
+        // file will not read the press still owes what the user was shown.
+        //
+        // **What that costs, corrected** (PR #207's R4). This said an unreadable file "names no
+        // tasks either way", which is false: the published list is whatever loaded successfully at
+        // launch, so a file that broke afterwards still names its tasks here. Those ids are enqueued
+        // and their server copies go, while the local bytes are *kept* — quarantined rather than
+        // deleted. That is the right direction on both halves (the server copy is what the user
+        // asked to remove; the unreadable bytes may still be recoverable under a restored key) and
+        // it is not what the previous sentence claimed.
+        var enqueuedTaskIDs: [String] = []
+        if category == .taskHistory {
+            enqueuedTaskIDs = ((try? taskHistoryStore.loadAll()) ?? taskHistoryRecords)
+                .compactMap(\.id)
+                .filter { !$0.isEmpty }
+            do {
+                try taskDeletionService.recordDeletedTasks(ids: enqueuedTaskIDs)
+            } catch {
+                setError("Could not delete task history: \(error.localizedDescription)")
+                return
+            }
+        }
+
         // **The split this ticket exists for** (SONNY-239, founder decision 2026-08-23). A file
         // Sonny can read is deleted, exactly as before — that is the privacy promise every one of
         // `MemoryDeletionCopy.message(for:)`'s sentences makes, and a Delete that quietly kept a
@@ -4322,6 +4606,18 @@ final class AgentViewModel: ObservableObject {
             } catch {
                 failures.append(error.localizedDescription)
             }
+        }
+
+        // **The obligation is withdrawn when nothing local went**, the symmetric half of the enqueue
+        // above and of `deleteTask`'s own (PR #194's F1). A row that could delete none of its files
+        // has left every task still in the user's history, and an entry left queued for it would
+        // have the next launch delete those tasks' server copies after the press visibly failed.
+        // Keyed on `failures.isEmpty` being false *and* nothing having been deleted, because a
+        // partial delete really did remove rows and those tasks' server copies are genuinely owed.
+        if !enqueuedTaskIDs.isEmpty, !failures.isEmpty, deletedFileCount == 0, keptFileURLs.isEmpty {
+            try? taskDeletionService.withdrawDeletedTasks(ids: enqueuedTaskIDs)
+        } else if !enqueuedTaskIDs.isEmpty {
+            deliverPendingServerDeletions()
         }
 
         // Replaced on every press — a delete that keeps nothing leaves `nil`, so the previous one's
@@ -6297,7 +6593,9 @@ final class AgentViewModel: ObservableObject {
             resolveVisionApproval(approving: approvalRequest)
             return
         }
-        guard !isRunning, let preparedRun, let runner, let approvalRequest else {
+        // `isDeletingLocalData` for the reason `dispatch` gives: approving starts a run, and the
+        // wipe is about to delete the stores that run would write into (PR #207's F3).
+        guard !isRunning, !isDeletingLocalData, let preparedRun, let runner, let approvalRequest else {
             return
         }
 
@@ -7284,7 +7582,10 @@ final class AgentViewModel: ObservableObject {
         // today. A background trigger's refusal set should not change because a UI predicate grows a
         // fourth term later; if a new state ought to block the scheduler, it gets added here on
         // purpose.
-        guard !isRunning, !isAwaitingApproval, clarificationQuestion == nil else {
+        // **The unattended door, and the one the review named as needing no user action to enter**
+        // (PR #207's F3): a scheduled routine sets `isRunning` from a timer, so the window the wipe
+        // opens is one a routine can walk into with nobody watching.
+        guard !isRunning, !isDeletingLocalData, !isAwaitingApproval, clarificationQuestion == nil else {
             return
         }
 

@@ -158,7 +158,7 @@ async function removeSnapshotMembers(
 async function recordDeletion(
   client: pg.Client,
   entry: {
-    reason: "task" | "account" | "expiry" | "snapshot_expiry";
+    reason: "task" | "account" | "account_content" | "expiry" | "snapshot_expiry";
     accountId: string | null;
     taskId: string | null;
     outcome: DeletionOutcome;
@@ -263,7 +263,260 @@ export async function deleteContentForTask(
 }
 
 /**
+ * What one bulk removal took, per task and in total (SONNY-404).
+ *
+ * `notMine` names the submitted ids that belong to a **different** account. It is a count rather
+ * than the ids themselves: the caller sent them, so echoing them back discloses nothing, but the
+ * only thing the client does with the answer is decide whether its queued obligation is finished —
+ * and a count answers that. Nothing renders it.
+ */
+export interface BulkDeletionOutcome {
+  readonly tasksDeleted: number;
+  readonly notMine: number;
+  readonly contentRows: number;
+  readonly snapshotRows: number;
+  readonly snapshotsTouched: readonly string[];
+}
+
+/** Which of these task ids belong to somebody else. Everything else is this account's to delete. */
+async function foreignTaskIds(
+  client: pg.Client,
+  request: { readonly accountId: string; readonly taskIds: readonly string[] },
+): Promise<Set<string>> {
+  const { rows } = await client.query<{ task_id: string }>(
+    // `bool_or` per task, exactly as `taskOwnership` does for one: a task is somebody else's only
+    // when this gateway knows it and knows it under another account. A task it has never heard of
+    // is `unknown`, which §4.6 makes a success with nothing deleted rather than a 404 — so it is
+    // deliberately absent from this result.
+    `SELECT task_id
+       FROM (SELECT task_id, account_id FROM sonny.metering_event WHERE task_id = ANY($2::text[])
+             UNION ALL
+             SELECT task_id, account_id FROM sonny.retained_content WHERE task_id = ANY($2::text[])
+            ) AS known
+      GROUP BY task_id
+     HAVING bool_or(account_id = $1) IS FALSE`,
+    [request.accountId, [...request.taskIds]],
+  );
+  return new Set(rows.map((row) => row.task_id));
+}
+
+/**
+ * Delete everything stored for several tasks at once — the Memory page's *Task history › Delete*,
+ * which removes every row the Mac holds (SONNY-404, contract §4.6.1).
+ *
+ * **One call rather than one per row is the founder's decision of 2026-09-05**, and it is a decision
+ * about the number of requests and about nothing else. What this writes is byte-for-byte what the
+ * same tasks deleted one at a time would have written: one `sonny.content_deletion` row per task,
+ * carrying that task's own counts and its own `snapshots_touched`, including a row of zeroes for a
+ * task that stored nothing. A bulk path that recorded one summary row instead would make the record
+ * of a wipe read differently from the record of the same deletions performed slowly, which is how a
+ * later reader concludes the two paths did different things.
+ *
+ * **Scoped by account in every statement, as `deleteContentForTask` is and for its reason.** The
+ * ownership read above decides what is reported; the scope is what makes the statement safe if that
+ * read is ever wrong.
+ *
+ * **A task belonging to another account is skipped, never a failure for the batch.** §4.6 answers
+ * one foreign id with a 404, and the batch equivalent of refusing the whole call would make one
+ * stale id on a shared Mac able to strand every other deletion in the queue indefinitely. The count
+ * goes back so the client can keep the obligation instead — the same "not deliverable by this
+ * session, never not deliverable" reading §4.6's 404 already has.
+ */
+export async function deleteContentForTasks(
+  client: pg.Client,
+  request: { readonly accountId: string; readonly taskIds: readonly string[] },
+): Promise<BulkDeletionOutcome> {
+  const submitted = [...new Set(request.taskIds)];
+  if (submitted.length === 0) {
+    return { tasksDeleted: 0, notMine: 0, contentRows: 0, snapshotRows: 0, snapshotsTouched: [] };
+  }
+
+  await client.query("BEGIN");
+  try {
+    const foreign = await foreignTaskIds(client, { accountId: request.accountId, taskIds: submitted });
+    const mine = submitted.filter((taskId) => !foreign.has(taskId));
+    if (mine.length === 0) {
+      await client.query("COMMIT");
+      return {
+        tasksDeleted: 0,
+        notMine: foreign.size,
+        contentRows: 0,
+        snapshotRows: 0,
+        snapshotsTouched: [],
+      };
+    }
+
+    const members = await client.query<{ task_id: string; rows: string; snapshots: string[] }>(
+      `WITH removed AS (
+         DELETE FROM sonny.training_snapshot_member
+          WHERE account_id = $1 AND task_id = ANY($2::text[])
+        RETURNING task_id, snapshot_id
+       )
+       SELECT task_id,
+              count(*)::text AS rows,
+              coalesce(array_agg(DISTINCT snapshot_id::text), '{}') AS snapshots
+         FROM removed
+        GROUP BY task_id`,
+      [request.accountId, mine],
+    );
+    const touched = [...new Set(members.rows.flatMap((row) => row.snapshots))];
+    if (touched.length > 0) {
+      // Recounted rather than decremented, for `removeSnapshotMembers`' reason: a decrement that
+      // ever ran twice would leave a sealed snapshot describing a membership it does not have.
+      await client.query(
+        `UPDATE sonny.training_snapshot s
+            SET member_count = (SELECT count(*) FROM sonny.training_snapshot_member m
+                                 WHERE m.snapshot_id = s.snapshot_id)
+          WHERE s.snapshot_id = ANY($1::uuid[])`,
+        [touched],
+      );
+    }
+
+    const content = await client.query<{ task_id: string; rows: string }>(
+      `WITH removed AS (
+         DELETE FROM sonny.retained_content
+          WHERE account_id = $1 AND task_id = ANY($2::text[])
+        RETURNING task_id
+       )
+       SELECT task_id, count(*)::text AS rows FROM removed GROUP BY task_id`,
+      [request.accountId, mine],
+    );
+
+    const contentByTask = new Map(content.rows.map((row) => [row.task_id, Number(row.rows)]));
+    const membersByTask = new Map(
+      members.rows.map((row) => [row.task_id, { rows: Number(row.rows), snapshots: row.snapshots }]),
+    );
+    const records = mine.map((taskId) => ({
+      task_id: taskId,
+      content_rows: contentByTask.get(taskId) ?? 0,
+      snapshot_rows: membersByTask.get(taskId)?.rows ?? 0,
+      snapshots: membersByTask.get(taskId)?.snapshots ?? [],
+    }));
+
+    // One statement for every record, because the alternative is one round trip per deleted task
+    // and this route exists to delete a whole history. `jsonb_to_recordset` is what lets the rows be
+    // built client-side and still land as a single INSERT.
+    await client.query(
+      `INSERT INTO sonny.content_deletion
+         (reason, account_id, task_id, content_rows, snapshot_rows, snapshots_touched)
+       SELECT 'task', $1, entry.task_id, entry.content_rows, entry.snapshot_rows, entry.snapshots
+         FROM jsonb_to_recordset($2::jsonb)
+           AS entry(task_id text, content_rows integer, snapshot_rows integer, snapshots uuid[])`,
+      [request.accountId, JSON.stringify(records)],
+    );
+
+    await client.query("COMMIT");
+    return {
+      tasksDeleted: mine.length,
+      notMine: foreign.size,
+      contentRows: records.reduce((total, entry) => total + entry.content_rows, 0),
+      snapshotRows: records.reduce((total, entry) => total + entry.snapshot_rows, 0),
+      snapshotsTouched: touched,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+/** What one screenshot clear took. No row was removed; two columns were set to NULL. */
+export interface ScreenshotClearOutcome {
+  readonly screenshotsCleared: number;
+  readonly snapshotScreenshotsCleared: number;
+  readonly snapshotsTouched: readonly string[];
+}
+
+/**
+ * Take one task's screenshots and leave the rest of that task alone (SONNY-404, contract §4.6.2).
+ *
+ * **An UPDATE to NULL, not a DELETE, and that is the whole difference from `deleteContentForTask`.**
+ * The button this serves is *Delete what Sonny did on screen*: it removes the task's vision-session
+ * record on the Mac and leaves the task, its command and its result standing. A row of
+ * `sonny.retained_content` holds the screenshot beside the request text and the served response, so
+ * deleting the row would take two things the button never mentions. §4.6's route is the one that
+ * takes everything; this one is deliberately narrower, which is the founder decision of 2026-09-05.
+ *
+ * **It reaches training snapshots for the same reason every other removal path here does**, and
+ * more sharply: a member holds a copy rather than a pointer, and `expireSnapshots` skips a NULL
+ * `expires_at`, which is every snapshot the builder makes — so a screenshot left in a snapshot is
+ * left there with no clock on it at all.
+ *
+ * **`screenshot_media_type` goes with `screenshot`.** A media type beside a NULL image describes
+ * nothing and would be the one surviving trace of what was captured.
+ *
+ * **Scoped by account in both statements**, the same way and for the same reason as everything else
+ * in this file: a `task_id` is client-minted, so a statement keyed on it alone is one collision away
+ * from reaching another account's rows.
+ */
+export async function clearScreenshotsForTask(
+  client: pg.Client,
+  request: { readonly accountId: string; readonly taskId: string },
+): Promise<ScreenshotClearOutcome> {
+  await client.query("BEGIN");
+  try {
+    const members = await client.query<{ snapshots: string[]; rows: string }>(
+      `WITH cleared AS (
+         UPDATE sonny.training_snapshot_member
+            SET screenshot = NULL, screenshot_media_type = NULL
+          WHERE account_id = $1 AND task_id = $2 AND screenshot IS NOT NULL
+        RETURNING snapshot_id
+       )
+       SELECT count(*)::text AS rows,
+              coalesce(array_agg(DISTINCT snapshot_id::text), '{}') AS snapshots
+         FROM cleared`,
+      [request.accountId, request.taskId],
+    );
+    const snapshotRows = Number(members.rows[0]?.rows ?? 0);
+    const snapshots = members.rows[0]?.snapshots ?? [];
+
+    const live = await client.query(
+      `UPDATE sonny.retained_content
+          SET screenshot = NULL, screenshot_media_type = NULL
+        WHERE account_id = $1 AND task_id = $2 AND screenshot IS NOT NULL`,
+      [request.accountId, request.taskId],
+    );
+
+    const outcome: ScreenshotClearOutcome = {
+      screenshotsCleared: live.rowCount ?? 0,
+      snapshotScreenshotsCleared: snapshotRows,
+      snapshotsTouched: snapshots,
+    };
+
+    // **Recorded even when it took nothing**, for `deleteContentForTask`'s reason: §4.6 makes "there
+    // was nothing to delete" a success, and a record that only ever fired on a hit could not tell
+    // that apart from a delete that never ran. `member_count` is untouched here, deliberately — no
+    // member left the snapshot, so the count it describes has not changed.
+    await client.query(
+      `INSERT INTO sonny.content_deletion
+         (reason, account_id, task_id, snapshots_touched, screenshots_cleared,
+          snapshot_screenshots_cleared)
+       VALUES ('task_screenshots', $1, $2, $3::uuid[], $4, $5)`,
+      [
+        request.accountId,
+        request.taskId,
+        outcome.snapshotsTouched,
+        outcome.screenshotsCleared,
+        outcome.snapshotScreenshotsCleared,
+      ],
+    );
+
+    await client.query("COMMIT");
+    return outcome;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
  * Everything one account has: content, snapshot membership, and its stored idempotency responses.
+ *
+ * **Two acts share this function and the `reason` tells them apart** (SONNY-404). `account` is
+ * `DELETE /v1/account` — the account is closed and its content goes with it. `account_content` is
+ * `DELETE /v1/account/content`, the Mac's own "Delete Sonny local data", which takes the same rows
+ * and leaves the account open. The work is identical, so it is one function; the *record* is not,
+ * because a row saying `account` is a row saying the account was closed, and
+ * `sonny.account.deleted_at` stops distinguishing them the day the user does close it.
  *
  * **The third of those is SONNY-319, closed here rather than left as a function with no call site.**
  * `sonny.idempotency_key` holds response bodies for twenty-four hours, which makes it the one place
@@ -288,14 +541,40 @@ export async function deleteContentForAccount(
   client: pg.Client,
   accountId: string,
   storedResponses: number,
+  // Required rather than defaulted, on this repository's own recorded ground that a defaulted
+  // parameter is a decision nobody has to make and therefore one nobody reads (SONNY-350's store
+  // locations). Both callers name their act.
+  reason: "account" | "account_content",
+  /**
+   * **The cutoff, and it is what stops a delayed delete reaching content it never covered**
+   * (SONNY-404, PR #207's F1). The Mac queues this delete when it cannot reach the gateway and may
+   * deliver it days later, by which time the user has signed in and worked; without a bound the
+   * delivery would take everything, including what the press never promised. `undefined` is the
+   * account-close path, which really does mean everything.
+   *
+   * Each table is bounded on its own notion of when the content happened: `occurred_at` on the live
+   * row, `source_occurred_at` on the snapshot copy of it, and — for the stored response bodies —
+   * `claimed_at`, which is when the key was taken. The caller clears those, so the bound is passed
+   * to `deleteStoredResponsesForAccount` rather than applied here.
+   */
+  occurredAtOrBefore?: Date,
 ): Promise<DeletionOutcome> {
   await client.query("BEGIN");
   try {
-    const removed = await removeSnapshotMembers(client, "account_id = $1", [accountId]);
-    const content = await client.query(
-      "DELETE FROM sonny.retained_content WHERE account_id = $1",
-      [accountId],
-    );
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
     const outcome: DeletionOutcome = {
       contentRows: content.rowCount ?? 0,
       snapshotRows: removed.rows,
@@ -303,7 +582,7 @@ export async function deleteContentForAccount(
       storedResponses,
     };
     await recordDeletion(client, {
-      reason: "account",
+      reason,
       accountId,
       taskId: null,
       outcome,
@@ -358,7 +637,7 @@ export async function sweepClosedAccountContent(
   const accountId = rows[0]?.account_id;
   if (accountId === undefined) return undefined;
   const storedResponses = await clearStoredResponses(client, accountId);
-  return deleteContentForAccount(client, accountId, storedResponses);
+  return deleteContentForAccount(client, accountId, storedResponses, "account");
 }
 
 /**

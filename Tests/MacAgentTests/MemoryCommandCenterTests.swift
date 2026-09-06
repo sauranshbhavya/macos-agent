@@ -899,7 +899,7 @@ struct MemoryCommandCenterTests {
     }
 
     @Test
-    func aWholeDataWipeEmptiesTheOutputLocationsList() throws {
+    func aWholeDataWipeEmptiesTheOutputLocationsList() async throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         defer { fixture.cleanUp() }
         let reports = try fixture.makeOutputFolder("Reports")
@@ -908,6 +908,9 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.outputLocations.count == 1)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(fixture.viewModel.outputLocations.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: fixture.outputLocationStore.fileURL.path))
@@ -984,12 +987,15 @@ struct MemoryCommandCenterTests {
     /// A wipe deletes every store file; it must not also switch memory back on for the person who
     /// reached for the most privacy-minded control in the app.
     @Test
-    func theMemorySwitchesSurviveALocalDataWipe() throws {
+    func theMemorySwitchesSurviveALocalDataWipe() async throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         fixture.viewModel.setMemoryEnabled(false)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(!fixture.viewModel.memorySettings.isRecording)
         // And a fresh view model over the same defaults reads the same answer, so this is the store's
@@ -1491,7 +1497,7 @@ struct MemoryCommandCenterTests {
     }
 
     @Test
-    func aWholeDataWipeEmptiesTheMemorySectionsOwnLists() throws {
+    func aWholeDataWipeEmptiesTheMemorySectionsOwnLists() async throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         defer { fixture.cleanUp() }
         try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
@@ -1501,6 +1507,9 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.approvedApps.count == 1)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         // Without `refreshMemoryEntries()` inside the wipe these lists keep rendering entries whose
         // files were just erased.
@@ -1817,7 +1826,7 @@ struct MemoryCommandCenterTests {
     /// The other half of F2: Settings' whole wipe is still the one door that takes them, so keeping
     /// them out of the per-row Delete does not leave a privacy hole.
     @Test
-    func settingsWholeWipeStillTakesASetAsideFile() throws {
+    func settingsWholeWipeStillTakesASetAsideFile() async throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         defer { fixture.cleanUp() }
         try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
@@ -1826,6 +1835,9 @@ struct MemoryCommandCenterTests {
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).count == 1)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).isEmpty)
     }
@@ -1956,7 +1968,7 @@ struct MemoryCommandCenterTests {
 
     /// The whole wipe sweeps these files itself, so the line goes to nothing with it.
     @Test
-    func theWholeWipeBringsTheDataPagesCountToNothing() throws {
+    func theWholeWipeBringsTheDataPagesCountToNothing() async throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         defer { fixture.cleanUp() }
         try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
@@ -1965,6 +1977,9 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(fixture.viewModel.setAsideFilesSummary == .none)
     }
@@ -2118,7 +2133,7 @@ struct MemoryCommandCenterTests {
     /// own clearing** — so its failure branch has to prune the record the same way, or the Memory
     /// page keeps naming a file the wipe removed.
     @Test
-    func aPartialWipeKeepsTheMemoryPagesSentenceForTheFileStillOnDisk() throws {
+    func aPartialWipeKeepsTheMemoryPagesSentenceForTheFileStillOnDisk() async throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         let kept = try Self.keepTwoFilesFromOnePress(in: fixture)
         defer {
@@ -2128,10 +2143,27 @@ struct MemoryCommandCenterTests {
         try Self.setImmutable(true, at: kept.second)
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(!FileManager.default.fileExists(atPath: kept.first.path))
         #expect(FileManager.default.fileExists(atPath: kept.second.path))
-        #expect(try #require(fixture.viewModel.localDataDeletionStatusMessage).hasPrefix("Could not delete local data:"))
+        // **The failure sentence names both halves since PR #207's F2.** It used to begin "Could not
+        // delete local data:" and say nothing at all about the servers, while the queue file — one
+        // of the files this press had already deleted — was gone and no obligation had been
+        // recorded. The state that produced was the one the founder's condition forbids, reached
+        // through the failure branch.
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.contains("could not be deleted"))
+        #expect(message.contains("the copy on Sonny's servers is still there"))
+
+        // **And what is owed afterwards**, which is the assertion this test was missing. The fixture
+        // is signed out, so nothing can name whose content it is about and nothing is recorded —
+        // which is why the sentence tells the user to sign in rather than promising a retry.
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(message.contains("Sign in and press Delete again."))
+
         #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
         #expect(fixture.viewModel.setAsideFilesFromLastDelete == [kept.second])
         #expect(
@@ -2209,7 +2241,11 @@ struct MemoryCommandCenterTests {
     @Test
     func everyDeletionDoorIsCalledOnceFromTheMethodThatOwnsIt() throws {
         let doors: [(door: String, owner: String)] = [
-            (".deleteAllLocalData()", "func deleteLocalData() {"),
+            // **The owner is `performLocalDataWipe` since SONNY-404's fix round**, not
+            // `deleteLocalData` — the press became asynchronous when the wipe started reaching the
+            // gateway, so the entry point now starts a task and the body it starts is where the
+            // door is called. One door, one caller, one owner; only the owner's name moved.
+            (".deleteAllLocalData()", "private func performLocalDataWipe() async {"),
             (".deleteStoreFilesOnly()", "func deleteMemory(in category: MemoryCategory) {"),
             (".deleteSetAsideFilesOnly()", "func deleteSetAsideFiles() {")
         ]
@@ -2380,9 +2416,17 @@ struct MemoryCommandCenterTests {
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: row) == 1)
         #expect(MacAgentSource.count(of: "viewModel.deleteLocalData()", inText: row) == 0)
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: page) == 1)
-        // Both controls disable under the wipe's condition — the wipe's as it always was, the row's by
-        // founder decision (PR #117 review, F3) — so the view-model guard is the backstop.
-        #expect(MacAgentSource.count(of: ".disabled(viewModel.isRunning)", inText: page) == 2)
+        // Both controls disable under a run — the row's by founder decision (PR #117 review, F3) —
+        // so the view-model guard is the backstop. **The wipe's control disables under one more
+        // condition since SONNY-404** (PR #207's cycle-3, F3): the press now spans a server round
+        // trip during which `isRunning` is false, and it stayed pressable for the whole of it.
+        #expect(MacAgentSource.count(of: ".disabled(viewModel.isRunning)", inText: page) == 1)
+        #expect(
+            MacAgentSource.count(
+                of: ".disabled(viewModel.isRunning || viewModel.isDeletingLocalData)",
+                inText: page
+            ) == 1
+        )
 
         let onAppear = try MacAgentSource.braceBlock(of: page, openedBy: ".onAppear {")
         #expect(onAppear.contains("viewModel.refreshSetAsideFiles()"))
@@ -2419,7 +2463,14 @@ struct MemoryCommandCenterTests {
         }
 
         // What the dialog says that the page does not, and which is nobody else's to derive.
-        #expect(contentView.contains("Generated files and API keys are not deleted."))
+        // **Three items rather than two since SONNY-404** (founder decision 2026-09-05): this wipe
+        // is a promise about this Mac, so what Sonny's servers keep joins the list of what the press
+        // does *not* take. `EveryDeleteReachesTheServerTests` holds both surfaces' "from this Mac".
+        // **Three items, and the account is the third since SONNY-404's fix round** (founder
+        // decision 2026-09-04 restated 2026-09-05): the wipe reaches the servers now, so what they
+        // keep left this list, and what a person might wrongly expect the press to close joined it.
+        // `EveryDeleteReachesTheServerTests` holds both surfaces' full sentences and both states.
+        #expect(contentView.contains("Generated files, API keys and your account are not deleted."))
     }
 
     /// **F3 — the whole wipe must not leave a row saying "Can't be read" about a file it just deleted.**
@@ -2443,6 +2494,9 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.unreadableStores.contains(.taskPlanDetails))
 
         fixture.viewModel.deleteLocalData()
+        // The press is asynchronous since SONNY-404's fix round: it drains the deletion queue and
+        // deletes the account's server-side content before it touches a local file.
+        await fixture.viewModel.localDataWipeForTests?.value
 
         #expect(fixture.viewModel.unreadableStores.isEmpty)
         #expect(fixture.viewModel.localStorageNotice == nil)
