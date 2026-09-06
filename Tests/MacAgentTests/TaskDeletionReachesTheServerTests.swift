@@ -629,12 +629,24 @@ struct EveryDeleteReachesTheServerTests {
         fixture.viewModel.sweepPendingServerDeletions()
         try await fixture.waitForDeliveryPasses(1)
 
-        // The path carries the bound the press was made at — without it the delete takes everything
-        // the account has, including whatever it made after the press.
+        // **The bound on the wire is the press's own instant**, not merely a `before=` that is
+        // present. A mutant sending `Date.distantFuture` satisfies "there is a bound" while deleting
+        // exactly what an unbounded delete would, which is the whole defect — so the value is read.
         let sent = try fixture.seen.only
         #expect(sent.path == "/v1/account/content")
         let query = try #require(sent.query)
-        #expect(query.contains("before="))
+        let prefix = "before="
+        let value = try #require(
+            query
+                .split(separator: "&")
+                .first(where: { $0.hasPrefix(prefix) })
+                .map { String($0.dropFirst(prefix.count)).removingPercentEncoding ?? "" }
+        )
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let sentInstant = try #require(formatter.date(from: value))
+        // Within the second, because the wire format is whole seconds.
+        #expect(abs(sentInstant.timeIntervalSince(owed.deletedAt)) < 1.5)
     }
 
     /// **F1's session-change door.** Signing in as somebody else discards what the previous account
