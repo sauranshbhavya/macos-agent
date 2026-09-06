@@ -170,6 +170,68 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-short-article-about-a-wall-is-served
+Status: complete
+Date: 2026-09-05
+Tickets: **SONNY-256** (a short article about a wall is served — the measuring round the ticket owed, then the rule that measurement supports). One session, from `origin/main` at `17533148`.
+Reviewed by: fresh session (per `WORKFLOW.md` step 7) — pending at the time this entry was written; the coordinator's kickoff note sets one cycle, focused on the measurements being real and the thresholds not tuned to the examples.
+
+Spec sections covered: §12's restricted-content boundary as stated at `docs/sonny-major-release-spec.md:459` and `:916` — "Sonny must not bypass paywalls, CAPTCHAs, login walls, or robots restrictions". Nothing in that boundary moves; what changes is the evidence a refusal acts on.
+
+Files changed:
+- `Sources/MacAgentCore/RestrictedContentDetector.swift` (the phrase list splits into `wallSpeechPhrases` and `subjectPhrases`; `firstPhrase` takes the list to search; stage 1 searches wall speech, stage 2 searches both; the type doc's stale SONNY-256-is-open paragraphs corrected)
+- `Tests/MacAgentCoreTests/RestrictedContentDetectorTests.swift` (5 new tests; 4 existing ones updated; the phrase table's comparison rebuilt off a trapping `Dictionary(uniqueKeysWithValues:)`)
+- `Tests/Fixtures/WebResearch/simonwillison-botbouncer.html`, `Tests/Fixtures/WebResearch/hackernews-paywall-comment.html` (new), `Tests/Fixtures/WebResearch/README.md`
+
+Tests: the flagged command from `CLAUDE.md` -> **exit 0, PLACEHOLDER_COUNT tests in PLACEHOLDER_SUITES suites, 8 known issues** at `PLACEHOLDER_HEAD`. Baseline at `17533148`, carried under `WORKFLOW.md` step 5's tree-identity proof (`git rev-parse 6cc9e189:Sources 17533148:Sources` and `git rev-parse d0b3a7a9:Tests 17533148:Tests` each printing one hash twice, exit 0): **2 929 tests in 198 suites, 8 known issues**, so this branch's five new tests are the whole of the difference. `scripts/warnings` -> **exit 0, 0 warnings** at `PLACEHOLDER_WARN_SHA`. `scripts/changelog-order` -> **exit 0, PLACEHOLDER_ENTRIES entries** at `PLACEHOLDER_HEAD`; 177 at `17533148`. No Postgres and no server commands: nothing under `server/` moves, and `git diff --stat 17533148..PLACEHOLDER_HEAD -- server` prints nothing.
+
+**Mutation battery: 5 mutants, 5 killed, 0 survived, 0 unattributed at `55061f7d`** (`scripts/mutate`, plan in the session scratchpad; baseline PASSED 2 934 in 198). The plan mutates the property rather than the diff — each mutant undoes one half of "a page whose subject is a wall is served, and a page that *is* a wall is still refused":
+- **R1**, a subject noun back in `wallSpeechPhrases` so the short article is refused again — killed by 5: `theShortArticleAboutAWallIsServed`, `aShortPageCarryingOnlyTheRecaptchaBadgeIsServed`, `aSubjectNounIsNotVisibleEvidenceAndWallSpeechOnTheSamePageStillIs`, `theOldRuleRefusedEveryFixtureAndTheNewRuleRefusesOnlyTheTwoWalls`, `eachPhraseKeepsItsOwnRefusalNoun`.
+- **R2**, the split undone so stage 1 searches every phrase as SONNY-245 did — killed by 5, the four above plus `theShortCommentPageAboutAPaywallIsServed`.
+- **R3**, ScienceDirect's own wording dropped so a real wall that speaks is served — killed by 4: `theScienceDirectGateIsRefusedOnWhatItSaysToTheReader`, `theHumanPhrasesReachTheWallWordingsTheOldListMissed`, `aSubjectNounIsNotVisibleEvidenceAndWallSpeechOnTheSamePageStillIs`, `eachPhraseKeepsItsOwnRefusalNoun`.
+- **R4**, markup loses the subject nouns so the JavaScript-drawn wall is served — killed by 7: `theZillowBlockPageIsRefusedOnMarkupBecauseItShowsAReaderNothingAtAll`, `theLoaderStillRefusesARealBlockPageAndNamesTheWall`, `markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched`, `aPhraseOnlyInMarkupCountsUpToTheContentlessLimitAndNotBeyondIt`, `theOldRuleRefusedEveryFixtureAndTheNewRuleRefusesOnlyTheTwoWalls`, `eachPhraseKeepsItsOwnRefusalNoun`, `matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace`.
+- **R5**, `you are human` narrowed back to `verify you are human` so Cloudflare's wording is missed again — killed by 2: `theHumanPhrasesReachTheWallWordingsTheOldListMissed`, `eachPhraseKeepsItsOwnRefusalNoun`.
+
+An earlier battery at `7157785e` returned the same 5-killed verdict with R1's killers unrecoverable; that is the trapped-test pitfall recorded below, and the whole plan was re-run rather than scoped because the fix edited the file every killer lives in.
+
+Behavior added:
+- **A short page whose *subject* is a wall is served.** The ticket's own example — `simonwillison.net/2006/Dec/19/botbouncer/`, HTTP 200, 1 110 visible characters, one sentence mentioning a CAPTCHA service — was refused as a CAPTCHA gate and is now read normally, as are Hacker News comment pages discussing paywalls and every other page in that class.
+- **A short page carrying Google's required reCAPTCHA attribution is served**, with no carve-out naming the notice. Any page with a reCAPTCHA-protected contact form, signup or comment box carries that 93-character string by licence; under the old rule every such page under 2 000 visible characters was refused. It stopped mattering because `captcha` stopped being visible-text evidence, which is a cheaper answer than a vendor allowlist that would need extending for the next badge.
+- **Wall coverage widens where it was measurably thin.** `you are human` replaces `verify you are human` and is strictly wider, so Cloudflare's "Verifying you are human" now matches — a wall `interstitialVisibleTextLimit`'s own doc comment named as a miss.
+
+Behavior preserved (required, no blanket claims):
+- **Stage 2, markup evidence, is untouched in behaviour and widened in coverage.** It still searches the whole page and still requires under 200 visible characters, and the list it searches is a superset of SONNY-245's seven phrases, since `you are human` contains the `verify you are human` it replaces. The Zillow PerimeterX fixture is still refused on markup at 0 visible characters, with the same reason, phrase and evidence.
+- **Both limits keep their values.** `interstitialVisibleTextLimit` is 2 000 and `contentlessVisibleTextLimit` is 200; the edge tests that pin them at 1 999/2 000 and 199/200 are unchanged and pass.
+- **Genuine walls that speak are still refused.** The ScienceDirect gate fixture is still refused on visible text at 523 characters — on `you are a human` now rather than on `captcha`, which is the split working rather than a weakening.
+- **Both encyclopedia articles are still served**, and the old rule still refuses all four original fixtures, so the two rules still disagree in exactly the places SONNY-245 made them disagree.
+- **`PublicWebPageLoader`'s ordering is untouched**: a 4xx is still refused on the status before the detector runs, and a 200 block page still surfaces the wall's name.
+- Locale-independent folding, the whitespace collapse, the `<script>`/`<style>` removal and the inline-icon guard are all unchanged and still pinned.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The ratio the ticket proposed was measured and rejected, and it is worse than the rule it would have replaced.** SONNY-256's hypothesis was that a wall's message is essentially the whole page while an article's mention is a small fraction of it. Scored over the 45-page stage-1 population, the strictest threshold that keeps both genuine walls refused leaves **19 of 41** innocent pages still refused for the sentence-share ratio and **21 of 41** for the block-share ratio, against **12 of 41** for a re-tuned absolute length. The premise is false of the wall we have: ScienceDirect's gate spends 14.0% of its visible text on the matching sentence — most of the rest is footer — while a Hacker News comment page whose whole body is one comment about a paywall spends 63.6%, and one spends 86.3%. **A ratio fires hardest on exactly the pages this ticket exists to stop refusing.** The full table, the corpus and the commands are in SONNY-256's measuring-round comment.
+
+**No length separates them either, which is why the fix is not a re-tuned threshold.** The wall at 523 visible characters sits above twelve innocent pages at 291 to 472. Length was being asked to stand in for a distinction it cannot express.
+
+**What separates the population is which phrase fired, and it is not subtle.** Every one of the 43 false refusals fired on `captcha`, `paywall` or `subscription required` — nouns that name the subject, and a page is allowed to have a subject. The other four phrases, all of them instructions addressed to the reader, fired on **zero** pages in the corpus. So the list splits by what a phrase *is* rather than the page being corroborated by how big it is.
+
+**Link count separates the corpus perfectly and was deliberately not shipped.** Every innocent page in the population has at least 25 links and both walls have 8 and 1, a clean gap. It was rejected because it is a threshold fitted to two positive examples, which is precisely the "second wrong threshold" the ticket warns is worse than a known one — and because a wall drawn inside a site's full navigation would defeat it on the first encounter.
+
+**Nothing was added to the phrase list speculatively.** `to continue reading` was tested and rejected: it matches an innocent Hacker News comment. Five further paywall wordings (`already a subscriber`, `subscribe to read`, `sign in to read`, `log in to continue`, `to read this article`) matched nothing on either side and were left out rather than added on the strength of no evidence.
+
+**A trapped test costs a mutant its evidence, and this branch produced a textbook instance.** The first battery reported R1 — a subject noun put back into `wallSpeechPhrases` — as `KILLED — the run failed but named no test` in 38 seconds. The cause was in the test: `eachPhraseKeepsItsOwnRefusalNoun` compared through `Dictionary(uniqueKeysWithValues:)`, which traps on a duplicate key, so the mutant killed the process and took the whole run's evidence with it (`Fatal error: Duplicate values for key: 'captcha'` at the end of a log that named none of the tests which had caught it). The mutant was genuinely caught and nothing in the report could say by what. Both lists are compared as ordered arrays now — which also pins the concatenation order, worth asserting on its own account since `firstPhrase` returns the first match and the order therefore decides which noun a refusal names. The battery was then re-run in full rather than scoped, because the fix edited the file every one of the five killers lives in.
+
+**Selection bias was designed against rather than asserted away.** The Hacker News half of the corpus is every third hit across the Algolia result set for three phrase searches, not the top hits; the Simon Willison half is every post on his own `captchas` and `paywalls` tag pages; the contact-form half is candidate-and-filter, because every search engine tried refuses this machine, and the filter is whether the fetched page actually carries the notice. Two of the pages became fixtures, from two different templates, so the fix cannot read as a property of one blog's markup.
+
+Known limitations / deferred scope:
+- **The error this chooses, stated at the code as well as here:** a wall whose entire visible message is a bare noun — a page saying only "Paywall" or "Subscription required" — at between 200 and 2 000 visible characters is now served. No such page exists in the 122-page corpus, and below 200 characters markup evidence still catches it, but the shape is real and this is the trade.
+- **The wall side of the stage-1 population is two pages.** `you are human` and `you are a human` catch both, and they are wall speech on their face rather than wordings fitted to them, but a corpus with two positives cannot rank candidate wordings against each other. A wall that speaks, answers 200, and uses neither wording would be served.
+- The corpus is one machine, one network and one afternoon. ResearchGate's status was already known to be unstable across networks (PR #108's review), and several sites that answered 403 here would reach the detector from elsewhere.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the coordinator's queue.
+
 ### Branch: docs/six-rules-move-into-the-file-every-session-reads
 Status: complete — SONNY-372, SONNY-265, SONNY-400, SONNY-397 and all six of SONNY-410's items landed; SONNY-371 closed as a duplicate of SONNY-410's zsh item, per the founder decision of 2026-09-05 recorded on it. SONNY-410's last two items arrived as a coordinator-routed addendum on 2026-09-06 — PR #195's F9, and the founder's Option A on the `gh api` surface — so that ticket has nothing outstanding and closes when this PR merges, by the founder's own instruction of 2026-09-06 rather than at step 6's usual point.
 Date: 2026-09-05, with the coordinator-routed addendum and the rebase onto PR #209 on 2026-09-06
