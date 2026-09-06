@@ -1,6 +1,6 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { errorBody } from "../errors.js";
+import { classify, errorBody } from "../errors.js";
 import { noteContent } from "../content/hook.js";
 import { meteredUpstreamCall, noteMetering } from "../metering/hook.js";
 import { BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS } from "../model/limits.js";
@@ -461,10 +461,20 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
           // releases the socket — after the answer is out, because destroying the request first
           // takes the response with it.
           reply.raw.once("finish", () => request.raw.destroy());
+          // **`request.timeout`, and the code is the whole of what the client acts on** (PR #208's
+          // F1). This answered `request.invalid`, which the Mac hard-codes as not retryable and
+          // renders as "Sonny couldn't send this one" — a sentence whose every clause is false for a
+          // body that simply did not arrive fast enough. `errors.ts`'s `classify` owns the mapping,
+          // so this route and `app.ts`'s socket-level handler cannot drift apart about one
+          // condition; being in `RELEASE_ON_CODES` is what stops the answer being stored and
+          // replayed at the retry it is asking for (PR #208's F2).
+          const timedOut = classify({ statusCode: 408 } as FastifyError);
           return reply
-            .status(408)
+            .status(timedOut.status)
             .header("Connection", "close")
-            .send(errorBody("request.invalid", "Request body was not delivered in time.", request.id));
+            .send(errorBody(timedOut.code, timedOut.message, request.id, {
+              retryable: timedOut.retryable,
+            }));
         }
         // `@fastify/multipart` throws its own typed errors for a malformed body and for a file over
         // `limits.fileSize`. The size one carries a 413 status, which `errors.ts` maps; anything

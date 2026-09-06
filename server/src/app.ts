@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from "fastify";
 import {
   optionalEntitlementSigningKey,
   requireClientVersionPolicy,
@@ -112,21 +112,33 @@ export const REQUEST_TIMEOUT_MS = 120_000;
  * Left alone it would make this file's own claim below — that with `frameworkErrors` "every response
  * this server can produce carries contract §7.1's envelope" — false the moment the timeout fires.
  *
- * **`request.invalid` at the status Fastify chose, and no new code.** §7.2 names no case for "you
- * took too long to send your request", and `errors.ts`'s `classify` already decides what a 4xx the
- * taxonomy does not name individually answers: `request.invalid`, "still a taxonomy code rather than
- * a framework one". This is that rule applied at the one layer `classify` cannot reach, so the two
- * doors agree rather than each inventing an answer.
+ * **The classification is Fastify's and the answer is `classify`'s, which is the whole fix** (PR
+ * #208's F3). The first version of this function wrote one fixed `408` whatever arrived, because it
+ * was written for the timeout and replaced `defaultClientErrorHandler` outright. Fastify's own
+ * handler classifies three ways, and losing that told a malformed request it had been too slow:
+ * measured over real sockets, `HPE_INVALID_HEADER_TOKEN`, `HPE_HEADER_OVERFLOW` and
+ * `HPE_INVALID_METHOD` all came back `408 Request Timeout` with "Request was not delivered in
+ * time." — a statement about something that did not happen, and, for the malformed case, a status
+ * contradicting §7.2's own table, which assigns *Malformed request* to **400**.
+ *
+ * So the status is decided the way Fastify decides it, and the body is decided by `errors.ts`'s
+ * `classify` — the same function `setErrorHandler` and `frameworkErrors` use one layer up. **"Two
+ * doors, one answer" is now literally true**: both doors call the same mapping, rather than this one
+ * reimplementing a rule and drifting from it. A status `classify` does not name individually still
+ * lands on its generic-4xx arm, exactly as it would through the other door.
  *
  * **`request_id` is empty here and that is honest.** `genReqId` runs per *request*, and this fires
  * on a socket that never completed one, so there is no id to quote — inventing one would put a join
  * key into a support lookup that names nothing. The bytes are written by hand because that is the
  * whole of what this seam offers: a socket, not a reply.
  */
-export function clientErrorResponse(): string {
-  const body = JSON.stringify(errorBody("request.invalid", "Request was not delivered in time.", ""));
+export function clientErrorResponse(error?: { code?: string | undefined }): string {
+  const mapped = classify({ statusCode: clientErrorStatus(error) } as FastifyError);
+  const body = JSON.stringify(
+    errorBody(mapped.code, mapped.message, "", { retryable: mapped.retryable }),
+  );
   return [
-    "HTTP/1.1 408 Request Timeout",
+    `HTTP/1.1 ${mapped.status} ${CLIENT_ERROR_REASON[mapped.status] ?? "Bad Request"}`,
     "Content-Type: application/json; charset=utf-8",
     `Content-Length: ${Buffer.byteLength(body)}`,
     `Sonny-Api-Version: ${API_VERSION}`,
@@ -135,6 +147,27 @@ export function clientErrorResponse(): string {
     body,
   ].join("\r\n");
 }
+
+/**
+ * Fastify's own three-way classification of a `clientError`, kept rather than replaced.
+ *
+ * Read off `defaultClientErrorHandler` in fastify 5.12.1: `ERR_HTTP_REQUEST_TIMEOUT` is the request
+ * timeout, `HPE_HEADER_OVERFLOW` is a header block past Node's `maxHeaderSize`, and everything else
+ * — a bad request line, an invalid header token, an unparseable method — is a malformed request.
+ * The statuses are Fastify's; what each one *says* is `classify`'s.
+ */
+function clientErrorStatus(error?: { code?: string | undefined }): number {
+  if (error?.code === "ERR_HTTP_REQUEST_TIMEOUT") return 408;
+  if (error?.code === "HPE_HEADER_OVERFLOW") return 431;
+  return 400;
+}
+
+/** The reason phrases for the three statuses above. Cosmetic — no client reads them. */
+const CLIENT_ERROR_REASON: Readonly<Record<number, string>> = {
+  400: "Bad Request",
+  408: "Request Timeout",
+  431: "Request Header Fields Too Large",
+};
 
 /**
  * `auth` is optional so a deployment that mounts no auth route needs no provider, no rate-limit salt
@@ -298,12 +331,24 @@ export function buildApp(
     requestTimeout: REQUEST_TIMEOUT_MS,
 
     /**
-     * The envelope on a request that never became one. `clientErrorResponse` carries the argument;
-     * the socket is destroyed after the write because `Connection: close` is a statement about a
-     * connection this server is done with, and a half-open one is the occupancy this ticket removes.
+     * The envelope on a request that never became one. `clientErrorResponse` carries the argument.
+     *
+     * **The early return is Fastify's and is kept** (PR #208's F3). Its own handler returns without
+     * writing when the connection is already gone — a reset peer, or a socket something else has
+     * destroyed — and a write to either is a wasted syscall at best. The first version of this
+     * dropped that guard; in practice `socket.writable` was already false in those cases, so the
+     * behaviour was the same, but the guard was doing real work in Fastify and nothing replaced it.
+     *
+     * **`end` rather than `destroy`, said accurately** — an earlier version of this comment claimed
+     * the socket "is destroyed after the write", which `socket.end()` does not do: it is a graceful
+     * half-close that flushes the answer first and lets the peer see it. Measured on this runtime
+     * the connection does end up destroyed and `getConnections()` answers 0, which is why the wrong
+     * word cost nothing; `Connection: close` is the statement to the caller, and `end` is what
+     * makes sure the caller receives it before the socket goes.
      */
-    clientErrorHandler: (_error, socket) => {
-      if (socket.writable) socket.end(clientErrorResponse());
+    clientErrorHandler: (error, socket) => {
+      if (error.code === "ECONNRESET" || socket.destroyed) return;
+      if (socket.writable) socket.end(clientErrorResponse(error));
       else socket.destroy();
     },
 

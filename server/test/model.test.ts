@@ -1,3 +1,4 @@
+import { connect } from "node:net";
 import { Readable } from "node:stream";
 import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import type { WithConnection } from "../src/db/connection.js";
 import {
   BODY_LIMIT_BYTES, BODY_READ_DEADLINE_MS, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS,
 } from "../src/model/limits.js";
-import { CLAIM_LEASE_SECONDS } from "../src/idempotency/store.js";
+import { CLAIM_LEASE_SECONDS, type KeyStore } from "../src/idempotency/store.js";
 import { REQUEST_TIMEOUT_MS, clientErrorResponse } from "../src/app.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
@@ -1087,9 +1088,16 @@ describe("the numbers this ticket is held to", () => {
 
   it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {
     // **SONNY-322's user-visible half, over the real route.** A caller that opens a request, sends
-    // the multipart preamble and then stops holds a socket, a Fastify request and — because the
-    // `Idempotency-Key` claim is taken in a `preHandler` hook that runs before this route's body is
-    // read — an idempotency claim, with nothing to end any of them. This is that request.
+    // the multipart preamble and then stops holds a socket and a Fastify request with nothing to end
+    // either. This is that request.
+    //
+    // **What this test does NOT exercise is the idempotency claim, and saying so is the point**
+    // (PR #208's F2). Its first version opened by naming the claim — the hook takes one in
+    // `preHandler`, before this route's body is read — and the app it builds passes no
+    // `idempotencyStore` and the request carries no `Idempotency-Key`, so `preHandler` takes the
+    // unguaranteed branch and there is no claim here to end. A comment describing state the test
+    // cannot see is worse than no comment: it is what a later reader trusts instead of looking.
+    // The claim is covered in `idempotency.db.test.ts`, where a store exists.
     //
     // **Fake timers rather than a shortened deadline**, so the test drives the real 30 s constant
     // instead of a value only tests use. Advancing the clock is what fires the route's timer; a
@@ -1141,8 +1149,14 @@ describe("the numbers this ticket is held to", () => {
       // `request.invalid`, and a 400 carrying the same code would look identical in a body-only
       // assertion while telling the client the body was malformed rather than late.
       expect(response.statusCode).toBe(408);
-      expect(response.json().error.code).toBe("request.invalid");
-      expect(response.json().error.retryable).toBe(false);
+      // **`request.timeout`, not `request.invalid`, and the code is what the client acts on**
+      // (PR #208's F1). `SonnyBackendError` decides retryability from the code rather than from the
+      // envelope for every code but one, and it hard-codes `request.invalid` as not retryable and
+      // renders it as "Sonny couldn't send this one" — so the old answer told a user on a slow link
+      // a dead end for a condition a retry clears. No `retryable` value could have moved that,
+      // which is why this asserts the code and not only the flag.
+      expect(response.json().error.code).toBe("request.timeout");
+      expect(response.json().error.retryable).toBe(true);
       // And no upstream call was made for a body that never arrived — the whole reason §9.2's
       // fourth bullet cares about this interval.
       expect(calls).toHaveLength(0);
@@ -1156,6 +1170,108 @@ describe("the numbers this ticket is held to", () => {
       vi.useRealTimers();
       await app.close();
     }
+  });
+
+  it("RELEASES the idempotency key when the body read times out, so the retry it invites re-runs", async () => {
+    // **PR #208's F2, and the half the branch's first version could not see.** The claim is taken in
+    // a `preHandler` hook, before this route's body is read, so the 408 the deadline answers passes
+    // through `onSend` with a live claim in hand. `request.invalid` was outside `RELEASE_ON_CODES`,
+    // so that answer was **stored**: the key held a timeout for twenty-four hours and the caller's
+    // next attempt — the complete, valid upload the user is waiting on — was replayed a stale 408
+    // with no upstream call. That is `fingerprint.ts`' "a wrong answer to a correct request, not a
+    // repeat of a right one", reached through a purely transient condition.
+    //
+    // The store is `AppOverrides.idempotencyStore`, which exists so the flagged `npm test` can cover
+    // §9.2 without a database. It models the two behaviours this test turns on: a completed key
+    // replays, a released key is claimable again.
+    const completed = new Map<string, { status: number; body: Buffer }>();
+    const released: string[] = [];
+    const store: KeyStore = {
+      claim: async ({ accountScope, key }) => {
+        const stored = completed.get(`${accountScope}/${key}`);
+        if (stored) {
+          return {
+            kind: "replay",
+            response: {
+              status: stored.status, body: stored.body,
+              contentType: "application/json", requestId: "original",
+            },
+          };
+        }
+        return { kind: "claimed", token: "token-1" };
+      },
+      complete: async ({ accountScope, key }, response) => {
+        completed.set(`${accountScope}/${key}`, { status: response.status, body: response.body });
+      },
+      release: async ({ accountScope, key }) => { released.push(`${accountScope}/${key}`); },
+    };
+    const calls = stubUpstream(() => jsonResponse({
+      text: "Open Safari",
+      usage: { type: "tokens", input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+    }));
+    const app = buildApp(
+      testConfig({ credentials: [{ provider: "openai", keys: ["sk-test-openai-key"] }] }),
+      { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+      { entitlementStore: fakeEntitlementStore(), idempotencyStore: store },
+    );
+    const key = "a-key-the-caller-will-reuse";
+    const boundary = "SonnyTestBoundary-claimed";
+
+    const stalled = new Readable({ read() { /* nothing more will ever arrive */ } });
+    stalled.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="meta"\r\n` +
+        `Content-Type: application/json\r\n\r\n` +
+        `{"task_id":"t","retention":"standard"}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="audio"; filename="voice.m4a"\r\n` +
+        `Content-Type: audio/mp4\r\n\r\n`,
+    );
+    stalled.push("partial-audio-bytes-and-then-silence");
+
+    vi.useFakeTimers();
+    try {
+      const pending = app.inject({
+        method: "POST",
+        url: "/v1/transcriptions",
+        headers: {
+          authorization: authorization(),
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+          "idempotency-key": key,
+        },
+        payload: stalled,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(BODY_READ_DEADLINE_MS + 1);
+      const timedOut = await pending;
+      expect(timedOut.statusCode).toBe(408);
+      expect(timedOut.json().error.code).toBe("request.timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Half one: the answer was released rather than stored. Both directions asserted, because a
+    // store that recorded neither would satisfy a check on `completed` alone.
+    expect(released).toEqual([`${ACCOUNT}/${key}`]);
+    expect(completed.size).toBe(0);
+
+    // Half two, and the one a user actually meets: the same key, carrying the complete body this
+    // time, genuinely re-runs. Under the defect this answered 408 with zero upstream calls.
+    const good = multipartBody({ task_id: "t", retention: "standard" }, Buffer.from("real-audio"));
+    const retried = await app.inject({
+      method: "POST",
+      url: "/v1/transcriptions",
+      headers: {
+        authorization: authorization(),
+        "content-type": good.contentType,
+        "idempotency-key": key,
+      },
+      payload: good.payload,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().text).toBe("Open Safari");
+    expect(calls).toHaveLength(1);
+    await app.close();
   });
 
   it("keeps the transcription body read plus its handler INSIDE the idempotency lease", () => {
@@ -1172,6 +1288,15 @@ describe("the numbers this ticket is held to", () => {
     // stay green on the change that is not — raising the lease's two inputs while leaving the lease.
     const worstCaseMs = BODY_READ_DEADLINE_MS + DEADLINE_MS.transcriptions.total;
     expect(worstCaseMs).toBeLessThan(CLAIM_LEASE_SECONDS * 1000);
+
+    // **The bound is §12's client timeout for this route, which is the derivation the founders
+    // chose on 2026-09-05** (PR #208's F4). The first version solved this inequality with the lease
+    // held fixed and got 30 s, which inverted §12's governing rule — the gateway giving up at a
+    // third of the budget its own client waits, on the one route where the upload is the slow part.
+    // The 90 is the number that answers to something outside this repository; the lease is the one
+    // that moved. Pinned as a literal because §12's table lives on the Swift side and nothing here
+    // can read it, so this assertion is the only thing standing between the two.
+    expect(BODY_READ_DEADLINE_MS).toBe(90_000);
 
     // The margin is real rather than incidental — a sum one millisecond under the lease would
     // satisfy the line above and leave nothing for the process's own work between the two.
@@ -1234,12 +1359,87 @@ describe("the numbers this ticket is held to", () => {
 
     expect(ended).toBe(true);
     expect(written).toHaveLength(1);
-    expect(written[0]).toBe(clientErrorResponse());
+    expect(written[0]).toBe(clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" }));
     // Fastify's own default handler answers `{"error":"Request Timeout","message":"Client Timeout",
     // "statusCode":408}`. Asserting the absence of that shape is what tells a wired handler from an
     // unwired one, since both end the socket with a 408 status line.
     expect(written[0]).not.toContain('"statusCode"');
     expect(written[0]).toContain('"request_id"');
+  });
+
+  it("classifies a client error the way Fastify does, inside §7.1's envelope", async () => {
+    // **PR #208's F3.** The first version of `clientErrorHandler` replaced Fastify's outright and
+    // wrote one fixed 408 whatever arrived, so a malformed request was told it had been too slow and
+    // a header block over the runtime's limit lost its 431 — two existing response classes moved
+    // silently. Fastify classifies three ways and the statuses are now its; what each one *says* is
+    // `errors.ts`' `classify`, the same function the other two error doors use.
+    //
+    // **Over a real socket, not `app.inject`.** These failures happen before a request object
+    // exists, which is the whole reason the handler takes a socket — `inject` never reaches them.
+    const app = build();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+    const port = address.port;
+
+    const speak = (raw: string): Promise<string> =>
+      new Promise((resolve) => {
+        const socket = connect(port, "127.0.0.1");
+        let seen = "";
+        socket.on("connect", () => socket.write(raw));
+        socket.on("data", (chunk) => { seen += chunk.toString(); });
+        socket.on("close", () => resolve(seen));
+        socket.on("error", () => resolve(seen));
+      });
+
+    try {
+      // A header name containing a space is not a token, so the parser refuses the message itself.
+      const malformed = await speak("GET /v1/health HTTP/1.1\r\nHost: h\r\nBad Header: x\r\n\r\n");
+      expect(malformed.split("\r\n")[0]).toBe("HTTP/1.1 400 Bad Request");
+      const malformedBody = JSON.parse(malformed.slice(malformed.indexOf("\r\n\r\n") + 4));
+      // §7.2's second block assigns *Malformed request* to 400 `request.invalid`, and `errors.ts`
+      // implements exactly that one layer up. Before the fix this was a 408 saying the request had
+      // not been delivered in time — a statement about something that did not happen.
+      expect(malformedBody.error.code).toBe("request.invalid");
+      expect(malformedBody.error.retryable).toBe(false);
+
+      // A header block past the runtime's `maxHeaderSize`, which is 16 KiB by default.
+      const huge = `GET /v1/health HTTP/1.1\r\nHost: h\r\nX-Big: ${"a".repeat(40_000)}\r\n\r\n`;
+      const overflowed = await speak(huge);
+      expect(overflowed.split("\r\n")[0]).toBe("HTTP/1.1 431 Request Header Fields Too Large");
+      const overflowedBody = JSON.parse(overflowed.slice(overflowed.indexOf("\r\n\r\n") + 4));
+      expect(overflowedBody.error.code).toBe("request.invalid");
+
+      // And every one of them carries the envelope rather than Fastify's `{statusCode,…}` shape.
+      for (const body of [malformedBody, overflowedBody]) {
+        expect(Object.keys(body)).toEqual(["error"]);
+        expect(body.error.retry_after_seconds).toBe(null);
+        expect(body.error.request_id).toBe("");
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("answers the TIMEOUT class with the retryable code, and only that class", () => {
+    // The third of Fastify's three, asserted at the function rather than over a socket because
+    // provoking a real request timeout costs the runtime's thirty-second sweep. The pairing is what
+    // matters: the timeout is the one client error that is retryable, and the other two are not.
+    const timedOut = clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" });
+    expect(timedOut.split("\r\n")[0]).toBe("HTTP/1.1 408 Request Timeout");
+    const timedOutBody = JSON.parse(timedOut.slice(timedOut.indexOf("\r\n\r\n") + 4));
+    expect(timedOutBody.error.code).toBe("request.timeout");
+    expect(timedOutBody.error.retryable).toBe(true);
+
+    // The control that makes the line above mean something: an error that is NOT the timeout must
+    // not get the timeout's answer. Before the fix every one of these was a 408.
+    for (const code of ["HPE_INVALID_HEADER_TOKEN", "HPE_HEADER_OVERFLOW", "HPE_INVALID_METHOD", undefined]) {
+      const other = clientErrorResponse(code === undefined ? undefined : { code });
+      expect(other.split("\r\n")[0], code ?? "no code").not.toBe("HTTP/1.1 408 Request Timeout");
+      const body = JSON.parse(other.slice(other.indexOf("\r\n\r\n") + 4));
+      expect(body.error.code, code ?? "no code").toBe("request.invalid");
+      expect(body.error.retryable, code ?? "no code").toBe(false);
+    }
   });
 
   it("answers a client error with §7.1's envelope rather than Fastify's own", () => {
@@ -1248,7 +1448,7 @@ describe("the numbers this ticket is held to", () => {
     // shares no field with §7.1's envelope. It arrives on a socket before any request object exists,
     // so `setErrorHandler` and `frameworkErrors` are both downstream of it and neither runs, which
     // is why `app.ts` states the envelope guarantee and this asserts it.
-    const raw = clientErrorResponse();
+    const raw = clientErrorResponse({ code: "ERR_HTTP_REQUEST_TIMEOUT" });
     const [statusLine, ...rest] = raw.split("\r\n");
     expect(statusLine).toBe("HTTP/1.1 408 Request Timeout");
     expect(rest).toContain("Connection: close");
@@ -1259,8 +1459,8 @@ describe("the numbers this ticket is held to", () => {
     // §7.2 names no case for "you took too long to send your request", and `errors.ts`' rule for a
     // 4xx it does not name individually is `request.invalid` — the same answer the route-level
     // deadline gives, so the two doors cannot disagree.
-    expect(body.error.code).toBe("request.invalid");
-    expect(body.error.retryable).toBe(false);
+    expect(body.error.code).toBe("request.timeout");
+    expect(body.error.retryable).toBe(true);
     expect(body.error.retry_after_seconds).toBe(null);
     // Empty rather than invented: `genReqId` runs per request and this fires on a socket that never
     // completed one, so there is no id to quote in a support lookup.

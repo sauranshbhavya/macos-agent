@@ -120,31 +120,38 @@ export const DEADLINE_MS = {
  * **This route is the one whose body is read inside the handler**, so it is the one route where the
  * body read is not covered by anything above. §4.4's body is `multipart/form-data`, consumed by
  * `request.parts()` in the handler; `DEADLINE_MS` above is applied by `routes/model.ts` to the
- * *upstream call* alone, and Fastify's `requestTimeout` — which `app.ts` now sets — bounds receipt of
- * the request but is enforced on a thirty-second sweep and measured landing a minute or more late,
- * so it cannot hold an interval this tight. Every other route's body is parsed by Fastify before the
+ * *upstream call* alone, and Fastify's `requestTimeout` — which `app.ts` sets — bounds receipt of the
+ * request but is enforced on a thirty-second sweep and measured landing a minute or more late, so it
+ * cannot hold an interval this tight. Every other route's body is parsed by Fastify before the
  * handler runs.
  *
- * **The number is derived from `CLAIM_LEASE_SECONDS`, which is what it exists to make true.** An
- * `Idempotency-Key` claim is taken in a `preHandler` hook — before this route's body read, because
- * the body is read in the handler — and §9.2's fourth bullet promises that a key in flight is never
- * a second upstream call. The interval the lease has to cover is therefore the body read plus the
- * rest of the handler:
+ * **Ninety seconds, which is §12's client timeout for this route — the founders' decision of
+ * 2026-09-05, option A on PR #208's F4.** The first version of this constant was 30 s, derived from
+ * the idempotency lease alone, and that derivation asked the wrong question: it held
+ * `CLAIM_LEASE_SECONDS` fixed and solved for the upload, when the lease is this repository's own
+ * constant — fixed by nothing outside the gateway, buying only how soon a key held by a *killed*
+ * process becomes re-claimable — while §12's 90 s is a number the shipping client actually waits
+ * (`SonnyBackendClient`'s `transcription = 90`). At 30 s the gateway gave up at a third of the budget
+ * its own client was prepared to spend, **inverting §12's governing rule** that the client's timeout
+ * is always longer than the server's, on the one route where an upload is the slow part. On a weak
+ * hotspot — where somebody dictating a command on the move actually is — a three-minute recording
+ * could not get through at all: the Mac's own ceiling is roughly two megabytes for 185 seconds
+ * (`AudioCommandRecorder`), so 30 s demanded about 533 kbit/s sustained upstream and 90 s asks about
+ * 178 kbit/s.
  *
- *     body read (30 s) + this route's total deadline (75 s) = 105 s  <  CLAIM_LEASE_SECONDS (120 s)
+ * **The lease moved to make room, rather than this number being tuned against it.** The arithmetic
+ * is the same shape at both ends, and it is the shape rather than either literal that
+ * `model.test.ts` asserts:
  *
- * That leaves fifteen seconds of margin, which is the same margin §12 gives this route between its
- * upstream and total deadlines. `idempotency/store.ts` states the relationship from the lease's side;
- * this is the constant that makes it hold, and `model.test.ts` asserts the inequality rather than
- * either number alone, so a later change to one of the three cannot quietly break it.
+ *     body read (90 s) + this route's total deadline (75 s) = 165 s  <  CLAIM_LEASE_SECONDS (180 s)
  *
- * **What a real caller needs, checked rather than assumed.** SONNY-130's cap is a duration enforced
- * on the Mac — `MAXIMUM_AUDIO_DURATION_SECONDS` below, 180 s, roughly 2 MB at the recorder's AAC
- * bitrate — so thirty seconds is about 560 kbit/s for the longest recording this client will send.
- * The 10 MiB byte ceiling is a backstop against a client that is not ours, and a caller trying to
- * push 10 MiB through this route slowly is the shape this deadline exists to end.
+ * Fifteen seconds of margin — the same margin §12 gives this route between its upstream and total
+ * deadlines, and the same margin the JSON routes have always had against the lease.
+ * `idempotency/store.ts` states the relationship from the lease's side and carries the cost the
+ * founders accepted with it: a process killed mid-request now holds its key for a minute longer
+ * before a repeat can take it.
  */
-export const BODY_READ_DEADLINE_MS = 30_000;
+export const BODY_READ_DEADLINE_MS = 90_000;
 
 /**
  * The longest recording this gateway will transcribe, in seconds — **SONNY-130's cap, and the

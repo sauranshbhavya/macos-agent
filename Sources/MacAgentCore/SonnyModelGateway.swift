@@ -301,6 +301,12 @@ public enum SonnyBackendCopy {
             // the three `authCode*` cases are unreachable because these routes never return those
             // codes. What remains is a backend that could not be reached and a code this build does
             // not recognise, and "try again" is honest for both.
+            //
+            // **`request.timeout` is reached here too, deliberately, and it is not unknown**
+            // (SONNY-322, PR #208's F1). `SignInFailure` maps it to `.backendUnreachable`, so an
+            // upload that did not arrive in time lands on this sentence — which is the one thing a
+            // user in that position should do, and the reason the interception above does not take
+            // it. Contrast `request.invalid` two arms up, whose whole point is to say the opposite.
             return "Sonny couldn't finish this one. Try again."
         case .tooManyAttempts:
             return "Too many requests just now. Try again shortly."

@@ -40,7 +40,11 @@ public enum BillingSettingFailure: Equatable, Sendable, CaseIterable {
         // **`limitRate` sits with the transient ones and not with the refusals**, which is the rule
         // `server/src/auth/supabase.ts:521-525` states and `BillingPortalFailure` already follows: a
         // rate limit is a statement about capacity, never about whether the request was right.
-        case .limitRate, .providerUnavailable, .providerTimeout, .serverError, .serverUnavailable:
+        case .limitRate, .providerUnavailable, .providerTimeout, .serverError, .serverUnavailable,
+             .requestTimeout:
+            // `requestTimeout` joins them on exactly the rule the comment above states: a body that
+            // did not arrive in time is a statement about the connection, never about whether the
+            // request was right.
             self = .temporarilyUnavailable
         case .providerRejected, .limitSpend, .requestInvalid, .requestTooLarge, .resourceNotFound,
              .idempotencyConflict, .versionUnsupported, .authCodeInvalid, .authCodeExpired,

@@ -109,8 +109,10 @@ const MAXIMUM_STORED_RESPONSE_BYTES = 1024 * 1024;
  * unreachable rather than describing a failure it prevents.
  *
  * The rest of the set is reachable now: `limit.rate` from the sign-in limiter, `provider.unavailable`
- * and `provider.timeout` from the model routes, `server.error` from the root error handler.
- * `server.unavailable` is produced nowhere yet, which is forward-looking in the same way.
+ * and `provider.timeout` from the model routes, `server.error` from the root error handler, and
+ * `request.timeout` from the transcription route's body-read deadline — the one member whose whole
+ * point is that the caller retries the identical body. `server.unavailable` is produced nowhere yet,
+ * which is forward-looking in the same way.
  */
 const RELEASE_ON_CODES: ReadonlySet<string> = new Set([
   "limit.rate",
@@ -119,6 +121,15 @@ const RELEASE_ON_CODES: ReadonlySet<string> = new Set([
   "server.error",
   "server.unavailable",
   "auth.token_expired",
+  // **`request.timeout` is the newest member and it is here for the sharpest version of the
+  // reason** (SONNY-322, PR #208's F2). The body-read deadline on `POST /v1/transcriptions` fires
+  // *after* `preHandler` has taken the claim, so without this line the 408 is a stored response:
+  // the key holds it for `RESPONSE_TTL_SECONDS`, and the caller's next attempt — the complete,
+  // valid upload the user is waiting on — is replayed a day-old timeout with no upstream call.
+  // That is exactly `fingerprint.ts`'s "a wrong answer to a correct request, not a repeat of a
+  // right one", reached through a purely transient condition. It is also the only member of this
+  // set whose failure the *client* is expected to resolve by retrying the identical body.
+  "request.timeout",
 ]);
 
 /**

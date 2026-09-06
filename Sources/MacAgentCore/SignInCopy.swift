@@ -81,7 +81,11 @@ public enum SignInFailure: Equatable, Sendable, CaseIterable {
         case .authUnauthenticated, .authTokenExpired, .authTokenRevoked:
             self = .signedOut
         case .providerUnavailable, .providerTimeout, .providerRejected, .serverError,
-             .serverUnavailable:
+             .serverUnavailable, .requestTimeout:
+            // `requestTimeout` is reachable here as well as on the model routes: the gateway's
+            // delivery bound covers every route, the sign-in ones included. `.backendUnreachable`
+            // is the arm whose sentence invites another attempt, which is the right thing to do
+            // about a request that did not arrive in time.
             self = .backendUnreachable
         case .versionUnsupported:
             self = .updateRequired

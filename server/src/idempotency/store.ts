@@ -47,13 +47,13 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  * | route family                        | bounded by                                   | worst case |
  * |-------------------------------------|----------------------------------------------|-----------|
  * | the JSON routes                     | §12's total deadline (`model/limits.ts`)      | 105 s     |
- * | `POST /v1/transcriptions`           | `BODY_READ_DEADLINE_MS` + its total deadline  | 105 s     |
+ * | `POST /v1/transcriptions`           | `BODY_READ_DEADLINE_MS` + its total deadline  | 165 s     |
  *
  * The transcription row is the one that used to be unbounded: its body is `multipart/form-data`,
  * consumed by `request.parts()` **inside** the handler, so the read happens *after* the `preHandler`
  * hook takes the claim and *outside* `withDeadlines`, which `routes/model.ts` applies to the upstream
- * call alone. `routes/model.ts` now runs that read under `BODY_READ_DEADLINE_MS` (30 s) and destroys
- * the request stream when it elapses, so 30 s + 75 s = 105 s, fifteen seconds under this lease — the
+ * call alone. `routes/model.ts` runs that read under `BODY_READ_DEADLINE_MS` (90 s) and destroys
+ * the request stream when it elapses, so 90 s + 75 s = 165 s, fifteen seconds under this lease — the
  * same margin the JSON routes already had. `model/limits.ts` derives that 30 s from this constant,
  * and `model.test.ts` asserts the inequality rather than any of the three numbers alone, so a later
  * change to one of them cannot quietly reopen this.
@@ -65,13 +65,24 @@ export const RESPONSE_TTL_SECONDS = 24 * 60 * 60;
  * within a minute cannot carry a fifteen-second margin. It is a backstop against connection
  * occupancy; the arithmetic above is held at the route.
  *
+ * **One hundred and eighty seconds, raised from 120 by the founders on 2026-09-05** (option A on PR
+ * #208's F4). The number that actually needed to move was the upload's: §12 gives
+ * `POST /v1/transcriptions` a 90-second *client* timeout and the first version of this arithmetic
+ * solved for the body read with the lease held fixed, producing 30 s — the gateway giving up at a
+ * third of the budget its own client waits, on the one route where the upload is the slow part. The
+ * lease is this repository's own constant and answers to nothing outside the gateway, so it is the
+ * side that moved. **The cost was named and accepted rather than discovered:** a process killed
+ * mid-request now holds its idempotency key for three minutes rather than two before a repeat can
+ * take it. What it buys is that a three-minute recording on a weak connection can actually be
+ * delivered.
+ *
  * **The lease still exists, and the fencing token still matters, because a bound is not a
  * guarantee.** A process killed mid-request runs no deadline at all — which is the case this
  * constant was always for — so a claim can still be taken from a row whose holder is gone.
  * `claim_token` means a superseded holder's `complete` or `release` matches zero rows instead of
  * landing on its successor's claim.
  */
-export const CLAIM_LEASE_SECONDS = 120;
+export const CLAIM_LEASE_SECONDS = 180;
 
 /** What a claim attempt turned out to be. The hook maps each to a contract §7.2 answer. */
 export type ClaimOutcome =

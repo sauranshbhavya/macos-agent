@@ -30,6 +30,17 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
     case limitRate
     case limitSpend
     case requestInvalid
+    /// The request body did not finish arriving in time. §7.2's `request.timeout`, 408 (SONNY-322).
+    ///
+    /// **Its own case rather than `request.invalid`, because the two need opposite behaviour from
+    /// this client** (PR #208, F1). The gateway bounds how long a caller may take to deliver a
+    /// request; a body that misses that bound is a transient *network* condition, and a retry is
+    /// very plausibly what fixes it. `request.invalid` sits on the not-retryable side below and
+    /// `SonnyModelGateway` renders it as "Sonny couldn't send this one" — a malformed request that
+    /// is Sonny's fault and that nobody can act on. Every clause of that is wrong for a slow upload,
+    /// and no `retryable` value the server sends could have moved it, because this file decides
+    /// retryability from the code rather than from the envelope for every code but one.
+    case requestTimeout
     case requestTooLarge
     case providerUnavailable
     case providerTimeout
@@ -55,6 +66,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case "limit.rate": self = .limitRate
         case "limit.spend": self = .limitSpend
         case "request.invalid": self = .requestInvalid
+        case "request.timeout": self = .requestTimeout
         case "request.too_large": self = .requestTooLarge
         case "provider.unavailable": self = .providerUnavailable
         case "provider.timeout": self = .providerTimeout
@@ -82,6 +94,7 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
         case .limitRate: return "limit.rate"
         case .limitSpend: return "limit.spend"
         case .requestInvalid: return "request.invalid"
+        case .requestTimeout: return "request.timeout"
         case .requestTooLarge: return "request.too_large"
         case .providerUnavailable: return "provider.unavailable"
         case .providerTimeout: return "provider.timeout"
@@ -104,7 +117,11 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
     /// against a wall that has already answered.
     public var maximumAttempts: Int {
         switch self {
-        case .limitRate, .providerTimeout, .idempotencyConflict:
+        case .limitRate, .providerTimeout, .idempotencyConflict, .requestTimeout:
+            // **Two, not three, and the difference is what a retry costs here.** `requestTimeout`
+            // means a body did not finish uploading, so every attempt re-sends the whole recording
+            // over the connection that was already too slow. One more try is worth having; a third
+            // spends the user's bandwidth on a link that has now failed twice.
             return 2
         case .providerUnavailable, .serverError, .serverUnavailable:
             return 3
@@ -134,7 +151,10 @@ public enum SonnyBackendErrorCode: Equatable, Hashable, Sendable {
     /// merged into `maximumAttempts`' and left the member the mutant was about undocumented).
     public func isRetryable(envelopeSaysRetryable: Bool) -> Bool {
         switch self {
-        case .limitRate, .providerUnavailable, .providerTimeout, .serverError, .serverUnavailable:
+        case .limitRate, .providerUnavailable, .providerTimeout, .serverError, .serverUnavailable,
+             .requestTimeout:
+            // `requestTimeout` is the whole point of that code existing separately from
+            // `requestInvalid` below: the body was late, and sending it again may well succeed.
             return true
         case .idempotencyConflict:
             return envelopeSaysRetryable
