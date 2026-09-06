@@ -197,7 +197,7 @@ interface ClaimedRow {
 export async function drainOwedRevocations(
   client: pg.Client,
   provider: AuthProvider,
-  options: { accountId?: string; limit?: number; now?: Date } = {},
+  options: { accountId?: string; limit?: number; now?: Date; signal?: AbortSignal } = {},
 ): Promise<RevocationOutcome> {
   const limit = options.limit ?? 100;
   const now = options.now ?? new Date();
@@ -271,7 +271,12 @@ export async function drainOwedRevocations(
     if (!owed) break;
 
     try {
-      await provider.signOutAllForUser(owed.supabase_user_id);
+      // **The caller's deadline, when it has one** (SONNY-425). This loop makes one provider call
+      // per identity, so the adapter's own per-request bound is not a bound on the drain — N
+      // identities buy N of them. `DELETE /v1/account` runs this inside §12's deadline and threads
+      // the signal here so the ceiling is the route's rather than the adapter's times N. Nothing
+      // else passes one, and a drain without one behaves exactly as it did.
+      await provider.signOutAllForUser(owed.supabase_user_id, options.signal);
     } catch (error) {
       if (!(error instanceof ProviderRejected)) {
         // Transient, or unknown, which is treated as transient. `provider_session_revoked_at` stays

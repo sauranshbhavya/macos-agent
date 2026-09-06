@@ -9,6 +9,7 @@ import {
 } from "../config.js";
 import { pooledConnections } from "../db/pool.js";
 import type { AuthDeps } from "../routes/auth.js";
+import { DEADLINE_MS } from "../model/limits.js";
 import { SupabaseAuthProvider } from "./supabase.js";
 
 /**
@@ -181,6 +182,12 @@ export function authWiringFrom(config: Config): AuthWiring | undefined {
     authUrl: policy.issuer,
     anonKey,
     serviceRoleKey,
+    // **§12's upstream deadline for these routes, read rather than defaulted** (SONNY-425). The
+    // adapter's own default was a literal `10_000` that matched the contract's table by coincidence,
+    // and a coincidence is what this ticket is about one layer up: a number the contract promises
+    // and nothing derives from it. Sourced here so a change to §12's row moves the socket's bound
+    // with it.
+    timeoutMs: DEADLINE_MS.auth.upstream,
   });
 
   // Non-null by the sweep above; `config.databaseUrl` is `string | undefined` on the type.

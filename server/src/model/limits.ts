@@ -112,6 +112,33 @@ export const DEADLINE_MS = {
    * spends up to twelve of them in sequence.
    */
   screenAnalyze: { upstream: 90_000, total: 105_000 },
+  /**
+   * §12's last row — "auth, account, meta, health, delete" — at the numbers that table states
+   * (SONNY-425). It is the only row here that is not one route, and the reason it is one entry is
+   * that §12 writes it as one: every route it covers gets the same budget.
+   *
+   * **What applies it, and what deliberately does not, because the row names more routes than the
+   * code wires.** `routes/auth.ts` applies it to all five of its handlers. Three routes it names are
+   * not wired and each is a different reason, stated here rather than left to be re-derived from
+   * the absence:
+   *
+   * - `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider — so a
+   *   deadline around them is a timer that cannot fire. §12 carries that in prose beside its table.
+   * - `DELETE /v1/tasks/{task_id}` was on this ticket's never-touch list while PR #207 held
+   *   `routes/tasks.ts`, and is owed its own change rather than a reach across that line.
+   * - The account routes (`routes/entitlements.ts`, `routes/credits.ts`) wait on the database rather
+   *   than on a provider, and `db/pool.ts` sets no statement timeout — so bounding them is a wider
+   *   change than one route's wrapper and is filed rather than half-made here.
+   *
+   * **`upstream` is enforced at the adapter as well as at the wrapper, and that is not a
+   * duplication.** `auth/deps.ts` builds the Supabase adapter with `timeoutMs` read from this field,
+   * so the per-request `AbortSignal.timeout` inside `auth/supabase.ts` *is* §12's number rather than
+   * a literal that happened to match it; the wrapper's own signal then bounds the route's whole
+   * upstream budget, which is a different quantity on `DELETE /v1/account` — that handler drains
+   * every identity on the account, so without a shared signal its upstream time is N times the
+   * adapter's bound.
+   */
+  auth: { upstream: 10_000, total: 15_000 },
 } as const;
 
 /**

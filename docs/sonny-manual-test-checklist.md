@@ -3876,6 +3876,32 @@ formality.
       have one to hand, because the section sign is exactly what this change taught the check to
       read.
 
+- [ ] **(SONNY-425, waits on SONNY-192)** **A sign-in whose provider stalls gives up in about
+      fifteen seconds, not two minutes.** Against a deployed gateway whose Supabase project is
+      unreachable — block it at the firewall, or point `SUPABASE_JWT_ISSUER` at a host that accepts
+      a connection and never answers. From a terminal, time a refresh:
+      `time curl -sS -i -X POST https://<host>/v1/auth/refresh -H 'content-type: application/json'
+      -d '{"refresh_token":"anything"}'`. Expected: an answer inside roughly **fifteen seconds**
+      carrying `504` and `code` **`provider.timeout`** with `retryable: true` — or `502`
+      `provider.unavailable` at about ten seconds, which is the same wiring answering one layer
+      earlier and is equally correct. **What would be a finding:** the request sitting for a minute
+      or more before anything comes back, which is the 120-second delivery bound doing it instead;
+      or a `500`, which would mean the answer never reached the deadline arm at all.
+- [ ] **(SONNY-425, waits on SONNY-192)** **Asking for a sign-in code still says nothing when the
+      provider stalls.** Same unreachable gateway. `curl -sS -i -X POST
+      https://<host>/v1/auth/email/start -H 'content-type: application/json'
+      -d '{"email":"you@example.com"}'`, then the same for an address that has never signed in.
+      Expected: **both answer `200`**, with the same fields and the same `expires_in`, inside roughly
+      fifteen seconds. **What would be a finding:** a `504` or any other status here — this route
+      must answer identically whatever happens behind it, or it becomes a way to ask whether an
+      address has an account.
+- [ ] **(SONNY-425)** **Ordinary sign-in is untouched.** In the real packaged app, against a working
+      gateway: sign out, sign in with an emailed code, let the session sit until it refreshes, and
+      sign out again. Expected: exactly the behaviour you are used to, at the speed you are used to.
+      **What would be a finding:** any sign-in step that now takes visibly longer, or a sign-in that
+      fails where it used to work — the deadlines added here sit in front of every one of these
+      calls, so this row is what says they bound only the failures.
+
 ## 8. How to report back
 
 For each real finding, give me:

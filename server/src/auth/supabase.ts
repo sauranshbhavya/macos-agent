@@ -275,11 +275,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * default that changed under us would turn every new user's first code into `otp_disabled` —
    * silently, since `routes/auth.ts` answers the same uniform 200 whatever happens here.
    */
-  async sendEmailCode(email: string): Promise<SentCode> {
+  async sendEmailCode(email: string, signal?: AbortSignal): Promise<SentCode> {
     const body = await this.#call("sendEmailCode", "/otp", {
       method: "POST",
       key: this.#anonKey,
       json: { email, create_user: true },
+      signal,
     });
     const parsed = otpResponse.safeParse(body);
     // A 200 whose body is not an object is not worth failing a send over: the mail is already gone,
@@ -297,11 +298,16 @@ export class SupabaseAuthProvider implements AuthProvider {
    * that endpoint's mail is a signup for a new address and a magic link for a known one. Sending
    * `magiclink` instead would refuse every first-ever sign-in.
    */
-  async verifyEmailCode(email: string, code: string): Promise<VerifiedSession> {
+  async verifyEmailCode(
+    email: string,
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSession> {
     const body = await this.#call("verifyEmailCode", "/verify", {
       method: "POST",
       key: this.#anonKey,
       json: { type: "email", email, token: code },
+      signal,
     });
     return this.#session("verifyEmailCode", body);
   }
@@ -310,11 +316,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * `POST /token?grant_type=refresh_token`. Rotation, the 10s reuse interval and family revocation
    * on reuse are all the provider's, per contract §3.3 — this hands the token over and reports back.
    */
-  async refresh(refreshToken: string): Promise<VerifiedSession> {
+  async refresh(refreshToken: string, signal?: AbortSignal): Promise<VerifiedSession> {
     const body = await this.#call("refresh", "/token?grant_type=refresh_token", {
       method: "POST",
       key: this.#anonKey,
       json: { refresh_token: refreshToken },
+      signal,
     });
     return this.#session("refresh", body);
   }
@@ -328,11 +335,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * `models.LogoutSession(tx, s.ID)` and its default, `global`, to `models.Logout(tx, u.ID)` — every
    * session the user has. A user signing out on one Mac must not sign themselves out on another.
    */
-  async signOut(accessToken: string): Promise<void> {
+  async signOut(accessToken: string, signal?: AbortSignal): Promise<void> {
     await this.#call("signOut", "/logout?scope=local", {
       method: "POST",
       key: this.#anonKey,
       bearer: accessToken,
+      signal,
     });
   }
 
@@ -395,8 +403,14 @@ export class SupabaseAuthProvider implements AuthProvider {
    * to `/logout?scope=global`, which `logout.go` shows would work even with no `session_id` claim —
    * that is the gateway forging a user credential, and it is a founder's decision, not a session's.
    */
-  async signOutAllForUser(supabaseUserId: string): Promise<void> {
+  async signOutAllForUser(supabaseUserId: string, signal?: AbortSignal): Promise<void> {
     void supabaseUserId;
+    // **The signal reaches no socket here, and saying so is the point of naming it.** This method
+    // throws before it sends anything, so the route deadline `revocation.ts` threads down is
+    // honoured by the seam's declaration and by nothing in this body. It is accepted rather than
+    // omitted so that the implementation this comment's own docstring says is owed inherits the
+    // bound instead of having to be told about it.
+    void signal;
     throw new ProviderUnavailable(
       "supabase signOutAllForUser is not implementable: Supabase Auth exposes no endpoint that " +
         "revokes a user's sessions from their id alone. The revocation stays owed and is reported " +
@@ -466,6 +480,8 @@ export class SupabaseAuthProvider implements AuthProvider {
       key: string;
       bearer?: string;
       json?: unknown;
+      /** The caller's deadline, when it has one. See the composition at the `fetch` below. */
+      signal?: AbortSignal | undefined;
     },
   ): Promise<unknown> {
     const headers: Record<string, string> = {
@@ -484,9 +500,18 @@ export class SupabaseAuthProvider implements AuthProvider {
         method: options.method,
         headers,
         ...(options.json === undefined ? {} : { body: JSON.stringify(options.json) }),
-        // Every call is bounded. An unbounded one is what `revocation.ts` names as owed, and it is
-        // also a request handler holding a connection while a socket hangs.
-        signal: AbortSignal.timeout(this.#timeoutMs),
+        // **Every call is bounded, and after SONNY-425 it is bounded twice.** An unbounded one is
+        // what `revocation.ts` names as owed, and it is also a request handler holding a connection
+        // while a socket hangs. `#timeoutMs` bounds THIS call — `auth/deps.ts` sets it from
+        // `DEADLINE_MS.auth.upstream`, so it is §12's own number rather than a literal that happens
+        // to match it — and the caller's signal bounds the ROUTE's whole upstream budget, which is a
+        // larger quantity wherever a handler makes more than one call. `AbortSignal.any` honours
+        // whichever fires first and is not given an array with a hole in it: composing only when the
+        // caller supplied one keeps the single-signal path byte-identical to what it was.
+        signal:
+          options.signal === undefined
+            ? AbortSignal.timeout(this.#timeoutMs)
+            : AbortSignal.any([options.signal, AbortSignal.timeout(this.#timeoutMs)]),
       });
     } catch (error) {
       // A timeout, a DNS failure, a refused socket, an aborted body. The name is safe to repeat --

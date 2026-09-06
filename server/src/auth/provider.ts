@@ -50,14 +50,35 @@ export class ProviderRejected extends Error {}
 export class ProviderUnavailable extends Error {}
 
 export interface AuthProvider {
+  // **The optional `signal` on the five methods below is the route's deadline reaching the socket**
+  // (SONNY-425). A caller that passes none gets exactly the behaviour it had before, which is what
+  // lets the eighteen test fakes implementing this interface keep their existing signatures
+  // untouched: a method declared with fewer parameters still satisfies one declared with more.
+  //
+  // **It is not a substitute for the adapter's own timeout and does not replace it.**
+  // `auth/supabase.ts` bounds every request it makes at `DEADLINE_MS.auth.upstream`, which bounds
+  // ONE call; this bounds the ROUTE's whole upstream budget, and the two differ the moment a handler
+  // makes more than one call — `DELETE /v1/account` drains every identity on the account, so without
+  // a shared signal its upstream time is N times the adapter's bound. The adapter combines them and
+  // honours whichever fires first.
+  //
+  // **What an abort through it reads as, said plainly because it differs from the model seam.** This
+  // seam has two errors and neither is a timeout: `auth/supabase.ts` maps an aborted fetch to
+  // `ProviderUnavailable`, and that mapping is older than this parameter and is not changed by it.
+  // The `504 provider.timeout` a caller sees on these routes comes from the wrapper's TOTAL deadline
+  // in `model/routing.ts`, never from here.
+  //
+  // `userFromAccessToken` and `deleteUser` take none because nothing on a request path calls either
+  // — the first says so in its own docstring below, and the second has no caller at all.
+
   /** Ask the provider to mint and send a code. Never returns the code. */
-  sendEmailCode(email: string): Promise<SentCode>;
+  sendEmailCode(email: string, signal?: AbortSignal): Promise<SentCode>;
   /** Exchange a code for a session. Throws `ProviderRejected` when the provider refuses it. */
-  verifyEmailCode(email: string, code: string): Promise<VerifiedSession>;
+  verifyEmailCode(email: string, code: string, signal?: AbortSignal): Promise<VerifiedSession>;
   /** Rotate. The provider owns rotation, the 10s reuse interval and family revocation (§3.3). */
-  refresh(refreshToken: string): Promise<VerifiedSession>;
+  refresh(refreshToken: string, signal?: AbortSignal): Promise<VerifiedSession>;
   /** Revoke this session's family server-side. */
-  signOut(accessToken: string): Promise<void>;
+  signOut(accessToken: string, signal?: AbortSignal): Promise<void>;
   /**
    * The provider-side user this access token belongs to, or `ProviderRejected`.
    *
@@ -89,7 +110,7 @@ export interface AuthProvider {
    * each. Needs Supabase's admin API, so it is unimplemented until the real adapter lands
    * (PR #87 F5).
    */
-  signOutAllForUser(supabaseUserId: string): Promise<void>;
+  signOutAllForUser(supabaseUserId: string, signal?: AbortSignal): Promise<void>;
 
   /**
    * Remove the provider-side user. Our account row is closed separately.

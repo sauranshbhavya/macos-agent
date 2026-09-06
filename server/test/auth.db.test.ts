@@ -9,6 +9,7 @@ import {
 import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
+import { ProviderTimedOut } from "../src/model/upstream.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
@@ -107,7 +108,39 @@ class FakeProvider implements AuthProvider {
    * provider that cannot be reached has not refused anything.
    */
   unreachable = false;
-  async sendEmailCode(email: string) { this.sent.push(email); return { providerRequestId: "p1" }; }
+  /**
+   * The route's total deadline elapsed before the provider answered (SONNY-425).
+   *
+   * **A third state, and separate from `unreachable` for the reason that one is separate from
+   * `accept`.** `accept = false` is the provider answering and refusing; `unreachable` is it failing
+   * to answer and saying so at once; this is the wrapper giving up on it — §7.2 case 5a, which §9.3
+   * retries on a different schedule from case 5, so a route that collapsed the two would spend a
+   * user's attempts wrongly.
+   *
+   * **It raises what `withDeadlines` raises, and that is the point of using its own class here.**
+   * `ProviderTimedOut` is `model/upstream.ts`', not this seam's, so a route that never applied the
+   * wrapper could not produce it at all.
+   */
+  timesOut = false;
+  /**
+   * The `AbortSignal` each wrapped call was handed, in call order — `undefined` where it was given
+   * none.
+   *
+   * **This is what pins the wiring rather than the mapping.** A test that only drives the failure
+   * arm passes just as well against a route that never wrapped anything, because the fake would be
+   * raising the timeout itself; the signal exists only if `withDeadlines` is really in front of the
+   * call. Timing the elapse is `authdeadlines.test.ts`', which advances a clock against the two
+   * routes that need no database — this file cannot, because vitest's fake timers replace the
+   * `setTimeout` the hang backstop and `pg` are both holding, and a run that does it hangs with no
+   * output at all rather than failing.
+   */
+  readonly signals: (AbortSignal | undefined)[] = [];
+  async sendEmailCode(email: string, signal?: AbortSignal) {
+    this.sent.push(email);
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
+    return { providerRequestId: "p1" };
+  }
   /**
    * **Declared with the interface's parameters even though this body ignores them** (PR #87 sixth
    * round, F1). It was `verifyEmailCode()` with none, which type-checks as a *narrower* function and
@@ -117,7 +150,13 @@ class FakeProvider implements AuthProvider {
    * except the one that exists to catch it.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
+  async verifyEmailCode(
+    _email: string,
+    _code: string,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSession> {
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
     if (this.unreachable) throw new ProviderUnavailable("supabase verifyEmailCode could not be reached");
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
     this.liveRefreshToken = this.session.refreshToken;
@@ -150,7 +189,9 @@ class FakeProvider implements AuthProvider {
     if (this.unreachable) throw new ProviderUnavailable("supabase signOut could not be reached");
     if (!this.accept) throw new ProviderRejected("already gone");
   }
-  async signOutAllForUser(id: string) {
+  async signOutAllForUser(id: string, signal?: AbortSignal) {
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
     if (this.failFor.has(id)) throw new ProviderUnavailable("admin API timed out");
     if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
     this.revokedUsers.push(id);
@@ -1352,5 +1393,135 @@ describeDb("the auth endpoints", () => {
       expect(provider.revokedUsers).toEqual([SESSION_USER]);
       await app.close();
     });
+  });
+  describe("§12's deadlines, on the three auth routes that need database state", () => {
+    /**
+     * SONNY-425. `authdeadlines.test.ts` carries `refresh` and `signout` — the two auth routes that
+     * reach the provider with no database read in front — and advances a clock against them, so the
+     * interval itself is asserted there and under the documented `npm test`.
+     *
+     * **These three assert the wiring and the answer, and deliberately not the interval**, which is
+     * a limit rather than a preference. Advancing vitest's fake timers here replaces the
+     * `setTimeout` that `support/backstop.ts` and `pg` are both holding: measured at this head, a
+     * version of these tests using `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })`
+     * ran for over five minutes and printed nothing at all — a hang rather than a failure, which is
+     * the worst shape a test can take. What is asserted instead is the pair a fake cannot forge on
+     * its own: that the provider was handed an `AbortSignal`, which exists only if `withDeadlines`
+     * is in front of the call, and what the route answers when the deadline elapses.
+     */
+
+    itUnderHangBackstop(
+      "POST /v1/auth/email/verify runs its provider call inside §12's deadline and answers 504",
+      async () => {
+        const app = build();
+        await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "stalled@example.com" },
+        });
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "stalled@example.com", code: "1" },
+        });
+        provider.timesOut = false;
+
+        // The wrapper is in front of the call: without it the provider is handed `undefined`.
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        // §7.2 case 5a, not case 5 — §9.3 retries the two on different schedules.
+        expect(response.statusCode).toBe(504);
+        expect(response.json().error.code).toBe("provider.timeout");
+        expect(response.json().error.retryable).toBe(true);
+
+        // **The code the user is holding survives it**, which is what makes the retry that answer
+        // invites worth inviting: `consumeLatest` runs only after the provider accepts, so a timeout
+        // consumes nothing.
+        const after = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "stalled@example.com", code: "1" },
+        });
+        expect(after.statusCode).toBe(200);
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "POST /v1/auth/email/start still answers the uniform 200 when its send times out",
+      async () => {
+        // **The one route whose deadline must not be visible to a caller.** §3.6 makes this response
+        // identical whatever happens downstream, and a 504 for an address that reached the send path
+        // — beside the silent 200 the per-address limit answers — is this route's
+        // account-existence oracle with an extra step.
+        const app = build();
+        const reference = await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "reference@example.com" },
+        });
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "stalledsend@example.com" },
+        });
+        provider.timesOut = false;
+
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        expect(response.statusCode).toBe(200);
+        expect(response.statusCode).toBe(reference.statusCode);
+        expect(Object.keys(response.json()).sort()).toEqual(Object.keys(reference.json()).sort());
+        expect(response.json().expires_in).toBe(reference.json().expires_in);
+        // And nothing was issued for it — the pre-existing rule that a failed send leaves the user's
+        // previous code alone, which a timeout is a case of.
+        const { rows } = await client.query(
+          "SELECT count(*)::int AS n FROM sonny.sign_in_code_issue WHERE mailbox_key = $1",
+          [normalizeEmail("stalledsend@example.com")],
+        );
+        expect(rows[0].n).toBe(0);
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "DELETE /v1/account answers 204 when its drain times out, and leaves the revocation owed",
+      async () => {
+        // **The other route whose deadline is not a 504.** By the time the drain runs the close is
+        // committed and the gate stops attributing this caller, so a 5xx would describe an outcome
+        // that is not the one on disk and would invite a retry that cannot get through. The residual
+        // is left owed instead, exactly as a failed provider call leaves it.
+        const app = build();
+        await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "slowdrain@example.com" },
+        });
+        const accountId = (await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "slowdrain@example.com", code: "1" },
+        })).json().user.id;
+
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "DELETE", url: "/v1/account", headers: signedIn(),
+        });
+        provider.timesOut = false;
+
+        // The drain's own provider call is handed the route's signal, which is the thing that makes
+        // §12's budget the route's rather than the adapter's times the identity count.
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        expect(response.statusCode).toBe(204);
+        const { rows } = await client.query(
+          "SELECT deleted_at FROM sonny.account WHERE id = $1",
+          [accountId],
+        );
+        expect(rows[0].deleted_at).not.toBeNull();
+        // Still owed, so the next drain takes it. A deadline that stamped the revocation would be
+        // recording a provider call that never returned.
+        expect(await owedRevocationCount(client)).toBe(1);
+        await app.close();
+      },
+    );
   });
 });
