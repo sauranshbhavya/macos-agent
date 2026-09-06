@@ -257,9 +257,23 @@ public enum RestrictedContentDetector {
         ("paywall", "paywalls")
     ]
 
-    /// What *markup* evidence is searched for: both kinds. A superset of the seven phrases SONNY-245
-    /// shipped, since `you are human` contains the `verify you are human` it replaces — so stage 2
-    /// loses no coverage to SONNY-256's split.
+    /// What *markup* evidence is searched for: both kinds. A **literal** superset of the seven
+    /// phrases SONNY-245 shipped — all seven are in it verbatim — so stage 2 loses no coverage to
+    /// SONNY-256's split.
+    ///
+    /// **It does change what a two-phrase page's refusal is called, and that is the one behavioural
+    /// consequence of the split down here** (PR #210 review, F3). `captcha` was first in SONNY-245's
+    /// list and is now eighth, and `firstPhrase` returns the first entry that matches, so a
+    /// contentless page whose markup carries both a reCAPTCHA script and `Please log in` is named
+    /// `login walls` where it used to be named `CAPTCHAs`. Still refused either way — what moves is
+    /// `Finding.phrase` and the noun the user reads.
+    /// `aPageCarryingTwoPhrasesInMarkupIsNamedByTheEarlierListEntry` pins it.
+    ///
+    /// (An earlier version justified the superset "since `you are human` contains the
+    /// `verify you are human` it replaces". That named a wording the fix round deleted, and the
+    /// containment ran the other way even while it existed: `verify you are human` is the longer
+    /// string, so it was the *pages* matching the shorter needle that were the superset, not the
+    /// phrase.)
     static let phrases: [(phrase: String, reason: String)] = wallSpeechPhrases + subjectPhrases
 
     /// The refusal reason for `html`, or `nil` if the page is not a wall.
