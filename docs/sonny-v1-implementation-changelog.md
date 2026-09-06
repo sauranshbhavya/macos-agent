@@ -570,8 +570,41 @@ Known limitations, recorded rather than fixed (coordinator's routing, 2026-09-05
   run door and not the other. A silence in a rare window; recorded because the comment two screens
   above it calls that class of silence out by name.
 
-**Fourth round's figures, stamped at the head.** Every earlier stamp in this entry passes
-`git merge-base --is-ancestor <sha> HEAD` with exit 0.
+**Fourth round's figures, stamped at `777f8140`, which is the head.** Every earlier stamp in this
+entry passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
+- Flagged Swift suite — **exit 0**, **2961 tests in 199 suites, 8 known issues**; main's baseline at
+  `6cc9e189` is 2929 in 198 with the same 8, so the branch adds 32 tests in 1 suite.
+- `scripts/warnings` — **exit 0, 0 warnings**, its own report stamped `777f8140` (clean), whole
+  population recompiled.
+- `scripts/changelog-order` — **exit 0**, 175 entries.
+- **The server half is carried, with the proof rather than the assertion.**
+  `git diff --name-only 910e20e3 HEAD -- server | wc -l` -> **0**, and
+  `git rev-parse 910e20e3:server 777f8140:server` prints
+  `a0f65233115d698bb5600876af87bfc6148b77b5` twice while the same command over `Sources` prints two
+  different hashes — so the control fires. This round's changes are which clock the *client* reads
+  and how the *client* holds a claim; §4.6.3's `before` parameter is last round's and did not move.
+  The carried figures are `npm run build`, `npm run typecheck`, `npm run check:secrets` and
+  `npm test` all exit 0 with 806 passed / 419 skipped, and `npm run test:db` exit 0 with 1225 passed,
+  at `910e20e3`.
+- `scripts/mutate` — **18 mutants, 18 killed, 0 survived, 0 unattributed**, at `777f8140`. Two are
+  new: **Y1**, the claim released by whichever wipe finishes rather than the last, killed by
+  `aSecondPressInsideTheWindowDoesNotReleaseTheFirstWipesClaim`; and **Y2**, the cutoff taken from
+  this Mac's wall clock, killed by `theCutoffIsTheServersClockAndNotThisMacs`. **Two verdicts were
+  carried and the rest re-run**: `W3` and `M9`, whose target files (`LocalDataDeletionService.swift`,
+  `PendingServerDeletionStore.swift`) and killing tests (`LocalStorageSecurityTests.swift`,
+  `PendingServerDeletionStoreTests.swift`) all answer 0 to
+  `git diff --name-only 910e20e3 HEAD -- <file> | wc -l`, and whose killers scan neither a population
+  nor a fixture this round moved. The gateway plan's nine are carried on the tree-identity proof
+  above. Everything else was re-run, `X2` and `X6` among them, because `AgentViewModel.swift`,
+  `SonnyTaskDeletionService.swift` and the killers' own file all moved.
+
+**One defect this round found in its own work.** The two-press test was first written as a poll for
+the second wipe's request with a sixty-second backstop, and a loaded full-suite run failed it while
+the same test passed under a filter — the shape `CLAUDE.md` names a test that only finds a defect on
+an idle machine, arriving inside the test written to close a defect. It awaits each press's own task
+handle now, which returns exactly when that wipe has finished and decremented the count; there is no
+wall clock left in it.
 
 Next branch: per the coordinator's wave-6 order.
 
