@@ -323,15 +323,18 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return ResumableTaskFileCollection.allCases.map(\.wipeCopyName)
         case .pendingServerDeletions:
             // **Named, even though it is the one store here that holds nothing the user gave
-            // Sonny** (SONNY-333). Returning no phrase was the alternative and it is the wrong one:
-            // this file is the only reason a task the user deleted while offline ever stops being
-            // held on the server, and the wipe takes it — so a person reading the sentence before
-            // an irreversible press is being told the one consequence of it they could not possibly
-            // guess. That is what this sentence is for.
+            // Sonny** (SONNY-333). The words describe the effect rather than the mechanism, in the
+            // register "what past tasks planned" already sets for a store whose file name means
+            // nothing to anybody.
             //
-            // The words describe the effect rather than the mechanism, in the register
-            // "what past tasks planned" already sets for a store whose file name means nothing to
-            // anybody.
+            // **The reason for naming it has changed, and the old one is now false** (SONNY-404,
+            // PR #207's R1). It used to be that this file "is the only reason a task the user
+            // deleted while offline ever stops being held on the server, and the wipe takes it" —
+            // so the sentence was warning a person about a consequence they could not guess. The
+            // wipe *drains* this file before it removes it now, and then deletes everything the
+            // account has on the server, so nothing is lost by its removal and there is no such
+            // warning to give. It stays named for the ordinary reason every other store here is:
+            // the sentence is a list of what the press deletes, and the press deletes this.
             return ["deletions Sonny hasn't finished"]
         }
     }

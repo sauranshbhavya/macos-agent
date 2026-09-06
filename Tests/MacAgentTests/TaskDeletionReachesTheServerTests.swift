@@ -559,11 +559,192 @@ struct EveryDeleteReachesTheServerTests {
         #expect(fixture.seen.all.map(\.path) == ["/v1/account/content"])
     }
 
+    // MARK: - An obligation belongs to the account that pressed it (PR #207's F1)
+
+    /// **F1 shape A, the cross-account data-loss path.** A presses the wipe offline; B signs in on
+    /// the same Mac; the sweep must not delete B's everything.
+    @Test
+    func anObligationLeftByOneAccountIsNeverDeliveredUnderAnother() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+        let owed = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(owed.count == 1)
+        #expect(owed.first?.accountID == "account-a")
+
+        // A signs out, B signs in — and B's launch sweep runs.
+        fixture.comeBackOnline()
+        fixture.signIn(as: "account-b")
+        fixture.seen.removeAll()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(1)
+
+        // Nothing was sent at all. Before this round the sweep issued
+        // `DELETE /v1/account/content` with B's token and deleted B's everything.
+        #expect(fixture.seen.all.isEmpty)
+        // And the obligation is kept rather than dropped: A may sign back in.
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
+    }
+
+    /// The same obligation, once the account that pressed it is back — it delivers.
+    @Test
+    func theAccountThatPressedTheWipeDeliversItsOwnObligation() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        fixture.comeBackOnline()
+        fixture.signIn(as: "account-b")
+        fixture.signIn(as: "account-a")
+        fixture.seen.removeAll()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(1)
+
+        #expect(fixture.seen.all.count == 1)
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+    }
+
+    /// **F1 shape B, the cutoff.** The obligation carries the instant of the press, and the request
+    /// carries it, so a delivery days later cannot reach content the press never covered.
+    @Test
+    func theWipesObligationCarriesTheInstantOfThePressAndTheRequestCarriesIt() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        let before = Date()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+        let after = Date()
+
+        let owed = try #require(try fixture.viewModel.pendingServerDeletionsForTests().first)
+        #expect(owed.deletedAt >= before.addingTimeInterval(-1))
+        #expect(owed.deletedAt <= after.addingTimeInterval(1))
+
+        fixture.comeBackOnline()
+        fixture.seen.removeAll()
+        fixture.viewModel.sweepPendingServerDeletions()
+        try await fixture.waitForDeliveryPasses(1)
+
+        // The path carries the bound the press was made at — without it the delete takes everything
+        // the account has, including whatever it made after the press.
+        let sent = try fixture.seen.only
+        #expect(sent.path == "/v1/account/content")
+        let query = try #require(sent.query)
+        #expect(query.contains("before="))
+    }
+
+    /// **F1's session-change door.** Signing in as somebody else discards what the previous account
+    /// owed, and says so — rather than leaving it for a sweep to aim at the wrong account.
+    @Test
+    func signingInAsAnotherAccountDiscardsTheOldAccountsObligationsAndRecordsWhy() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
+
+        fixture.comeBackOnline()
+        fixture.signIn(as: "account-b")
+        fixture.viewModel.settlePendingServerDeletionsForSessionChange()
+        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(fixture.viewModel.logStore.events.contains {
+            $0.message.contains("belonging to an account that is no longer signed in")
+        })
+    }
+
+    /// Signing out keeps them: the account that owns them may sign back in, and the delivery gate is
+    /// what holds them safe until it does.
+    @Test
+    func signingOutKeepsTheObligationsRatherThanDiscardingThem() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        fixture.signIn(as: nil)
+        fixture.viewModel.settlePendingServerDeletionsForSessionChange()
+        await fixture.viewModel.pendingServerDeletionDeliveryForTests?.value
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().count == 1)
+    }
+
+    /// **A wipe pressed with nobody signed in records nothing at all, and says why.** An obligation
+    /// that cannot name whose content it is about is the obligation that deletes the next account.
+    @Test
+    func aWipePressedSignedOutRecordsNoObligationAndTellsTheUserWhatToDo() async throws {
+        let fixture = try TaskDeletionFixture(signedIn: false)
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.contains("You're signed out"))
+        #expect(message.contains("Sign in and press Delete again."))
+    }
+
+    // MARK: - The failure branch owes what it could not do (PR #207's F2)
+
+    /// **F2.** A local file that cannot be deleted throws *after* the queue file is already gone, so
+    /// the obligation has to be recorded on that path too — or the server keeps everything with
+    /// nothing owed and nothing said.
+    @Test
+    func aWipeWhoseLocalDeleteThrowsStillOwesTheServersCopyAndSaysSo() async throws {
+        let fixture = try TaskDeletionFixture(oneLocalFileCannotBeDeleted: true)
+        defer { fixture.tearDown() }
+        fixture.goOffline()
+
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        let owed = try fixture.viewModel.pendingServerDeletionsForTests()
+        #expect(owed.count == 1)
+        #expect(owed.first?.scope == .everythingUnderTheAccount)
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.contains("could not be deleted"))
+        // The half that used to be missing entirely: the sentence names the servers.
+        #expect(message.contains("their copy is still there"))
+    }
+
+    // MARK: - The wipe holds its claim (PR #207's F3)
+
+    /// **F3.** The press now spans a server round trip, and a run started inside that window would
+    /// have every store deleted underneath it. The doors refuse instead.
+    @Test
+    func aRunCannotStartWhileTheWipeIsRunning() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.holdTheGateway()
+
+        fixture.viewModel.deleteLocalData()
+        // Synchronously after the press, with the gateway still holding the request open.
+        #expect(fixture.viewModel.isDeletingLocalData)
+        fixture.viewModel.command = "do the thing"
+        fixture.viewModel.start()
+        // Refused, and it says why rather than doing nothing: the run door reads the wipe's claim.
+        #expect(!fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.logStore.events.contains {
+            $0.message == "Not started: Sonny is deleting your data."
+        })
+
+        fixture.viewModel.localDataWipeForTests?.cancel()
+    }
+
     /// **The words, at both surfaces that state them, in each state.** Neither sentence is reachable
     /// from a test except through the source, because this repository renders no views in the suite
     /// — and the founder's decision is precisely that the words say which promise this press is.
     @Test
-    func bothSurfacesSayTheWipeReachesTheServersAndWhatHappensWhenItCannot() throws {
+    func bothSurfacesSayTheWipeReachesTheServersAndNothingAboutWhy() throws {
         let page = try MacAgentSource.read("CommandCenterView.swift")
         let dialog = try MacAgentSource.read("ContentView.swift")
 
@@ -573,8 +754,10 @@ struct EveryDeleteReachesTheServerTests {
         #expect(dialog.contains(
             "This deletes \\(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers."
         ))
-        // The other state, said before the press rather than only after it.
-        #expect(dialog.contains("If Sonny can't reach them now, it deletes their copy the next time it can."))
+        // **And the how-it-works sentence is gone** (PR #207's R5). A confirmation names what the
+        // press does; what happens when the servers cannot be reached is said afterwards, by
+        // `LocalDataDeletionCopy.outcome`, in the state it actually happened in.
+        #expect(!dialog.contains("it deletes their copy the next time it can"))
         // And what it leaves alone — the account among them, because "delete my data" and "delete my
         // account" are two promises and only one of them has a control in the app.
         #expect(dialog.contains("Generated files, API keys and your account are not deleted."))
@@ -586,11 +769,27 @@ struct EveryDeleteReachesTheServerTests {
     /// Both outcomes of the one sentence, at the type that owns it.
     @Test
     func theWipesOwnSentenceNamesBothOutcomesAndNeverGoesQuiet() {
-        let reached = LocalDataDeletionCopy.outcome(deletedFileCount: 13, serverCopyIsGone: true)
+        let reached = LocalDataDeletionCopy.outcome(deletedFileCount: 13, serverCopy: .deleted)
         #expect(reached == "Deleted 13 local data files. The copy on Sonny's servers is deleted too.")
 
-        let didNot = LocalDataDeletionCopy.outcome(deletedFileCount: 1, serverCopyIsGone: false)
-        #expect(didNot == "Deleted 1 local data file. Sonny couldn't reach its servers, so their copy is still there. Sonny deletes it the next time it can.")
+        let owed = LocalDataDeletionCopy.outcome(deletedFileCount: 1, serverCopy: .owed)
+        #expect(owed == "Deleted 1 local data file. Sonny couldn't reach its servers, so their copy is still there. Sonny deletes it the next time it can.")
+
+        // **The third state, and it is the one that must not promise a retry** (PR #207's F1):
+        // nothing was recorded, because an obligation that cannot name whose content it is about is
+        // the obligation that deletes the next account to sign in.
+        let stranded = LocalDataDeletionCopy.outcome(deletedFileCount: 2, serverCopy: .strandedWithNoSession)
+        #expect(stranded == "Deleted 2 local data files. You're signed out, so the copy on Sonny's servers is still there. Sign in and press Delete again.")
+
+        // **A local failure names the servers too** (PR #207's F2): the sentence used to talk only
+        // about a file while the servers' copy sat there.
+        let partial = LocalDataDeletionCopy.outcome(
+            deletedFileCount: 2,
+            localFailure: "vision-sessions.json",
+            serverCopy: .owed
+        )
+        #expect(partial.contains("but some could not be deleted: vision-sessions.json"))
+        #expect(partial.contains("their copy is still there"))
     }
 
     /// The narrow button's confirmation names both halves of what it reaches.
@@ -610,8 +809,19 @@ private struct TaskDeletionFixture {
     let seen = RecordedBackendRequests()
     private let host: String?
     private let network: NetworkState
+    /// Who is signed in, as the view model reads it — settable, because the defect F1 names is what
+    /// happens when it *changes* between a press and its delivery.
+    private let account: AccountBox
 
-    init(signedIn: Bool = true, queueInsideAFile: Bool = false) throws {
+    init(
+        signedIn: Bool = true,
+        queueInsideAFile: Bool = false,
+        /// One file in this fixture's own wipe list that cannot be unlinked, so
+        /// `deleteAllLocalData()` throws **after** deleting everything else — the queue among them.
+        /// That is the shape PR #207's F2 is about, and it is the shape the wipe's own list produces
+        /// rather than one invented here.
+        oneLocalFileCannotBeDeleted: Bool = false
+    ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("sonny-delete-reaches-server-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -621,6 +831,8 @@ private struct TaskDeletionFixture {
         )
         let network = NetworkState()
         self.network = network
+        let account = AccountBox(signedIn ? "account-a" : nil)
+        self.account = account
         let seen = self.seen
 
         let client: SonnyBackendClient
@@ -657,6 +869,27 @@ private struct TaskDeletionFixture {
             queueURL = blocker.appendingPathComponent("pending-server-deletions.json")
         } else {
             queueURL = root.appendingPathComponent("pending-server-deletions.json")
+        }
+
+        // **The wipe's own list, with the undeletable file *last but one*** so the queue really is
+        // deleted before the throw — which is the ordering PR #207's F2 turns on:
+        // `deleteAllLocalData` collects failures and throws only after it has deleted everything it
+        // could, so the queue file is always gone by the time the caller sees the error.
+        var wipeFileURLs: [URL] = [
+            queueURL,
+            root.appendingPathComponent("task-history.json"),
+            root.appendingPathComponent("vision-sessions.json"),
+            root.appendingPathComponent("task-plan-details.json")
+        ]
+        if oneLocalFileCannotBeDeleted {
+            // A *directory* where the wipe expects a file: `removeItem` on a non-empty directory
+            // whose parent is not writable fails, and the simplest reliable refusal here is a
+            // directory containing a file, which `removeItem` will not unlink as a plain file.
+            let blocked = root.appendingPathComponent("blocked-store", isDirectory: true)
+            try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+            try Data("held".utf8).write(to: blocked.appendingPathComponent("child"), options: .atomic)
+            try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: blocked.path)
+            wipeFileURLs.append(blocked)
         }
 
         let suiteName = "TaskDeletionReachesTheServerTests-\(UUID().uuidString)"
@@ -736,13 +969,11 @@ private struct TaskDeletionFixture {
             // and the assertion would have been about a file nobody touched. The real list is
             // `LocalDataDeletionService.defaultStoreFileURLs()`, which points under `~/Library` and
             // is never what a fixture passes.
-            localDataDeletionService: LocalDataDeletionService(fileURLs: [
-                queueURL,
-                root.appendingPathComponent("task-history.json"),
-                root.appendingPathComponent("vision-sessions.json"),
-                root.appendingPathComponent("task-plan-details.json")
-            ]),
+            localDataDeletionService: LocalDataDeletionService(fileURLs: wipeFileURLs),
             backendClient: client,
+            // Movable, because F1's shape A is precisely what happens when this changes between a
+            // press and its delivery.
+            accountIdentity: { account.current },
             userDefaults: userDefaults,
             whitelist: PathWhitelist(roots: [root])
         )
@@ -867,6 +1098,12 @@ private struct TaskDeletionFixture {
         }
     }
 
+    /// The account the view model reads right now.
+    var currentAccount: String? { account.current }
+
+    /// Somebody else signs in on this Mac — the second half of F1's shape A.
+    func signIn(as accountID: String?) { account.current = accountID }
+
     func goOffline() { network.set(.failure(URLError(.notConnectedToInternet))) }
 
     func comeBackOnline() { network.set(NetworkState.ok) }
@@ -885,7 +1122,23 @@ private struct TaskDeletionFixture {
         if let host {
             BackendStubURLProtocol.unregister(host: host)
         }
+        // The immutable flag has to come off or the whole temp root survives the run.
+        let blocked = root.appendingPathComponent("blocked-store", isDirectory: true)
+        try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: blocked.path)
         try? FileManager.default.removeItem(at: root)
+    }
+}
+
+/// The signed-in account, mutable from a test and readable from the view model's synchronous seam.
+private final class AccountBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    init(_ value: String?) { self.value = value }
+
+    var current: String? {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
     }
 }
 

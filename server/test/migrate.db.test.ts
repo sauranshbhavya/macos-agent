@@ -108,8 +108,13 @@ describeDb("migrations against a real Postgres", () => {
    * is the kind of schema change whose absence stays invisible until a row that should have been
    * refused lands. `0020` moved a CHECK too and passed only because it added columns beside it.
    *
-   * `contype = 'c'` is real CHECKs; NOT NULL is not a `pg_constraint` row on this server version, so
-   * this adds no noise that would make every column change register twice.
+   * **And every other kind of constraint, plus nullability, defaults and column comments, since
+   * PR #207's R6.** The `check`-only arm closed the case that had just bitten and left the same
+   * shape open beside it: a migration whose only effect is a foreign key, a `SET NOT NULL`, a
+   * `SET DEFAULT` or a `COMMENT ON COLUMN` was still invisible, and `0020` adds two column comments
+   * this could not see. The constraint arm drops its `contype` filter — a foreign key and a unique
+   * constraint are schema too — and two arms beside it read what `information_schema.columns`'
+   * `data_type` alone does not.
    */
   const schemaFingerprint = async (): Promise<string> => {
     const { rows } = await client.query<{ line: string }>(
@@ -129,10 +134,20 @@ describeDb("migrations against a real Postgres", () => {
            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'sonny'
          UNION ALL
-         SELECT 'check:' || c.conrelid::regclass::text || '.' || c.conname || ':'
+         SELECT 'constraint:' || c.conrelid::regclass::text || '.' || c.conname || ':'
                 || pg_get_constraintdef(c.oid)
            FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
-          WHERE n.nspname = 'sonny' AND c.contype = 'c'
+          WHERE n.nspname = 'sonny'
+         UNION ALL
+         SELECT 'columndetail:' || table_name || '.' || column_name || ':'
+                || is_nullable || ':' || coalesce(column_default, '-')
+           FROM information_schema.columns WHERE table_schema = 'sonny'
+         UNION ALL
+         SELECT 'comment:' || c.relname || '.' || a.attname || ':'
+                || coalesce(col_description(c.oid, a.attnum), '-')
+           FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'sonny' AND a.attnum > 0 AND NOT a.attisdropped
        ) parts ORDER BY line`,
     );
     return rows.map((r) => r.line).join("\n");

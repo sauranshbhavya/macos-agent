@@ -533,7 +533,7 @@ here only so nobody adds a second one.
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
 | `DELETE /v1/tasks` | yes | Delete several tasks' retained content in one call | SONNY-404 |
 | `DELETE /v1/tasks/{task_id}/screenshots` | yes | Delete this task's screenshots and nothing else | SONNY-404 |
-| `DELETE /v1/account/content` | yes | Delete everything retained for this account; the account stays open | SONNY-404 |
+| `DELETE /v1/account/content` | yes | Delete everything retained for this account at or before an optional `before`; the account stays open | SONNY-404 |
 | `POST /v1/billing/checkout` | yes | Where to send this account to subscribe | SONNY-211 |
 | `POST /v1/billing/webhook` | HMAC signature over the raw body, not a Bearer token | Subscription lifecycle from the payment provider | SONNY-211 |
 | `POST /v1/billing/portal` | yes | Where to send this account to manage an existing subscription | SONNY-216 |
@@ -885,6 +885,16 @@ renamed.
 - **There is no identifier on this path**, deliberately. The account comes from the token the gate
   already verified, so there is nothing here for a client to get wrong and no shape in which this
   Mac could name another account.
+- **`?before=<RFC 3339 instant>` is optional and bounds what is deleted to content that happened at
+  or before it.** Absent, the route deletes everything, which is what it did before this parameter
+  existed — so it is additive under 8.1's "may add an **optional** request field" and a shipped
+  client that sends none behaves identically. An unparseable value is `400 request.invalid`.
+  Each table is bounded on its own notion of when the content happened: `occurred_at` on the live
+  row, `source_occurred_at` on the training-snapshot copy, and `claimed_at` on a stored response
+  body. **It exists because the Mac may deliver this delete long after the press**: its wipe queues
+  an obligation when the gateway is unreachable, and without a bound that delivery would take content
+  the user created *after* the press, which the press never promised. The client sends the instant of
+  the press.
 - **Safe to repeat**, which is what lets the Mac retry it from its queue: a second call finds nothing
   and answers `200` with zeroes. It is `404`-free for the same reason 4.6 is: a delete that is
   already true is not an error.

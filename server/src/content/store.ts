@@ -545,14 +545,36 @@ export async function deleteContentForAccount(
   // parameter is a decision nobody has to make and therefore one nobody reads (SONNY-350's store
   // locations). Both callers name their act.
   reason: "account" | "account_content",
+  /**
+   * **The cutoff, and it is what stops a delayed delete reaching content it never covered**
+   * (SONNY-404, PR #207's F1). The Mac queues this delete when it cannot reach the gateway and may
+   * deliver it days later, by which time the user has signed in and worked; without a bound the
+   * delivery would take everything, including what the press never promised. `undefined` is the
+   * account-close path, which really does mean everything.
+   *
+   * Each table is bounded on its own notion of when the content happened: `occurred_at` on the live
+   * row, `source_occurred_at` on the snapshot copy of it, and — for the stored response bodies —
+   * `claimed_at`, which is when the key was taken. The caller clears those, so the bound is passed
+   * to `deleteStoredResponsesForAccount` rather than applied here.
+   */
+  occurredAtOrBefore?: Date,
 ): Promise<DeletionOutcome> {
   await client.query("BEGIN");
   try {
-    const removed = await removeSnapshotMembers(client, "account_id = $1", [accountId]);
-    const content = await client.query(
-      "DELETE FROM sonny.retained_content WHERE account_id = $1",
-      [accountId],
-    );
+    const removed =
+      occurredAtOrBefore === undefined
+        ? await removeSnapshotMembers(client, "account_id = $1", [accountId])
+        : await removeSnapshotMembers(client, "account_id = $1 AND source_occurred_at <= $2", [
+            accountId,
+            occurredAtOrBefore,
+          ]);
+    const content =
+      occurredAtOrBefore === undefined
+        ? await client.query("DELETE FROM sonny.retained_content WHERE account_id = $1", [accountId])
+        : await client.query(
+            "DELETE FROM sonny.retained_content WHERE account_id = $1 AND occurred_at <= $2",
+            [accountId, occurredAtOrBefore],
+          );
     const outcome: DeletionOutcome = {
       contentRows: content.rowCount ?? 0,
       snapshotRows: removed.rows,

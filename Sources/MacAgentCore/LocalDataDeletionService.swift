@@ -114,15 +114,46 @@ public enum LocalDataDeletionCopy {
     /// no network and no session — and the sentence covers both without asking the user to work out
     /// which they are in. What actually retries it is the launch sweep and every later delete's
     /// delivery pass, and neither is something the product explains.
-    public static func outcome(deletedFileCount: Int, serverCopyIsGone: Bool) -> String {
+    /// What became of the servers' copy — three states, not two (SONNY-404, PR #207's F1).
+    public enum ServerCopy: Equatable, Sendable {
+        /// The gateway answered and took it.
+        case deleted
+        /// It could not be reached, and an obligation is recorded: a later pass finishes the job.
+        case owed
+        /// It could not be reached **and nothing is owed**, because nobody was signed in — so this
+        /// Mac cannot name whose content it is about. Recording an obligation without an account is
+        /// the data-loss path F1 is: the next account to sign in would be the one whose everything
+        /// went. The user is told what to do instead.
+        case strandedWithNoSession
+    }
+
+    public static func outcome(
+        deletedFileCount: Int,
+        localFailure: String? = nil,
+        serverCopy: ServerCopy
+    ) -> String {
         let noun = deletedFileCount == 1 ? "local data file" : "local data files"
-        let local = "Deleted \(deletedFileCount) \(noun)."
-        guard serverCopyIsGone else {
+        let local: String
+        if let localFailure {
+            // **The failure sentence names the servers too** (PR #207's F2). It used to talk only
+            // about a local file while the servers' copy sat there, which is the one thing this
+            // press may never be silent about.
+            local = "Deleted \(deletedFileCount) \(noun), but some could not be deleted: \(localFailure)"
+        } else {
+            local = "Deleted \(deletedFileCount) \(noun)."
+        }
+        switch serverCopy {
+        case .deleted:
+            return local + " The copy on Sonny's servers is deleted too."
+        case .owed:
             return local
                 + " Sonny couldn't reach its servers, so their copy is still there."
                 + " Sonny deletes it the next time it can."
+        case .strandedWithNoSession:
+            return local
+                + " You're signed out, so the copy on Sonny's servers is still there."
+                + " Sign in and press Delete again."
         }
-        return local + " The copy on Sonny's servers is deleted too."
     }
 
     /// Oxford-comma join. Written out rather than `joined(separator:)` because the last separator

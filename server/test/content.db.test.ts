@@ -1399,6 +1399,62 @@ describeDb("the content store, its clocks, and what reaches training", () => {
         expect(deletions[0]!.contentRows).toBe(1);
       });
 
+      itUnderHangBackstop("deletes only content at or before ?before, leaving what came after", async () => {
+        // **The cutoff, and the data-loss path it closes** (PR #207's F1). The Mac queues this
+        // delete when it cannot reach the gateway and may deliver it days later; without a bound the
+        // delivery takes content the user made after the press, which the press never promised.
+        const old = new Date(Date.now() - 60 * 60 * 1000);
+        await insertRetainedContent(client, content({ taskId: "old", accountId: CONSENTING }));
+        await client.query("UPDATE sonny.retained_content SET occurred_at = $1 WHERE task_id = 'old'", [old]);
+        await insertRetainedContent(client, content({ taskId: "new", accountId: CONSENTING }));
+
+        const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+        const response = await app().inject({
+          method: "DELETE",
+          url: `/v1/account/content?before=${encodeURIComponent(cutoff.toISOString())}`,
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body).requests_deleted).toBe(1);
+        const rows = await contentRows();
+        expect(rows.map((row) => row["task_id"])).toEqual(["new"]);
+      });
+
+      itUnderHangBackstop("bounds the training-snapshot copies by the same cutoff", async () => {
+        const old = new Date(Date.now() - 60 * 60 * 1000);
+        await insertRetainedContent(client, content({ taskId: "old", accountId: CONSENTING }));
+        await client.query("UPDATE sonny.retained_content SET occurred_at = $1 WHERE task_id = 'old'", [old]);
+        await insertRetainedContent(client, content({ taskId: "new", accountId: CONSENTING }));
+        const built = await buildTrainingSnapshot(client, { label: "cutoff-corpus" });
+        expect(built.memberCount).toBe(2);
+
+        const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+        await app().inject({
+          method: "DELETE",
+          url: `/v1/account/content?before=${encodeURIComponent(cutoff.toISOString())}`,
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+
+        const { rows } = await client.query<{ task_id: string }>(
+          "SELECT task_id FROM sonny.training_snapshot_member",
+        );
+        expect(rows.map((row) => row.task_id)).toEqual(["new"]);
+      });
+
+      itUnderHangBackstop("refuses an unreadable ?before rather than deleting everything", async () => {
+        // The direction that matters: an unparseable bound must not fall through to "no bound".
+        await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
+        const response = await app().inject({
+          method: "DELETE",
+          url: "/v1/account/content?before=not-an-instant",
+          headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(JSON.parse(response.body).error.code).toBe("request.invalid");
+        expect(await contentRows()).toHaveLength(1);
+      });
+
       itUnderHangBackstop("is safe to repeat, which is what lets the Mac retry it from its queue", async () => {
         await insertRetainedContent(client, content({ taskId: "a", accountId: CONSENTING }));
         const send = async () =>

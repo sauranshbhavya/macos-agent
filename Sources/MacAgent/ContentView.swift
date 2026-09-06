@@ -39,13 +39,19 @@ extension View {
             // fewer than the line on the page behind it, so the two surfaces describing one
             // irreversible press disagreed with each other as well as with the wipe. What stays
             // written here is the part that is this dialog's alone: what the press does *not* take.
-            // **Three sentences, one per thing a person needs before an irreversible press**
-            // (SONNY-404, founder decision 2026-09-04 restated 2026-09-05): what it reaches, what
-            // happens if the servers cannot be reached right now, and what it leaves alone. The
-            // account is named in that last list because "delete my data" and "delete my account"
-            // are two promises and only one of them is this button. This said "from this Mac" for
-            // one round, under a reversal that was a coordinator's error.
-            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers. If Sonny can't reach them now, it deletes their copy the next time it can. Generated files, API keys and your account are not deleted.")
+            // **Two sentences: what the press reaches, and what it leaves alone** (SONNY-404,
+            // founder decision 2026-09-04 restated 2026-09-05). The account is named in the second
+            // because "delete my data" and "delete my account" are two promises and only one of
+            // them is this button. This said "from this Mac" for one round, under a reversal that
+            // was a coordinator's error.
+            //
+            // **A third sentence stood here and is gone** (PR #207's R5): "If Sonny can't reach them
+            // now, it deletes their copy the next time it can." That is how-it-works copy in a
+            // pre-press confirmation, which the standing rule forbids, and the founder's condition
+            // is about what the press says *afterwards* — which `LocalDataDeletionCopy.outcome`
+            // covers in all three of its states, including the signed-out one that tells the user
+            // what to do.
+            Text("This deletes \(LocalDataDeletionCopy.everythingItTakes) from this Mac and from Sonny's servers. Generated files, API keys and your account are not deleted.")
         }
     }
 }

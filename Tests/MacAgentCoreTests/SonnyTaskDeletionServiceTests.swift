@@ -12,6 +12,11 @@ import Testing
 @Suite
 @MainActor
 struct SonnyTaskDeletionServiceTests {
+    /// One signed-in account for the whole suite. Every obligation carries the account it was
+    /// pressed under since SONNY-404's second fix round; these tests are about the delivery pass's
+    /// four outcomes rather than about who pressed, so they all run under one.
+    private nonisolated static let account = "account-a"
+
     private func makeRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("sonny-deletion-service-\(UUID().uuidString)", isDirectory: true)
@@ -47,7 +52,7 @@ struct SonnyTaskDeletionServiceTests {
             return DeletionStubReplies.deleted
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "task-a", deletedAt: Self.epoch)
 
         let outcome = await service.deliverPendingDeletions()
@@ -83,7 +88,7 @@ struct SonnyTaskDeletionServiceTests {
             seen.append(request)
             return DeletionStubReplies.deleted
         }
-        let service = SonnyTaskDeletionService(client: backend.client, store: makeStore(at: root))
+        let service = SonnyTaskDeletionService(client: backend.client, store: makeStore(at: root), accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "a/../v1/account", deletedAt: Self.epoch)
 
         _ = await service.deliverPendingDeletions()
@@ -105,7 +110,7 @@ struct SonnyTaskDeletionServiceTests {
             seen.append(request)
             return DeletionStubReplies.deleted
         }
-        let service = SonnyTaskDeletionService(client: backend.client, store: makeStore(at: root))
+        let service = SonnyTaskDeletionService(client: backend.client, store: makeStore(at: root), accountIdentity: { Self.account })
 
         let outcome = await service.deliverPendingDeletions()
 
@@ -130,7 +135,7 @@ struct SonnyTaskDeletionServiceTests {
             DeletionStubReplies.reply(200, #"{"task_id":"t","deleted_at":"2026-08-30T00:00:00Z","requests_deleted":0}"#)
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "never-stored", deletedAt: Self.epoch)
 
         let outcome = await service.deliverPendingDeletions()
@@ -160,7 +165,7 @@ struct SonnyTaskDeletionServiceTests {
             return DeletionStubReplies.deleted
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "someone-elses", deletedAt: Self.epoch)
         try service.recordDeletedTask(id: "mine", deletedAt: Self.epoch.addingTimeInterval(60))
 
@@ -190,7 +195,7 @@ struct SonnyTaskDeletionServiceTests {
             DeletionStubReplies.reply(400, #"{"error":{"code":"request.invalid","message":"A task identifier is required.","request_id":"r"}}"#)
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "malformed", deletedAt: Self.epoch)
 
         let outcome = await service.deliverPendingDeletions()
@@ -221,7 +226,7 @@ struct SonnyTaskDeletionServiceTests {
             return DeletionStubReplies.reply(503, #"{"error":{"code":"server.unavailable","message":"Try later.","request_id":"r"}}"#)
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         for index in 0..<3 {
             try service.recordDeletedTask(id: "task-\(index)", deletedAt: Self.epoch.addingTimeInterval(Double(index)))
         }
@@ -259,7 +264,7 @@ struct SonnyTaskDeletionServiceTests {
             session: stub.session
         )
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: client, store: store)
+        let service = SonnyTaskDeletionService(client: client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "task-a", deletedAt: Self.epoch)
 
         let outcome = await service.deliverPendingDeletions()
@@ -282,7 +287,7 @@ struct SonnyTaskDeletionServiceTests {
             offline.isOn ? .failure(URLError(.notConnectedToInternet)) : DeletionStubReplies.deleted
         }
         let store = makeStore(at: root)
-        let service = SonnyTaskDeletionService(client: backend.client, store: store)
+        let service = SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
         try service.recordDeletedTask(id: "task-a", deletedAt: Self.epoch)
 
         offline.turnOn()
@@ -314,7 +319,7 @@ struct SonnyTaskDeletionServiceTests {
             return DeletionStubReplies.deleted
         }
 
-        let outcome = await SonnyTaskDeletionService(client: backend.client, store: store)
+        let outcome = await SonnyTaskDeletionService(client: backend.client, store: store, accountIdentity: { Self.account })
             .deliverPendingDeletions()
 
         #expect(outcome == .nothingOwed)

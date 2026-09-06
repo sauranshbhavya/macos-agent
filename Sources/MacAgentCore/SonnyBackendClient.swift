@@ -1046,10 +1046,14 @@ public actor SonnyBackendClient {
     /// The body is not decoded, for the reason the two calls above give about their own counts:
     /// nothing on this Mac renders `requests_deleted`, and the wipe's words turn on whether the call
     /// succeeded rather than on what it took.
-    public func deleteAccountContent() async throws {
+    /// `before` is the instant the wipe was pressed, and the route deletes only content at or
+    /// before it (SONNY-404, PR #207's F1). An obligation the queue delivers days later would
+    /// otherwise reach content the press never covered — the user signs in, works for a week, and
+    /// a launch sweep takes it all.
+    public func deleteAccountContent(before cutoff: Date) async throws {
         _ = try await send(SonnyBackendRequest(
             method: "DELETE",
-            path: "/v1/account/content",
+            path: "/v1/account/content?before=" + Self.iso8601(cutoff),
             body: nil,
             authentication: .bearer,
             // §9.3's naturally-idempotent family, which this route joins: a second call finds
@@ -1058,6 +1062,17 @@ public actor SonnyBackendClient {
             timeout: SonnyBackendTimeouts.auth,
             isRetrySafe: true
         ))
+    }
+
+    /// The one instant format this client puts on a wire, per §2.1.
+    ///
+    /// Built per call rather than held statically: `ISO8601DateFormatter` is not `Sendable`, and a
+    /// shared one behind an actor would be a mutable box reachable from a nonisolated context. This
+    /// runs once per account-wipe delivery, which is at most a handful of times per launch.
+    static func iso8601(_ instant: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: instant)
     }
 
     // MARK: - Clock

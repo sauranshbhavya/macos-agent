@@ -12,6 +12,9 @@ import Testing
 /// One recorded upstream request, read the way `URLProtocol` actually sees one.
 public struct RecordedBackendRequest: @unchecked Sendable {
     public let path: String
+    /// The URL's query string, or `nil` when it has none. Read by SONNY-404's cutoff test: a bound
+    /// this client sends as a query parameter is invisible in `path`.
+    public let query: String?
     public let method: String?
     public let authorization: String?
     public let idempotencyKey: String?
@@ -28,6 +31,7 @@ public struct RecordedBackendRequest: @unchecked Sendable {
 
     public init(_ request: URLRequest) {
         path = request.url?.path ?? ""
+        query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.query }
         method = request.httpMethod
         authorization = request.value(forHTTPHeaderField: "Authorization")
         idempotencyKey = request.value(forHTTPHeaderField: "Idempotency-Key")

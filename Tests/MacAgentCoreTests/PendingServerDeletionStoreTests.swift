@@ -21,13 +21,17 @@ struct PendingServerDeletionStoreTests {
     }
 
     private static let epoch = Date(timeIntervalSince1970: 1_772_000_000)
+    /// One signed-in account for the whole suite. Every obligation carries the account it was
+    /// pressed under since SONNY-404's second fix round, and these tests are about the queue's own
+    /// mechanics rather than about who pressed.
+    private static let account = "account-a"
 
     @Test
     func anEnqueuedDeletionSurvivesAFreshStoreOverTheSameFile() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try makeStore(at: root).enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try makeStore(at: root).enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         // A second store over the same URL is the relaunch: nothing is carried in memory, so this
         // reads what was actually written. That is the whole reason this is a file at all.
@@ -62,8 +66,13 @@ struct PendingServerDeletionStoreTests {
         #expect(queued.first?.taskIDs == ["task-a"])
         #expect(queued.first?.scope == .wholeTask)
         // And it is filed under today's key, so the doors that look for it find it: removing by task
-        // id — which is what a withdrawn delete does — takes this entry.
-        try makeStore(at: root).remove(taskID: "task-a")
+        // id — which is what a withdrawn delete does — takes this entry. **The account is part of
+        // the key since SONNY-404's second fix round**, so a legacy entry is withdrawn by naming the
+        // account it has, which is none: an entry written before the field existed cannot be matched
+        // by a withdrawal that claims one.
+        try makeStore(at: root).remove(taskID: "task-a", accountID: Self.account)
+        #expect(try makeStore(at: root).loadAll().count == 1)
+        try makeStore(at: root).remove(taskID: "task-a", accountID: nil)
         #expect(try makeStore(at: root).loadAll().isEmpty)
     }
 
@@ -76,7 +85,7 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let ids = (0..<(PendingServerDeletionStore.maxItems * 3)).map { "task-\($0)" }
 
-        try makeStore(at: root).enqueue(taskIDs: ids, scope: .wholeTask, deletedAt: Self.epoch)
+        try makeStore(at: root).enqueue(taskIDs: ids, scope: .wholeTask, accountID: Self.account, deletedAt: Self.epoch)
 
         let queued = try makeStore(at: root).loadAll()
         #expect(queued.count == 1)
@@ -92,8 +101,8 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskIDs: ["a", "b", "c"], scope: .wholeTask, deletedAt: Self.epoch)
-        try store.enqueue(taskIDs: ["c", "b", "a"], scope: .wholeTask, deletedAt: Self.epoch.addingTimeInterval(60))
+        try store.enqueue(taskIDs: ["a", "b", "c"], scope: .wholeTask, accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskIDs: ["c", "b", "a"], scope: .wholeTask, accountID: Self.account, deletedAt: Self.epoch.addingTimeInterval(60))
 
         let queued = try store.loadAll()
         #expect(queued.count == 1)
@@ -111,14 +120,14 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskIDs: ["task-a"], scope: .screenshotsOnly, deletedAt: Self.epoch)
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch.addingTimeInterval(60))
+        try store.enqueue(taskIDs: ["task-a"], scope: .screenshotsOnly, accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch.addingTimeInterval(60))
 
         #expect(try store.loadAll().map(\.scope) == [.screenshotsOnly, .wholeTask])
 
         // And a withdrawal names one of them. `remove(taskID:)` is the whole-task door — the one
         // `deleteTask` calls when its local delete throws — so the screenshots obligation stays.
-        try store.remove(taskID: "task-a")
+        try store.remove(taskID: "task-a", accountID: Self.account)
         #expect(try store.loadAll().map(\.scope) == [.screenshotsOnly])
     }
 
@@ -130,8 +139,8 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskIDs: [], scope: .wholeTask, deletedAt: Self.epoch)
-        try store.enqueue(taskIDs: ["", "  "], scope: .wholeTask, deletedAt: Self.epoch)
+        try store.enqueue(taskIDs: [], scope: .wholeTask, accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskIDs: ["", "  "], scope: .wholeTask, accountID: Self.account, deletedAt: Self.epoch)
 
         #expect(try store.loadAll().isEmpty)
         // Written as an empty queue rather than not written at all is equally fine; what must not
@@ -157,7 +166,7 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         let bytes = try Data(contentsOf: store.fileURL)
         #expect(bytes.starts(with: LocalStorageEncryption.fileHeader))
@@ -178,8 +187,8 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch.addingTimeInterval(3600))
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch.addingTimeInterval(3600))
 
         let queued = try store.loadAll()
         #expect(queued.count == 1)
@@ -199,9 +208,9 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskID: "later", deletedAt: Self.epoch.addingTimeInterval(60))
-        try store.enqueue(taskID: "b-same-second", deletedAt: Self.epoch)
-        try store.enqueue(taskID: "a-same-second", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "later", accountID: Self.account, deletedAt: Self.epoch.addingTimeInterval(60))
+        try store.enqueue(taskID: "b-same-second", accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "a-same-second", accountID: Self.account, deletedAt: Self.epoch)
 
         #expect(try store.loadAll().flatMap(\.taskIDs) == ["a-same-second", "b-same-second", "later"])
         // Twice, over a fresh store, because the hazard is an order that is stable within one load
@@ -220,6 +229,7 @@ struct PendingServerDeletionStoreTests {
         for index in 0...PendingServerDeletionStore.maxItems {
             try store.enqueue(
                 taskID: "task-\(index)",
+                accountID: Self.account,
                 deletedAt: Self.epoch.addingTimeInterval(Double(index) * 60)
             )
         }
@@ -237,10 +247,10 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
-        try store.enqueue(taskID: "task-b", deletedAt: Self.epoch.addingTimeInterval(60))
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-b", accountID: Self.account, deletedAt: Self.epoch.addingTimeInterval(60))
 
-        try store.remove(taskID: "task-a")
+        try store.remove(taskID: "task-a", accountID: Self.account)
 
         #expect(try makeStore(at: root).loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
@@ -254,8 +264,8 @@ struct PendingServerDeletionStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
 
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
-        try store.remove(taskID: "task-never-queued")
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
+        try store.remove(taskID: "task-never-queued", accountID: Self.account)
 
         #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-a"])
     }
@@ -275,7 +285,7 @@ struct PendingServerDeletionStoreTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(at: root)
-        try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         try Data("not this store's bytes".utf8).write(to: store.fileURL, options: .atomic)
 
@@ -287,7 +297,7 @@ struct PendingServerDeletionStoreTests {
         #expect(try Data(contentsOf: try #require(setAside.first)) == Data("not this store's bytes".utf8))
         // And the queue works again immediately — which is the point, since the alternative was
         // every future Delete failing to record its obligation.
-        try store.enqueue(taskID: "task-b", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "task-b", accountID: Self.account, deletedAt: Self.epoch)
         #expect(try store.loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
 
@@ -342,7 +352,7 @@ struct PendingServerDeletionStoreTests {
         let good = PendingServerDeletionStore(
             fileURL: keyed.appendingPathComponent("pending-server-deletions.json")
         )
-        try good.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try good.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         let badKey = PendingServerDeletionStore(
             fileURL: good.fileURL,
@@ -390,7 +400,7 @@ struct PendingServerDeletionStoreTests {
             encryption: LocalStorageEncryption(keyManager: FixedKeyManager(byte: 0x42)),
             insideTheCriticalSection: nil
         )
-        try written.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try written.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         let otherKey = PendingServerDeletionStore(
             fileURL: fileURL,
@@ -402,7 +412,7 @@ struct PendingServerDeletionStoreTests {
         #expect(try otherKey.loadAll().isEmpty)
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fileURL).count == 1)
         // Service is restored: the next Delete records its obligation instead of failing forever.
-        try otherKey.enqueue(taskID: "task-b", deletedAt: Self.epoch)
+        try otherKey.enqueue(taskID: "task-b", accountID: Self.account, deletedAt: Self.epoch)
         #expect(try otherKey.loadAll().flatMap(\.taskIDs) == ["task-b"])
     }
 
@@ -445,12 +455,13 @@ struct PendingServerDeletionStoreTests {
         for index in 0..<(PendingServerDeletionStore.maxItems - 1) {
             try store.enqueue(
                 taskID: "filler-\(String(format: "%04d", index))",
+                accountID: Self.account,
                 deletedAt: Self.epoch.addingTimeInterval(60)
             )
         }
         // Two at one instant, older than every filler above, and one newer than all of them.
-        try store.enqueue(taskID: "tie-a", deletedAt: Self.epoch)
-        try store.enqueue(taskID: "tie-b", deletedAt: Self.epoch)
+        try store.enqueue(taskID: "tie-a", accountID: Self.account, deletedAt: Self.epoch)
+        try store.enqueue(taskID: "tie-b", accountID: Self.account, deletedAt: Self.epoch)
 
         let queued = try store.loadAll()
         #expect(queued.count == PendingServerDeletionStore.maxItems)
@@ -516,11 +527,11 @@ struct PendingServerDeletionStoreTests {
 
             switch door {
             case "enqueue":
-                try store.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+                try store.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
             case "loadAll":
                 _ = try store.loadAll()
             default:
-                try store.remove(taskID: "task-a")
+                try store.remove(taskID: "task-a", accountID: Self.account)
             }
 
             #expect(heldDuring.observed == true, "\(door) ran its critical section without the file's lock")
@@ -562,7 +573,7 @@ struct PendingServerDeletionStoreTests {
         )
         _ = holder
 
-        try other.enqueue(taskID: "task-a", deletedAt: Self.epoch)
+        try other.enqueue(taskID: "task-a", accountID: Self.account, deletedAt: Self.epoch)
 
         #expect(observed.observed == true, "two stores over one path did not share a lock")
         // The other direction, so this cannot pass by every store sharing one global lock.

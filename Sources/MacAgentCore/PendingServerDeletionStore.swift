@@ -65,12 +65,31 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
     /// What the delete reached on the Mac, and therefore what it has to reach on the server.
     public var scope: Scope
 
+    /// **The account this obligation was pressed under, and the reason it exists is a data-loss
+    /// path** (SONNY-404, PR #207's F1). Nil in a file written before this field did.
+    ///
+    /// Every per-task obligation had one protection against being delivered under the wrong account
+    /// and it was the *server's*: §4.6 answers `404` for a task id belonging to somebody else, so a
+    /// misdirected delete refused itself. `.everythingUnderTheAccount` carries no id by design, so
+    /// there was nothing for that refusal to fire on, and `DELETE /v1/account/content` takes its
+    /// account from the bearer token — correct server-side, and exactly what removed the last bound.
+    /// A wipe pressed offline by one user, followed by a second signing in on the same Mac, deleted
+    /// the second user's everything.
+    ///
+    /// So the bound is carried here instead: the Supabase user id, which is an *account* identifier
+    /// and says nothing about what the user did — the property that let the task ids in beside it.
+    public var accountID: String?
+
     /// When the user pressed Delete.
     ///
-    /// Read for two things and neither is display: the total order the queue is delivered in, and
-    /// which entry the cap drops when the queue is full. **Nothing renders it**, which is why it is
-    /// the only field here besides the keys — a queue entry that carried the command text, or the
-    /// time a task ran, would be a record of the deleted task surviving the deletion.
+    /// Read for three things and none is display: the total order the queue is delivered in, which
+    /// entry the cap drops when the queue is full, and — for `.everythingUnderTheAccount` — the
+    /// **cutoff** the delete carries, so an obligation delivered days later cannot reach content the
+    /// press never covered (SONNY-404, PR #207's F1).
+    ///
+    /// **Nothing renders it**, and it says nothing about any task: it is the moment of a press the
+    /// user made, not the time anything ran. (PR #207's R2: this file used to claim it held "no
+    /// timestamp", which was false of the field itself while being true of the thing that matters.)
     public var deletedAt: Date
 
     /// The dictionary key this entry is filed under. Derived, never stored.
@@ -81,19 +100,27 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
     /// ids, so an identical press coalesces the same way while two different sets stay two
     /// obligations. The scope is part of every key: a task can owe both a whole-task delete and a
     /// screenshots-only one, and those are different asks.
-    public var id: String { Self.key(scope: scope, taskIDs: taskIDs) }
+    public var id: String { Self.key(scope: scope, taskIDs: taskIDs, accountID: accountID) }
 
-    public init(taskIDs: [String], scope: Scope, deletedAt: Date) {
+    public init(taskIDs: [String], scope: Scope, accountID: String?, deletedAt: Date) {
         self.taskIDs = taskIDs
         self.scope = scope
+        self.accountID = accountID
         self.deletedAt = deletedAt
     }
 
-    public init(taskID: String, deletedAt: Date) {
-        self.init(taskIDs: [taskID], scope: .wholeTask, deletedAt: deletedAt)
+    public init(taskID: String, accountID: String?, deletedAt: Date) {
+        self.init(taskIDs: [taskID], scope: .wholeTask, accountID: accountID, deletedAt: deletedAt)
     }
 
-    static func key(scope: Scope, taskIDs: [String]) -> String {
+    /// **The account is part of the key**, so two accounts signed into one Mac keep two obligations
+    /// rather than one overwriting the other — and so a legacy entry with no account is a different
+    /// entry from a new one with the same ids.
+    static func key(scope: Scope, taskIDs: [String], accountID: String?) -> String {
+        "\(accountID ?? "-")|" + unscopedKey(scope: scope, taskIDs: taskIDs)
+    }
+
+    private static func unscopedKey(scope: Scope, taskIDs: [String]) -> String {
         guard namesTasks(scope) else {
             // One obligation of this kind ever, so a second wipe that could not reach the gateway
             // coalesces onto the first rather than queueing a duplicate of a request that is
@@ -123,6 +150,7 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
         case taskID
         case taskIDs
         case scope
+        case accountID
         case deletedAt
     }
 
@@ -139,6 +167,11 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         deletedAt = try container.decode(Date.self, forKey: .deletedAt)
         scope = try container.decodeIfPresent(Scope.self, forKey: .scope) ?? .wholeTask
+        // Absent in a file written before SONNY-404's second fix round. Nil is read as "pressed
+        // under an account this Mac can no longer name", which the delivery gate treats as the
+        // legacy per-task case §4.6's `404` already protects — and which no `.everythingUnderTheAccount`
+        // entry can ever be, because the wipe refuses to record one without an account.
+        accountID = try container.decodeIfPresent(String.self, forKey: .accountID)
         if let ids = try container.decodeIfPresent([String].self, forKey: .taskIDs) {
             taskIDs = ids
         } else {
@@ -153,6 +186,7 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(taskIDs, forKey: .taskIDs)
         try container.encode(scope, forKey: .scope)
+        try container.encodeIfPresent(accountID, forKey: .accountID)
         try container.encode(deletedAt, forKey: .deletedAt)
     }
 }
@@ -193,9 +227,14 @@ public struct PendingServerDeletion: Codable, Equatable, Sendable, Identifiable 
 /// 3. **This file is then deleted with every other store**, so no task id survives the press.
 /// 4. **If step 2 could not reach the gateway, one obligation is written back**:
 ///    `.everythingUnderTheAccount`, which **names no task**. That is what makes it safe for the one
-///    file a privacy wipe leaves behind to be this one — it carries no id, no command and no time of
-///    anything the user did — and what makes it *sufficient* is that it is strictly wider than every
-///    obligation the wipe just discarded.
+///    file a privacy wipe leaves behind to be this one — it carries no task id and no command; what
+///    it does carry is the account it was pressed under and the instant of the press, and both are
+///    load-bearing rather than residue (SONNY-404, PR #207's F1 and R2). And what makes it
+///    *sufficient* is that it is strictly wider than every obligation the wipe just discarded.
+/// 5. **It is delivered only under a session for the account that pressed it**, bounded at that
+///    instant. Without the first of those, a wipe pressed offline by one user deleted the *next*
+///    user's everything; without the second, a delivery days later reached content the press never
+///    covered.
 ///
 /// So nothing owed is abandoned by the press, with one exception written down at
 /// `AgentViewModel.deleteLocalData`: an entry the drain kept on a `404`, meaning a task belonging to
@@ -385,8 +424,8 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     ///
     /// Keyed on the task id, so pressing Delete twice on a row whose local delete failed the first
     /// time leaves one entry rather than two.
-    public func enqueue(taskID: String, deletedAt: Date = Date()) throws {
-        try enqueue(taskIDs: [taskID], scope: .wholeTask, deletedAt: deletedAt)
+    public func enqueue(taskID: String, accountID: String?, deletedAt: Date = Date()) throws {
+        try enqueue(taskIDs: [taskID], scope: .wholeTask, accountID: accountID, deletedAt: deletedAt)
     }
 
     /// Records an obligation covering one task or many, in one of the two scopes (SONNY-404).
@@ -410,6 +449,7 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
     public func enqueue(
         taskIDs: [String],
         scope: PendingServerDeletion.Scope,
+        accountID: String?,
         deletedAt: Date = Date()
     ) throws {
         // Trimmed-empty rather than empty, matching the server's own `z.string().trim().min(1)`:
@@ -427,7 +467,12 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
         guard !unique.isEmpty || !PendingServerDeletion.namesTasks(scope) else {
             return
         }
-        let entry = PendingServerDeletion(taskIDs: unique, scope: scope, deletedAt: deletedAt)
+        let entry = PendingServerDeletion(
+            taskIDs: unique,
+            scope: scope,
+            accountID: accountID,
+            deletedAt: deletedAt
+        )
         lock.lock()
         defer { lock.unlock() }
         var entries = try loadKeyed()
@@ -471,8 +516,40 @@ public struct PendingServerDeletionStore: @unchecked Sendable {
 
     /// Forgets the whole-task obligation for one id — the withdrawal `deleteTask` performs when its
     /// local delete throws after the enqueue succeeded.
-    public func remove(taskID: String) throws {
-        try remove(key: PendingServerDeletion.key(scope: .wholeTask, taskIDs: [taskID]))
+    public func remove(taskID: String, accountID: String?) throws {
+        try remove(key: PendingServerDeletion.key(
+            scope: .wholeTask,
+            taskIDs: [taskID],
+            accountID: accountID
+        ))
+    }
+
+    /// Forgets every obligation that is **not** this account's (SONNY-404, PR #207's F1).
+    ///
+    /// **The session-change door, and the second half of the founder-level rule the review named:**
+    /// a session change either delivers what it can for the outgoing account before it is gone, or
+    /// discards its obligations with a recorded reason. Delivery is impossible after the fact —
+    /// signing out clears the tokens, so there is nothing left to authenticate with — so this is the
+    /// discard, and `AgentViewModel` records it.
+    ///
+    /// **Called only when there *is* a current account**, so signing out keeps everything: the
+    /// account that owned those obligations may sign back in, and the per-entry delivery gate is
+    /// what keeps them safe until it does. Returns what it discarded so the caller can say so.
+    @discardableResult
+    public func discardObligationsNotBelongingTo(accountID: String) throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        var entries = try loadKeyed()
+        insideTheCriticalSection?()
+        let doomed = entries.values.filter { $0.accountID != accountID }
+        guard !doomed.isEmpty else {
+            return 0
+        }
+        for entry in doomed {
+            entries.removeValue(forKey: entry.id)
+        }
+        try write(entries)
+        return doomed.count
     }
 
     private func remove(key: String) throws {

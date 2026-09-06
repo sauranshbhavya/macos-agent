@@ -295,8 +295,12 @@ Behavior added:
   confirmation says so.
 - *Memory › Task history › Delete* queues every row's server deletion as one obligation and sends it
   as one `DELETE /v1/tasks`.
-- Both surfaces describing the whole wipe say it deletes "from this Mac", and the confirmation names
-  what Sonny's servers keep among the things the press does *not* take.
+- ~~Both surfaces describing the whole wipe say it deletes "from this Mac", and the confirmation
+  names what Sonny's servers keep among the things the press does *not* take.~~ **Superseded by the
+  fix round below** (2026-09-05): decision 1 was reversed back, so both surfaces say "from this Mac
+  **and from Sonny's servers**" and the confirmation names **your account** among what the press
+  leaves alone. The struck sentence is kept rather than replaced, so a sweep for the old wording
+  finds it labelled as history. (PR #207's F5.)
 - The pending-deletion queue carries a scope and a list of ids, and reads a file written before it
   did.
 
@@ -307,7 +311,10 @@ Behavior preserved:
 - **The four-outcome delivery taxonomy is unchanged** and is now shared by all three shapes through
   one classifier, so a `404`, a `400`, a `200` and everything else mean on the new routes exactly
   what they mean on the old one.
-- **The whole wipe still takes the queue file** with every other store, and still sends nothing.
+- ~~**The whole wipe still takes the queue file** with every other store, and still sends nothing.~~
+  **Superseded by the fix round below**: it still takes the queue file, and it now drains it first,
+  sends `DELETE /v1/account/content`, and writes back one account-scoped obligation when it could
+  not. (PR #207's F5.)
 - **A Memory row that is not Task history queues nothing**, which is pinned rather than assumed.
 - The screen record's local half is unchanged: the task row and its `visionSessionID` stay, and a
   deleted screen record is still indistinguishable from one that aged out.

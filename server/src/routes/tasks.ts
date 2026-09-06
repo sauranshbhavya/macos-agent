@@ -83,6 +83,21 @@ const bulkBody = z.object({
   task_ids: z.array(z.string().trim().min(1).max(200)).min(1).max(MAXIMUM_TASK_IDS),
 });
 
+/**
+ * `DELETE /v1/account/content`'s one optional parameter (SONNY-404, PR #207's F1). Contract §4.6.3.
+ *
+ * **Optional, and its absence means "everything"** — which is what §8.1 allows a minor version to
+ * add and is why this is a query parameter rather than a new required field. A shipped client that
+ * sends none behaves exactly as it did.
+ *
+ * **It exists because the Mac may deliver this delete days after the press.** The wipe queues an
+ * obligation when it cannot reach the gateway; without a bound, the delivery would take content the
+ * user created *after* the press, which the press never promised.
+ */
+const accountContentQuery = z.object({
+  before: z.coerce.date().optional(),
+});
+
 export interface TaskRoutesDeps {
   readonly withConnection: WithConnection;
 }
@@ -317,14 +332,23 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
    * finds nothing and answers `200` with zeroes.
    */
   app.delete("/v1/account/content", async (request, reply) => {
+    const bounds = accountContentQuery.safeParse(request.query);
+    if (!bounds.success) {
+      return reply
+        .status(400)
+        .send(
+          errorBody("request.invalid", "before must be an RFC 3339 instant.", request.id),
+        );
+    }
     if (deps === undefined) {
       // Unreachable for the reason the first route gives, and loud for the same one.
       throw new Error("DELETE /v1/account/content served with no database configured");
     }
     const accountId = callerOf(request).accountId;
+    const before = bounds.data.before;
 
     return deps.withConnection(async (client) => {
-      const storedResponses = await deleteStoredResponsesForAccount(client, accountId);
+      const storedResponses = await deleteStoredResponsesForAccount(client, accountId, before);
       const outcome = await deleteContentForAccount(
         client,
         accountId,
@@ -332,9 +356,11 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
         // Not `account`: that value means the account was closed and its content went with it, and
         // nothing in the row would tell the two apart once the user does close it for real.
         "account_content",
+        before,
       );
       request.log.info(
         {
+          before: before?.toISOString(),
           contentRows: outcome.contentRows,
           snapshotRows: outcome.snapshotRows,
           snapshots: outcome.snapshotsTouched,

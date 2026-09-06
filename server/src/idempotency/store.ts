@@ -421,14 +421,29 @@ export async function pruneExpiredResponses(client: pg.Client, limit = 1000): Pr
 export async function deleteStoredResponsesForAccount(
   client: pg.Client,
   accountScope: string,
+  /**
+   * Bound the clear to keys taken at or before this instant (SONNY-404, PR #207's F1). `claimed_at`
+   * is when the key was taken, which is the closest this table has to when the content happened.
+   * `undefined` is the account-close path and means every key.
+   */
+  claimedAtOrBefore?: Date,
 ): Promise<number> {
-  const cleared = await client.query(
-    `UPDATE sonny.idempotency_key
-        SET state = 'released', response_status = NULL, response_content_type = NULL,
-            response_body = NULL, response_request_id = NULL, response_expires_at = NULL
-      WHERE account_scope = $1 AND response_body IS NOT NULL`,
-    [accountScope],
-  );
+  const cleared =
+    claimedAtOrBefore === undefined
+      ? await client.query(
+          `UPDATE sonny.idempotency_key
+              SET state = 'released', response_status = NULL, response_content_type = NULL,
+                  response_body = NULL, response_request_id = NULL, response_expires_at = NULL
+            WHERE account_scope = $1 AND response_body IS NOT NULL`,
+          [accountScope],
+        )
+      : await client.query(
+          `UPDATE sonny.idempotency_key
+              SET state = 'released', response_status = NULL, response_content_type = NULL,
+                  response_body = NULL, response_request_id = NULL, response_expires_at = NULL
+            WHERE account_scope = $1 AND response_body IS NOT NULL AND claimed_at <= $2`,
+          [accountScope, claimedAtOrBefore],
+        );
   return cleared.rowCount ?? 0;
 }
 

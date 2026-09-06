@@ -25,7 +25,14 @@ let accountModel = SonnyAccountModel.atItsRealKeychainLocation()
 let screenAccessModel = ScreenAccessOnboardingModel()
 // **The view model is bound to a name rather than built inline** (SONNY-136, PR #153's F4), because
 // the line below needs to refer to it. It was `viewModel: .atItsRealStoreLocations(…)` in the call.
-let agentViewModel = AgentViewModel.atItsRealStoreLocations(backendClient: accountModel.backendClient)
+// **`accountIdentity` reads the Keychain, not the client actor** (SONNY-404, PR #207's F1): every
+// queued server deletion carries the account it was pressed under, and the enqueue that records one
+// runs synchronously before the local deletes. `SonnyTaskDeletionService.init` carries the argument.
+let accountTokenStore = KeychainAccountTokenStore()
+let agentViewModel = AgentViewModel.atItsRealStoreLocations(
+    backendClient: accountModel.backendClient,
+    accountIdentity: { (try? accountTokenStore.loadTokens())??.userID }
+)
 // **The session and the readiness row, joined here.** Signing in is a sheet over Command Center and
 // signing out is a menu item, so neither re-fires the `onAppear` that is otherwise the only thing
 // that refreshes the account row — the "show permission readiness" tool then reported a session the
@@ -40,6 +47,12 @@ accountModel.sessionDidChange = { [weak agentViewModel] in
     // "12 of 20 runs left this month" on the page they were already on, and the next user to sign in
     // on this Mac read the previous one's figure.
     agentViewModel?.forgetScreenControlAllowance()
+    // **And the deletion queue** (SONNY-404, PR #207's F1). Every queued server deletion carries the
+    // account it was pressed under; this is the moment a different account signing in makes the old
+    // ones undeliverable, so they are discarded with the reason recorded, and whatever the new
+    // account owns is swept. Without it a wipe pressed offline by one user deleted the *next* user's
+    // everything at the following launch.
+    agentViewModel?.settlePendingServerDeletionsForSessionChange()
 }
 // **The one screen-control billing gate, joined here for the same reason the line above is**
 // (SONNY-213). It needs the account model's `EntitlementService` — one per process, because that
