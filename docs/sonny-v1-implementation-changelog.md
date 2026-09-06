@@ -294,6 +294,7 @@ Server half — 5 killed, run with `MUTATE_TEST_CMD` carrying this lane's `DATAB
 | R5 | the route answers health without asking the store | `says past_due for an account whose payment has failed`, `never answers current for an account the store reports past due`, `asks about the caller's own account and nothing else` |
 | R6 | an operator grant leaves the payment failure outstanding, so a comped customer reads `Past due` forever | `anOperatorGrantEndsAnOutstandingPaymentFailure` |
 | R7 | an operator revoke leaves the payment failure outstanding, so an ended account reads `Past due` | `anOperatorRevokeEndsAnOutstandingPaymentFailure` |
+| R8 | `setRevoked` clears only when revoking, so an operator **restore** leaves the stale window behind | `anOperatorRestoreEndsAnOutstandingPaymentFailure` |
 
 **S8 is worth reading rather than counting.** It is the mutant for "the control does not reach the portal" — a past-due customer shown no row at all — and what killed it is the *scan*, on its `model.paymentState` occurrence count going from one to two, not on anything about rendering. That is a real kill and a narrow one: the scan holds the shape of the row rather than its behaviour, because a SwiftUI body is not renderable in this suite. Whoever reviews this should treat the row's actual appearance as a manual item, which is what the three checklist rows are for.
 
