@@ -187,6 +187,35 @@ describeDb("a sign-out, against a real denylist", () => {
     await app.close();
   });
 
+  itUnderHangBackstop("leaves another session's LIVE row alone while pruning the dead one", async () => {
+    // **The property the prune's `WHERE` actually carries, and the one a battery found missing.**
+    // `prunes a row whose token has expired, and only that row` reads as if it covers this and does
+    // not: with the boundary widened to every row, that test still ends with exactly the row it
+    // asserts, because the row it planted was the one meant to go. What tells the two apart is a
+    // *live* row belonging to somebody else — under a prune that drops everything, signing one user
+    // out un-revokes every other signed-out session in the system, which is the same defect this
+    // ticket exists to fix, arriving through the fix.
+    const app = build();
+    await signIn(app, "bystander@example.com");
+    const first = accessTokenFor(SESSION_USER, { sessionId: SECOND_DEVICE_SESSION });
+    const second = accessTokenFor(SESSION_USER);
+
+    expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: bearer(first) }))
+      .statusCode).toBe(204);
+    expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: bearer(second) }))
+      .statusCode).toBe(204);
+
+    const { rows } = await client.query<{ session_id: string }>(
+      "SELECT session_id FROM sonny.revoked_provider_session ORDER BY session_id",
+    );
+    expect(rows.map((r) => r.session_id).sort())
+      .toEqual([SECOND_DEVICE_SESSION, providerSessionFor(SESSION_USER)].sort());
+    // And the property in the terms a user meets it in: the first session is still refused.
+    expect((await protectedCall(app, first)).statusCode).toBe(401);
+    expect((await protectedCall(app, second)).statusCode).toBe(401);
+    await app.close();
+  });
+
   itUnderHangBackstop("re-revokes a session whose own row has already expired", async () => {
     // **The prune and the upsert touch one row in one statement, and this is the case that finds
     // out.** One user signing out twice more than a token lifetime apart, with no other sign-out in
