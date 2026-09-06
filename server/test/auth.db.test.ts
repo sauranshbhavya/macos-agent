@@ -9,6 +9,9 @@ import {
 import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
+import type { WithConnection } from "../src/db/connection.js";
+import { DEADLINE_MS } from "../src/model/limits.js";
+import { ProviderTimedOut } from "../src/model/upstream.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testConfig } from "./support/config.js";
 import { rebuildSchema } from "./support/schema.js";
@@ -107,7 +110,39 @@ class FakeProvider implements AuthProvider {
    * provider that cannot be reached has not refused anything.
    */
   unreachable = false;
-  async sendEmailCode(email: string) { this.sent.push(email); return { providerRequestId: "p1" }; }
+  /**
+   * The route's total deadline elapsed before the provider answered (SONNY-425).
+   *
+   * **A third state, and separate from `unreachable` for the reason that one is separate from
+   * `accept`.** `accept = false` is the provider answering and refusing; `unreachable` is it failing
+   * to answer and saying so at once; this is the wrapper giving up on it — §7.2 case 5a, which §9.3
+   * retries on a different schedule from case 5, so a route that collapsed the two would spend a
+   * user's attempts wrongly.
+   *
+   * **It raises what `withDeadlines` raises, and that is the point of using its own class here.**
+   * `ProviderTimedOut` is `model/upstream.ts`', not this seam's, so a route that never applied the
+   * wrapper could not produce it at all.
+   */
+  timesOut = false;
+  /**
+   * The `AbortSignal` each wrapped call was handed, in call order — `undefined` where it was given
+   * none.
+   *
+   * **This is what pins the wiring rather than the mapping.** A test that only drives the failure
+   * arm passes just as well against a route that never wrapped anything, because the fake would be
+   * raising the timeout itself; the signal exists only if `withDeadlines` is really in front of the
+   * call. Timing the elapse is `authdeadlines.test.ts`', which advances a clock against the two
+   * routes that need no database — this file cannot, because vitest's fake timers replace the
+   * `setTimeout` the hang backstop and `pg` are both holding, and a run that does it hangs with no
+   * output at all rather than failing.
+   */
+  readonly signals: (AbortSignal | undefined)[] = [];
+  async sendEmailCode(email: string, signal?: AbortSignal) {
+    this.sent.push(email);
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
+    return { providerRequestId: "p1" };
+  }
   /**
    * **Declared with the interface's parameters even though this body ignores them** (PR #87 sixth
    * round, F1). It was `verifyEmailCode()` with none, which type-checks as a *narrower* function and
@@ -117,7 +152,13 @@ class FakeProvider implements AuthProvider {
    * except the one that exists to catch it.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
+  async verifyEmailCode(
+    _email: string,
+    _code: string,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSession> {
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
     if (this.unreachable) throw new ProviderUnavailable("supabase verifyEmailCode could not be reached");
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
     this.liveRefreshToken = this.session.refreshToken;
@@ -150,7 +191,21 @@ class FakeProvider implements AuthProvider {
     if (this.unreachable) throw new ProviderUnavailable("supabase signOut could not be reached");
     if (!this.accept) throw new ProviderRejected("already gone");
   }
-  async signOutAllForUser(id: string) {
+  /**
+   * A call the test holds open, and the stall PR #212's F1 is about.
+   *
+   * **The provider is the right thing to stall and the drain's own SQL is not** — measured on this
+   * branch rather than assumed. A `pg.Client` serialises the queries issued on it, so a drain
+   * blocked on a row lock also blocks every statement the *route* issues after it: the wipe queues
+   * behind the drain's `UPDATE`, and the route cannot answer or release the connection ahead of it
+   * even with the race in place. Stalling the provider leaves the connection idle, which is exactly
+   * the window where a raced deadline lets the route finish, release, and leave the drain writing.
+   */
+  stallSignOutAllUntil: Promise<void> | undefined;
+  async signOutAllForUser(id: string, signal?: AbortSignal) {
+    this.signals.push(signal);
+    if (this.timesOut) throw new ProviderTimedOut("the route's total deadline elapsed");
+    if (this.stallSignOutAllUntil !== undefined) await this.stallSignOutAllUntil;
     if (this.failFor.has(id)) throw new ProviderUnavailable("admin API timed out");
     if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
     this.revokedUsers.push(id);
@@ -1352,5 +1407,518 @@ describeDb("the auth endpoints", () => {
       expect(provider.revokedUsers).toEqual([SESSION_USER]);
       await app.close();
     });
+  });
+  describe("§12's deadlines, on the three auth routes that need database state", () => {
+    /**
+     * SONNY-425. `authdeadlines.test.ts` carries `refresh` and `signout` — the two auth routes that
+     * reach the provider with no database read in front — and advances a clock against them, so the
+     * interval itself is asserted there and under the documented `npm test`.
+     *
+     * **These three assert the wiring and the answer, and deliberately not the interval**, which is
+     * a limit rather than a preference. Advancing vitest's fake timers here replaces the
+     * `setTimeout` that `support/backstop.ts` and `pg` are both holding: measured at this head, a
+     * version of these tests using `vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })`
+     * ran for over five minutes and printed nothing at all — a hang rather than a failure, which is
+     * the worst shape a test can take. What is asserted instead is the pair a fake cannot forge on
+     * its own: that the provider was handed an `AbortSignal`, which exists only if `withDeadlines`
+     * is in front of the call, and what the route answers when the deadline elapses.
+     */
+
+    itUnderHangBackstop(
+      "POST /v1/auth/email/verify runs its provider call inside §12's deadline and answers 504",
+      async () => {
+        const app = build();
+        await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "stalled@example.com" },
+        });
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "stalled@example.com", code: "1" },
+        });
+        provider.timesOut = false;
+
+        // The wrapper is in front of the call: without it the provider is handed `undefined`.
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        // §7.2 case 5a, not case 5 — §9.3 retries the two on different schedules.
+        expect(response.statusCode).toBe(504);
+        expect(response.json().error.code).toBe("provider.timeout");
+        expect(response.json().error.retryable).toBe(true);
+
+        // **The code the user is holding survives it**, which is what makes the retry that answer
+        // invites worth inviting: `consumeLatest` runs only after the provider accepts, so a timeout
+        // consumes nothing.
+        const after = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "stalled@example.com", code: "1" },
+        });
+        expect(after.statusCode).toBe(200);
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "POST /v1/auth/email/start still answers the uniform 200 when its send times out",
+      async () => {
+        // **The one route whose deadline must not be visible to a caller.** §3.6 makes this response
+        // identical whatever happens downstream, and a 504 for an address that reached the send path
+        // — beside the silent 200 the per-address limit answers — is this route's
+        // account-existence oracle with an extra step.
+        const app = build();
+        const reference = await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "reference@example.com" },
+        });
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "stalledsend@example.com" },
+        });
+        provider.timesOut = false;
+
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        expect(response.statusCode).toBe(200);
+        expect(response.statusCode).toBe(reference.statusCode);
+        expect(Object.keys(response.json()).sort()).toEqual(Object.keys(reference.json()).sort());
+        expect(response.json().expires_in).toBe(reference.json().expires_in);
+        // And nothing was issued for it — the pre-existing rule that a failed send leaves the user's
+        // previous code alone, which a timeout is a case of.
+        const { rows } = await client.query(
+          "SELECT count(*)::int AS n FROM sonny.sign_in_code_issue WHERE mailbox_key = $1",
+          [normalizeEmail("stalledsend@example.com")],
+        );
+        expect(rows[0].n).toBe(0);
+        await app.close();
+      },
+    );
+
+    /**
+     * Shortens **only** the timer scheduled for exactly `ms`, and reports when it fires.
+     *
+     * **A surgical replacement rather than `vi.useFakeTimers()`**, which this file cannot use at
+     * all: `support/backstop.ts` and `pg` both hold `setTimeout`, and a version of these tests that
+     * faked it hung for minutes printing nothing (recorded in this branch's changelog entry). Every
+     * other `setTimeout` here stays the real one, so nothing else in the process changes behaviour.
+     * `intercepted()` is asserted to be exactly 1 by each caller: an interception count of 0 means
+     * the route stopped scheduling the deadline and the test would otherwise pass by never
+     * exercising it, and a count above 1 means something else in the process happens to want the
+     * same delay and the shortening is no longer surgical.
+     */
+    function shortenDeadlineTimer(ms: number, shortenedTo: number) {
+      const realSetTimeout = globalThis.setTimeout;
+      let markFired: () => void = () => {};
+      const fired = new Promise<void>((resolve) => { markFired = resolve; });
+      let intercepted = 0;
+      globalThis.setTimeout = ((handler: unknown, delay?: number, ...args: unknown[]) => {
+        if (delay === ms) {
+          intercepted += 1;
+          return realSetTimeout(() => { (handler as () => void)(); markFired(); }, shortenedTo);
+        }
+        return (realSetTimeout as (...a: unknown[]) => unknown)(handler, delay, ...args);
+      }) as unknown as typeof globalThis.setTimeout;
+      return {
+        fired,
+        intercepted: () => intercepted,
+        restore: () => { globalThis.setTimeout = realSetTimeout; },
+      };
+    }
+
+    /** One statement the route's leased connection carried, and where it sat around the release. */
+    interface QueryRecord {
+      readonly sql: string;
+      readonly issuedAfterRelease: boolean;
+      settledAfterRelease: boolean;
+    }
+
+    /**
+     * What the tests below wait on instead of a clock: the connection's own release, and a count of
+     * everything that has happened on it.
+     *
+     * `releases` counts leases handed back inside `withConnection`'s `finally`, so under a race that
+     * abandons the drain the count rising is *caused* by the abandonment rather than merely
+     * correlated with it. **A count and not a promise, because this app makes several requests
+     * before the one under test** — the sign-in that sets the account up leases and releases twice —
+     * so a promise resolved on the first release had already fired before the request that matters
+     * began, and every waiter below returned "released" on the clean tree. A waiter reads the count
+     * at entry and watches for it to move.
+     *
+     * `activity` increments on every statement issued and again on every statement settled, which is
+     * what makes "the connection has gone quiet" a statement about progress rather than about the
+     * clock — a loaded machine makes each statement slower and keeps the counter moving, so a quiet
+     * connection means nothing is running rather than that this process is not getting turns.
+     */
+    interface ConnectionProbe {
+      readonly wiring: WithConnection;
+      readonly releases: () => number;
+      readonly activity: () => number;
+    }
+
+    /**
+     * `pool.ts`'s `withConnection`, plus the reviewer's probe: every statement recorded against the
+     * moment the connection went back to the pool.
+     *
+     * The `finally` mirrors the real one exactly — that ordering is the thing under test — and
+     * `settledAfterRelease` matters as much as `issuedAfterRelease`, because a statement issued
+     * before the release and still in flight at it is running on a connection the pool can already
+     * hand to another request.
+     */
+    function recordingConnection(record: QueryRecord[]): ConnectionProbe {
+      let releases = 0;
+      let activity = 0;
+      const wiring: WithConnection = async (work) => {
+        // **Per lease, and by wrapping rather than by patching.** Two drafts got this wrong in ways
+        // worth recording, because both failed loudly and the second one would not have. A flag
+        // outside this closure made every statement after the *first* request's release read as
+        // post-release. Then patching `conn.query` on the object the pool hands out patched a
+        // *shared* object — `pg-pool` reuses the same client — so each lease wrapped the previous
+        // lease's wrapper and inherited its already-true flag. Handing the route its own object
+        // leaves the pooled client untouched, and a statement the drain issues after this lease
+        // released still goes through *this* lease's recorder, which is the whole point.
+        let hasReleased = false;
+        const conn = await pool.connect();
+        const raw = conn.query.bind(conn);
+        const probe = {
+          query: (...args: unknown[]) => {
+            const entry: QueryRecord = {
+              sql: String(args[0]).trim().split("\n")[0]!.trim(),
+              issuedAfterRelease: hasReleased,
+              settledAfterRelease: false,
+            };
+            record.push(entry);
+            activity += 1;
+            return Promise.resolve((raw as (...a: unknown[]) => unknown)(...args)).finally(() => {
+              entry.settledAfterRelease = hasReleased;
+              activity += 1;
+            });
+          },
+        };
+        try {
+          return await work(probe as unknown as pg.Client);
+        } finally {
+          hasReleased = true;
+          conn.release();
+          releases += 1;
+        }
+      };
+      return { wiring, releases: () => releases, activity: () => activity };
+    }
+
+    /**
+     * How long the connection must stay quiet before either waiter below concludes nothing is
+     * running, in milliseconds.
+     *
+     * **Not a bet against the work, because the work resets it.** Every statement issued and every
+     * statement settled bumps the counter these waiters read, so a slow machine makes each statement
+     * slower and keeps the window open rather than closing it early. What is left is the case where
+     * the connection genuinely stops: under the fix that is the route parked on the stalled
+     * provider, and under a hang-shaped mutant it is the route parked on something that never
+     * resolves. Five hundred milliseconds against a localhost round trip in the tenths of a
+     * millisecond is a wide margin, and the direction it fails in is "wait longer" rather than
+     * "conclude sooner".
+     */
+    const QUIET_MS = 500;
+
+    /** The same, after the provider is resumed, before the route counts as stuck rather than slow. */
+    const STUCK_QUIET_MS = 3_000;
+
+    /** Poll interval for both waiters. Not the deadline's delay, so the timer shortener ignores it. */
+    const POLL_MS = 25;
+
+    const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+    /**
+     * Wait for the leased connection to be released, or for it to go quiet — whichever comes first —
+     * and say which.
+     *
+     * **This is what the tests resume the stalled provider on, and the ordering is the whole point**
+     * (PR #212 cycle 2, F1). Under a race that abandons the drain the release is *caused* by the
+     * abandonment: the route answers and `withConnection`'s `finally` runs, so `released` wins
+     * deterministically and the caller learns the property has failed. Under the fix the release
+     * cannot come at all while the drain is stalled, so the connection falls quiet and the fallback
+     * wins. **Resuming on a fixed number of turns instead is the wrong answer, and is how the first
+     * version of this test let the race through**: it resumed while the route was still mid-wipe, so
+     * the drain's mark-done was issued and settled before the release and both post-release
+     * assertions stayed empty.
+     *
+     * The hard cap fails in wording no declaration matches, because a connection that neither goes
+     * quiet nor comes back for thirty seconds is a route that cannot finish rather than a slow
+     * machine.
+     */
+    async function releasedOrQuiet(probe: ConnectionProbe): Promise<"released" | "quiet"> {
+      const releasesAtEntry = probe.releases();
+      let lastActivity = probe.activity();
+      let quietSince = Date.now();
+      const capAt = Date.now() + 30_000;
+      for (;;) {
+        if (probe.releases() !== releasesAtEntry) return "released";
+        const now = probe.activity();
+        if (now !== lastActivity) {
+          lastActivity = now;
+          quietSince = Date.now();
+        } else if (Date.now() - quietSince >= QUIET_MS) {
+          return "quiet";
+        }
+        if (Date.now() > capAt) {
+          throw new Error(
+            "the leased connection neither went quiet nor came back to the pool: it kept issuing "
+              + "statements for thirty seconds without the route answering, which is a route that "
+              + "cannot finish rather than a machine that is slow",
+          );
+        }
+        await sleep(POLL_MS);
+      }
+    }
+
+    /**
+     * Await `work`, and when it will not finish, fail in wording **no declaration matches**.
+     *
+     * **Why this exists** (`CLAUDE.md`'s SONNY-259 rule). Every wording the server hang backstop
+     * emits is declared in `scripts/mutate-untrusted-failures`, correctly — a sixty-second wall clock
+     * over work another process owns is a statement about the machine whatever the margin. So a
+     * mutant whose only effect is to make one of these two tests *hang* comes back UNATTRIBUTED
+     * rather than KILLED, on a run where the test failed for exactly the right reason, and
+     * UNATTRIBUTED reads as a note about a busy machine rather than as a caught defect. The remedy
+     * is the caller's: record a second issue the declarations do not excuse, gated on something that
+     * cannot fire from slowness.
+     *
+     * **The gate is progress, not tick rate, and that departure from the Swift half is measured
+     * rather than preferred.** `HangBackstop`'s `.stuck` verdict is an observation count, and that
+     * instrument was tried on this suite and rejected: the declaration file records the event loop
+     * ticking at 167-178 per second against a nominal 200 at load averages up to 194, including a run
+     * where one of these tests took ten times its unloaded cost — so a floor below the healthy
+     * population would have called that run a deadlock. What separates the two cases here instead is
+     * whether the connection is *doing anything*. Load makes statements slower and keeps the counter
+     * moving; a route parked on something that never resolves stops it dead. That is the distinction
+     * `.stuck` draws, read off the resource this suite actually waits on.
+     *
+     * **And the cascade above it is closed**, which the rule requires or the gate is a lie: this is
+     * called only after `releasedOrQuiet` has returned normally, so the stalled provider has been
+     * resumed and the route waits on nothing this test still owes it. Called before that resume it
+     * would reach the quiet threshold at a perfectly healthy cadence, every time.
+     */
+    async function settledOrStuck<T>(
+      what: string,
+      work: Promise<T>,
+      probe: ConnectionProbe,
+    ): Promise<T> {
+      let done = false;
+      void work.then(() => { done = true; }, () => { done = true; });
+      let lastActivity = -1;
+      let quietSince = Date.now();
+      for (;;) {
+        if (done) return await work;
+        const now = probe.activity();
+        if (now !== lastActivity) {
+          lastActivity = now;
+          quietSince = Date.now();
+        } else if (Date.now() - quietSince >= STUCK_QUIET_MS) {
+          throw new Error(
+            `${what} never finished, and the connection it holds has issued and settled nothing for `
+              + `${STUCK_QUIET_MS} ms. Nothing is running: this is work that cannot complete rather `
+              + "than work that is slow, so it is evidence about the code and not about the machine.",
+          );
+        }
+        await sleep(POLL_MS);
+      }
+    }
+
+    /** An account with `identities` provider-side users on it, closed-ready and signed in. */
+    async function accountWithIdentities(
+      app: ReturnType<typeof build>,
+      email: string,
+      extra: readonly string[],
+    ): Promise<string> {
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email } });
+      const accountId = (await app.inject({
+        method: "POST", url: "/v1/auth/email/verify", payload: { email, code: "1" },
+      })).json().user.id;
+      for (const [index, supabaseUserId] of extra.entries()) {
+        await client.query(
+          `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+             email_is_relay, supabase_user_id, link_method)
+           VALUES ($1,'apple',$2,'ggg@privaterelay.appleid.com',true,true,$3,'explicit')`,
+          [accountId, `apple-sub-${index}`, supabaseUserId],
+        );
+      }
+      provider.revokedUsers = [];
+      return accountId;
+    }
+
+    itUnderHangBackstop(
+      "does not release the connection while the drain is still running on it",
+      async () => {
+        // **PR #212's F1, and it is the defect this branch introduced.** `withDeadlines` is a
+        // `Promise.race`: when the deadline won it *abandoned* the drain, which holds the pooled
+        // client the handler leased. The route then answered 204, `withConnection`'s `finally`
+        // released that connection, and the drain went on writing — `pg` does not refuse a query on
+        // a released client, and the pool hands the same client object to the next `connect()`.
+        //
+        // **The stall is the provider's, and that is a measurement rather than a preference.** A
+        // `pg.Client` serialises its queries, so a drain blocked on a *statement* also blocks every
+        // statement the route issues after it; the route cannot outrun it and no post-release write
+        // is reachable that way. With the provider stalled the connection sits idle, which is the
+        // window the race actually opened.
+        //
+        // **What this test waits on is the whole of cycle 2's F1.** Its first version resumed the
+        // provider one microtask after the deadline callback, before the route could have finished
+        // its wipe — so under a race that abandons the drain the mark-done was issued and settled
+        // *before* the release, both post-release lists stayed empty, and `settled` was still false.
+        // It failed only when both halves of the fix were gone, so a mutant restoring the route half
+        // alone survived it. It now resumes on the release itself, which the abandonment causes,
+        // against a fallback only the fix can reach.
+        const record: QueryRecord[] = [];
+        const connection = recordingConnection(record);
+        const app = buildApp(
+          config,
+          { provider, withConnection: connection.wiring, now: () => PINNED_NOW },
+        );
+        await accountWithIdentities(app, "abandoned@example.com", []);
+
+        let releaseProvider: () => void = () => {};
+        provider.stallSignOutAllUntil = new Promise<void>((resolve) => { releaseProvider = resolve; });
+        const timer = shortenDeadlineTimer(DEADLINE_MS.auth.total, 40);
+        let response;
+        try {
+          const pending = app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
+          let settled = false;
+          void pending.then(() => { settled = true; });
+
+          // Deterministic: this resolves inside the deadline's own callback, so the abort has
+          // certainly happened by the assertions below rather than probably.
+          await timer.fired;
+          expect(timer.intercepted()).toBe(1);
+
+          // **The assertion the race fails, and it names the branch rather than a status.** Under a
+          // race the release is caused by the abandonment and arrives in single-digit milliseconds;
+          // under the fix it cannot arrive at all while the drain is stalled, so the connection
+          // falls quiet and the fallback answers. Naming the winner makes the failure say what
+          // happened instead of leaving a reader to infer it from a later empty list.
+          expect(await releasedOrQuiet(connection)).toBe("quiet");
+          // The same property in the terms the route sees: answering is what releases, so the route
+          // must not have answered either.
+          expect(settled).toBe(false);
+
+          releaseProvider();
+          response = await settledOrStuck(
+            "DELETE /v1/account after the provider resumed", pending, connection,
+          );
+        } finally {
+          timer.restore();
+          provider.stallSignOutAllUntil = undefined;
+        }
+        expect(response.statusCode).toBe(204);
+
+        // The reviewer's probe shape, and the property in its own terms.
+        expect(record.filter((entry) => entry.issuedAfterRelease)).toEqual([]);
+        expect(record.filter((entry) => entry.settledAfterRelease)).toEqual([]);
+        // A control, so the two empties above cannot be an empty recorder reading as a pass.
+        expect(record.length).toBeGreaterThan(5);
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "stops the drain at the deadline instead of filing one failure per identity",
+      async () => {
+        // **PR #212's F3.** The property the record claims — that a deadline ends the whole drain
+        // rather than recording a truthful-looking failure row per identity — needs **two**
+        // identities to be observable at all: with one, ending and continuing produce the same 204,
+        // the same `deleted_at` and the same owed count. The mechanism is the loop's own check on
+        // the signal, which is reachable; the version this replaced rethrew a `ProviderTimedOut`
+        // from the drain's `catch`, which the race could never inject and the one real adapter never
+        // raises.
+        //
+        // It takes a recording connection too — not to assert on the record, but for the waiters, so
+        // that a mutant which makes this route hang is a kill here as well rather than an
+        // unattributed silence.
+        const record: QueryRecord[] = [];
+        const connection = recordingConnection(record);
+        const app = buildApp(
+          config,
+          { provider, withConnection: connection.wiring, now: () => PINNED_NOW },
+        );
+        await accountWithIdentities(app, "twoids@example.com", [
+          "99999999-9999-9999-9999-999999999999",
+        ]);
+
+        let releaseProvider: () => void = () => {};
+        provider.stallSignOutAllUntil = new Promise<void>((resolve) => { releaseProvider = resolve; });
+        const timer = shortenDeadlineTimer(DEADLINE_MS.auth.total, 40);
+        let response;
+        try {
+          const pending = app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
+          await timer.fired;
+          expect(timer.intercepted()).toBe(1);
+          expect(await releasedOrQuiet(connection)).toBe("quiet");
+          releaseProvider();
+          response = await settledOrStuck(
+            "DELETE /v1/account after the provider resumed", pending, connection,
+          );
+        } finally {
+          timer.restore();
+          provider.stallSignOutAllUntil = undefined;
+        }
+
+        expect(response.statusCode).toBe(204);
+        // One provider call made, not two: the first identity's call was already in flight when the
+        // deadline fired, and the loop stopped rather than claiming the second.
+        expect(provider.revokedUsers).toHaveLength(1);
+        // So the account still owes exactly the one it never reached.
+        expect(await owedRevocationCount(client)).toBe(1);
+        // And no lease is left held on it — the drain stops between iterations, before it claims.
+        const { rows } = await client.query(
+          `SELECT count(*)::int AS n FROM sonny.identity_provider_user
+            WHERE revocation_claimed_at IS NOT NULL AND provider_session_revoked_at IS NULL`,
+        );
+        expect(rows[0].n).toBe(0);
+        await app.close();
+      },
+    );
+
+    itUnderHangBackstop(
+      "DELETE /v1/account answers 204 when its drain times out, and leaves the revocation owed",
+      async () => {
+        // **The other route whose deadline is not a 504.** By the time the drain runs the close is
+        // committed and the gate stops attributing this caller, so a 5xx would describe an outcome
+        // that is not the one on disk and would invite a retry that cannot get through. The residual
+        // is left owed instead, exactly as a failed provider call leaves it.
+        const app = build();
+        await app.inject({
+          method: "POST", url: "/v1/auth/email/start",
+          payload: { email: "slowdrain@example.com" },
+        });
+        const accountId = (await app.inject({
+          method: "POST", url: "/v1/auth/email/verify",
+          payload: { email: "slowdrain@example.com", code: "1" },
+        })).json().user.id;
+
+        provider.signals.length = 0;
+        provider.timesOut = true;
+        const response = await app.inject({
+          method: "DELETE", url: "/v1/account", headers: signedIn(),
+        });
+        provider.timesOut = false;
+
+        // The drain's own provider call is handed the route's signal, which is the thing that makes
+        // §12's budget the route's rather than the adapter's times the identity count.
+        expect(provider.signals).toHaveLength(1);
+        expect(provider.signals[0]).toBeInstanceOf(AbortSignal);
+        expect(response.statusCode).toBe(204);
+        const { rows } = await client.query(
+          "SELECT deleted_at FROM sonny.account WHERE id = $1",
+          [accountId],
+        );
+        expect(rows[0].deleted_at).not.toBeNull();
+        // Still owed, so the next drain takes it. A deadline that stamped the revocation would be
+        // recording a provider call that never returned.
+        expect(await owedRevocationCount(client)).toBe(1);
+        await app.close();
+      },
+    );
   });
 });

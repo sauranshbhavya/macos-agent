@@ -1071,6 +1071,10 @@ describe("the numbers this ticket is held to", () => {
       transcriptions: { upstream: 60_000, total: 75_000 },
       search: { upstream: 20_000, total: 25_000 },
       screenAnalyze: { upstream: 90_000, total: 105_000 },
+      // §12's last row, which is five routes rather than one and which nothing enforced until
+      // SONNY-425. It is asserted here for the reason the other five are — the table is asserted
+      // whole, so a sixth row has to be written here as well as beside the routes that read it.
+      auth: { upstream: 10_000, total: 15_000 },
     });
     // **The invariant is the ordering, not a fixed gap** — a first draft of this test asserted
     // fifteen seconds on every row and went red on `search`, whose margin is five. §12's table has
@@ -1081,9 +1085,13 @@ describe("the numbers this ticket is held to", () => {
       expect(deadlines.upstream, route).toBeGreaterThan(0);
       expect(deadlines.total, route).toBeGreaterThan(deadlines.upstream);
     }
-    // The other five numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
-    // matching `total` here. `ModelRouteNumbersTests` asserts them against these same literals, so
-    // the two halves of §12's table cannot move independently without one of the two failing.
+    // The client half of every row lives in `SonnyBackendTimeouts` on the Swift side, each above the
+    // matching `total` here. `ModelRouteNumbersTests` asserts the five model routes against these
+    // same literals, so those two halves of §12's table cannot move independently without one of
+    // the two failing. **The `auth` row's client half is `SonnyBackendTimeouts.auth`, 20 s, and it
+    // is NOT paired by that test** — it was 20 s before this row existed and no Swift assertion
+    // reaches it, so §12's governing rule holds here by reading rather than by a guard. Said rather
+    // than implied, because a reader who knows the five are paired will assume the sixth is.
   });
 
   it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {

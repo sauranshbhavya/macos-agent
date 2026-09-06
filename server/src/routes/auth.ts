@@ -9,13 +9,16 @@ import { expiryFields } from "../auth/clock.js";
 import { callerOf } from "../auth/gate.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
-import { drainOwedRevocations } from "../auth/revocation.js";
+import { drainOwedRevocations, type RevocationOutcome } from "../auth/revocation.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
   CODE_VERIFY_PER_SOURCE,
   bucketKey, consume,
 } from "../auth/ratelimit.js";
 import { errorBody } from "../errors.js";
+import { DEADLINE_MS } from "../model/limits.js";
+import { sendUpstreamFailure, withDeadlines } from "../model/routing.js";
+import { ProviderTimedOut } from "../model/upstream.js";
 import type { Config } from "../config.js";
 import { deleteContentForAccount, type DeletionOutcome } from "../content/store.js";
 import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
@@ -75,6 +78,60 @@ function providerUnavailable(
   return reply.status(502).send(
     errorBody("provider.unavailable", message, request.id, { retryable: true }),
   );
+}
+
+/**
+ * §12's deadlines for the routes in this file, and the two things worth knowing before reading the
+ * `withDeadlines` calls below (SONNY-425).
+ *
+ * **What was wrong.** §12's table gives auth, account, meta, health and delete a 10 s upstream and a
+ * 15 s total deadline, and no route here applied either. A sign-in whose provider call stalled was
+ * bounded only by `app.ts`'s server-wide delivery bound of 120 s — which SONNY-322 documents as
+ * bounding *receipt* of a request rather than a handler, and as landing tens of seconds late — so
+ * the contract's row was a promise the code did not keep. `routes/model.ts` and `routes/screen.ts`
+ * have applied the same wrapper since SONNY-130 and SONNY-131.
+ *
+ * **Why the answers here are not all the wrapper's.** `model/routing.ts`'s `sendUpstreamFailure`
+ * maps all three upstream failures for a model route, and this file cannot use it that way: each
+ * route maps a *rejection* differently — `email/verify` classifies it into one of three 400s,
+ * `refresh` answers `401 auth.token_revoked`, `signout` swallows it, `email/start` must answer the
+ * same uniform 200 whatever happens. Only the timeout has one answer, so only the timeout is routed
+ * through the shared function, and `ProviderTimedOut` is the one error type this file takes from
+ * `model/upstream.ts` — the `ProviderRejected` and `ProviderUnavailable` imported above are the auth
+ * seam's own classes of the same names, which `sendUpstreamFailure` deliberately does not recognise.
+ *
+ * **Two routes do not answer 504 at all, and both are decisions.** `email/start` swallows a timeout
+ * into its uniform 200, because a status that varied with what happened downstream is the
+ * account-existence oracle that route's whole shape exists to close — a 504 for an address that
+ * reached the send path, beside a 200 for one the per-address limit refused silently, is that oracle
+ * with an extra step. `DELETE /v1/account` answers 204, because by the time its drain runs the close
+ * is committed and the caller can no longer reach this route to retry; the residual is left owed and
+ * `npm run revocations` reports it, which is the arrangement that handler's own docstring already
+ * describes for a failed revocation.
+ *
+ * **`DELETE /v1/account` does not use this wrapper at all, and the reason is a rule rather than a
+ * preference** (PR #212's F1). `withDeadlines` is a `Promise.race`: when the deadline wins it
+ * abandons the work. That is harmless for the four routes above, whose work is one HTTP call, and it
+ * is a correctness defect for work that holds this handler's pooled database connection. **A
+ * deadline around work that holds a database connection is never a race that abandons.** That route
+ * builds its own `AbortController` on the same `total`, hands the drain the signal, and awaits the
+ * drain's termination, so the connection's release is ordered after the last statement rather than
+ * racing it. The cost is that the bound is cooperative — polled between statements — which is stated
+ * where it is applied.
+ */
+const AUTH_DEADLINES = DEADLINE_MS.auth;
+
+/**
+ * §7.2 case 5a — the provider did not answer inside §12's total deadline — answered by the shared
+ * mapper rather than by a fourth copy of the envelope.
+ *
+ * `sendUpstreamFailure` recognises `ProviderTimedOut` first and answers `504 provider.timeout`,
+ * `retryable: true`, and it logs. Calling it means the status, the code and the flag cannot drift
+ * from what the two model routes send for the same condition; PR #208's own lesson was that the fix
+ * for two implementations of one answer is to route through the one that already decides.
+ */
+function timedOut(request: FastifyRequest, reply: FastifyReply, error: unknown): FastifyReply {
+  return sendUpstreamFailure(request, reply, error);
 }
 
 export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDeps): void {
@@ -148,7 +205,13 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // `issueCode` is the invalidate-and-record pair as one locked transaction (PR #87 second
       // round, F11): as two statements, concurrent starts for one address each invalidated nothing
       // of each other's and left up to three live codes behind.
-      await deps.provider.sendEmailCode(email);
+      // **§12's deadline, and its answer here is the uniform 200 like every other failure**
+      // (SONNY-425). The wrapper bounds the send; the `catch` below is what a `ProviderTimedOut`
+      // lands in, exactly as a socket failure does. Answering `504` instead would make the status
+      // vary with what happened downstream of the per-address limit — silent 200 for an address
+      // asked for recently, 504 for one that reached the send — which is this route's oracle in a
+      // slower form, and closing that is the whole shape of this handler.
+      await withDeadlines(AUTH_DEADLINES, (signal) => deps.provider.sendEmailCode(email, signal));
       await issueCode(client, mailbox, sourceHash(request, salt), now());
     } catch (error) {
       // Even a provider failure returns the uniform response. The user is told nothing useful
@@ -242,7 +305,9 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
 
     let session;
     try {
-      session = await deps.provider.verifyEmailCode(email, parsed.data.code);
+      session = await withDeadlines(AUTH_DEADLINES, (signal) =>
+        deps.provider.verifyEmailCode(email, parsed.data.code, signal),
+      );
     } catch (error) {
       if (error instanceof ProviderRejected) {
         // The caller's own source hash decides whether the distinct codes are disclosed at all
@@ -253,6 +318,12 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       if (error instanceof ProviderUnavailable) {
         return providerUnavailable(request, reply, "Sign-in is temporarily unavailable.");
       }
+      // **A timeout is not an unreachable provider and is not a wrong code** (SONNY-425). §7.2 gives
+      // it its own case, 5a, and §9.3 retries it once where `provider.unavailable` gets backoff — so
+      // collapsing the two would spend a user's sign-in attempts on the wrong schedule. Nothing is
+      // consumed on this path: `consumeLatest` runs only after the provider accepted, so the code the
+      // user is holding survives the timeout and the retry this answer invites can use it.
+      if (error instanceof ProviderTimedOut) return timedOut(request, reply, error);
       throw error;
     }
 
@@ -318,7 +389,9 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     }
     let session;
     try {
-      session = await deps.provider.refresh(parsed.data.refresh_token);
+      session = await withDeadlines(AUTH_DEADLINES, (signal) =>
+        deps.provider.refresh(parsed.data.refresh_token, signal),
+      );
     } catch (error) {
       if (error instanceof ProviderRejected) {
         // Reuse past the overlap window is treated as theft by the provider, which revokes the
@@ -336,6 +409,11 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       if (error instanceof ProviderUnavailable) {
         return providerUnavailable(request, reply, "Session refresh is temporarily unavailable.");
       }
+      // Ordered after the `ProviderRejected` arm for the same reason that one is: a rotated-away
+      // token is a *decided* answer and must not be reported as a timeout. Nothing is rotated on
+      // this path — the provider never answered — so the caller's refresh token is still the live
+      // one and §9.3's single retry can use it (SONNY-425).
+      if (error instanceof ProviderTimedOut) return timedOut(request, reply, error);
       throw error;
     }
     return deps.withConnection(async (client) => {
@@ -486,7 +564,58 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // handler", which is not where this call is and not what it does: it runs after the close, and
     // it is scoped to `{ accountId }` — this account, never a backlog. Nothing drains anything
     // else, and the command reports rather than revokes, because no adapter exists to call.
-    const outcome = await drainOwedRevocations(client, deps.provider, { accountId });
+    // **§12's deadline, OBSERVED by the drain rather than raced against it** (SONNY-425, and the
+    // shape is PR #212's F1). This loop makes one provider call per identity, so the adapter's own
+    // per-request bound is not a bound on the handler; the signal below is threaded into the drain
+    // so the whole of it sits inside §12's budget rather than N times the adapter's.
+    //
+    // **`withDeadlines` is the wrong instrument here and using it was a defect this branch
+    // introduced.** It is a `Promise.race`, so when the deadline wins it *abandons* the work — which
+    // is harmless for every other caller, because their work is a bare HTTP call. This work holds
+    // the pooled `client` this handler leased. Raced, the handler answered 204 and
+    // `withConnection`'s `finally` released that connection while the drain was still running on it:
+    // `pg` does not refuse a query on a released client, and the pool hands the same client object
+    // to the next `connect()`, so the abandoned drain's statements land inside whatever transaction
+    // the next request has open. Nothing logs it — the race has already subscribed, so the later
+    // rejection is swallowed. **The rule, stated once because it generalises past this route: a
+    // deadline around work that holds a database connection is never a race that abandons.** It is
+    // a signal the work reads, plus an `await` that the connection's release is ordered after.
+    //
+    // So the deadline is a controller the drain polls between statements, and this handler waits for
+    // the drain to *terminate* either way. What that costs is honest and is the residual: the bound
+    // is cooperative, so a single statement that hangs is bounded by nothing here — `db/pool.ts`
+    // sets no statement timeout, which is SONNY-427's. What it buys is that the drain cannot outlive
+    // the connection.
+    //
+    // **It cannot be allowed to throw, for the reason this handler's own comments below already
+    // give**: the close is committed by the time this runs, so a 5xx would describe an outcome that
+    // is not the one on disk and would invite a retry the gate can no longer let through —
+    // `accountForSupabaseUser` stops attributing this caller the moment `deleted_at` is set. So a
+    // deadline that elapses is recorded as debt exactly the way a failed provider call is: the rows
+    // it never reached keep `provider_session_revoked_at` NULL, the next drain finds them, and
+    // `npm run revocations` reports the residual.
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => deadline.abort(), AUTH_DEADLINES.total);
+    let outcome: RevocationOutcome;
+    try {
+      outcome = await drainOwedRevocations(client, deps.provider, {
+        accountId,
+        signal: deadline.signal,
+      });
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
+    if (deadline.signal.aborted) {
+      // **A real partial outcome, not a synthesised empty one.** The previous version replaced the
+      // whole outcome with zeros because the race left it with nothing; the drain now returns what
+      // it actually did before it stopped, so the log below counts real work. What is left owed is
+      // in the database either way, which is the record that matters.
+      request.log.error(
+        { requestId: request.id, revoked: outcome.revoked, owed: outcome.failed },
+        "account closed, but its provider-side revocation did not finish inside the route " +
+          "deadline; the rows it did not reach stay owed and the next drain takes them",
+      );
+    }
 
     // **The wipe, after the close and after the drain** — see this handler's doc comment for what it
     // reaches and what it deliberately does not.
@@ -587,7 +716,9 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    */
   app.post("/v1/auth/signout", async (request, reply) => {
     try {
-      await deps.provider.signOut(callerOf(request).accessToken);
+      await withDeadlines(AUTH_DEADLINES, (signal) =>
+        deps.provider.signOut(callerOf(request).accessToken, signal),
+      );
     } catch (error) {
       if (error instanceof ProviderRejected) {
         // An already-invalid token is a signed-out session. Answering 401 would make the client's
@@ -600,6 +731,17 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
           "sign-out could not reach the auth provider; the refresh-token family was not revoked",
         );
         return providerUnavailable(request, reply, "Sign-out is temporarily unavailable.");
+      } else if (error instanceof ProviderTimedOut) {
+        // Same reasoning as the arm above and the same log line's subject: the family this gateway
+        // was asked to revoke is still live, and nothing else records that. `204` here would assert
+        // a revocation that did not happen, which is the decision this route's docstring makes for
+        // the unavailable case and which a timeout does not change (SONNY-425).
+        request.log.warn(
+          { requestId: request.id },
+          "sign-out did not reach the auth provider inside the route deadline; " +
+            "the refresh-token family was not revoked",
+        );
+        return timedOut(request, reply, error);
       } else {
         throw error;
       }

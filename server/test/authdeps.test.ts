@@ -4,6 +4,7 @@ import { buildApp } from "../src/app.js";
 import { authWiringFrom, intendsAuth } from "../src/auth/deps.js";
 import { ServiceRoleKeyNotConfigured, SupabaseAuthProvider } from "../src/auth/supabase.js";
 import { ConfigError, loadConfig, type Config } from "../src/config.js";
+import { DEADLINE_MS } from "../src/model/limits.js";
 import { TEST_CREDIT_PLANS } from "./support/credit.js";
 import { testDatabaseUrl } from "./support/database.js";
 
@@ -324,6 +325,28 @@ describe("what the wiring hands the adapter", () => {
       await wiring.close();
     } finally {
       globalThis.fetch = real;
+    }
+  });
+
+  it("wires the adapter's per-request bound to §12's upstream deadline, and to that number", async () => {
+    // **PR #212's F2, R4.** `deps.ts` says "Sourced here so a change to §12's row moves the socket's
+    // bound with it", and until this test that sentence was true by reading and by nothing else:
+    // rewiring it to `90_000` passed the whole suite. W9 is not a substitute — making `timeoutMs`
+    // required proves that *a* bound must be named and says nothing about which one.
+    //
+    // **Both halves are asserted, and neither alone is enough.** Against `DEADLINE_MS.auth.upstream`
+    // so the wiring is what is measured rather than a literal that happens to agree; and against
+    // `10_000` so the pair cannot drift together the day §12's row moves and someone updates only
+    // the table in code. `model.test.ts` pins that row against the contract; this pins the socket
+    // against that row.
+    const wiring = authWiringFrom(loadConfig(AUTH_ENV))!;
+    try {
+      const provider = wiring.deps.provider as SupabaseAuthProvider;
+      expect(provider).toBeInstanceOf(SupabaseAuthProvider);
+      expect(provider.timeoutMs).toBe(DEADLINE_MS.auth.upstream);
+      expect(provider.timeoutMs).toBe(10_000);
+    } finally {
+      await wiring.close();
     }
   });
 

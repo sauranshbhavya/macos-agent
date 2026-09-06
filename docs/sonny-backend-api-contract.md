@@ -1941,6 +1941,33 @@ how long a large vision model actually takes — and neither is read off any hos
 ticket's own scoped requirements already ask for both measurements; this is the contract stating what
 the answers have to clear.
 
+**The last row is five routes rather than one, and until SONNY-425 nothing applied it to any of
+them.** `POST /v1/auth/email/start`, `/email/verify`, `/refresh`, `/signout` and `DELETE /v1/account`
+now run their provider work inside both deadlines, at the numbers above, through the same wrapper the
+model routes have used since SONNY-130 — and the 10 s is the bound the Supabase adapter sets on each
+request it makes, read from this table rather than written as a literal that matched it by accident.
+**Two of the five do not answer `504 provider.timeout` when the deadline elapses, and both are
+decisions this table does not override.** `/email/start` answers its uniform `200` whatever happens,
+because section 3.6 makes that response identical for an address with an account and one without, and
+a status that varied with what happened downstream would be that oracle in a slower form.
+`DELETE /v1/account` answers `204`: by the time its provider work runs the account is closed and
+committed, the caller can no longer be attributed to it, and a `5xx` would describe an outcome that is
+not the one on disk while inviting a retry that cannot get through — the revocation stays owed and is
+reported by the operator command, which is what that route already does for a provider failure.
+
+**Three routes the row names are deliberately not wired, each for its own reason** (SONNY-425).
+`GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider, no network — so
+a deadline around either is a timer that cannot fire, and the row's numbers are true of them only in
+the sense that any bound is. `DELETE /v1/tasks/{task_id}` and three of the four `/v1/account/*`
+routes wait on the database rather than on a provider, and this gateway sets no statement timeout
+anywhere — only a connection timeout — so bounding those is a change to how every authenticated route
+reaches Postgres rather than a wrapper at a few call sites. **The fourth is `POST
+/v1/account/credits/top-up` and it is nothing of the kind: it charges at the payment provider, with
+up to three sequential calls of twelve seconds each, so its upstream work can run for far longer than
+this row allows.** Whether it gets a row of its own derived from those attempts, or the attempts are
+bounded to fit this one, is **SONNY-430** (2026-09-06), filed so the route has an owner; nothing
+bounds it today. All three are owed and none is claimed here.
+
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying
 option by default, and this project had never turned it back on — so a caller that sent headers and

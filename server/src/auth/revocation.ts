@@ -197,7 +197,7 @@ interface ClaimedRow {
 export async function drainOwedRevocations(
   client: pg.Client,
   provider: AuthProvider,
-  options: { accountId?: string; limit?: number; now?: Date } = {},
+  options: { accountId?: string; limit?: number; now?: Date; signal?: AbortSignal } = {},
 ): Promise<RevocationOutcome> {
   const limit = options.limit ?? 100;
   const now = options.now ?? new Date();
@@ -205,6 +205,21 @@ export async function drainOwedRevocations(
   const failures: { supabaseUserId: string; reason: string }[] = [];
 
   for (let attempted = 0; attempted < limit; attempted += 1) {
+    // **The caller's deadline, read between statements — never raced against this loop**
+    // (SONNY-425, and the shape is PR #212's F1). This function holds a database connection its
+    // caller leased, so a deadline that *abandoned* it would leave statements running after that
+    // connection had been released and handed to another request. `DELETE /v1/account` therefore
+    // awaits this function's return and asks it to stop, rather than racing it; this is where it
+    // stops. Checked before the claim, so a run that ends here has taken no new lease and owes
+    // nothing to a reader of `revocation_claimed_at`.
+    //
+    // **What this bounds and what it does not.** It ends the loop between iterations, so the worst
+    // case past the deadline is the statement already in flight plus one provider call. A single
+    // statement that hangs is bounded by nothing here — `db/pool.ts` sets no statement timeout,
+    // which is SONNY-427's — and this comment says so rather than letting the word "deadline" imply
+    // otherwise. Nothing else passes a signal, and a drain without one behaves exactly as it did.
+    if (options.signal?.aborted === true) break;
+
     // **One atomic UPDATE takes the lease and returns what it took** (PR #87 fifth round, F3).
     //
     // This was `BEGIN; SELECT … FOR UPDATE SKIP LOCKED; COMMIT` followed by the provider call — and
@@ -271,11 +286,27 @@ export async function drainOwedRevocations(
     if (!owed) break;
 
     try {
-      await provider.signOutAllForUser(owed.supabase_user_id);
+      // **The caller's deadline, when it has one** (SONNY-425). This loop makes one provider call
+      // per identity, so the adapter's own per-request bound is not a bound on the drain — N
+      // identities buy N of them. `DELETE /v1/account` runs this inside §12's deadline and threads
+      // the signal here so the ceiling is the route's rather than the adapter's times N. Nothing
+      // else passes one, and a drain without one behaves exactly as it did.
+      await provider.signOutAllForUser(owed.supabase_user_id, options.signal);
     } catch (error) {
       if (!(error instanceof ProviderRejected)) {
         // Transient, or unknown, which is treated as transient. `provider_session_revoked_at` stays
         // NULL, so the row is still owed and the next drain finds it.
+        //
+        // **A deadline elapse ends the whole drain rather than this identity, and the loop's own
+        // check at the top is what does it — not a special error class here** (SONNY-425; PR #212's
+        // F3 removed the version that tried to do it from this `catch`). That version rethrew a
+        // `ProviderTimedOut`, on the reasoning that the wrapper's race raised it. The race never
+        // reached this `catch` at all: it rejects the *outer* promise and injects nothing into the
+        // work, and the one real adapter maps every abort — the route's signal included — to
+        // `ProviderUnavailable` (`auth/supabase.ts`). So the line was unreachable outside a test fake
+        // and its stated mechanism was wrong. An abort arriving *during* a provider call therefore
+        // lands here like any other transient failure, releases the lease on the line below, and the
+        // loop stops at its next top rather than claiming another row.
         //
         // **The lease is released, and that distinction matters.** A lease says "somebody is calling
         // the provider about this right now"; a failure that has already returned is not that. Left

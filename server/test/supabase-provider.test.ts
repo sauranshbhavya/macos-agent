@@ -87,6 +87,12 @@ function providerAnswering(
     anonKey: ANON,
     serviceRoleKey: SERVICE_ROLE,
     fetch,
+    // **Named rather than defaulted, because the adapter no longer has a default** (SONNY-425). It
+    // carried one of `10_000`, which was §12's upstream deadline for these routes spelled a second
+    // time in a file that cites no contract section — so a mutant deleting `deps.ts`' wiring of the
+    // real number survived the whole suite, there being nothing left to observe. §12's number is
+    // `deps.ts`' to supply; a test that only needs *a* bound says so here.
+    timeoutMs: 10_000,
   });
   return { provider, calls };
 }
@@ -414,6 +420,81 @@ describe("SupabaseAuthProvider — rejected versus unavailable", () => {
     const error = await errorFrom(provider.refresh("r"));
     expect(error).toBeInstanceOf(ProviderUnavailable);
     expect((error as Error).message).toContain("TypeError");
+  });
+
+  it("composes the CALLER's deadline with its own bound, so a route's signal reaches the socket", async () => {
+    // **PR #212's F2, R1.** §12 and this branch's own prose both claim "the route's deadline
+    // reaching the socket", and until this test nothing held it: every other assertion about a
+    // signal in this repository observes a *fake* provider's parameter, so replacing the
+    // `AbortSignal.any([...])` composition with the adapter's own timeout alone passed the whole
+    // suite. That mutant matters — with the composition gone, `DELETE /v1/account`'s drain is back
+    // to N times the adapter's bound, which is the defect SONNY-425 exists to fix.
+    //
+    // Driven by aborting the caller's controller and reading the signal the adapter actually put on
+    // its `fetch`. No clock: `AbortSignal.any` propagates an abort to the composed signal at once,
+    // and the adapter's own bound here is long enough that it cannot be what fires.
+    let seen: AbortSignal | undefined;
+    const fetch = (async (_input: FetchInput, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      // Rejects on abort, the way a real `fetch` does — a stub that ignored the signal would hang
+      // here rather than exercising the path this test is about.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+        });
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const provider = new SupabaseAuthProvider({
+      authUrl: AUTH_URL,
+      anonKey: ANON,
+      serviceRoleKey: SERVICE_ROLE,
+      fetch,
+      timeoutMs: 600_000,
+    });
+    const caller = new AbortController();
+    const pending = provider.refresh("r", caller.signal);
+    await Promise.resolve();
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(false);
+
+    caller.abort();
+    expect(seen!.aborted).toBe(true);
+    // And it arrives at the caller as this seam's own error rather than a bare `AbortError`, which
+    // is what `routes/auth.ts` catches. `provider.ts` states that mapping; this is where it holds.
+    await expect(pending).rejects.toBeInstanceOf(ProviderUnavailable);
+  });
+
+  it("leaves a call with no caller signal bounded by its own timeout and nothing else", async () => {
+    // The other direction of the composition, and it is what stops the mutant being written the
+    // easy way round: an adapter that always composed with a *caller* signal would fail on the five
+    // call sites that pass none, and one that dropped its own bound would leave those unbounded.
+    let seen: AbortSignal | undefined;
+    const fetch = (async (_input: FetchInput, init?: RequestInit) => {
+      seen = init?.signal ?? undefined;
+      // Rejects on abort, the way a real `fetch` does — a stub that ignored the signal would hang
+      // here rather than exercising the path this test is about.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+        });
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const provider = new SupabaseAuthProvider({
+      authUrl: AUTH_URL,
+      anonKey: ANON,
+      serviceRoleKey: SERVICE_ROLE,
+      fetch,
+      timeoutMs: 20,
+    });
+    const error = await errorFrom(provider.refresh("r"));
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(true);
+    expect(error).toBeInstanceOf(ProviderUnavailable);
+    // **`timeoutMs` is the field the request above actually used, not a second spelling of it.**
+    // That is the whole reason it is readable, so the assertion pairing it with the abort has to
+    // live beside the abort: a public field nothing ties to behaviour would recreate W9's defect one
+    // level out. Twenty milliseconds, so this reads a real bound firing rather than a wall clock.
+    expect(provider.timeoutMs).toBe(20);
   });
 
   it("bounds every call with a timeout and reports a timeout as unavailable", async () => {

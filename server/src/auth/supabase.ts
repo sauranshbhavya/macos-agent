@@ -109,12 +109,20 @@ export interface SupabaseAuthConfig {
    * no timeout on `signOutAllForUser` to bound it further. A real adapter should set one; whichever
    * ticket lands it owns that").
    *
-   * Ten seconds, and the ceiling that matters is not patience: `sonny.revocation_lease_seconds()` is
-   * 300 (migration 0008), and a provider call outliving its lease is re-claimed by a second drain
-   * and made twice. Ten leaves that two orders of magnitude away. It is also in front of a user
-   * waiting on a sign-in, where ten seconds is already long.
+   * The ceiling that matters is not patience: `sonny.revocation_lease_seconds()` is 300 (migration
+   * 0008), and a provider call outliving its lease is re-claimed by a second drain and made twice.
+   * It is also in front of a user waiting on a sign-in, where ten seconds is already long.
+   *
+   * **Required, and it carried a default of `10_000` until SONNY-425.** That default was §12's
+   * upstream deadline for these routes written a second time, in a file that cites no contract
+   * section — so `deps.ts` reading the number from `DEADLINE_MS.auth.upstream` and the adapter
+   * defaulting to a literal produced the same behaviour, and *deleting* the wiring produced it too.
+   * A mutation battery found exactly that: the mutant survived the whole suite, because there was
+   * nothing left for a test to see. No test can close a gap between two spellings of one number;
+   * removing one spelling can. A caller that names no bound now fails to compile, which is the same
+   * answer `ClipboardHistoryStore` gives for a store that names no location.
    */
-  readonly timeoutMs?: number;
+  readonly timeoutMs: number;
   /** Injected so the translation can be tested without a project. Defaults to the global `fetch`. */
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -140,8 +148,6 @@ export class ServiceRoleKeyNotConfigured extends Error {
     this.name = "ServiceRoleKeyNotConfigured";
   }
 }
-
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * The token response of GoTrue's `/token`, `/verify` and every other session-minting endpoint
@@ -256,14 +262,25 @@ export class SupabaseAuthProvider implements AuthProvider {
   readonly #authUrl: string;
   readonly #anonKey: string;
   readonly #serviceRoleKey: string | undefined;
-  readonly #timeoutMs: number;
+  /**
+   * The per-request bound this adapter applies, readable (PR #212's F2).
+   *
+   * **Public because a number wired from a contract table has to be checkable, and W9 showed that
+   * an unreadable one is not.** `auth/deps.ts` passes §12's `DEADLINE_MS.auth.upstream` here; with
+   * this private, a mutant wiring `90_000` instead survived the whole suite, because
+   * `AbortSignal.timeout` does not report the duration it was built with and no test could reach
+   * the value by any other route. It is not a second spelling of the number — it *is* the field the
+   * `fetch` below uses, and `supabase-provider.test.ts` asserts the two together against a tiny
+   * bound so this cannot become one.
+   */
+  readonly timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
 
   constructor(config: SupabaseAuthConfig) {
     this.#authUrl = config.authUrl.replace(/\/+$/, "");
     this.#anonKey = config.anonKey;
     this.#serviceRoleKey = config.serviceRoleKey;
-    this.#timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.timeoutMs = config.timeoutMs;
     this.#fetch = config.fetch ?? globalThis.fetch;
   }
 
@@ -275,11 +292,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * default that changed under us would turn every new user's first code into `otp_disabled` —
    * silently, since `routes/auth.ts` answers the same uniform 200 whatever happens here.
    */
-  async sendEmailCode(email: string): Promise<SentCode> {
+  async sendEmailCode(email: string, signal?: AbortSignal): Promise<SentCode> {
     const body = await this.#call("sendEmailCode", "/otp", {
       method: "POST",
       key: this.#anonKey,
       json: { email, create_user: true },
+      signal,
     });
     const parsed = otpResponse.safeParse(body);
     // A 200 whose body is not an object is not worth failing a send over: the mail is already gone,
@@ -297,11 +315,16 @@ export class SupabaseAuthProvider implements AuthProvider {
    * that endpoint's mail is a signup for a new address and a magic link for a known one. Sending
    * `magiclink` instead would refuse every first-ever sign-in.
    */
-  async verifyEmailCode(email: string, code: string): Promise<VerifiedSession> {
+  async verifyEmailCode(
+    email: string,
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSession> {
     const body = await this.#call("verifyEmailCode", "/verify", {
       method: "POST",
       key: this.#anonKey,
       json: { type: "email", email, token: code },
+      signal,
     });
     return this.#session("verifyEmailCode", body);
   }
@@ -310,11 +333,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * `POST /token?grant_type=refresh_token`. Rotation, the 10s reuse interval and family revocation
    * on reuse are all the provider's, per contract §3.3 — this hands the token over and reports back.
    */
-  async refresh(refreshToken: string): Promise<VerifiedSession> {
+  async refresh(refreshToken: string, signal?: AbortSignal): Promise<VerifiedSession> {
     const body = await this.#call("refresh", "/token?grant_type=refresh_token", {
       method: "POST",
       key: this.#anonKey,
       json: { refresh_token: refreshToken },
+      signal,
     });
     return this.#session("refresh", body);
   }
@@ -328,11 +352,12 @@ export class SupabaseAuthProvider implements AuthProvider {
    * `models.LogoutSession(tx, s.ID)` and its default, `global`, to `models.Logout(tx, u.ID)` — every
    * session the user has. A user signing out on one Mac must not sign themselves out on another.
    */
-  async signOut(accessToken: string): Promise<void> {
+  async signOut(accessToken: string, signal?: AbortSignal): Promise<void> {
     await this.#call("signOut", "/logout?scope=local", {
       method: "POST",
       key: this.#anonKey,
       bearer: accessToken,
+      signal,
     });
   }
 
@@ -395,8 +420,14 @@ export class SupabaseAuthProvider implements AuthProvider {
    * to `/logout?scope=global`, which `logout.go` shows would work even with no `session_id` claim —
    * that is the gateway forging a user credential, and it is a founder's decision, not a session's.
    */
-  async signOutAllForUser(supabaseUserId: string): Promise<void> {
+  async signOutAllForUser(supabaseUserId: string, signal?: AbortSignal): Promise<void> {
     void supabaseUserId;
+    // **The signal reaches no socket here, and saying so is the point of naming it.** This method
+    // throws before it sends anything, so the route deadline `revocation.ts` threads down is
+    // honoured by the seam's declaration and by nothing in this body. It is accepted rather than
+    // omitted so that the implementation this comment's own docstring says is owed inherits the
+    // bound instead of having to be told about it.
+    void signal;
     throw new ProviderUnavailable(
       "supabase signOutAllForUser is not implementable: Supabase Auth exposes no endpoint that " +
         "revokes a user's sessions from their id alone. The revocation stays owed and is reported " +
@@ -466,6 +497,8 @@ export class SupabaseAuthProvider implements AuthProvider {
       key: string;
       bearer?: string;
       json?: unknown;
+      /** The caller's deadline, when it has one. See the composition at the `fetch` below. */
+      signal?: AbortSignal | undefined;
     },
   ): Promise<unknown> {
     const headers: Record<string, string> = {
@@ -484,9 +517,18 @@ export class SupabaseAuthProvider implements AuthProvider {
         method: options.method,
         headers,
         ...(options.json === undefined ? {} : { body: JSON.stringify(options.json) }),
-        // Every call is bounded. An unbounded one is what `revocation.ts` names as owed, and it is
-        // also a request handler holding a connection while a socket hangs.
-        signal: AbortSignal.timeout(this.#timeoutMs),
+        // **Every call is bounded, and after SONNY-425 it is bounded twice.** An unbounded one is
+        // what `revocation.ts` names as owed, and it is also a request handler holding a connection
+        // while a socket hangs. `timeoutMs` bounds THIS call — `auth/deps.ts` sets it from
+        // `DEADLINE_MS.auth.upstream`, so it is §12's own number rather than a literal that happens
+        // to match it — and the caller's signal bounds the ROUTE's whole upstream budget, which is a
+        // larger quantity wherever a handler makes more than one call. `AbortSignal.any` honours
+        // whichever fires first and is not given an array with a hole in it: composing only when the
+        // caller supplied one keeps the single-signal path byte-identical to what it was.
+        signal:
+          options.signal === undefined
+            ? AbortSignal.timeout(this.timeoutMs)
+            : AbortSignal.any([options.signal, AbortSignal.timeout(this.timeoutMs)]),
       });
     } catch (error) {
       // A timeout, a DNS failure, a refused socket, an aborted body. The name is safe to repeat --
