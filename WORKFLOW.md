@@ -261,6 +261,25 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   alter, so it would report zero over a server change while never compiling what changed. A
   change touching both halves runs both halves' commands; neither substitutes for the other,
   and green on the wrong half is not evidence (SONNY-193).
+- **Attributions: `scripts/no-attribution`, on the three surfaces no hook can watch.** The two
+  hooks are the refusal and this is the audit: they stop a new attribution arriving, and neither
+  can see what is already in the history, already in a tracked file, or already in a pull request
+  body on GitHub — the last being the surface nothing in the repository can reach at all.
+  `history` and `tree` are local and cost a second or two, `prs` needs `gh`, and `all` runs the
+  three. Exit 0 is a clean surface, 2 is a finding, and **1 means a surface could not be measured
+  and is never reported as clean**. The closing comment carries the exit the same way it carries
+  the suite's count. **Naming it here is the half that keeps it alive** — a hook fires inside one
+  session's checkout and leaves nothing a reviewer or a zero-context reader can quote, so a
+  session whose hook never ran looks exactly like a session whose hook passed, which is the same
+  reason step 7 keeps naming `scripts/warnings`, and this file's own record of SONNY-64 is what a
+  check nobody is told to run turns into. (PR #195's F9: the tool shipped with SONNY-406 and this
+  file named it nowhere. Measured at `d14eba65`, before this bullet existed:
+  `grep -c 'scripts/no-attribution' WORKFLOW.md` → **0**, against **11** for the same command over
+  `scripts/warnings` — that 11 is file-wide, of which **6** fall inside this step, and which of the
+  two a figure is has to be said before it is compared — and the 11 is also the control saying the
+  search can find a tool this file does name. Both are readings at a commit rather than claims
+  about the file: this bullet names both tools twice each, so the same two commands answer **2**
+  and **13** here. Routed into SONNY-372's branch 2026-09-05; recorded on SONNY-410.)
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
