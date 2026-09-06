@@ -511,10 +511,90 @@ struct ShellSurfaceDetectorTests {
         Fixture(name: "an address and a section mark in prose (SONNY-277 adversarial)", signals: [], text: """
         Write to counsel@acme.example about \u{00A7} 12 before Friday.
         The clause priya@acme.io cited is \u{00A7} 3 and it is 82% settled.
+        """),
+
+        // **PR #209's F1 documents, and the three that defeat the narrowing it proposed** (SONNY-277).
+        // Every one of these is refused by the repetition floor this branch first shipped. They are
+        // marked *(SONNY-277 adversarial)* so `theCorpusCoversBothDirections` can hold a floor on
+        // them; the measurement that chose the rule is on the ticket. Two of them keep one signal
+        // apiece — a document may mention an ssh error or end a menu in `logout` and still not be a
+        // shell — which is the threshold doing its job, and is why the expected sets are asserted
+        // exactly rather than through `showsShell`.
+        Fixture(name: "an incident policy naming two parties under section marks (SONNY-277 adversarial)", signals: [.shellDiagnostic], text: """
+        Incident Response Policy
+
+        Report incidents to security@acme.example under \u{00A7} 7.2 within one hour.
+        Escalations go to soc@acme.example under \u{00A7} 7.3 within four hours.
+
+        If your key is rejected the agent prints Permission denied (publickey) and you must re-enrol.
+        """),
+
+        // The same document with the mark spelled out. **This is the control that makes the fixture
+        // above mean something**: the two differ only in whether they write the section sign, so a
+        // rule that refuses one and serves the other is refusing the glyph rather than the shell. It
+        // keeps its shell-diagnostic signal in both, which is why neither reaches two.
+        Fixture(name: "the same incident policy with the mark spelled out (SONNY-277 control)", signals: [.shellDiagnostic], text: """
+        Incident Response Policy
+
+        Report incidents to security@acme.example under clause 7.2 within one hour.
+        Escalations go to soc@acme.example under clause 7.3 within four hours.
+
+        If your key is rejected the agent prints Permission denied (publickey) and you must re-enrol.
+        """),
+
+        Fixture(name: "a help page whose menu ends in logout, beside two contact lines (SONNY-277 adversarial)", signals: [.sessionBanner], text: """
+        Account help
+
+        Billing questions go to billing@acme.example under \u{00A7} 4 of the agreement.
+        Access questions go to identity@acme.example under \u{00A7} 5 of the agreement.
+
+        Menu
+        profile
+        settings
+        logout
+        """),
+
+        // The branch's own adversarial sentence written twice, which is what the repetition floor
+        // could not tell from a scrollback.
+        Fixture(name: "the address-and-section-mark sentence twice, two addresses (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        Write to soc@acme.example about \u{00A7} 13 before Monday.
+        """),
+
+        // **The three that defeat a shared-identity rule on its own** — written by asking what the
+        // review's proposed narrowing does not reach, rather than by checking it against its own
+        // examples. One address repeated is the ordinary way a contract names a single party.
+        Fixture(name: "the same sentence twice with one address (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        Write to counsel@acme.example about \u{00A7} 13 before Monday.
+        """),
+
+        Fixture(name: "one party, one section mark, three times (SONNY-277 adversarial)", signals: [], text: """
+        Under the contract legal@acme.example owns \u{00A7} 1 and reviews it yearly.
+        Under the contract legal@acme.example owns \u{00A7} 2 and reviews it yearly.
+        Under the contract legal@acme.example owns \u{00A7} 3 and reviews it yearly.
+        """),
+
+        // A real terminal, quoted in an email. Not a live shell, and it shares its identity by
+        // construction — so a shared-identity rule alone refuses it and the line anchor is what does
+        // not.
+        Fixture(name: "a terminal session quoted in an email reply (SONNY-277 adversarial)", signals: [], text: """
+        On Tuesday priya wrote:
+        > sauransh@Mac macos-agent \u{00A7} ls
+        > README.md Sources
+        > sauransh@Mac macos-agent \u{00A7}
+        Can you try again?
+        """),
+
+        // **The one the line anchor alone gets wrong**, which is why both conditions are kept: a
+        // contact table puts its addresses at the start of every line.
+        Fixture(name: "a contact table whose lines start with addresses (SONNY-277 adversarial)", signals: [], text: """
+        security@acme.example owns \u{00A7} 7.2 of the policy.
+        soc@acme.example owns \u{00A7} 7.3 of the policy.
         """)
     ]
 
-    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
+    /// **The panel the recognizer actually returned** (SONNY-277).    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
     /// verbatim joined text of the 800x600 @ 13pt run in `ShellSurfaceLookAlikeFoldTests`, where
     /// Vision read every `%` sigil as U+00A7 SECTION SIGN. Against the detector at `4a3d0ef6` it
     /// produced **no signals at all** — a terminal panel with `sudo rm -rf .build` typed at it,
@@ -1014,6 +1094,16 @@ struct ShellSurfaceDetectorTests {
         #expect(Self.mustRefuse.filter { $0.name.contains("(N2)") }.count >= 4)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(N1)") }.count >= 3)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(N2 adversarial)") }.count >= 5)
+        // **SONNY-277's anchor, and it is not decoration** (PR #209 review, F11). Both of the
+        // branch's first two section-mark fixtures could be deleted with the suite staying green,
+        // because `mustNotRefuse.count >= 22` sat exactly at the count minus two — and deleting the
+        // address-and-section-mark sentence alone is what makes the repetition floor's mutant
+        // survive, while deleting the legal page alone takes a killer off the minimal-set mutant.
+        // The floor is nine because that is what the F1 round left: two from the first version and
+        // seven documents from the review's round, one of which is a control rather than an
+        // adversary and is counted here so the pair cannot be split.
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 adversarial)") }.count >= 9)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 control)") }.count >= 1)
     }
 }
 
@@ -1240,19 +1330,34 @@ struct ShellSurfaceLookAlikeFoldTests {
     ///
     /// The fold turns non-ASCII letters into ASCII ones, so the risk it carries is manufacturing a
     /// prompt or a command word out of another script — the false-refusal direction, the one that
-    /// stops a user's real work. Measured over the whole corpus rather than a chosen example: every
-    /// fixture's verdict must be identical folded and unfolded.
+    /// stops a user's real work. Measured over the whole corpus rather than a chosen example.
     ///
-    /// This is not made vacuous by the fold now living inside `verdict(for:)`: folding is idempotent
-    /// on its own output, so a fixture whose folded and unfolded verdicts differ is still a fixture
-    /// the fold moved.
+    /// **What this test can and cannot do, since the fold moved inside `verdict(for:)`** (PR #209
+    /// review, F10). It used to assert `verdict(for: fold(text)) == fixture.signals` and claim that
+    /// as a folded-versus-unfolded comparison; the fold is idempotent and now runs inside the
+    /// verdict, so that expression was byte-equivalent to the corpus test beside it and had no
+    /// unfolded branch to compare against. It compares against the **unfolded** verdict now, which
+    /// is reachable because `LatinConfusables` is `@testable`-visible and the pure ASCII path is not
+    /// something `verdict(for:)` can undo: a fixture whose text folds to itself is asserted to be
+    /// unchanged by the fold, and a fixture that does fold is asserted to reach the same verdict
+    /// either way.
+    ///
+    /// **The property itself is covered by something stronger than this test**, and that is worth
+    /// stating rather than leaving to be rediscovered: the pre-existing fixtures carry expected
+    /// signal sets authored before the fold existed, so the corpus test passing at all is the
+    /// evidence that the fold moved none of them.
     @Test(arguments: ShellSurfaceDetectorTests.corpus.map(\.name))
     func theFoldChangesNoVerdictOnTheExistingCorpus(name: String) throws {
         let fixture = try #require(ShellSurfaceDetectorTests.corpus.first { $0.name == name })
+        let folded = LatinConfusables.fold(fixture.text).text
         #expect(
-            ShellSurfaceDetector.verdict(for: LatinConfusables.fold(fixture.text).text).signals == fixture.signals,
+            ShellSurfaceDetector.verdict(for: folded).signals == fixture.signals,
             "the fold moved \(fixture.name)"
         )
+        // The half the old version could not perform: for every fixture whose text the fold leaves
+        // alone — which on this ASCII corpus is all of them — folding is provably a no-op on the
+        // input rather than merely on the output, so the equality above is not an identity.
+        #expect(folded == fixture.text, "this corpus is ASCII; a fixture that folds needs its own pin")
     }
 
     /// The same question asked of text the corpus does not contain: ordinary prose in scripts the

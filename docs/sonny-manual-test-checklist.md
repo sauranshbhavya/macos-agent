@@ -3224,6 +3224,16 @@ what you will see is the storage banner rather than a watcher.
       be a finding:** a "reads differently every time" notification from that single wobble — that
       would mean an ordinary page that flickers once gets abandoned, which is the cost this ticket
       was required to avoid.
+
+      **Make sure the wobble was actually seen, or this row cannot tell a pass from nothing
+      happening** (PR #209 review, F13). "No notification" is also what you get if the watcher never
+      observed the change at all — the page was edited and put back inside one 30-second interval,
+      so no check ever read the changed version. **Leave the changed version up for a full 40
+      seconds by the clock** before putting it back, which at `checkInterval: 30` guarantees at least
+      one check saw it. If the expiry sentence at the end reads *"Nothing settled"* rather than
+      *"It did not change"*, that is Sonny telling you the wobble was seen — and that is the sentence
+      this row wants. Getting *"It did not change"* means the wobble was missed: re-run rather than
+      recording a pass.
 - [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first seven checks say **nothing**.
       After the eighth — about **four minutes** at a 30-second interval — one notification says
       *Sonny stopped watching “…”. The page could not be read.* A notification per failed fetch is a
@@ -3730,6 +3740,16 @@ formality.
       command or two of scrollback above it. Then ask Sonny to do something that needs screen
       control in that window. **Expected: Sonny does not act inside it.** **What would be a
       finding:** Sonny going ahead and clicking or typing in that window.
+
+      **A pass here does not by itself confirm the fix, and the row says so rather than implying
+      otherwise** (PR #209 review, F13). The misread this change is about may simply not happen on
+      your screen — a Retina display captures a 12 pt font at 2×, so the recognizer may read the
+      prompt perfectly and the panel then refuses through the ordinary path exactly as it did before
+      this branch. Sonny is not allowed to say which of the two happened. So please **write down the
+      font size, the display, and whether it is Retina** beside your result: a refusal at 9 pt on a
+      non-Retina external monitor is evidence, and one at 12 pt on a built-in Retina screen is
+      consistent with the fix never being exercised. Either is worth having; they are not the same
+      reading.
 - [ ] **(SONNY-277)** **The same terminal at a normal font size.** Repeat the row above with the font
       back at its usual size. **Expected: the same refusal.** This is the control — if the small-font
       case refuses and this one does not, something is wrong in the opposite direction from the bug.

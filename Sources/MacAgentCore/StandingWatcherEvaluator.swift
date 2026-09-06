@@ -137,9 +137,9 @@ public enum StandingWatcherEvaluator {
     /// rather than on a confirmed change alone, which is the shape `consecutiveFailures` already has.
     /// The ticket's own proposal reset only on a confirmed pair, and that accumulates: a single
     /// one-check wobble costs two increments — one leaving the baseline and one returning — so it
-    /// declared a page wobbling once a day unwatchable on check 193, and one wobbling once an hour on
-    /// check 9. With this reset every wobble rate from hourly to fortnightly reads exactly as it did
-    /// before the change.
+    /// declared a page wobbling once a day unwatchable on check 146, one wobbling twice a week on
+    /// check 506, and one wobbling once an hour on check 8. With this reset every wobble rate from
+    /// hourly to fortnightly reads exactly as it did before the change.
     ///
     /// **Where it fails, since four consecutive differences is what it counts:** two one-off wobbles
     /// separated by exactly one stable reading — `w`, baseline, `w`, baseline — end the watcher,

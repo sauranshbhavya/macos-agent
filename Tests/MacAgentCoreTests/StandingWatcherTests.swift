@@ -361,7 +361,7 @@ struct StandingWatcherTests {
     /// (SONNY-390).
     ///
     /// **The reset is a check later, and the test asserts both halves**, because "does not reset" on
-    /// its own is the rule that declared a page wobbling once a day unwatchable on check 193. What
+    /// its own is the rule that declared a page wobbling once a day unwatchable on check 146. What
     /// forgives an ordinary wobble is the *next* reading agreeing with this one.
     @Test
     func aReadingEqualToTheBaselineCountsTowardInstabilityAndTheNextAgreementClearsIt() {
@@ -440,7 +440,11 @@ struct StandingWatcherTests {
     /// A watcher life is 672 checks at the shipped limits and a fortnight is 1344 of them, so
     /// `check % 1344` fires never and an archetype written that way is silently the steady page —
     /// which is what the corpus's first shape did, and this test is what caught it. The counts are
-    /// wobbles per watcher life: 1 is roughly fortnightly, 7 is daily, 168 is hourly.
+    /// wobbles per watcher life, and a life is 672 checks at fifteen minutes, which is **seven
+    /// days**: so 1 is weekly, 2 twice a week, 7 daily, 168 hourly. (This said "1 is roughly
+    /// fortnightly" — PR #209 review, F14. One per life is the conservative stand-in for a
+    /// fortnightly page, since half of those lives carry no wobble at all and the informative case
+    /// is the one that does, but the label was arithmetic and the arithmetic was wrong.)
     @Test(arguments: [1, 2, 7, 28, 84, 168])
     func aPageThatWobblesAndSettlesIsNeverCalledUnwatchable(wobblesPerLife: Int) {
         var watcher = sampleWatcher(id: "w1", subject: "a wobbling page", baselineDigest: "base")
@@ -470,14 +474,21 @@ struct StandingWatcherTests {
         #expect(watcher.firstDifferenceAt != nil, "the wobbles really happened")
     }
 
-    /// **Where the rule fails, pinned so it is a decision rather than a surprise.** Two one-off
-    /// wobbles separated by exactly one stable reading are four consecutive differences, and end the
-    /// watcher. Two wobbles two stable readings apart, or adjacent to each other, are forgiven.
+    /// **Where the rule fails, pinned so it is a decision rather than a surprise.** The counter is a
+    /// run length of consecutive differing readings, so **any four in a row end the watcher**,
+    /// whatever produced them — and `main` carried every one of these sequences to expiry.
     ///
-    /// The three cases are asserted together because the boundary is the finding: it is not that
-    /// clustered wobbles are fatal, it is that one spacing out of the three is.
+    /// **This test was named `onlyWobblesOneStableReadingApartEndTheWatcher`, and the "only" was
+    /// false** (PR #209 review, F8). Three further shapes end a watcher and are asserted below; the
+    /// `w, base, w, base` alternation is merely the one the ticket's own example reaches. A page
+    /// that shows three different readings and then settles is arguably the more ordinary of the
+    /// two, and a name promising it was safe is worse than no name at all.
+    ///
+    /// What is genuinely forgiven is a run that never reaches four: two wobbles two or more stable
+    /// readings apart, and two adjacent wobbles that then settle. Both are asserted, because the
+    /// finding is the boundary rather than "clustered wobbles are fatal".
     @Test
-    func onlyWobblesOneStableReadingApartEndTheWatcher() {
+    func fourConsecutiveDifferingReadingsEndTheWatcherHoweverTheyArrive() {
         func verdict(_ readings: [String]) -> StandingWatcherStopReason? {
             var watcher = sampleWatcher(id: "w", subject: "a page", baselineDigest: "base")
             for (index, reading) in readings.enumerated() {
@@ -498,9 +509,14 @@ struct StandingWatcherTests {
             return nil
         }
 
-        #expect(verdict(["w1", "base", "w2", "base", "base"]) == .unwatchable, "one apart is four consecutive differences")
+        // Four in a row, four ways in. Every one of these reads `nothing` under the rule on `main`.
+        #expect(verdict(["w1", "base", "w2", "base", "base"]) == .unwatchable, "one stable reading apart")
+        #expect(verdict(["w1", "w2", "w3", "base", "base"]) == .unwatchable, "three adjacent, then settles")
+        #expect(verdict(["w1", "w2", "base", "w3", "base", "base"]) == .unwatchable, "two adjacent, one apart")
+        #expect(verdict(["w1", "base", "w2", "w3", "base", "base"]) == .unwatchable, "one apart, two adjacent")
+        // And the runs that stop at three.
         #expect(verdict(["w1", "base", "base", "w2", "base", "base"]) == nil, "two apart is forgiven")
-        #expect(verdict(["w1", "w2", "base", "base"]) == nil, "adjacent is forgiven")
+        #expect(verdict(["w1", "w2", "base", "base"]) == nil, "two adjacent, then settles, is forgiven")
     }
 
     /// **The two-reading rule is untouched, which the ticket puts out of scope.** A real change is
