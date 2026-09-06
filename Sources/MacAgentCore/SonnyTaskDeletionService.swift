@@ -180,6 +180,27 @@ public struct SonnyTaskDeletionService: Sendable {
         await deliverPendingDeletions()
     }
 
+    /// The instant a press should be bounded at — **the server's clock, not this Mac's**
+    /// (SONNY-404, PR #207's cycle-3, G1).
+    ///
+    /// The cutoff is compared against `occurred_at` on the gateway's own rows, so a Mac whose clock
+    /// is wrong bounds the deletion at the wrong instant. Running behind, the immediate wipe
+    /// under-deletes while reporting that the servers' copy is gone; running ahead, the queued
+    /// obligation's cutoff sits in the future, which is the over-deletion `?before=` was added to
+    /// prevent. `SonnyBackendClient.serverNow()` exists for exactly this (§3.5's offset) and is what
+    /// `EntitlementService` and `SonnyAccountService` already read.
+    ///
+    /// **It is the Mac's clock plus a correction, so it is never unavailable**: with no observation
+    /// yet the offset is zero and this is `Date()`, which is what the press used before.
+    ///
+    /// **The wire truncates it toward the past by up to a second**, deliberately and harmlessly:
+    /// §2.1's format carries no fractional seconds, so a bound of `…00.750` goes out as `…00Z`. The
+    /// error is always in the under-deleting direction, which is the safe one for a bound whose job
+    /// is to stop a delayed delete reaching too far.
+    public func instantToBoundAPressAt() async -> Date {
+        await client.serverNow()
+    }
+
     /// Deletes everything the gateway retains for this account, leaving the account open.
     ///
     /// **Not queued first and then delivered**, unlike every other delete in this file, because the

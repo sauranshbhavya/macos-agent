@@ -1077,7 +1077,9 @@ public actor SonnyBackendClient {
 
     // MARK: - Clock
 
-    func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
+    /// `public` since SONNY-404 (PR #207's cycle-3, G1): the whole wipe's cutoff is compared against
+    /// the gateway's own timestamps, so it has to be this clock rather than the Mac's.
+    public func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
 
     /// The last instant a server reported, paired with the monotonic reading it arrived at.
     ///

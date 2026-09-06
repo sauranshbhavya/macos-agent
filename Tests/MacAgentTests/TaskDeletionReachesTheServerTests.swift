@@ -728,7 +728,100 @@ struct EveryDeleteReachesTheServerTests {
         #expect(message.contains("their copy is still there"))
     }
 
+    // MARK: - The cutoff comes from the server's clock (PR #207's cycle-3, G1)
+
+    /// **The bound is compared against the gateway's own `occurred_at`, so it must be the gateway's
+    /// clock.** A Mac running behind under-deletes while reporting the servers' copy gone; one
+    /// running ahead puts the cutoff in the future, which is the over-deletion `?before=` exists to
+    /// stop.
+    @Test
+    func theCutoffIsTheServersClockAndNotThisMacs() async throws {
+        // **An hour *behind*, deliberately.** The offset is observed from a `Date` header, so a
+        // request has to have gone out first — true of any Mac that has talked to the gateway at
+        // all — and a server an hour *ahead* would push `serverNow()` past this fixture's own access
+        // token expiry, so the client would refresh and the assertion would be reading the wrong
+        // request. The direction does not matter to what is being tested: the bound follows the
+        // gateway's clock rather than this Mac's, whichever way the two differ.
+        let fixture = try TaskDeletionFixture(serverClockAhead: -3600)
+        defer { fixture.tearDown() }
+        let record = try fixture.writeTaskRecord(id: "task-a")
+        fixture.viewModel.deleteTask(record)
+        try await fixture.waitForDeliveryPasses(1)
+
+        fixture.seen.removeAll()
+        fixture.viewModel.deleteLocalData()
+        await fixture.viewModel.localDataWipeForTests?.value
+
+        let sent = try fixture.seen.only
+        #expect(sent.path == "/v1/account/content")
+        let bound = try #require(Self.boundOnTheWire(of: sent))
+        // Nearer the gateway's hour-behind clock than this Mac's — with a second of slack for the
+        // wire format, which carries no fractional seconds and truncates toward the past. On the
+        // Mac's own clock this would be within a second of zero.
+        #expect(bound.timeIntervalSince(Date()) < -3500)
+        #expect(bound.timeIntervalSince(Date()) > -3700)
+    }
+
+    /// Parses the `before=` the request carried, or `nil` when it carried none.
+    private static func boundOnTheWire(of request: RecordedBackendRequest) -> Date? {
+        let prefix = "before="
+        guard let value = request.query?
+            .split(separator: "&")
+            .first(where: { $0.hasPrefix(prefix) })
+            .map({ String($0.dropFirst(prefix.count)).removingPercentEncoding ?? "" })
+        else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+
     // MARK: - The wipe holds its claim (PR #207's F3)
+
+    /// **F3's second half: the claim is held until the *last* wipe finishes, not the first.**
+    ///
+    /// Each wipe used to clear the flag when its own body ended, so a second press chained behind
+    /// the first had the first's completion drop the claim while the second was still draining,
+    /// still calling the gateway and still about to delete every store — the window the claim exists
+    /// to close, re-opened by pressing twice.
+    ///
+    /// **The signal is the second wipe's own request, not a sleep.** The chain serialises them, so
+    /// the second request can only exist once the first wipe has finished; polling for it is
+    /// polling for the exact state this test is about, and on the mutant the claim is already false
+    /// when it arrives.
+    @Test
+    func aSecondPressInsideTheWindowDoesNotReleaseTheFirstWipesClaim() async throws {
+        let fixture = try TaskDeletionFixture()
+        defer { fixture.tearDown() }
+        fixture.blockTheGateway()
+
+        fixture.viewModel.deleteLocalData()
+        fixture.viewModel.deleteLocalData()
+        #expect(fixture.viewModel.isDeletingLocalData)
+
+        // Let exactly one request through: the first wipe finishes, the second starts and blocks.
+        fixture.releaseTheGateway(1)
+        try await fixture.waitUntilRequestsSeen(2)
+
+        // The second wipe is running. Before this round the first wipe's completion had already set
+        // the flag false, and the run doors — and Settings' Delete — were open again.
+        #expect(fixture.viewModel.isDeletingLocalData)
+        #expect(!fixture.viewModel.isRunning)
+
+        fixture.releaseTheGateway(1)
+        await fixture.viewModel.localDataWipeForTests?.value
+        // And it is released once the last one finishes, or the control never comes back.
+        #expect(!fixture.viewModel.isDeletingLocalData)
+    }
+
+    /// The control the user actually presses is disabled for the whole window, which is why two
+    /// presses are unreachable through the product.
+    @Test
+    func settingsDeleteControlIsDisabledWhileAWipeIsRunning() throws {
+        let page = try MacAgentSource.read("CommandCenterView.swift")
+        let block = try MacAgentSource.braceBlock(of: page, openedBy: "private struct SettingsDataPage: View {")
+        #expect(block.contains(".disabled(viewModel.isRunning || viewModel.isDeletingLocalData)"))
+    }
+
 
     /// **F3.** The press now spans a server round trip, and a run started inside that window would
     /// have every store deleted underneath it. The doors refuse instead.
@@ -828,6 +921,10 @@ private struct TaskDeletionFixture {
     init(
         signedIn: Bool = true,
         queueInsideAFile: Bool = false,
+        /// How far ahead of this Mac the gateway's own clock reads. The stub puts it on a `Date`
+        /// header, which is what `SonnyBackendClient` observes §3.5's offset from, so a request has
+        /// to have gone out before the offset exists — which is what SONNY-404's G1 test arranges.
+        serverClockAhead: TimeInterval = 0,
         /// One file in this fixture's own wipe list that cannot be unlinked, so
         /// `deleteAllLocalData()` throws **after** deleting everything else — the queue among them.
         /// That is the shape PR #207's F2 is about, and it is the shape the wipe's own list produces
@@ -841,7 +938,7 @@ private struct TaskDeletionFixture {
         let encryption = LocalStorageEncryption(
             keyManager: FixedDeletionKeyManager(bytes: Data(repeating: 0x4D, count: 32))
         )
-        let network = NetworkState()
+        let network = NetworkState(serverClockAhead: serverClockAhead)
         self.network = network
         let account = AccountBox(signedIn ? "account-a" : nil)
         self.account = account
@@ -1118,7 +1215,7 @@ private struct TaskDeletionFixture {
 
     func goOffline() { network.set(.failure(URLError(.notConnectedToInternet))) }
 
-    func comeBackOnline() { network.set(NetworkState.ok) }
+    func comeBackOnline() { network.comeBackOnline() }
 
     /// A gateway that never answers, so the delivery pass is provably still in flight while the
     /// assertions about the button run.
@@ -1129,6 +1226,22 @@ private struct TaskDeletionFixture {
     func blockTheGateway() { network.hold() }
 
     func releaseTheGateway(_ requests: Int) { network.open(requests) }
+
+    /// Waits until the stub has recorded this many requests.
+    ///
+    /// **A real signal rather than a sleep**: the thing being waited for is that a later request
+    /// exists, which is a state the stub publishes. The deadline is a backstop reachable only by a
+    /// genuine failure, and it records an issue rather than hanging.
+    func waitUntilRequestsSeen(_ count: Int, timeout: TimeInterval = 60) async throws {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while seen.all.count < count {
+            if Date() > deadline {
+                Issue.record("only \(seen.all.count) of \(count) requests were seen — treat as genuinely stuck.")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 
     func tearDown() {
         if let host {
@@ -1156,11 +1269,25 @@ private final class AccountBox: @unchecked Sendable {
 
 /// What the stub answers, flipped by the test between passes.
 private final class NetworkState: @unchecked Sendable {
-    static let ok = BackendStubURLProtocol.Outcome.reply(
-        statusCode: 200,
-        headers: ["Content-Type": "application/json"],
-        body: Data(#"{"task_id":"t","deleted_at":"2026-08-30T00:00:00Z","requests_deleted":1}"#.utf8)
-    )
+    static let ok = reply(serverClockAhead: 0)
+
+    /// The ordinary success, optionally carrying a `Date` header the client reads §3.5's clock
+    /// offset from (SONNY-404, PR #207's cycle-3, G1).
+    static func reply(serverClockAhead: TimeInterval) -> BackendStubURLProtocol.Outcome {
+        var headers = ["Content-Type": "application/json"]
+        if serverClockAhead != 0 {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+            headers["Date"] = formatter.string(from: Date().addingTimeInterval(serverClockAhead))
+        }
+        return BackendStubURLProtocol.Outcome.reply(
+            statusCode: 200,
+            headers: headers,
+            body: Data(#"{"task_id":"t","deleted_at":"2026-08-30T00:00:00Z","requests_deleted":1}"#.utf8)
+        )
+    }
 
     /// What a request answers when the gate was held and nobody opened it. Distinguishable from
     /// `ok`, so a test that mis-counts its `open()` calls fails on its own assertion instead of
@@ -1171,6 +1298,13 @@ private final class NetworkState: @unchecked Sendable {
     private var outcome = NetworkState.ok
     private var gate: DispatchSemaphore?
 
+    init(serverClockAhead: TimeInterval = 0) {
+        outcome = NetworkState.reply(serverClockAhead: serverClockAhead)
+        self.serverClockAhead = serverClockAhead
+    }
+
+    private let serverClockAhead: TimeInterval
+
     var answer: BackendStubURLProtocol.Outcome {
         lock.lock()
         let held = gate
@@ -1179,6 +1313,9 @@ private final class NetworkState: @unchecked Sendable {
         guard let held else { return next }
         return held.wait(timeout: .now() + 30) == .success ? next : Self.gateNeverOpened
     }
+
+    /// Back to the ordinary success, carrying whatever clock header this fixture was built with.
+    func comeBackOnline() { set(Self.reply(serverClockAhead: serverClockAhead)) }
 
     func set(_ next: BackendStubURLProtocol.Outcome) {
         lock.lock()

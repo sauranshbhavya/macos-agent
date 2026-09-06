@@ -4112,14 +4112,42 @@ final class AgentViewModel: ObservableObject {
         // `activeTaskScope` dropped, and its result overwritten by the wipe's own sentence on the
         // channel SONNY-201 reserves for a failure. `isDeletingLocalData` is what the run doors
         // refuse on, and it is set before the press returns rather than inside the task.
+        //
+        // **Counted rather than flagged, because the flag was released per press and not per chain**
+        // (PR #207's cycle-3, F3's second half). Each wipe cleared it when *its own* body finished,
+        // so a second press chained behind the first had the first's completion drop the claim while
+        // the second was still draining, still calling the gateway and still about to delete every
+        // store — the exact window this flag was added to close, re-opened by pressing twice. The
+        // count goes up before the press returns and down as each wipe ends, so the claim is held
+        // until the **last** one finishes.
+        localDataWipesInFlight += 1
         isDeletingLocalData = true
         let previous = localDataWipe
         localDataWipe = Task { @MainActor in
             await previous?.value
             await self.performLocalDataWipe()
-            self.isDeletingLocalData = false
+            self.localDataWipesInFlight -= 1
+            self.isDeletingLocalData = self.localDataWipesInFlight > 0
         }
     }
+
+    /// How many wipes are between their press and their last step (SONNY-404, PR #207's F3).
+    ///
+    /// **The claim's owner is the chain, not a task.** `isDeletingLocalData` is derived from this and
+    /// from nothing else, so the only way to release it is for every wipe to have finished. A
+    /// `Bool` set by each press and cleared by each completion is what cycle 3 measured releasing the
+    /// claim mid-sequence.
+    ///
+    /// Two presses are unreachable through the product now — the control is disabled while the claim
+    /// is held — and the count is what keeps the model right if a press ever arrives another way.
+    ///
+    /// **A model-level refusal was the other option and it was rejected**, though the surface-level
+    /// one (the disabled control) ships beside this. Returning early from a second press would drop
+    /// a press the user made, and it would make the property untestable in the bargain: with no
+    /// second wipe there is no chain, so nothing could tell a claim released by the last wipe from
+    /// one released by the first, which is precisely the defect cycle 3 found. Chaining keeps the
+    /// second press honoured, keeps two wipes off one queue file, and leaves the release observable.
+    private var localDataWipesInFlight = 0
 
     /// Whether Settings' whole wipe is running right now (SONNY-404, PR #207's F3).
     ///
@@ -4143,7 +4171,12 @@ final class AgentViewModel: ObservableObject {
         // The instant the press covers. Everything below carries it: the server delete bounds itself
         // at or before it, and the obligation left behind carries it so a delivery days later cannot
         // reach content the press never covered (PR #207's F1).
-        let pressedAt = Date()
+        //
+        // **The server's clock, not this Mac's** (PR #207's cycle-3, G1). It is compared against
+        // `occurred_at` on the gateway's rows, so a skewed Mac bounds the deletion at the wrong
+        // instant in whichever direction it is skewed. `instantToBoundAPressAt()` carries the whole
+        // argument, including the sub-second truncation the wire format applies.
+        let pressedAt = await taskDeletionService.instantToBoundAPressAt()
         // Stopped first, before anything else: the poll timer can write a clipboard entry between
         // the wipe and the refresh, and the network steps below make that window seconds wide rather
         // than milliseconds.

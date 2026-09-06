@@ -6340,7 +6340,13 @@ private struct SettingsDataPage: View {
                             Label("Delete", systemImage: "trash")
                         }
                         .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
-                        .disabled(viewModel.isRunning)
+                        // **`isDeletingLocalData` as well as `isRunning`** (SONNY-404, PR #207's
+                        // cycle-3, F3). The press became asynchronous when the wipe started reaching
+                        // the gateway, and it spans up to the client's whole multi-attempt budget on
+                        // a 20-second route — throughout which this control stayed pressable,
+                        // because `isRunning` is false during a wipe. A second press inside that
+                        // window is what re-opened the window the claim exists to close.
+                        .disabled(viewModel.isRunning || viewModel.isDeletingLocalData)
                         .help("Delete local Sonny data")
                     }
 

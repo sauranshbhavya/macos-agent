@@ -2416,9 +2416,17 @@ struct MemoryCommandCenterTests {
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: row) == 1)
         #expect(MacAgentSource.count(of: "viewModel.deleteLocalData()", inText: row) == 0)
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: page) == 1)
-        // Both controls disable under the wipe's condition — the wipe's as it always was, the row's by
-        // founder decision (PR #117 review, F3) — so the view-model guard is the backstop.
-        #expect(MacAgentSource.count(of: ".disabled(viewModel.isRunning)", inText: page) == 2)
+        // Both controls disable under a run — the row's by founder decision (PR #117 review, F3) —
+        // so the view-model guard is the backstop. **The wipe's control disables under one more
+        // condition since SONNY-404** (PR #207's cycle-3, F3): the press now spans a server round
+        // trip during which `isRunning` is false, and it stayed pressable for the whole of it.
+        #expect(MacAgentSource.count(of: ".disabled(viewModel.isRunning)", inText: page) == 1)
+        #expect(
+            MacAgentSource.count(
+                of: ".disabled(viewModel.isRunning || viewModel.isDeletingLocalData)",
+                inText: page
+            ) == 1
+        )
 
         let onAppear = try MacAgentSource.braceBlock(of: page, openedBy: ".onAppear {")
         #expect(onAppear.contains("viewModel.refreshSetAsideFiles()"))

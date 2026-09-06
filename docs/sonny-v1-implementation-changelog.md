@@ -520,6 +520,59 @@ entry passes `git merge-base --is-ancestor <sha> HEAD` with exit 0.
   deleting exactly what an unbounded delete would — the defect the parameter exists to stop, passing
   the test written for it. The assertion reads the instant now and X2 dies.
 
+**Fourth round, 2026-09-05: the claim is held per chain, and the cutoff reads the server's clock.**
+Review-207's cycle 3 found F1, F2, F4 and F5 held and R1 to R6 swept, and **F3 held for one press and
+not for two** — a defect above the bar in production code left by the fix round itself, which is what
+the founders' 2026-08-21 directive reserves one extra cycle for. This round is scoped to it and to
+the reviewer's G1; G2 and G3 are recorded below rather than fixed.
+
+**F3's second half.** `isDeletingLocalData` was set by every press and cleared by every completion,
+so a second press chained behind the first had the *first* wipe's completion drop the claim while the
+second was still draining, still calling the gateway and still about to delete every store — the
+exact window the claim exists to close, re-opened by pressing twice. And Settings' Delete was
+`.disabled(viewModel.isRunning)` alone, so it stayed pressable for the whole of it, because
+`isRunning` is false during a wipe. Three changes:
+
+- **The claim is owned by the chain, not by a task.** `localDataWipesInFlight` goes up before the
+  press returns and down as each wipe ends, and `isDeletingLocalData` is derived from it and from
+  nothing else — so only the last wipe can release it.
+- **The control is disabled while the claim is held**, which is what makes a second press unreachable
+  through the product.
+- **A model-level refusal was considered and rejected**, and the reasoning is at the code: returning
+  early from a second press would drop a press the user made, and it would make the property
+  untestable in the bargain — with no second wipe there is no chain, so nothing could tell a claim
+  released by the last wipe from one released by the first, which is the defect itself.
+
+**G1: the cutoff is the gateway's clock, not this Mac's.** `?before=` is compared against
+`occurred_at` on the gateway's own rows, so a skewed Mac bounds the deletion at the wrong instant —
+running behind, the immediate wipe under-deletes while reporting the servers' copy gone; running
+ahead, the queued obligation's cutoff sits in the future, which is the over-deletion the parameter
+was added to prevent. `SonnyBackendClient.serverNow()` exists for exactly this (§3.5's offset) and is
+what `EntitlementService` and `SonnyAccountService` already read; it is `public` now and reached
+through `SonnyTaskDeletionService.instantToBoundAPressAt()`. **It is the Mac's clock plus a
+correction, so it is never unavailable**: with no observation yet the offset is zero and the value is
+`Date()`, which is what the press used before. **The wire truncates it toward the past by up to a
+second** — §2.1's format carries no fractional seconds, so a bound of `…00.750` goes out as `…00Z` —
+and that error is always in the under-deleting direction, which is the safe one for a bound whose job
+is to stop a delayed delete reaching too far.
+
+Known limitations, recorded rather than fixed (coordinator's routing, 2026-09-05):
+
+- **G2 — the session-change discard destroys a pre-field entry the delivery gate would have kept.**
+  `discardObligationsNotBelongingTo` filters `accountID != accountID`, and `nil != "A"` is true, so a
+  per-task obligation written before that field existed is discarded on the first explicit sign-in —
+  including a sign-in as the same account — while `deliverable` one screen away deliberately keeps
+  exactly that entry, because §4.6's `404` protects it. Not fixed because pre-field files exist only
+  on Macs that ran builds from before this branch, which today means the founders' own, and the
+  window closes at the first successful sweep.
+- **G3 — pressing Allow during a wipe is silent where `start()` logs.** `approvePendingRun`'s guard
+  returns without a line, so the "refused rather than raced, and it says so" property holds at one
+  run door and not the other. A silence in a rare window; recorded because the comment two screens
+  above it calls that class of silence out by name.
+
+**Fourth round's figures, stamped at the head.** Every earlier stamp in this entry passes
+`git merge-base --is-ancestor <sha> HEAD` with exit 0.
+
 Next branch: per the coordinator's wave-6 order.
 
 ### Branch: fix/a-short-article-about-a-wall-is-served
