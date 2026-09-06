@@ -484,25 +484,42 @@ struct RestrictedContentDetectorTests {
         }
     }
 
-    /// The phrases keep their nouns, and the earlier match in the list wins — unchanged from the
-    /// rule this replaces, since SONNY-245 changed the evidence and not the coverage.
+    /// The phrases keep their nouns, and the earlier match in the list wins. SONNY-256 split them in
+    /// two, so both lists are pinned by value and so is the order they concatenate in — the order is
+    /// load-bearing, since `firstPhrase` returns the first entry that matches and the `reason` a
+    /// refusal names comes from it.
+    ///
+    /// **Compared as ordered arrays rather than through `Dictionary(uniqueKeysWithValues:)`, and that
+    /// is not a style choice.** The dictionary form traps on a duplicate key, and the process dying
+    /// takes the whole run's evidence with it: SONNY-256's first battery had exactly that, a mutant
+    /// putting `captcha` back into `wallSpeechPhrases` reported as `KILLED — the run failed but named
+    /// no test` in 38 seconds, with `Fatal error: Duplicate values for key: 'captcha'` at the end of
+    /// a log naming none of the tests that had caught it. The mutant really was caught; nothing in
+    /// the report could say by what. (`CLAUDE.md`, "a trapped test costs a mutant its evidence".)
     @Test
     func eachPhraseKeepsItsOwnRefusalNoun() {
-        let expected: [String: String] = [
-            "you are human": "CAPTCHAs",
-            "you are a human": "CAPTCHAs",
-            "are you a robot": "CAPTCHAs",
-            "please log in": "login walls",
-            "sign in to continue": "login walls",
-            "subscribe to continue": "paywalls",
-            "captcha": "CAPTCHAs",
-            "subscription required": "paywalls",
-            "paywall": "paywalls"
+        let expectedWallSpeech = [
+            ("you are human", "CAPTCHAs"),
+            ("you are a human", "CAPTCHAs"),
+            ("are you a robot", "CAPTCHAs"),
+            ("please log in", "login walls"),
+            ("sign in to continue", "login walls"),
+            ("subscribe to continue", "paywalls")
+        ]
+        let expectedSubjects = [
+            ("captcha", "CAPTCHAs"),
+            ("subscription required", "paywalls"),
+            ("paywall", "paywalls")
         ]
 
-        #expect(Dictionary(uniqueKeysWithValues: RestrictedContentDetector.phrases.map { ($0.phrase, $0.reason) }) == expected)
+        #expect(RestrictedContentDetector.wallSpeechPhrases.map { [$0.phrase, $0.reason] }
+            == expectedWallSpeech.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.subjectPhrases.map { [$0.phrase, $0.reason] }
+            == expectedSubjects.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.phrases.map { [$0.phrase, $0.reason] }
+            == (expectedWallSpeech + expectedSubjects).map { [$0.0, $0.1] })
 
-        for (phrase, reason) in expected {
+        for (phrase, reason) in expectedWallSpeech + expectedSubjects {
             let html = "<html><body><p>\(phrase)</p></body></html>"
             #expect(RestrictedContentDetector.reason(inHTML: html) == reason, "phrase \(phrase)")
         }
