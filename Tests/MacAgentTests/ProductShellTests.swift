@@ -1040,6 +1040,11 @@ struct ProductShellTests {
             // the clearing, so clearing its own handle from inside itself is a task cancelling
             // itself half way through the promise it is keeping. It holds no local data either.
             "localDataWipe",
+            // **The wipe's claim** (SONNY-404, PR #207's F3). A flag the run doors read, held from
+            // the press to the last step; the wipe clears it itself when it finishes, and clearing
+            // it from `clearInMemoryLocalDataState` — which the wipe calls *mid-sequence* — would
+            // drop the claim while the sequence still had steps left. Not local data either.
+            "isDeletingLocalData",
             // A monotone count of finished delivery passes, for the test that cannot wait on the
             // handle above (PR #194 cycle-3). Not local data and not task state — it counts
             // background work since launch, so a wipe has nothing to find in it and resetting it

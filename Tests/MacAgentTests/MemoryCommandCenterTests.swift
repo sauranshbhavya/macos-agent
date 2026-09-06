@@ -2149,7 +2149,21 @@ struct MemoryCommandCenterTests {
 
         #expect(!FileManager.default.fileExists(atPath: kept.first.path))
         #expect(FileManager.default.fileExists(atPath: kept.second.path))
-        #expect(try #require(fixture.viewModel.localDataDeletionStatusMessage).hasPrefix("Could not delete local data:"))
+        // **The failure sentence names both halves since PR #207's F2.** It used to begin "Could not
+        // delete local data:" and say nothing at all about the servers, while the queue file — one
+        // of the files this press had already deleted — was gone and no obligation had been
+        // recorded. The state that produced was the one the founder's condition forbids, reached
+        // through the failure branch.
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.contains("could not be deleted"))
+        #expect(message.contains("the copy on Sonny's servers is still there"))
+
+        // **And what is owed afterwards**, which is the assertion this test was missing. The fixture
+        // is signed out, so nothing can name whose content it is about and nothing is recorded —
+        // which is why the sentence tells the user to sign in rather than promising a retry.
+        #expect(try fixture.viewModel.pendingServerDeletionsForTests().isEmpty)
+        #expect(message.contains("Sign in and press Delete again."))
+
         #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
         #expect(fixture.viewModel.setAsideFilesFromLastDelete == [kept.second])
         #expect(
