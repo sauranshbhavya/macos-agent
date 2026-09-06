@@ -487,6 +487,92 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
     }
 
+    /// **The recent-artifacts write's own failure, on this path** (SONNY-232).
+    ///
+    /// The third of the family above, and the only one of the three that was a real gap rather than
+    /// an untested property. `AgentRunner` sets `lastRecentArtifactFailure` when the store throws,
+    /// and two of the three `runner.execute` call sites read it back — the foreground one in
+    /// `AgentViewModel.swift` and the vision one in `AgentViewModel+VisionSession.swift`. The
+    /// scheduled path did not, so a routine that wrote a file and then could not record the note
+    /// about it left the user with no signal at all: no notice, no error, nothing in any surface.
+    /// The enumeration that gave the other four bookkeeping writes a channel (SONNY-208's rounds)
+    /// looked at the view model's own writes, and this one is set in `AgentRunner`.
+    ///
+    /// **The routine here writes a real file, and it has to.** `recordGeneratedArtifacts` records
+    /// only paths that exist as regular files, so a run producing nothing never asks the store to
+    /// write and the store can never throw — a fixture whose routine does arithmetic would pass this
+    /// test with the fix reverted. `createLocalDraft` is the cheapest step that genuinely writes:
+    /// tier 2, so the scheduled path's fixed `.approved(.tier2)` ceiling covers it, and its one
+    /// escalation to tier 3 fires only when the output already exists, which is why the draft path
+    /// is a name inside a directory this test just made.
+    ///
+    /// The last two assertions are the point, and they are CLAUDE.md's write-failure channel rule:
+    /// the routine ran and did what it was asked, so this belongs on `localStorageNotice` and not on
+    /// `errorMessage` — the widget picks `.failure` ahead of `.result`, so routing it there would
+    /// replace the result of a scheduled run that actually succeeded.
+    @Test(.requiresUnprivilegedProcess)
+    func aRecentArtifactWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun() async throws {
+        let artifactRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScheduledArtifactFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: artifactRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: artifactRoot.path)
+            try? FileManager.default.removeItem(at: artifactRoot)
+        }
+        // The whitelist has to admit the draft's output path, and it is rooted at a directory this
+        // test made so the write cannot reach the real `~/Desktop` and `~/Documents` that
+        // `PathWhitelist()` names by default.
+        let draftRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScheduledArtifactDraft-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: draftRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: draftRoot) }
+        let fixture = try makeFixture(recentArtifactRoot: artifactRoot, whitelistRoot: draftRoot)
+        defer { fixture.cleanUp() }
+
+        let draftPath = draftRoot.appendingPathComponent("morning-note.md")
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Create the morning note.",
+                    outputPath: draftPath.path,
+                    draftTitle: "Morning Note",
+                    draftContent: "Hello"
+                )
+            ]
+        )
+        // Read-only *after* the routine is saved, and only this directory: every other store sits
+        // under the fixture root and stays writable, so the recent-artifacts write is the only one
+        // that fails — which is what lets the wording assertions below discriminate.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: artifactRoot.path)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // The run really did generate an artifact — without this the store is never asked to write
+        // and the rest of the test would pass on a tree with the fix reverted.
+        #expect(FileManager.default.fileExists(atPath: draftPath.path))
+        // And the store really is empty, so the failure was a write failure rather than a no-op.
+        #expect(try fixture.recentArtifactStore.loadAll().isEmpty)
+
+        // Write wording naming this store, not the output-location store's and not the load
+        // banner's.
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not update its recent-artifacts list: "))
+        #expect(!notice.contains("list of output locations"))
+        #expect(!notice.contains("decrypted or decoded"))
+
+        // And the routine itself ran and still reports that it did.
+        #expect(fixture.viewModel.errorMessage == nil, "a bookkeeping failure is not the routine failing")
+        #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
+        // The row landed too: the run was a success on every channel that describes the run itself.
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.trigger == .scheduled)
+    }
+
     /// The occurrence must not be reconsidered on the next tick. Without the baseline advance the
     /// timer would re-run the same routine every 30 seconds, forever.
     @Test
@@ -1874,12 +1960,16 @@ struct ScheduledRoutineRunTests {
     private func makeFixture(
         taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
         planDetailRoot: URL? = nil,
-        taskHistoryRoot: URL? = nil
+        taskHistoryRoot: URL? = nil,
+        recentArtifactRoot: URL? = nil,
+        whitelistRoot: URL? = nil
     ) throws -> Fixture {
         try Fixture(
             taskHistoryMaxItems: taskHistoryMaxItems,
             planDetailRoot: planDetailRoot,
-            taskHistoryRoot: taskHistoryRoot
+            taskHistoryRoot: taskHistoryRoot,
+            recentArtifactRoot: recentArtifactRoot,
+            whitelistRoot: whitelistRoot
         )
     }
 
@@ -1895,6 +1985,9 @@ struct ScheduledRoutineRunTests {
         let snippetStore: SnippetStore
         let taskHistoryStore: TaskHistoryStore
         let taskPlanDetailStore: TaskPlanDetailStore
+        /// Exposed for the one test that has to fail this store's write while every other store
+        /// stays writable (SONNY-232), the same shape `taskHistoryStore` is exposed in.
+        let recentArtifactStore: RecentArtifactStore
         let nineAM: Date
         let tenAM: Date
         let enabledAt: Date
@@ -1910,7 +2003,17 @@ struct ScheduledRoutineRunTests {
             planDetailRoot: URL? = nil,
             /// The mirror of `planDetailRoot`, for the test that has to fail the *row* write while
             /// the plan store stays writable (SONNY-201).
-            taskHistoryRoot: URL? = nil
+            taskHistoryRoot: URL? = nil,
+            /// The third of that family, for the test that has to fail the *recent-artifacts* write
+            /// while everything else stays writable (SONNY-232).
+            recentArtifactRoot: URL? = nil,
+            /// Roots the path whitelist somewhere this fixture owns, for the one test whose routine
+            /// actually writes a file. Defaulted to `nil` — and therefore to `PathWhitelist()`'s
+            /// real `~/Desktop` and `~/Documents` — because every other test here runs a routine
+            /// that writes nothing, and a whitelist is not a store: no defaulted-store hazard
+            /// applies, and narrowing it for tests that never reach it would change their
+            /// assessments for no reason.
+            whitelistRoot: URL? = nil
         ) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ScheduledRoutineRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -1934,6 +2037,10 @@ struct ScheduledRoutineRunTests {
                 fileURL: (planDetailRoot ?? root).appendingPathComponent("task-plan-details.json")
             )
 
+            recentArtifactStore = RecentArtifactStore(
+                fileURL: (recentArtifactRoot ?? root).appendingPathComponent("recent-artifacts.json")
+            )
+
             browserOpener = HermeticBrowserOpener()
             appOpener = HermeticAppOpener()
             let suiteName = "ScheduledRoutineRunTests-\(UUID().uuidString)"
@@ -1944,9 +2051,7 @@ struct ScheduledRoutineRunTests {
                 routineStore: routineStore,
                 workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
                 snippetStore: snippetStore,
-                recentArtifactStore: RecentArtifactStore(
-                    fileURL: root.appendingPathComponent("recent-artifacts.json")
-                ),
+                recentArtifactStore: recentArtifactStore,
                 shortcutCatalog: EmptyShortcutCatalog(),
                 // Hermetic seams (fakes defined in ProductShellTests.swift, same test target).
                 // This fixture executes real routine plans — since SONNY-38's AC5 test its routine
@@ -1995,7 +2100,8 @@ struct ScheduledRoutineRunTests {
                 backendClient: makeHermeticBackendClient(),
                 priorTaskContextStore: PriorTaskContextStore(),
                 taskUsageRecorder: TaskUsageRecorder(),
-                userDefaults: userDefaults
+                userDefaults: userDefaults,
+                whitelist: whitelistRoot.map { PathWhitelist(roots: [$0]) } ?? PathWhitelist()
             )
         }
 

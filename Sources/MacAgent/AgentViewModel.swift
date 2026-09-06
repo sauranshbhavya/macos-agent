@@ -8090,15 +8090,24 @@ final class AgentViewModel: ObservableObject {
                 context: approvalContext(visionTarget: nil)
             )
             // The scheduled twin of the two foreground sites' bookkeeping-failure handover
-            // (SONNY-209). `recordLocalStorageWriteFailure`, never `errorMessage`: the routine ran
-            // and did what it was asked, and only the note about where its file landed could not be
-            // saved — CLAUDE.md's write-failure channel rule exactly.
+            // (SONNY-209 for output locations, SONNY-232 for recent artifacts).
+            // `recordLocalStorageWriteFailure`, never `errorMessage`: the routine ran and did what
+            // it was asked, and only the note about the file it wrote could not be saved —
+            // CLAUDE.md's write-failure channel rule exactly. `errorMessage` would say the run
+            // failed, and the widget picks `.failure` ahead of `.result`, so routing either of
+            // these there replaces the result of a scheduled run that actually succeeded.
             //
-            // **`lastRecentArtifactFailure` is *not* read here, and that is not an oversight of this
-            // ticket's** — it has never been read on this path, so a scheduled routine whose
-            // recent-artifacts write fails still reports nothing. That is the other store's defect
-            // and the other store is on this ticket's never-touch list; it is filed rather than
-            // fixed here.
+            // **Both properties are read here, in the order the other two sites read them**
+            // (`AgentViewModel.swift`'s foreground site and `AgentViewModel+VisionSession.swift`'s).
+            // `lastRecentArtifactFailure` was not read on this path until SONNY-232: the enumeration
+            // that gave the other bookkeeping writes a channel looked at the view model's own
+            // writes, and this one is set in `AgentRunner`, so a scheduled routine whose
+            // recent-artifacts write failed reported nothing at all — no notice, no error, nothing
+            // in any surface. Two `if let`s rather than one combined message, because the two name
+            // different stores and `AgentRunner` keeps them apart for exactly that reason.
+            if let artifactFailure = runner.lastRecentArtifactFailure {
+                recordLocalStorageWriteFailure(artifactFailure)
+            }
             if let outputLocationFailure = runner.lastOutputLocationFailure {
                 recordLocalStorageWriteFailure(outputLocationFailure)
             }
