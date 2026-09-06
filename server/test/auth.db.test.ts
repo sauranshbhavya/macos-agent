@@ -1536,6 +1536,29 @@ describeDb("the auth endpoints", () => {
     }
 
     /**
+     * What the tests below wait on instead of a clock: the connection's own release, and a count of
+     * everything that has happened on it.
+     *
+     * `releases` counts leases handed back inside `withConnection`'s `finally`, so under a race that
+     * abandons the drain the count rising is *caused* by the abandonment rather than merely
+     * correlated with it. **A count and not a promise, because this app makes several requests
+     * before the one under test** — the sign-in that sets the account up leases and releases twice —
+     * so a promise resolved on the first release had already fired before the request that matters
+     * began, and every waiter below returned "released" on the clean tree. A waiter reads the count
+     * at entry and watches for it to move.
+     *
+     * `activity` increments on every statement issued and again on every statement settled, which is
+     * what makes "the connection has gone quiet" a statement about progress rather than about the
+     * clock — a loaded machine makes each statement slower and keeps the counter moving, so a quiet
+     * connection means nothing is running rather than that this process is not getting turns.
+     */
+    interface ConnectionProbe {
+      readonly wiring: WithConnection;
+      readonly releases: () => number;
+      readonly activity: () => number;
+    }
+
+    /**
      * `pool.ts`'s `withConnection`, plus the reviewer's probe: every statement recorded against the
      * moment the connection went back to the pool.
      *
@@ -1544,8 +1567,10 @@ describeDb("the auth endpoints", () => {
      * before the release and still in flight at it is running on a connection the pool can already
      * hand to another request.
      */
-    function recordingConnection(record: QueryRecord[]): WithConnection {
-      return async (work) => {
+    function recordingConnection(record: QueryRecord[]): ConnectionProbe {
+      let releases = 0;
+      let activity = 0;
+      const wiring: WithConnection = async (work) => {
         // **Per lease, and by wrapping rather than by patching.** Two drafts got this wrong in ways
         // worth recording, because both failed loudly and the second one would not have. A flag
         // outside this closure made every statement after the *first* request's release read as
@@ -1554,29 +1579,152 @@ describeDb("the auth endpoints", () => {
         // lease's wrapper and inherited its already-true flag. Handing the route its own object
         // leaves the pooled client untouched, and a statement the drain issues after this lease
         // released still goes through *this* lease's recorder, which is the whole point.
-        let released = false;
+        let hasReleased = false;
         const conn = await pool.connect();
         const raw = conn.query.bind(conn);
         const probe = {
           query: (...args: unknown[]) => {
             const entry: QueryRecord = {
               sql: String(args[0]).trim().split("\n")[0]!.trim(),
-              issuedAfterRelease: released,
+              issuedAfterRelease: hasReleased,
               settledAfterRelease: false,
             };
             record.push(entry);
+            activity += 1;
             return Promise.resolve((raw as (...a: unknown[]) => unknown)(...args)).finally(() => {
-              entry.settledAfterRelease = released;
+              entry.settledAfterRelease = hasReleased;
+              activity += 1;
             });
           },
         };
         try {
           return await work(probe as unknown as pg.Client);
         } finally {
-          released = true;
+          hasReleased = true;
           conn.release();
+          releases += 1;
         }
       };
+      return { wiring, releases: () => releases, activity: () => activity };
+    }
+
+    /**
+     * How long the connection must stay quiet before either waiter below concludes nothing is
+     * running, in milliseconds.
+     *
+     * **Not a bet against the work, because the work resets it.** Every statement issued and every
+     * statement settled bumps the counter these waiters read, so a slow machine makes each statement
+     * slower and keeps the window open rather than closing it early. What is left is the case where
+     * the connection genuinely stops: under the fix that is the route parked on the stalled
+     * provider, and under a hang-shaped mutant it is the route parked on something that never
+     * resolves. Five hundred milliseconds against a localhost round trip in the tenths of a
+     * millisecond is a wide margin, and the direction it fails in is "wait longer" rather than
+     * "conclude sooner".
+     */
+    const QUIET_MS = 500;
+
+    /** The same, after the provider is resumed, before the route counts as stuck rather than slow. */
+    const STUCK_QUIET_MS = 3_000;
+
+    /** Poll interval for both waiters. Not the deadline's delay, so the timer shortener ignores it. */
+    const POLL_MS = 25;
+
+    const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
+
+    /**
+     * Wait for the leased connection to be released, or for it to go quiet — whichever comes first —
+     * and say which.
+     *
+     * **This is what the tests resume the stalled provider on, and the ordering is the whole point**
+     * (PR #212 cycle 2, F1). Under a race that abandons the drain the release is *caused* by the
+     * abandonment: the route answers and `withConnection`'s `finally` runs, so `released` wins
+     * deterministically and the caller learns the property has failed. Under the fix the release
+     * cannot come at all while the drain is stalled, so the connection falls quiet and the fallback
+     * wins. **Resuming on a fixed number of turns instead is the wrong answer, and is how the first
+     * version of this test let the race through**: it resumed while the route was still mid-wipe, so
+     * the drain's mark-done was issued and settled before the release and both post-release
+     * assertions stayed empty.
+     *
+     * The hard cap fails in wording no declaration matches, because a connection that neither goes
+     * quiet nor comes back for thirty seconds is a route that cannot finish rather than a slow
+     * machine.
+     */
+    async function releasedOrQuiet(probe: ConnectionProbe): Promise<"released" | "quiet"> {
+      const releasesAtEntry = probe.releases();
+      let lastActivity = probe.activity();
+      let quietSince = Date.now();
+      const capAt = Date.now() + 30_000;
+      for (;;) {
+        if (probe.releases() !== releasesAtEntry) return "released";
+        const now = probe.activity();
+        if (now !== lastActivity) {
+          lastActivity = now;
+          quietSince = Date.now();
+        } else if (Date.now() - quietSince >= QUIET_MS) {
+          return "quiet";
+        }
+        if (Date.now() > capAt) {
+          throw new Error(
+            "the leased connection neither went quiet nor came back to the pool: it kept issuing "
+              + "statements for thirty seconds without the route answering, which is a route that "
+              + "cannot finish rather than a machine that is slow",
+          );
+        }
+        await sleep(POLL_MS);
+      }
+    }
+
+    /**
+     * Await `work`, and when it will not finish, fail in wording **no declaration matches**.
+     *
+     * **Why this exists** (`CLAUDE.md`'s SONNY-259 rule). Every wording the server hang backstop
+     * emits is declared in `scripts/mutate-untrusted-failures`, correctly — a sixty-second wall clock
+     * over work another process owns is a statement about the machine whatever the margin. So a
+     * mutant whose only effect is to make one of these two tests *hang* comes back UNATTRIBUTED
+     * rather than KILLED, on a run where the test failed for exactly the right reason, and
+     * UNATTRIBUTED reads as a note about a busy machine rather than as a caught defect. The remedy
+     * is the caller's: record a second issue the declarations do not excuse, gated on something that
+     * cannot fire from slowness.
+     *
+     * **The gate is progress, not tick rate, and that departure from the Swift half is measured
+     * rather than preferred.** `HangBackstop`'s `.stuck` verdict is an observation count, and that
+     * instrument was tried on this suite and rejected: the declaration file records the event loop
+     * ticking at 167-178 per second against a nominal 200 at load averages up to 194, including a run
+     * where one of these tests took ten times its unloaded cost — so a floor below the healthy
+     * population would have called that run a deadlock. What separates the two cases here instead is
+     * whether the connection is *doing anything*. Load makes statements slower and keeps the counter
+     * moving; a route parked on something that never resolves stops it dead. That is the distinction
+     * `.stuck` draws, read off the resource this suite actually waits on.
+     *
+     * **And the cascade above it is closed**, which the rule requires or the gate is a lie: this is
+     * called only after `releasedOrQuiet` has returned normally, so the stalled provider has been
+     * resumed and the route waits on nothing this test still owes it. Called before that resume it
+     * would reach the quiet threshold at a perfectly healthy cadence, every time.
+     */
+    async function settledOrStuck<T>(
+      what: string,
+      work: Promise<T>,
+      probe: ConnectionProbe,
+    ): Promise<T> {
+      let done = false;
+      void work.then(() => { done = true; }, () => { done = true; });
+      let lastActivity = -1;
+      let quietSince = Date.now();
+      for (;;) {
+        if (done) return await work;
+        const now = probe.activity();
+        if (now !== lastActivity) {
+          lastActivity = now;
+          quietSince = Date.now();
+        } else if (Date.now() - quietSince >= STUCK_QUIET_MS) {
+          throw new Error(
+            `${what} never finished, and the connection it holds has issued and settled nothing for `
+              + `${STUCK_QUIET_MS} ms. Nothing is running: this is work that cannot complete rather `
+              + "than work that is slow, so it is evidence about the code and not about the machine.",
+          );
+        }
+        await sleep(POLL_MS);
+      }
     }
 
     /** An account with `identities` provider-side users on it, closed-ready and signed in. */
@@ -1615,37 +1763,55 @@ describeDb("the auth endpoints", () => {
         // statement the route issues after it; the route cannot outrun it and no post-release write
         // is reachable that way. With the provider stalled the connection sits idle, which is the
         // window the race actually opened.
+        //
+        // **What this test waits on is the whole of cycle 2's F1.** Its first version resumed the
+        // provider one microtask after the deadline callback, before the route could have finished
+        // its wipe — so under a race that abandons the drain the mark-done was issued and settled
+        // *before* the release, both post-release lists stayed empty, and `settled` was still false.
+        // It failed only when both halves of the fix were gone, so a mutant restoring the route half
+        // alone survived it. It now resumes on the release itself, which the abandonment causes,
+        // against a fallback only the fix can reach.
         const record: QueryRecord[] = [];
+        const connection = recordingConnection(record);
         const app = buildApp(
           config,
-          { provider, withConnection: recordingConnection(record), now: () => PINNED_NOW },
+          { provider, withConnection: connection.wiring, now: () => PINNED_NOW },
         );
         await accountWithIdentities(app, "abandoned@example.com", []);
 
         let releaseProvider: () => void = () => {};
         provider.stallSignOutAllUntil = new Promise<void>((resolve) => { releaseProvider = resolve; });
         const timer = shortenDeadlineTimer(DEADLINE_MS.auth.total, 40);
+        let response;
         try {
           const pending = app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
           let settled = false;
           void pending.then(() => { settled = true; });
 
           // Deterministic: this resolves inside the deadline's own callback, so the abort has
-          // certainly happened by the assertion below rather than probably.
+          // certainly happened by the assertions below rather than probably.
           await timer.fired;
           expect(timer.intercepted()).toBe(1);
 
-          // **The assertion the race fails.** The drain is still inside its provider call, holding
-          // the connection; the route must not have answered, because answering is what releases it.
+          // **The assertion the race fails, and it names the branch rather than a status.** Under a
+          // race the release is caused by the abandonment and arrives in single-digit milliseconds;
+          // under the fix it cannot arrive at all while the drain is stalled, so the connection
+          // falls quiet and the fallback answers. Naming the winner makes the failure say what
+          // happened instead of leaving a reader to infer it from a later empty list.
+          expect(await releasedOrQuiet(connection)).toBe("quiet");
+          // The same property in the terms the route sees: answering is what releases, so the route
+          // must not have answered either.
           expect(settled).toBe(false);
 
           releaseProvider();
-          const response = await pending;
-          expect(response.statusCode).toBe(204);
+          response = await settledOrStuck(
+            "DELETE /v1/account after the provider resumed", pending, connection,
+          );
         } finally {
           timer.restore();
           provider.stallSignOutAllUntil = undefined;
         }
+        expect(response.statusCode).toBe(204);
 
         // The reviewer's probe shape, and the property in its own terms.
         expect(record.filter((entry) => entry.issuedAfterRelease)).toEqual([]);
@@ -1666,7 +1832,16 @@ describeDb("the auth endpoints", () => {
         // the signal, which is reachable; the version this replaced rethrew a `ProviderTimedOut`
         // from the drain's `catch`, which the race could never inject and the one real adapter never
         // raises.
-        const app = build();
+        //
+        // It takes a recording connection too — not to assert on the record, but for the waiters, so
+        // that a mutant which makes this route hang is a kill here as well rather than an
+        // unattributed silence.
+        const record: QueryRecord[] = [];
+        const connection = recordingConnection(record);
+        const app = buildApp(
+          config,
+          { provider, withConnection: connection.wiring, now: () => PINNED_NOW },
+        );
         await accountWithIdentities(app, "twoids@example.com", [
           "99999999-9999-9999-9999-999999999999",
         ]);
@@ -1679,8 +1854,11 @@ describeDb("the auth endpoints", () => {
           const pending = app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
           await timer.fired;
           expect(timer.intercepted()).toBe(1);
+          expect(await releasedOrQuiet(connection)).toBe("quiet");
           releaseProvider();
-          response = await pending;
+          response = await settledOrStuck(
+            "DELETE /v1/account after the provider resumed", pending, connection,
+          );
         } finally {
           timer.restore();
           provider.stallSignOutAllUntil = undefined;
