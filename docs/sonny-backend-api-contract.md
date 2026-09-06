@@ -1958,10 +1958,15 @@ reported by the operator command, which is what that route already does for a pr
 **Three routes the row names are deliberately not wired, each for its own reason** (SONNY-425).
 `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider, no network — so
 a deadline around either is a timer that cannot fire, and the row's numbers are true of them only in
-the sense that any bound is. `DELETE /v1/tasks/{task_id}` and the four `/v1/account/*` routes wait on
-the database rather than on a provider, and this gateway sets no statement timeout anywhere — only a
-connection timeout — so bounding them is a change to how every authenticated route reaches Postgres
-rather than a wrapper at five call sites. Both are owed and neither is claimed here.
+the sense that any bound is. `DELETE /v1/tasks/{task_id}` and three of the four `/v1/account/*`
+routes wait on the database rather than on a provider, and this gateway sets no statement timeout
+anywhere — only a connection timeout — so bounding those is a change to how every authenticated route
+reaches Postgres rather than a wrapper at a few call sites. **The fourth is `POST
+/v1/account/credits/top-up` and it is nothing of the kind: it charges at the payment provider, with
+up to three sequential calls of twelve seconds each, so its upstream work can run for far longer than
+this row allows.** Whether it gets a row of its own derived from those attempts, or the attempts are
+bounded to fit this one, is **SONNY-430** (2026-09-06), filed so the route has an owner; nothing
+bounds it today. All three are owed and none is claimed here.
 
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying

@@ -1,5 +1,4 @@
 import type pg from "pg";
-import { ProviderTimedOut } from "../model/upstream.js";
 import { ProviderRejected, type AuthProvider } from "./provider.js";
 
 /**
@@ -206,6 +205,21 @@ export async function drainOwedRevocations(
   const failures: { supabaseUserId: string; reason: string }[] = [];
 
   for (let attempted = 0; attempted < limit; attempted += 1) {
+    // **The caller's deadline, read between statements — never raced against this loop**
+    // (SONNY-425, and the shape is PR #212's F1). This function holds a database connection its
+    // caller leased, so a deadline that *abandoned* it would leave statements running after that
+    // connection had been released and handed to another request. `DELETE /v1/account` therefore
+    // awaits this function's return and asks it to stop, rather than racing it; this is where it
+    // stops. Checked before the claim, so a run that ends here has taken no new lease and owes
+    // nothing to a reader of `revocation_claimed_at`.
+    //
+    // **What this bounds and what it does not.** It ends the loop between iterations, so the worst
+    // case past the deadline is the statement already in flight plus one provider call. A single
+    // statement that hangs is bounded by nothing here — `db/pool.ts` sets no statement timeout,
+    // which is SONNY-427's — and this comment says so rather than letting the word "deadline" imply
+    // otherwise. Nothing else passes a signal, and a drain without one behaves exactly as it did.
+    if (options.signal?.aborted === true) break;
+
     // **One atomic UPDATE takes the lease and returns what it took** (PR #87 fifth round, F3).
     //
     // This was `BEGIN; SELECT … FOR UPDATE SKIP LOCKED; COMMIT` followed by the provider call — and
@@ -283,15 +297,16 @@ export async function drainOwedRevocations(
         // Transient, or unknown, which is treated as transient. `provider_session_revoked_at` stays
         // NULL, so the row is still owed and the next drain finds it.
         //
-        // **A deadline elapse is the one thing here that ends the whole drain rather than one
-        // identity** (SONNY-425). `ProviderTimedOut` is raised by `withDeadlines`' own race, so it
-        // means the *caller's* budget is spent — not that this provider-side user is unreachable.
-        // Continuing would run the remaining identities against a clock that has already run out and
-        // record each of them as a separate failure, which is a truthful-looking row per identity
-        // for one event. The lease is released first, on the line below, exactly as it is for a
-        // transient failure and for the same reason; the throw happens after that, so the row stays
-        // claimable. `DELETE /v1/account` is the only caller that passes a signal and it catches
-        // this by type; `npm run revocations` passes none, so nothing there can raise it.
+        // **A deadline elapse ends the whole drain rather than this identity, and the loop's own
+        // check at the top is what does it — not a special error class here** (SONNY-425; PR #212's
+        // F3 removed the version that tried to do it from this `catch`). That version rethrew a
+        // `ProviderTimedOut`, on the reasoning that the wrapper's race raised it. The race never
+        // reached this `catch` at all: it rejects the *outer* promise and injects nothing into the
+        // work, and the one real adapter maps every abort — the route's signal included — to
+        // `ProviderUnavailable` (`auth/supabase.ts`). So the line was unreachable outside a test fake
+        // and its stated mechanism was wrong. An abort arriving *during* a provider call therefore
+        // lands here like any other transient failure, releases the lease on the line below, and the
+        // loop stops at its next top rather than claiming another row.
         //
         // **The lease is released, and that distinction matters.** A lease says "somebody is calling
         // the provider about this right now"; a failure that has already returned is not that. Left
@@ -311,7 +326,6 @@ export async function drainOwedRevocations(
           "UPDATE sonny.identity_provider_user SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
           [owed.supabase_user_id],
         );
-        if (error instanceof ProviderTimedOut) throw error;
         // This run still excludes it, so one dead user cannot spin the loop.
         failures.push({
           supabaseUserId: owed.supabase_user_id,

@@ -126,9 +126,17 @@ export const DEADLINE_MS = {
    *   deadline around them is a timer that cannot fire. §12 carries that in prose beside its table.
    * - `DELETE /v1/tasks/{task_id}` was on this ticket's never-touch list while PR #207 held
    *   `routes/tasks.ts`, and is owed its own change rather than a reach across that line.
-   * - The account routes (`routes/entitlements.ts`, `routes/credits.ts`) wait on the database rather
-   *   than on a provider, and `db/pool.ts` sets no statement timeout — so bounding them is a wider
-   *   change than one route's wrapper and is filed rather than half-made here.
+   * - Three of the four account routes (`routes/entitlements.ts`, and the read and the consent
+   *   switch in `routes/credits.ts`) wait on the database rather than on a provider, and
+   *   `db/pool.ts` sets no statement timeout — so bounding those is a wider change than one route's
+   *   wrapper and is filed rather than half-made here (SONNY-427).
+   * - **`POST /v1/account/credits/top-up` is the fourth and is not database-bound at all**: it
+   *   charges at the payment provider, spending `TOPUP_CHARGE_TIMEOUT_MS` up to three times in
+   *   sequence, so its upstream work can outlast this row several times over. It is **SONNY-430**
+   *   (2026-09-06), and it is named separately because it was folded into the sentence above until
+   *   PR #212's F4 — the lane's own enumeration had the exception and every record after it dropped
+   *   the exception rather than the enumeration, which is `CLAUDE.md`'s enumerate-before-you-subtract
+   *   rule failing at its last step instead of its first.
    *
    * **`upstream` is enforced at the adapter as well as at the wrapper, and that is not a
    * duplication.** `auth/deps.ts` builds the Supabase adapter with `timeoutMs` read from this field,

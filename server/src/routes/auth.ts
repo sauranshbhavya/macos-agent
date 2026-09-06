@@ -108,6 +108,16 @@ function providerUnavailable(
  * is committed and the caller can no longer reach this route to retry; the residual is left owed and
  * `npm run revocations` reports it, which is the arrangement that handler's own docstring already
  * describes for a failed revocation.
+ *
+ * **`DELETE /v1/account` does not use this wrapper at all, and the reason is a rule rather than a
+ * preference** (PR #212's F1). `withDeadlines` is a `Promise.race`: when the deadline wins it
+ * abandons the work. That is harmless for the four routes above, whose work is one HTTP call, and it
+ * is a correctness defect for work that holds this handler's pooled database connection. **A
+ * deadline around work that holds a database connection is never a race that abandons.** That route
+ * builds its own `AbortController` on the same `total`, hands the drain the signal, and awaits the
+ * drain's termination, so the connection's release is ordered after the last statement rather than
+ * racing it. The cost is that the bound is cooperative — polled between statements — which is stated
+ * where it is applied.
  */
 const AUTH_DEADLINES = DEADLINE_MS.auth;
 
@@ -554,36 +564,57 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // handler", which is not where this call is and not what it does: it runs after the close, and
     // it is scoped to `{ accountId }` — this account, never a backlog. Nothing drains anything
     // else, and the command reports rather than revokes, because no adapter exists to call.
-    // **§12's deadline, and a timeout here still answers 204** (SONNY-425). This loop makes one
-    // provider call per identity, so the adapter's own per-request bound is not a bound on the
-    // handler; the wrapper's signal is threaded into the drain so the whole of it sits inside §12's
-    // budget rather than N times the adapter's.
+    // **§12's deadline, OBSERVED by the drain rather than raced against it** (SONNY-425, and the
+    // shape is PR #212's F1). This loop makes one provider call per identity, so the adapter's own
+    // per-request bound is not a bound on the handler; the signal below is threaded into the drain
+    // so the whole of it sits inside §12's budget rather than N times the adapter's.
+    //
+    // **`withDeadlines` is the wrong instrument here and using it was a defect this branch
+    // introduced.** It is a `Promise.race`, so when the deadline wins it *abandons* the work — which
+    // is harmless for every other caller, because their work is a bare HTTP call. This work holds
+    // the pooled `client` this handler leased. Raced, the handler answered 204 and
+    // `withConnection`'s `finally` released that connection while the drain was still running on it:
+    // `pg` does not refuse a query on a released client, and the pool hands the same client object
+    // to the next `connect()`, so the abandoned drain's statements land inside whatever transaction
+    // the next request has open. Nothing logs it — the race has already subscribed, so the later
+    // rejection is swallowed. **The rule, stated once because it generalises past this route: a
+    // deadline around work that holds a database connection is never a race that abandons.** It is
+    // a signal the work reads, plus an `await` that the connection's release is ordered after.
+    //
+    // So the deadline is a controller the drain polls between statements, and this handler waits for
+    // the drain to *terminate* either way. What that costs is honest and is the residual: the bound
+    // is cooperative, so a single statement that hangs is bounded by nothing here — `db/pool.ts`
+    // sets no statement timeout, which is SONNY-427's. What it buys is that the drain cannot outlive
+    // the connection.
     //
     // **It cannot be allowed to throw, for the reason this handler's own comments below already
     // give**: the close is committed by the time this runs, so a 5xx would describe an outcome that
     // is not the one on disk and would invite a retry the gate can no longer let through —
-    // `accountForSupabaseUser` stops attributing this caller the moment `deleted_at` is set. So the
-    // timeout is recorded as debt exactly the way a failed provider call is: the rows keep
-    // `provider_session_revoked_at` NULL, the next drain finds them, and `npm run revocations`
-    // reports the residual.
+    // `accountForSupabaseUser` stops attributing this caller the moment `deleted_at` is set. So a
+    // deadline that elapses is recorded as debt exactly the way a failed provider call is: the rows
+    // it never reached keep `provider_session_revoked_at` NULL, the next drain finds them, and
+    // `npm run revocations` reports the residual.
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => deadline.abort(), AUTH_DEADLINES.total);
     let outcome: RevocationOutcome;
     try {
-      outcome = await withDeadlines(AUTH_DEADLINES, (signal) =>
-        drainOwedRevocations(client, deps.provider, { accountId, signal }),
-      );
-    } catch (error) {
-      if (!(error instanceof ProviderTimedOut)) throw error;
+      outcome = await drainOwedRevocations(client, deps.provider, {
+        accountId,
+        signal: deadline.signal,
+      });
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
+    if (deadline.signal.aborted) {
+      // **A real partial outcome, not a synthesised empty one.** The previous version replaced the
+      // whole outcome with zeros because the race left it with nothing; the drain now returns what
+      // it actually did before it stopped, so the log below counts real work. What is left owed is
+      // in the database either way, which is the record that matters.
       request.log.error(
-        { requestId: request.id },
+        { requestId: request.id, revoked: outcome.revoked, owed: outcome.failed },
         "account closed, but its provider-side revocation did not finish inside the route " +
-          "deadline; the rows stay owed and the next drain takes them",
+          "deadline; the rows it did not reach stay owed and the next drain takes them",
       );
-      // Not a count of nothing having happened — the drain may have revoked several identities
-      // before the deadline elapsed and this loses that number. What it must not do is claim a
-      // revocation, so the honest reading of `failed: 0, revoked: 0` here is "this request has
-      // nothing to report", and the line above is what records that it was cut off. The database is
-      // the record of what is still owed either way.
-      outcome = { revoked: 0, failed: 0, failures: [] };
     }
 
     // **The wipe, after the close and after the drain** — see this handler's doc comment for what it

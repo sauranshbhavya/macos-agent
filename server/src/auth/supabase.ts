@@ -262,14 +262,25 @@ export class SupabaseAuthProvider implements AuthProvider {
   readonly #authUrl: string;
   readonly #anonKey: string;
   readonly #serviceRoleKey: string | undefined;
-  readonly #timeoutMs: number;
+  /**
+   * The per-request bound this adapter applies, readable (PR #212's F2).
+   *
+   * **Public because a number wired from a contract table has to be checkable, and W9 showed that
+   * an unreadable one is not.** `auth/deps.ts` passes §12's `DEADLINE_MS.auth.upstream` here; with
+   * this private, a mutant wiring `90_000` instead survived the whole suite, because
+   * `AbortSignal.timeout` does not report the duration it was built with and no test could reach
+   * the value by any other route. It is not a second spelling of the number — it *is* the field the
+   * `fetch` below uses, and `supabase-provider.test.ts` asserts the two together against a tiny
+   * bound so this cannot become one.
+   */
+  readonly timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
 
   constructor(config: SupabaseAuthConfig) {
     this.#authUrl = config.authUrl.replace(/\/+$/, "");
     this.#anonKey = config.anonKey;
     this.#serviceRoleKey = config.serviceRoleKey;
-    this.#timeoutMs = config.timeoutMs;
+    this.timeoutMs = config.timeoutMs;
     this.#fetch = config.fetch ?? globalThis.fetch;
   }
 
@@ -508,7 +519,7 @@ export class SupabaseAuthProvider implements AuthProvider {
         ...(options.json === undefined ? {} : { body: JSON.stringify(options.json) }),
         // **Every call is bounded, and after SONNY-425 it is bounded twice.** An unbounded one is
         // what `revocation.ts` names as owed, and it is also a request handler holding a connection
-        // while a socket hangs. `#timeoutMs` bounds THIS call — `auth/deps.ts` sets it from
+        // while a socket hangs. `timeoutMs` bounds THIS call — `auth/deps.ts` sets it from
         // `DEADLINE_MS.auth.upstream`, so it is §12's own number rather than a literal that happens
         // to match it — and the caller's signal bounds the ROUTE's whole upstream budget, which is a
         // larger quantity wherever a handler makes more than one call. `AbortSignal.any` honours
@@ -516,8 +527,8 @@ export class SupabaseAuthProvider implements AuthProvider {
         // caller supplied one keeps the single-signal path byte-identical to what it was.
         signal:
           options.signal === undefined
-            ? AbortSignal.timeout(this.#timeoutMs)
-            : AbortSignal.any([options.signal, AbortSignal.timeout(this.#timeoutMs)]),
+            ? AbortSignal.timeout(this.timeoutMs)
+            : AbortSignal.any([options.signal, AbortSignal.timeout(this.timeoutMs)]),
       });
     } catch (error) {
       // A timeout, a DNS failure, a refused socket, an aborted body. The name is safe to repeat --
