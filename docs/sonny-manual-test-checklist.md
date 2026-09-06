@@ -3668,13 +3668,23 @@ deployment has them, rather than reconstructing them later from a ticket.
       app control can produce it. Open a request to `POST /v1/transcriptions` that sends its headers
       and then stops sending the body — `curl` with `--limit-rate 1` against a few megabytes will do
       it, or `nc` with a hand-written multipart preamble and no ending. Expected: the connection is
-      refused within about half a minute with a `408`, and the JSON body has the same shape every
+      refused after about **ninety seconds** with a `408`, the JSON body has the same shape every
       other Sonny error has — an `error` object with `code`, `message`, `retryable`,
-      `retry_after_seconds` and `request_id`. **What would be a finding:** the connection sitting
-      open indefinitely, or a reply whose body has a `statusCode` field at the top level, which would
-      mean the framework answered rather than Sonny.
+      `retry_after_seconds` and `request_id` — and that `code` reads **`request.timeout`** with
+      `retryable: true`. **What would be a finding:** the connection sitting open indefinitely; a
+      reply whose body has a `statusCode` field at the top level, which would mean the framework
+      answered rather than Sonny; or a `code` of `request.invalid`, which is the malformed-request
+      code and the thing PR #208's review caught — it tells the app not to retry a condition a retry
+      would clear.
+- [ ] **(SONNY-322, waits on SONNY-192)** **A malformed request is not told it was too slow.** Same
+      terminal, same deployed gateway. Send a request with a header name containing a space —
+      `printf 'GET /v1/health HTTP/1.1\r\nHost: h\r\nBad Header: x\r\n\r\n' | nc <host> <port>`.
+      Expected: `400 Bad Request` with `code` `request.invalid`. **What would be a finding:** a `408`,
+      or the words "not delivered in time" — a statement about something that did not happen, which
+      is what this answered before the fix round.
 - [ ] **(SONNY-322, waits on SONNY-192)** **An ordinary voice command still works, and is not the
-      thing that got cut off.** The bound above is 30 seconds for the upload itself. On a normal
+      thing that got cut off.** The bound above is 90 seconds for the upload itself — raised from 30
+      by the founders on 2026-09-05, precisely so this row is unlikely to fail. On a normal
       connection, hold the push-to-talk hotkey, say a real command of a few seconds, and let it run.
       Expected: it transcribes and acts exactly as before. Then, if you can, try the same on a
       deliberately poor connection (macOS Network Link Conditioner, or a phone hotspot with one bar).
