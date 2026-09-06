@@ -2,8 +2,10 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// SONNY-245. The wall check, run over three real pages saved verbatim under
-/// `Tests/Fixtures/WebResearch/`.
+/// SONNY-245 and SONNY-256. The wall check, run over six real pages saved verbatim under
+/// `Tests/Fixtures/WebResearch/`. (This read "three" while four were committed, from SONNY-245
+/// onward; it was stale before SONNY-256 added the last two, and PR #210's F5 sweep is what found
+/// it — the ordinal it flagged in the README was one of three sites, not one of two.)
 ///
 /// **Why fixtures rather than hand-written HTML, stated here because the ticket makes the point and
 /// it is the reason this suite exists at all:** a string like
@@ -115,10 +117,175 @@ struct RestrictedContentDetectorTests {
 
         #expect(RestrictedContentDetector.finding(inHTML: html) == RestrictedContentDetector.Finding(
             reason: "CAPTCHAs",
-            phrase: "captcha",
+            phrase: "confirm you are a human",
             evidence: .visibleText,
             visibleTextLength: 523
         ))
+    }
+
+    // MARK: - SONNY-256: a short article about a wall
+
+    /// The ticket's own example, and the page the founders called a first-ten-minutes failure.
+    ///
+    /// An ordinary link-blog post, 1 110 visible characters, whose entire mention of the subject is
+    /// one sentence: "neat concept: a third party service for ensuring that an openid has passed a
+    /// captcha." SONNY-245 refused it, because `captcha` was visible-text evidence and the page was
+    /// under `interstitialVisibleTextLimit`.
+    ///
+    /// The assertions before the verdict are what keep this honest, and they are the ones that
+    /// establish SONNY-245's verdict: the word is in the *visible* text and the page is *under* the
+    /// interstitial limit, which is SONNY-245's rule spelled out. `oldRuleReason` beside them is the
+    /// **pre**-SONNY-245 rule — a weaker statement, since it matches markup too — and it is here as a
+    /// second witness that the page still carries the evidence, not as a model of SONNY-245
+    /// (PR #210 review, F6).
+    @Test
+    func theShortArticleAboutAWallIsServed() throws {
+        let html = try WebResearchFixture.simonWillisonBotBouncer.html()
+
+        let visible = RestrictedContentDetector.visibleText(inHTML: html)
+        #expect(visible.count == 1_110)
+        #expect(visible.contains("a third party service for ensuring that an openid has passed a captcha"))
+        #expect(visible.count < RestrictedContentDetector.interstitialVisibleTextLimit)
+        #expect(oldRuleReason(inHTML: html) == "CAPTCHAs")
+
+        #expect(RestrictedContentDetector.finding(inHTML: html) == nil)
+    }
+
+    /// The same class arriving from a different kind of page, so the fix is not read as a property of
+    /// one blog's template.
+    ///
+    /// A Hacker News comment page, 327 visible characters — well inside the band where nothing else
+    /// saves it — whose whole body is one comment saying "surely you could provide a reference not
+    /// behind a paywall?".
+    ///
+    /// As above, the visible-text and under-the-limit assertions are what establish SONNY-245's
+    /// refusal; `oldRuleReason` is the pre-SONNY-245 rule and is the weaker witness (PR #210, F6).
+    @Test
+    func theShortCommentPageAboutAPaywallIsServed() throws {
+        let html = try WebResearchFixture.hackerNewsPaywallComment.html()
+
+        let visible = RestrictedContentDetector.visibleText(inHTML: html)
+        #expect(visible.count == 327)
+        #expect(visible.contains("surely you could provide a reference not behind a paywall?"))
+        #expect(visible.count > RestrictedContentDetector.contentlessVisibleTextLimit)
+        #expect(oldRuleReason(inHTML: html) == "paywalls")
+
+        #expect(RestrictedContentDetector.finding(inHTML: html) == nil)
+    }
+
+    /// Google's reCAPTCHA attribution is boilerplate a licence requires, it is visible text, and it
+    /// says nothing about this reader being gated.
+    ///
+    /// It is the population PR #108's review found widest: any short page with a reCAPTCHA-protected
+    /// contact form, signup or comment box carries it, and under SONNY-245 every one of them under
+    /// 2 000 characters was refused. Measured live, `accounts.spotify.com/en/login` (216 visible
+    /// characters, 93 of them this notice) and `pixiv.net` (599) were both refused on it.
+    ///
+    /// **It is served now with no carve-out for the notice**, which is the point: nothing here
+    /// excludes a vendor string by name. The badge stopped mattering because `captcha` stopped being
+    /// visible-text evidence at all. A rule that named the notice would have had to name the next
+    /// one too.
+    @Test
+    func aShortPageCarryingOnlyTheRecaptchaBadgeIsServed() {
+        let notice = "This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply."
+        let filler = String(repeating: "a", count: 300)
+        let html = "<html><body><p>\(filler)</p><p>\(notice)</p></body></html>"
+
+        let visible = RestrictedContentDetector.visibleText(inHTML: html)
+        #expect(visible.contains("this site is protected by recaptcha"))
+        #expect(visible.count > RestrictedContentDetector.contentlessVisibleTextLimit)
+        #expect(visible.count < RestrictedContentDetector.interstitialVisibleTextLimit)
+        #expect(oldRuleReason(inHTML: html) == "CAPTCHAs")
+
+        #expect(RestrictedContentDetector.finding(inHTML: html) == nil)
+    }
+
+    /// The other half of the split, and the one that keeps it fail-closed: a subject noun stops being
+    /// visible-text evidence, and wall *speech* on the very same page still refuses it.
+    ///
+    /// Both pages are 500 visible characters — inside the band, above the markup limit — so length
+    /// decides nothing and only the wording does. Without the second case this test would show the
+    /// check being narrowed and nothing showing it still fires.
+    @Test
+    func aSubjectNounIsNotVisibleEvidenceAndWallSpeechOnTheSamePageStillIs() {
+        let mentions = page(visibleCharacters: 500, saying: "captcha")
+        let speaks = page(visibleCharacters: 500, saying: "please confirm you are a human")
+
+        #expect(RestrictedContentDetector.visibleText(inHTML: mentions).count == 500)
+        #expect(RestrictedContentDetector.finding(inHTML: mentions) == nil)
+
+        let refused = RestrictedContentDetector.finding(inHTML: speaks)
+        #expect(refused?.reason == "CAPTCHAs")
+        #expect(refused?.phrase == "confirm you are a human")
+        #expect(refused?.evidence == .visibleText)
+        #expect(refused?.visibleTextLength == 500)
+    }
+
+    /// The wordings `wallSpeechPhrases` reaches, and — the half that matters — the ones it must not.
+    ///
+    /// **The control here used to be a sentence containing none of the phrases**, which controls
+    /// nothing: a page *discussing* a wall contains the wording, so a sentence that avoids it cannot
+    /// show the list is not too loose. PR #210's F1 was found in exactly that gap — the list then
+    /// carried `you are human`, `you are a human` and `are you a robot`, and 41 innocent Hacker News
+    /// comment pages were refused by it. **The controls below are four of those real comments**,
+    /// verbatim, so this test fails if any of those three wordings comes back.
+    ///
+    /// The reached set is the wall side: Cloudflare's modern and legacy interstitials, ScienceDirect's
+    /// gate and Bluehost's security step, in the words those pages actually use.
+    @Test
+    func wallSpeechReachesRealGateWordingsAndNotReadersTalkingAboutThem() {
+        let reached = [
+            "Verifying you are human. This may take a few seconds.",
+            "Please confirm you are a human by completing the captcha challenge below.",
+            "Completing the CAPTCHA proves you are human and gives you access to the web property.",
+            "Completing the CAPTCHA proves you are a human and gives you temporary access."
+        ]
+        for wording in reached {
+            let html = page(visibleCharacters: 600, saying: wording)
+            #expect(RestrictedContentDetector.finding(inHTML: html)?.reason == "CAPTCHAs", "wording \(wording)")
+            #expect(RestrictedContentDetector.finding(inHTML: html)?.evidence == .visibleText, "wording \(wording)")
+        }
+
+        let served = [
+            "When you think about that $6B company, which if you are human you will do from time to time",
+            "The experience is broken by 'are you a robot' walls, subscribe to my blog walls, paywalls",
+            "Are you suggesting somehow automating the process of proving you are a human?",
+            "How do you prove you are human without handing over yet another phone number?"
+        ]
+        for comment in served {
+            let html = page(visibleCharacters: 600, saying: comment)
+            #expect(RestrictedContentDetector.finding(inHTML: html) == nil, "comment \(comment)")
+        }
+    }
+
+    /// The concatenation order decides which noun a two-phrase page's refusal names, and nothing
+    /// asserted that until PR #210's F3 — the claim was checked against the Zillow fixture, which
+    /// carries no wall-speech phrase and therefore cannot exercise the ordering at all.
+    ///
+    /// `phrases` is `wallSpeechPhrases + subjectPhrases`, so a contentless page whose markup carries
+    /// both a reCAPTCHA vendor script and a login wording is refused as a **login wall**, not as a
+    /// CAPTCHA — the order changed that from SONNY-245, where `captcha` was first. Fail-closed is
+    /// intact either way; what moved is the noun the user is shown, and that is worth pinning rather
+    /// than discovering.
+    @Test
+    func aPageCarryingTwoPhrasesInMarkupIsNamedByTheEarlierListEntry() {
+        let filler = String(repeating: "a", count: 100)
+        let html = """
+        <html><body><p>\(filler)</p><!-- Please log in --> \
+        <script src="https://www.google.com/recaptcha/api.js"></script></body></html>
+        """
+
+        let refused = RestrictedContentDetector.finding(inHTML: html)
+        #expect(refused?.evidence == .markup)
+        #expect(refused?.reason == "login walls")
+        #expect(refused?.phrase == "please log in")
+
+        // The control: with the login wording gone, the same page is a CAPTCHA refusal.
+        let captchaOnly = "<html><body><p>\(filler)</p>"
+            + "<script src=\"https://www.google.com/recaptcha/api.js\"></script></body></html>"
+        let alone = RestrictedContentDetector.finding(inHTML: captchaOnly)
+        #expect(alone?.reason == "CAPTCHAs")
+        #expect(alone?.phrase == "captcha")
     }
 
     // MARK: - Both ways, on the same three pages
@@ -144,13 +311,17 @@ struct RestrictedContentDetectorTests {
             "wikipedia-machine-learning": "CAPTCHAs",
             "wikipedia-captcha": "CAPTCHAs",
             "zillow-perimeterx-block": "CAPTCHAs",
-            "sciencedirect-captcha-challenge": "CAPTCHAs"
+            "sciencedirect-captcha-challenge": "CAPTCHAs",
+            "simonwillison-botbouncer": "CAPTCHAs",
+            "hackernews-paywall-comment": "paywalls"
         ])
         #expect(newVerdicts == [
             "wikipedia-machine-learning": "served",
             "wikipedia-captcha": "served",
             "zillow-perimeterx-block": "CAPTCHAs",
-            "sciencedirect-captcha-challenge": "CAPTCHAs"
+            "sciencedirect-captcha-challenge": "CAPTCHAs",
+            "simonwillison-botbouncer": "served",
+            "hackernews-paywall-comment": "served"
         ])
     }
 
@@ -248,8 +419,8 @@ struct RestrictedContentDetectorTests {
     @Test
     func aCommentAndAnAttributeAreNotWhatAPageSaysToAReader() {
         let filler = String(repeating: "a", count: 1_000)
-        let hidden = "<html><body><p title=\"captcha\">\(filler)</p><!-- captcha --></body></html>"
-        let spoken = "<html><body><p>captcha \(filler)</p></body></html>"
+        let hidden = "<html><body><p title=\"please log in\">\(filler)</p><!-- please log in --></body></html>"
+        let spoken = "<html><body><p>please log in \(filler)</p></body></html>"
 
         #expect(RestrictedContentDetector.visibleText(inHTML: hidden).count == 1_000)
         #expect(RestrictedContentDetector.finding(inHTML: hidden) == nil)
@@ -362,23 +533,46 @@ struct RestrictedContentDetectorTests {
         }
     }
 
-    /// The phrases keep their nouns, and the earlier match in the list wins — unchanged from the
-    /// rule this replaces, since SONNY-245 changed the evidence and not the coverage.
+    /// The phrases keep their nouns, and the earlier match in the list wins. SONNY-256 split them in
+    /// two, so both lists are pinned by value and so is the order they concatenate in — the order is
+    /// load-bearing, since `firstPhrase` returns the first entry that matches and the `reason` a
+    /// refusal names comes from it.
+    ///
+    /// **Compared as ordered arrays rather than through `Dictionary(uniqueKeysWithValues:)`, and that
+    /// is not a style choice.** The dictionary form traps on a duplicate key, and the process dying
+    /// takes the whole run's evidence with it: SONNY-256's first battery had exactly that, a mutant
+    /// putting `captcha` back into `wallSpeechPhrases` reported as `KILLED — the run failed but named
+    /// no test` in 38 seconds, with `Fatal error: Duplicate values for key: 'captcha'` at the end of
+    /// a log naming none of the tests that had caught it. The mutant really was caught; nothing in
+    /// the report could say by what. (`CLAUDE.md`, "a trapped test costs a mutant its evidence".)
     @Test
     func eachPhraseKeepsItsOwnRefusalNoun() {
-        let expected: [String: String] = [
-            "captcha": "CAPTCHAs",
-            "verify you are human": "CAPTCHAs",
-            "please log in": "login walls",
-            "sign in to continue": "login walls",
-            "subscribe to continue": "paywalls",
-            "subscription required": "paywalls",
-            "paywall": "paywalls"
+        let expectedWallSpeech = [
+            ("verify you are human", "CAPTCHAs"),
+            ("verifying you are human", "CAPTCHAs"),
+            ("verifying you are a human", "CAPTCHAs"),
+            ("confirm you are human", "CAPTCHAs"),
+            ("confirm you are a human", "CAPTCHAs"),
+            ("proves you are human", "CAPTCHAs"),
+            ("proves you are a human", "CAPTCHAs"),
+            ("please log in", "login walls"),
+            ("sign in to continue", "login walls"),
+            ("subscribe to continue", "paywalls")
+        ]
+        let expectedSubjects = [
+            ("captcha", "CAPTCHAs"),
+            ("subscription required", "paywalls"),
+            ("paywall", "paywalls")
         ]
 
-        #expect(Dictionary(uniqueKeysWithValues: RestrictedContentDetector.phrases.map { ($0.phrase, $0.reason) }) == expected)
+        #expect(RestrictedContentDetector.wallSpeechPhrases.map { [$0.phrase, $0.reason] }
+            == expectedWallSpeech.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.subjectPhrases.map { [$0.phrase, $0.reason] }
+            == expectedSubjects.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.phrases.map { [$0.phrase, $0.reason] }
+            == (expectedWallSpeech + expectedSubjects).map { [$0.0, $0.1] })
 
-        for (phrase, reason) in expected {
+        for (phrase, reason) in expectedWallSpeech + expectedSubjects {
             let html = "<html><body><p>\(phrase)</p></body></html>"
             #expect(RestrictedContentDetector.reason(inHTML: html) == reason, "phrase \(phrase)")
         }
@@ -395,10 +589,17 @@ struct RestrictedContentDetectorTests {
 
     // MARK: - Helpers
 
-    /// The rule SONNY-245 replaced, reimplemented here so both can be run over the same page.
+    /// **The rule SONNY-245 replaced — the *pre*-SONNY-245 rule, not SONNY-245's own.** It
+    /// lowercases the whole raw HTML and matches any phrase anywhere, with no visible-text stage and
+    /// no length gate; SONNY-245's rule has both. Call sites must say which they mean, because "the
+    /// old rule" is ambiguous once two rules have been replaced (PR #210 review, F6).
     ///
     /// Copied from `PublicWebPageLoader.restrictedContentReason(in:)` as it stood at `94afca1`. It
     /// lives in the test rather than in the source because its only remaining job is to fail.
+    ///
+    /// One property of it is worth knowing before it is read as a fixed baseline: it searches
+    /// `RestrictedContentDetector.phrases`, which SONNY-256 changed, so what it models is
+    /// "match anything in today's list anywhere in the markup" rather than a frozen 2026-08-23 list.
     private func oldRuleReason(inHTML html: String) -> String? {
         let normalized = html
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -456,6 +657,8 @@ enum WebResearchFixture: String, CaseIterable {
     case wikipediaCaptcha = "wikipedia-captcha"
     case zillowPerimeterXBlock = "zillow-perimeterx-block"
     case scienceDirectCaptchaChallenge = "sciencedirect-captcha-challenge"
+    case simonWillisonBotBouncer = "simonwillison-botbouncer"
+    case hackerNewsPaywallComment = "hackernews-paywall-comment"
 
     enum FixtureError: Error {
         case unreadable(String)
