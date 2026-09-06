@@ -261,6 +261,25 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   alter, so it would report zero over a server change while never compiling what changed. A
   change touching both halves runs both halves' commands; neither substitutes for the other,
   and green on the wrong half is not evidence (SONNY-193).
+- **Attributions: `scripts/no-attribution`, on the three surfaces no hook can watch.** The two
+  hooks are the refusal and this is the audit: they stop a new attribution arriving, and neither
+  can see what is already in the history, already in a tracked file, or already in a pull request
+  body on GitHub — the last being the surface nothing in the repository can reach at all.
+  `history` and `tree` are local and cost a second or two, `prs` needs `gh`, and `all` runs the
+  three. Exit 0 is a clean surface, 2 is a finding, and **1 means a surface could not be measured
+  and is never reported as clean**. The closing comment carries the exit the same way it carries
+  the suite's count. **Naming it here is the half that keeps it alive** — a hook fires inside one
+  session's checkout and leaves nothing a reviewer or a zero-context reader can quote, so a
+  session whose hook never ran looks exactly like a session whose hook passed, which is the same
+  reason step 7 keeps naming `scripts/warnings`, and this file's own record of SONNY-64 is what a
+  check nobody is told to run turns into. (PR #195's F9: the tool shipped with SONNY-406 and this
+  file named it nowhere. Measured at `d14eba65`, before this bullet existed:
+  `grep -c 'scripts/no-attribution' WORKFLOW.md` → **0**, against **11** for the same command over
+  `scripts/warnings` — that 11 is file-wide, of which **6** fall inside this step, and which of the
+  two a figure is has to be said before it is compared — and the 11 is also the control saying the
+  search can find a tool this file does name. Both are readings at a commit rather than claims
+  about the file: this bullet names both tools twice each, so the same two commands answer **2**
+  and **13** here. Routed into SONNY-372's branch 2026-09-05; recorded on SONNY-410.)
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
@@ -586,6 +605,41 @@ besides — the right one was in the same session's own trace output. The implem
 probe in the branch instead of transcribing it, and a probe that will not reproduce is a finding to
 hand back rather than a test to make pass. (`CLAUDE.md`'s Claims and evidence section carries the
 general rule.)
+
+**An implementing lane may tell a reviewing session that its anchor moved, and what the delta is,
+and nothing else.** Everything else — findings, fix-round routing, and anything at all that could
+shape what the reviewer looks at or concludes — goes through the coordinator, and the lane tells
+the coordinator it has sent the fact. What was already written is only half of this and reads as
+the opposite: "Step 0" above instructs the *reviewer* to stop and re-anchor when the remote head
+moves before its findings are filed, and says nothing about who may tell it that the head moved,
+while the bullet above routes every post-close round through the user without carving out a fact
+that is not a round. A session reading only those two concludes it must stay silent and let the
+reviewer discover the move for itself, which is the outcome nobody wants. **Why interrupting beats
+waiting, which is the part that makes this more than etiquette:** on the instance that produced the
+rule, the two lines that had moved were precisely the two a reviewer at the old tree would have
+raised — a changelog entry reporting a PR body as unfixed, and an open question the founder had
+since answered — and both were already closed. Separating an already-fixed finding from a live one
+costs more than re-reading a two-line diff, which is the same reasoning Step 0 gives for
+re-anchoring in the first place. (Founder-confirmed 2026-09-03, on
+`chore/no-attribution-in-the-history` while PR #195 was open: a review worktree sat detached at
+`1b3006a`, the lane's push moved the branch to `538466c`, the lane sent the bare fact and told the
+coordinator, and the coordinator confirmed that was the right call and stated the rule it follows.
+Both SHAs are branch heads and SONNY-407's rewrite has since taken them non-ancestral, which is
+§8's convention working. Recorded on SONNY-410 and written here 2026-09-05.)
+
+**Before pushing to a branch with an open PR, check whether a review is anchored to it.**
+`git worktree list` shows a detached worktree at that branch's head while a review is live, and
+that is the whole check. Before this rule was written, this file mentioned that command exactly
+once: `grep -c -i 'worktree list' WORKFLOW.md` → **1** at `d14eba65`, and that one hit is step
+3's worktree-lifecycle bullet, which is about auditing worktrees rather than about pushing. The
+same command answers **3** here, because this paragraph names the command once in its own prose
+and again in that citation — the difference is this rule arriving, not the file drifting, and it
+is the reason the 1 is written as a reading at a commit rather than as a claim about the file. A
+review pinned at a head that then moves is not wrong; it is reviewing a tree one step behind, and
+the cost is the reviewer's time separating a stale finding from a live one. When the check says a
+review is live the push is still the lane's to make — step 5's standing authorization is
+untouched, and holding work back to keep a review still is not what this asks for — and what the
+lane then owes is the one sentence the rule above allows. (SONNY-410, same instance.)
 
 **Review cycles are capped at three: the initial review, one fix round, one re-check.** The
 re-check is the last word **on finding things**; what may continue past it is verification of
