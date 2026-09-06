@@ -99,14 +99,20 @@ export function denylistedUntil(accessTokenExpiresAt: Date): Date {
  * is a narrower residual than the one this table closes, and it is written down rather than assumed
  * away.
  *
- * **`AND session_id <> $1` is not a redundancy and removing it is a runtime error, not a slower
- * prune.** A data-modifying `WITH` runs on the statement's own snapshot, while `ON CONFLICT`'s
- * arbiter reads the index as it actually stands — so a sign-out for a session whose row has already
- * passed `expires_at` would have the prune delete the very row the upsert then tries to update, and
- * Postgres refuses to update a tuple another operation of the same command has already modified.
- * Reachable rather than theoretical: it is one user signing out twice more than a token lifetime
- * apart with no other sign-out in between to have pruned the row. Excluding the row being written
- * removes the interaction instead of relying on an ordering the snapshot rules do not promise.
+ * **The prune and the upsert touch the same row and that is fine, which was measured rather than
+ * reasoned about.** The obvious worry is that a sign-out for a session whose own row has already
+ * passed `expires_at` has the prune delete the very row the upsert then conflicts on — a
+ * data-modifying `WITH` runs on the statement's own snapshot while `ON CONFLICT`'s arbiter reads
+ * the index as it stands, and Postgres does refuse to *update* a tuple the same command has already
+ * modified. It does not arise here: the delete is what the arbiter sees, so the insert proceeds as a
+ * plain insert. Measured on Postgres 17.11 in both directions — an expired row pruned and reinserted,
+ * and a live row deleted by a widened boundary and reinserted — each leaving exactly one row
+ * carrying the new expiry, and neither raising. **An earlier version of this function carried an
+ * `AND session_id <> $1` on the prune to sidestep an interaction that turned out not to happen, and
+ * it is gone rather than kept as belt and braces**, for the reason `token.ts` gives for deleting its
+ * unreachable `4n+1` guard: a condition that cannot change an answer is not a second defence, it is a
+ * claim the next reader will reason from. `re-revokes a session whose own row has already expired`
+ * in `denylist.db.test.ts` is what keeps this measured rather than remembered.
  */
 export async function revokeProviderSession(
   client: pg.Client,
@@ -116,8 +122,7 @@ export async function revokeProviderSession(
 ): Promise<void> {
   await client.query(
     `WITH pruned AS (
-       DELETE FROM sonny.revoked_provider_session
-        WHERE expires_at <= $3 AND session_id <> $1
+       DELETE FROM sonny.revoked_provider_session WHERE expires_at <= $3
      )
      INSERT INTO sonny.revoked_provider_session (session_id, revoked_at, expires_at)
      VALUES ($1, $3, $2)

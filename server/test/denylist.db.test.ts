@@ -187,6 +187,39 @@ describeDb("a sign-out, against a real denylist", () => {
     await app.close();
   });
 
+  itUnderHangBackstop("re-revokes a session whose own row has already expired", async () => {
+    // **The prune and the upsert touch one row in one statement, and this is the case that finds
+    // out.** One user signing out twice more than a token lifetime apart, with no other sign-out in
+    // between to have pruned the row, so the prune's `DELETE` and the insert's `ON CONFLICT` are
+    // both about the same `session_id`. It resolves cleanly on Postgres 17 — the delete is what the
+    // arbiter sees, so the insert proceeds as an insert — and this test is what says so rather than
+    // the reasoning in `denylist.ts`, which was wrong in the other direction before it was measured.
+    // What would fail here is a `500` on a route that must not have one.
+    const app = build();
+    await signIn(app, "twice@example.com");
+    await client.query(
+      `INSERT INTO sonny.revoked_provider_session (session_id, revoked_at, expires_at)
+       VALUES ($1, now() - interval '3 hours', now() - interval '2 hours')`,
+      [providerSessionFor(SESSION_USER)],
+    );
+
+    const answered = await app.inject({
+      method: "POST", url: "/v1/auth/signout",
+      headers: bearer(accessTokenFor(SESSION_USER)),
+    });
+
+    expect(answered.statusCode).toBe(204);
+    const { rows } = await client.query<{ expires_at: Date }>(
+      "SELECT expires_at FROM sonny.revoked_provider_session WHERE session_id = $1",
+      [providerSessionFor(SESSION_USER)],
+    );
+    // One row, and its window is the new token's rather than the dead one's — the upsert refreshed
+    // it instead of the prune taking it away.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.expires_at.getTime()).toBeGreaterThan(Date.now());
+    await app.close();
+  });
+
   itUnderHangBackstop("never shortens a row a second sign-out presents an older token for", async () => {
     // `session_id` survives a refresh, so two tokens of one session can be presented at different
     // times with different expiries. Taking the later of the two is what keeps the row covering
