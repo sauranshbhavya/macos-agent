@@ -87,6 +87,12 @@ function providerAnswering(
     anonKey: ANON,
     serviceRoleKey: SERVICE_ROLE,
     fetch,
+    // **Named rather than defaulted, because the adapter no longer has a default** (SONNY-425). It
+    // carried one of `10_000`, which was §12's upstream deadline for these routes spelled a second
+    // time in a file that cites no contract section — so a mutant deleting `deps.ts`' wiring of the
+    // real number survived the whole suite, there being nothing left to observe. §12's number is
+    // `deps.ts`' to supply; a test that only needs *a* bound says so here.
+    timeoutMs: 10_000,
   });
   return { provider, calls };
 }

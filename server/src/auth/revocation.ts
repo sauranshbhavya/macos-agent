@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { ProviderTimedOut } from "../model/upstream.js";
 import { ProviderRejected, type AuthProvider } from "./provider.js";
 
 /**
@@ -282,6 +283,16 @@ export async function drainOwedRevocations(
         // Transient, or unknown, which is treated as transient. `provider_session_revoked_at` stays
         // NULL, so the row is still owed and the next drain finds it.
         //
+        // **A deadline elapse is the one thing here that ends the whole drain rather than one
+        // identity** (SONNY-425). `ProviderTimedOut` is raised by `withDeadlines`' own race, so it
+        // means the *caller's* budget is spent — not that this provider-side user is unreachable.
+        // Continuing would run the remaining identities against a clock that has already run out and
+        // record each of them as a separate failure, which is a truthful-looking row per identity
+        // for one event. The lease is released first, on the line below, exactly as it is for a
+        // transient failure and for the same reason; the throw happens after that, so the row stays
+        // claimable. `DELETE /v1/account` is the only caller that passes a signal and it catches
+        // this by type; `npm run revocations` passes none, so nothing there can raise it.
+        //
         // **The lease is released, and that distinction matters.** A lease says "somebody is calling
         // the provider about this right now"; a failure that has already returned is not that. Left
         // set, an operator who fixed the provider and re-ran the drain would be told there was
@@ -300,6 +311,7 @@ export async function drainOwedRevocations(
           "UPDATE sonny.identity_provider_user SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
           [owed.supabase_user_id],
         );
+        if (error instanceof ProviderTimedOut) throw error;
         // This run still excludes it, so one dead user cannot spin the loop.
         failures.push({
           supabaseUserId: owed.supabase_user_id,

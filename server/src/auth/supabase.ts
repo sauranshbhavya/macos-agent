@@ -109,12 +109,20 @@ export interface SupabaseAuthConfig {
    * no timeout on `signOutAllForUser` to bound it further. A real adapter should set one; whichever
    * ticket lands it owns that").
    *
-   * Ten seconds, and the ceiling that matters is not patience: `sonny.revocation_lease_seconds()` is
-   * 300 (migration 0008), and a provider call outliving its lease is re-claimed by a second drain
-   * and made twice. Ten leaves that two orders of magnitude away. It is also in front of a user
-   * waiting on a sign-in, where ten seconds is already long.
+   * The ceiling that matters is not patience: `sonny.revocation_lease_seconds()` is 300 (migration
+   * 0008), and a provider call outliving its lease is re-claimed by a second drain and made twice.
+   * It is also in front of a user waiting on a sign-in, where ten seconds is already long.
+   *
+   * **Required, and it carried a default of `10_000` until SONNY-425.** That default was §12's
+   * upstream deadline for these routes written a second time, in a file that cites no contract
+   * section — so `deps.ts` reading the number from `DEADLINE_MS.auth.upstream` and the adapter
+   * defaulting to a literal produced the same behaviour, and *deleting* the wiring produced it too.
+   * A mutation battery found exactly that: the mutant survived the whole suite, because there was
+   * nothing left for a test to see. No test can close a gap between two spellings of one number;
+   * removing one spelling can. A caller that names no bound now fails to compile, which is the same
+   * answer `ClipboardHistoryStore` gives for a store that names no location.
    */
-  readonly timeoutMs?: number;
+  readonly timeoutMs: number;
   /** Injected so the translation can be tested without a project. Defaults to the global `fetch`. */
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -140,8 +148,6 @@ export class ServiceRoleKeyNotConfigured extends Error {
     this.name = "ServiceRoleKeyNotConfigured";
   }
 }
-
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * The token response of GoTrue's `/token`, `/verify` and every other session-minting endpoint
@@ -263,7 +269,7 @@ export class SupabaseAuthProvider implements AuthProvider {
     this.#authUrl = config.authUrl.replace(/\/+$/, "");
     this.#anonKey = config.anonKey;
     this.#serviceRoleKey = config.serviceRoleKey;
-    this.#timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#timeoutMs = config.timeoutMs;
     this.#fetch = config.fetch ?? globalThis.fetch;
   }
 
