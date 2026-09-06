@@ -506,8 +506,12 @@ struct EveryDeleteReachesTheServerTests {
     func theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll() async throws {
         let fixture = try TaskDeletionFixture()
         defer { fixture.tearDown() }
-        _ = try fixture.writeTaskRecord(id: "task-a")
         let unfinished = try fixture.writeResumableTask(id: "unfinished-a")
+        // **Linked, because the unlinked case cannot refuse anything.** A run that failed leaves a
+        // history row pointing at its unfinished record, and that link is the only route by which
+        // this press could name server content at all. With no link a queueing implementation finds
+        // nothing to queue and this test passes over it.
+        _ = try fixture.writeTaskRecord(id: "task-a", resumableTaskID: unfinished.id)
 
         fixture.viewModel.deleteResumableTask(unfinished)
 
@@ -1153,7 +1157,11 @@ private struct TaskDeletionFixture {
     }
 
     /// Writes one finished task and hands back the record as the Tasks page would.
-    func writeTaskRecord(id: String, visionSessionID: String? = nil) throws -> CompletedTaskRecord {
+    func writeTaskRecord(
+        id: String,
+        visionSessionID: String? = nil,
+        resumableTaskID: String? = nil
+    ) throws -> CompletedTaskRecord {
         let store = TaskHistoryStore(
             fileURL: root.appendingPathComponent("task-history.json"),
             encryption: LocalStorageEncryption(
@@ -1176,7 +1184,12 @@ private struct TaskDeletionFixture {
             startedAt: Date(timeIntervalSince1970: 1_772_000_000 + offset),
             completedAt: Date(timeIntervalSince1970: 1_772_000_060 + offset),
             outcomeStatus: .completed,
-            visionSessionID: visionSessionID
+            visionSessionID: visionSessionID,
+            // **The link a failed run leaves**, which is the join that makes the rejected
+            // implementation of SONNY-426 look reachable: a per-entry delete could walk it back to
+            // this row's id and queue a whole-task obligation. A fixture without it would let that
+            // mutant find nothing and survive by accident rather than be refused.
+            resumableTaskID: resumableTaskID
         )
         _ = try store.record(record)
         viewModel.refreshTaskHistory()
