@@ -71,6 +71,18 @@ export interface BillingPlan {
   readonly capabilities: readonly string[];
 }
 
+/**
+ * What the app is told about payment on this account, and the whole of the wire enum (SONNY-380).
+ *
+ * **Two values, and a third is a version question rather than a free addition.** §8.2 item 7 makes
+ * adding a value to a wire enum a breaking change unless every client tolerates an unknown one, and
+ * the Mac's `BillingPaymentState` carries that fallback from this route's first release — but
+ * tolerating it there means saying *nothing* about payment, which is the right answer for a value
+ * an old build cannot interpret and the wrong one if the new value means something worse than
+ * `past_due`. So a third value needs §8.4's ladder behind it, not just this type.
+ */
+export type BillingPaymentState = "current" | "past_due";
+
 /** Provider product id → what it grants. Deployment configuration; see `config.ts`. */
 export type BillingPlans = ReadonlyMap<string, BillingPlan>;
 
@@ -251,6 +263,35 @@ const SUBSCRIPTION_RECORD = `SELECT billing_subscription_id FROM sonny.entitleme
 const LIVE_SUBSCRIPTION = `${SUBSCRIPTION_RECORD}
         AND revoked_at IS NULL`;
 
+/**
+ * Whether this account has an outstanding payment failure (SONNY-380).
+ *
+ * **What makes this correct is that it never compares against `now()`, and NOT which of the two
+ * columns it reads** (PR #206's F6). Those are easy to confuse and only one of them is load-bearing.
+ * Migration 0018 carries `CONSTRAINT entitlement_grace_is_whole CHECK ((grace_until IS NULL) =
+ * (past_due_since IS NULL))`, so on every row that can exist `grace_until IS NOT NULL` and
+ * `past_due_since IS NOT NULL` are the *same predicate* — swapping the column in the query below
+ * changes nothing. What would break it is asking whether the deadline has passed. A failure still
+ * inside its window and one whose window has closed are the same fact about the customer's card,
+ * and both are things the app must be able to say; a `now()` comparison here would answer
+ * `"current"` at exactly the moment the customer's access ends, which is when the line matters
+ * most. `claimFactsFor` is the one place that comparison belongs, and it stays the only thing that
+ * decides whether the capabilities are still there — this question is deliberately not that one.
+ * So: a later simplification may move the column; it may not add a clock.
+ *
+ * **It is not scoped by `billing_provider`, unlike every other query in this file, and that is the
+ * fail-safe direction rather than an oversight.** `past_due_since` is written only by
+ * `applyBillingDelivery`, which sets `billing_provider` in the same statement, so a row carrying one
+ * carries the other and the narrowing would exclude nothing today. What it *could* do is exclude a
+ * row written by a provider a deployment has since changed away from — and that mistake reports a
+ * past-due account as healthy, which is the one answer this read exists to make impossible. Being
+ * wrong in the other direction is not reachable from here: nothing else in the repository writes
+ * that column.
+ */
+const OUTSTANDING_PAYMENT_FAILURE = `SELECT past_due_since FROM sonny.entitlement
+      WHERE account_id = $1
+        AND past_due_since IS NOT NULL`;
+
 async function refuseForeignSubscription(
   client: pg.Client,
   provider: string,
@@ -359,6 +400,45 @@ export async function hasSubscriptionRecord(
  * — it reads the plan's allowance, which a revoked entitlement has already lost — and answering it
  * twice, once here on a different rule, is how two paths come to disagree about who may buy.
  */
+/**
+ * What this gateway can say about the account's payments right now (SONNY-380).
+ *
+ * **The whole reason this exists is that the signed claim cannot say it.** §16.4 keeps every
+ * capability through the grace window on purpose, so `entitlement/store.ts` mints a claim for a
+ * customer whose card was declined that is byte-identical to a healthy one — `plan` and
+ * `capabilities` and nothing else — and the Mac reads `Active` for the length of the window. Adding
+ * a status field to the claim was declined on 2026-08-31 (§8.2's breaking-change rule), so what
+ * carries it is this separate, unsigned read instead.
+ *
+ * **Unsigned, and that is why it decides nothing.** No capability, no gate and no refusal anywhere
+ * depends on this answer; it is a word on a line and a label on a control. A caller who tampered
+ * with it would change what a sentence says on their own screen and nothing else — which is the
+ * property that makes it affordable to answer outside the claim at all.
+ *
+ * **`"current"` is the absence of a recorded failure and never a claim that a payment succeeded.**
+ * An account with no entitlement row, a cancelled subscriber, and an account an operator has
+ * granted or revoked all answer `"current"`, because none of them has an outstanding failure. The
+ * line the app renders from this is the claim's own word unless this says otherwise, so
+ * `"current"` adds nothing and only `"past_due"` changes anything.
+ *
+ * **The operator half of that sentence was false when it was written, and it is true now because
+ * the behaviour changed rather than the wording** (PR #206's F2). `grant`'s upsert cleared
+ * `revoked_at` and touched neither payment column, so a comped past-due customer read
+ * `<Plan> · Past due` with an `Update payment` button indefinitely — nothing but a newer billing
+ * delivery clears `past_due_since`, and for an account somebody is comping one may never arrive.
+ * `setRevoked` had the mirror shape. Both clear both columns now, with the reasoning at each
+ * statement in `entitlements.ts`, and `anOperatorGrantEndsAnOutstandingPaymentFailure` and
+ * `anOperatorRevokeEndsAnOutstandingPaymentFailure` in `billing.db.test.ts` fail against the tree
+ * that shipped this sentence.
+ */
+export async function paymentStateFor(
+  client: pg.Client,
+  accountId: string,
+): Promise<BillingPaymentState> {
+  const { rows } = await client.query(OUTSTANDING_PAYMENT_FAILURE, [accountId]);
+  return rows.length > 0 ? "past_due" : "current";
+}
+
 export async function billingCustomerFor(
   client: pg.Client,
   provider: string,
@@ -594,6 +674,13 @@ export interface BillingStore {
     provider: string,
     accountId: string,
   ) => Promise<string | undefined>;
+  /**
+   * Whether a payment failure is outstanding on this account (SONNY-380).
+   *
+   * **The one question in this interface that takes no provider**, and `paymentStateFor` says why:
+   * narrowing it could only ever turn a past-due account into a healthy-looking one.
+   */
+  readonly paymentState: (accountId: string) => Promise<BillingPaymentState>;
 }
 
 export function postgresBillingStore(withConnection: WithConnection): BillingStore {
@@ -605,5 +692,6 @@ export function postgresBillingStore(withConnection: WithConnection): BillingSto
       withConnection((client) => hasSubscriptionRecord(client, provider, accountId)),
     billingCustomerFor: (provider, accountId) =>
       withConnection((client) => billingCustomerFor(client, provider, accountId)),
+    paymentState: (accountId) => withConnection((client) => paymentStateFor(client, accountId)),
   };
 }

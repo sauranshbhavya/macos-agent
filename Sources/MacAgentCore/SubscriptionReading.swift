@@ -30,13 +30,17 @@ public struct SubscriptionSnapshot: Equatable, Sendable {
 
 /// The two states a signed claim can establish about a subscription that exists.
 ///
-/// **There is no `pastDue`, and its absence is a design fact rather than a gap.** Spec §16.4 keeps
-/// every capability through the grace window on purpose — billing never cuts a user off mid-task —
-/// so a claim minted for an account whose payment has failed is indistinguishable from a healthy
-/// one, by design. This Mac therefore reads `active` while a card has been declined, and the
-/// customer's only notice is the provider's own dunning email. §16.4 exists to stop a surprise wall
-/// and that is a quiet route to one; it is filed as **SONNY-380**, together with the unreviewed
-/// 14-day `BILLING_GRACE_DAYS` default it compounds with, and nothing here builds for it.
+/// **There is still no `pastDue` here, and that is now a division of labour rather than a gap.**
+/// Spec §16.4 keeps every capability through the grace window on purpose — billing never cuts a
+/// user off mid-task — so a claim minted for an account whose payment has failed is
+/// indistinguishable from a healthy one, by design, and this type is what the *claim* can prove.
+/// What a past-due account looks like arrives separately, as `BillingPaymentState` below, read from
+/// `GET /v1/billing/payment-state` (SONNY-380).
+///
+/// (This doc used to end "nothing here builds for it", recording SONNY-380 as filed and unbuilt.
+/// That is the sentence this branch is the answer to. The 14-day `BILLING_GRACE_DAYS` default it
+/// named as compounding with the silence was **reviewed and kept** by the founders on 2026-09-05,
+/// on the reasoning that the state line removes the silence the ticket was filed for.)
 public enum SubscriptionStatus: Equatable, Sendable {
     /// The claim is current and grants at least one capability.
     case active
@@ -47,6 +51,57 @@ public enum SubscriptionStatus: Equatable, Sendable {
     /// allowing gated features immediately rather than waiting out the claim it already holds. A
     /// product `BILLING_PLANS` does not name lands here too, fail-closed.
     case ended
+}
+
+/// What the gateway says about payment on this account, or the absence of an answer (SONNY-380).
+///
+/// **It is not on the signed claim and could not have been cheaply.** `EntitlementClaim` carries
+/// `plan` and `capabilities`; adding a status field to it is a change to §4.1 and §5.3 under §8.2's
+/// breaking-change rule, and the founders declined that trade on 2026-08-31 and again on
+/// 2026-09-05. So this arrives on its own unsigned route instead — and it is affordable to be
+/// unsigned precisely because nothing is allowed to depend on it: it picks a word on one line and a
+/// label on one control, and every question about what the account may *do* is still answered by
+/// the claim, by `EntitlementJudgement` and by `decision(for:)`.
+///
+/// **`unrecognised` is §8.2 item 7's required fallback and it is present from the first release.**
+/// The contract makes adding a value to a wire enum a breaking change unless every client already
+/// tolerates one, so this case is what buys the server that freedom — and what it does with it is
+/// the honest thing: an unrecognised value says *nothing* about payment, so the line falls back to
+/// what the claim proves rather than asserting a state this build cannot interpret.
+///
+/// **What that costs, stated rather than left to be discovered.** A future value meaning something
+/// *worse* than `past_due` would read on an old build exactly as a healthy account does, which is
+/// this ticket's own defect arriving through the version door. That is §8.4's ladder to solve —
+/// `recommended_client`, then `minimum_supported_client` — and not something this enum can, because
+/// by construction an old build does not know what the new value means.
+public enum BillingPaymentState: Equatable, Sendable {
+    /// No payment failure is outstanding. **Not a claim that a payment succeeded**: an account with
+    /// no subscription, a customer who cancelled on purpose, and an account an operator has granted
+    /// or revoked all answer this, because none of them has a failure recorded.
+    ///
+    /// **The operator half was false when this was written** (PR #206's F2). The gateway's `grant`
+    /// cleared the revocation and left the payment columns alone, so a comped past-due customer
+    /// read `Past due` here with an `Update payment` control indefinitely — only a newer billing
+    /// delivery clears that column, and for a comped account one may never arrive. `setRevoked` had
+    /// the mirror shape. Both clear it now; `server/src/entitlements.ts` carries the reasoning at
+    /// each statement.
+    case current
+    /// A payment has failed and has not been resolved — inside its grace window or past it. Both are
+    /// the same fact about the customer's card, and the control that fixes either is the same one.
+    case pastDue
+    /// A value this build does not know. See the paragraphs above.
+    case unrecognised
+
+    /// The wire value, mapped. **Total by construction** — `default` is what makes item 7's
+    /// tolerance real, and a `switch` over known cases with no default is what would have made a
+    /// new server value a crash in every shipped build.
+    public init(wire: String) {
+        switch wire {
+        case "current": self = .current
+        case "past_due": self = .pastDue
+        default: self = .unrecognised
+        }
+    }
 }
 
 /// Reading a subscription out of a claim, as a pure function of a claim, a session and an instant.
@@ -116,11 +171,36 @@ public enum SubscriptionCopy {
     /// `EntitlementClaim`'s own rule and SONNY-212 owns what the plans are, so mapping `"paid"` onto
     /// a marketing name would be taking that ticket's decision inside this one. If a key ever reads
     /// badly to a user, the fix is the key the gateway sends, not a translation table here.
-    public static func line(for snapshot: SubscriptionSnapshot) -> String {
-        "\(snapshot.plan.capitalized) · \(word(for: snapshot.status))"
+    ///
+    /// **`payment` has no default, and that is the whole of how SONNY-380's defect is kept fixed.**
+    /// A defaulted parameter would let a second host of this line render it without answering the
+    /// payment question — which is exactly the state the app was in before this ticket, and it read
+    /// `Active` for a customer whose card had been declined. Required, a caller that has no answer
+    /// says `nil` in words, and a new call site that forgets is a compile error rather than a quiet
+    /// `Active`. (The same argument `SignInDialogView` makes for its own required parameters.)
+    public static func line(for snapshot: SubscriptionSnapshot, payment: BillingPaymentState?) -> String {
+        "\(snapshot.plan.capitalized) · \(word(for: snapshot.status, payment: payment))"
     }
 
-    public static func word(for status: SubscriptionStatus) -> String {
+    /// The one word the line ends with.
+    ///
+    /// **A past-due reading wins over the claim's own word, in both directions, and that is the
+    /// ticket's central decision.** Against `.active` it is the defect being fixed: §16.4 keeps the
+    /// capabilities through the grace window on purpose, so a declined card and a healthy account
+    /// mint identical claims and this is the only thing that can tell them apart. Against `.ended`
+    /// it is the more accurate of the two: a window that has closed empties the capabilities, so the
+    /// claim then looks exactly like a cancellation — but nobody cancelled, the card is still
+    /// declined, and "Ended" would send the user looking for a subscribe button instead of the
+    /// control that actually fixes it. A customer who genuinely cancelled never reaches this arm:
+    /// `writeFor`'s `ended` case clears `past_due_since`, so the gateway answers `current` for them.
+    ///
+    /// **`nil` and `.unrecognised` are the same answer — say nothing about payment** — and that is
+    /// what the founders' decision of 2026-09-05 asks for offline: "the line shows nothing about
+    /// payment state, which is acceptable because the grace window keeps capabilities working
+    /// offline anyway". Falling back to the claim's word is not a statement about payment; it is the
+    /// only thing this Mac can prove without the network.
+    public static func word(for status: SubscriptionStatus, payment: BillingPaymentState?) -> String {
+        if payment == .pastDue { return pastDueWord }
         switch status {
         case .active:
             return "Active"
@@ -129,10 +209,26 @@ public enum SubscriptionCopy {
         }
     }
 
+    /// **Two words, and no third.** The standing rule against explanatory copy is at its sharpest
+    /// here: this line does not say what a grace window is, how long one runs, when access ends, or
+    /// what happens next. It names a state, and the control beside it names the fix.
+    public static let pastDueWord = "Past due"
+
     /// The control that opens the provider's hosted portal.
     ///
-    /// **Named for where it goes, not for what lives there.** "Manage subscription" is what the user
-    /// wants to do; listing what the portal offers — payment method, invoices, cancel — would be the
-    /// product explaining itself, and the portal's own page says all of it anyway.
+    /// **Named for what it resolves, which is why it is a function rather than one string.** The
+    /// founders' decision of 2026-09-05 asks for "a state line that names the state and the control
+    /// that resolves it" — and what resolves a past-due account is not managing a subscription, it
+    /// is paying for it. Both labels open the same hosted portal; the word is what tells the user
+    /// which door they are being pointed at.
+    ///
+    /// **Named for where it goes, not for what lives there** — the rule the `.manage` half has
+    /// always followed. Listing what the portal offers, or explaining why the payment needs
+    /// updating, would be the product explaining itself, and the portal's own page says all of it.
+    public static func controlLabel(for payment: BillingPaymentState?) -> String {
+        payment == .pastDue ? updatePaymentLabel : manageLabel
+    }
+
     public static let manageLabel = "Manage subscription"
+    public static let updatePaymentLabel = "Update payment"
 }

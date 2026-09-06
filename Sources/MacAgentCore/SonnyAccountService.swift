@@ -118,6 +118,49 @@ public struct SonnyAccountService: Sendable {
         return url
     }
 
+    /// Ask the gateway whether a payment failure is outstanding on this account (SONNY-380).
+    ///
+    /// **This is the one thing the signed entitlement claim cannot say.** §16.4 keeps every
+    /// capability through a payment failure's grace window on purpose, so the claim minted for a
+    /// customer whose card was declined is byte-identical to a healthy one's — which is why the
+    /// Account line read `Active` for the whole window and the customer's only notice was the
+    /// provider's own dunning email. Adding a status field to the claim was declined twice on §8.2
+    /// grounds, so the word travels on this route instead.
+    ///
+    /// **Beside `hostedBillingPortalURL()` for the reason that method gives for being here at all**:
+    /// it is one authenticated call about the account, the Account surface is what asks for it, and
+    /// a `SonnyBillingService` holding two methods would be a type for the sake of a name.
+    ///
+    /// **A `GET`, retry-safe, and no idempotency key** — the exact opposite of the portal call above,
+    /// and for the opposite reason: this changes nothing, mints nothing, and answers the same for
+    /// every attempt, so §9.1's key would be recording a result that cannot go stale in a way that
+    /// matters and §9.3's retry costs the user nothing.
+    ///
+    /// **It throws rather than answering a state, and the caller is expected to swallow it.** A Mac
+    /// with no network, or a gateway that has never existed, is the ordinary condition of this
+    /// product today — not news, and not something to put a warning under. `SonnyAccountModel`
+    /// turns anything thrown here into "nothing known about payment", which renders as the line the
+    /// claim alone supports.
+    public func billingPaymentState() async throws -> BillingPaymentState {
+        let response = try await client.send(SonnyBackendRequest(
+            method: "GET",
+            path: "/v1/billing/payment-state",
+            body: nil,
+            authentication: .bearer,
+            idempotencyKey: nil,
+            timeout: SonnyBackendTimeouts.auth,
+            isRetrySafe: true
+        ))
+        guard let envelope = try? JSONDecoder().decode(WireBillingPaymentState.self, from: response.data) else {
+            throw SonnyBackendError.undecodableResponse("billing payment state response")
+        }
+        // **The unknown value is mapped here and never thrown on**, which is §8.2 item 7: a body
+        // this build cannot interpret is a contract the server is allowed to hand it, not a failure.
+        // A body with no `payment` key at all is a different thing and does throw above — that is a
+        // response that does not answer the question rather than one answering it with a new word.
+        return BillingPaymentState(wire: envelope.payment)
+    }
+
     /// Revoke the family server-side, then clear this Mac. **The local clear happens either way.**
     ///
     /// Order matters and cannot be the other one: clearing first destroys the very token the revoke
@@ -173,4 +216,14 @@ private struct WireCodeRequest: Decodable {
 /// a field no caller consumes would invite a later reader to cache on it.
 private struct WireBillingPortal: Decodable {
     let portal_url: String
+}
+
+/// §4.1's `GET /v1/billing/payment-state` response (SONNY-380).
+///
+/// **One field, decoded as a `String` and interpreted afterwards.** Decoding straight into an enum
+/// would make an unrecognised value a decode *failure*, and §8.2 item 7 requires the opposite: a
+/// client must tolerate a value the server adds. `BillingPaymentState(wire:)` is where that
+/// tolerance lives, so this type's job ends at "the key was present and was a string".
+private struct WireBillingPaymentState: Decodable {
+    let payment: String
 }

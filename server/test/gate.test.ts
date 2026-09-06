@@ -155,14 +155,20 @@ describe("which routes the gate challenges", () => {
     const routes = await registeredRoutes(app);
     expectPopulationIsReal(routes);
 
-    // All three routes are in the population now, which is the half that was missing. SONNY-216's
+    // Every billing route is in the population now, which is the half that was missing. SONNY-216's
     // portal route is the case this scan was widened for: it was added inside that config-gated
-    // scope after the widening, and it is challenged.
+    // scope after the widening, and it is challenged. SONNY-380's payment-state read arrived the
+    // same way and is the second one this scan caught rather than was told about.
     const billing = routes
       .map((route) => `${route.method} ${route.url}`)
       .filter((route) => route.includes("/v1/billing/"))
       .sort();
     expect(billing).toEqual([
+      "GET /v1/billing/payment-state",
+      // Fastify serves `HEAD` for every `GET` it registers, so the read arrives here as two routes
+      // and both are challenged — which is the shape `GET`/`HEAD /v1/account/credits` and
+      // `/v1/account/entitlements` already take in `gate.test.ts`'s own population.
+      "HEAD /v1/billing/payment-state",
       "POST /v1/billing/checkout",
       "POST /v1/billing/portal",
       "POST /v1/billing/webhook",
@@ -174,6 +180,12 @@ describe("which routes the gate challenges", () => {
       (route) => !isPublicRoute(route.method, route.url) && route.url.startsWith("/v1/billing/"),
     );
     expect(unclassified.map((route) => `${route.method} ${route.url}`).sort()).toEqual([
+      // SONNY-380's, challenged for the plainest reason of the three: it answers about the caller's
+      // own account and takes nothing that could name another, so an unchallenged caller is not a
+      // caller at all. First in this list because it is sorted and `GET` precedes `POST`, and it
+      // is two entries because Fastify serves `HEAD` for every `GET`.
+      "GET /v1/billing/payment-state",
+      "HEAD /v1/billing/payment-state",
       // The checkout route is authenticated like any other: absent from `PUBLIC_ROUTES`, challenged
       // by the gate, with its own 401 test in `billing.test.ts`. The webhook is NOT here, because it
       // is on the list — authenticated by its signature instead, which is the one entry in that list

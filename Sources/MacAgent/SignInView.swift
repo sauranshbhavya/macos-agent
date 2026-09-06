@@ -49,6 +49,32 @@ final class SonnyAccountModel: ObservableObject {
     /// pressed is a broken control; not offering it is the requirement (founder direction,
     /// 2026-08-31). `SubscriptionReading` carries the four situations that produce `nil`.
     @Published private(set) var subscription: SubscriptionSnapshot?
+    /// What the gateway last said about payment on this account, or `nil` when nothing is known
+    /// (SONNY-380).
+    ///
+    /// **`nil` is the offline answer and the founders chose it.** The read is a network call and the
+    /// grace window keeps capabilities working without one, so a Mac that cannot reach the gateway
+    /// shows nothing about payment state and the line says what the claim proves — which is the
+    /// state this surface was in before this ticket, now reached only when there is genuinely
+    /// nothing to add rather than always.
+    ///
+    /// **Its own value rather than a field on `subscription`.** `SubscriptionSnapshot` is what the
+    /// signed claim establishes, judged locally with no network; this is a separate, unsigned read
+    /// that can fail on its own. Folding them would make one type mean two different kinds of
+    /// certainty, and would put a network failure inside a value `SubscriptionReading.read`
+    /// documents as pure.
+    @Published private(set) var paymentState: BillingPaymentState?
+    /// Whether this model has opened the billing portal and not yet re-read what came of it
+    /// (SONNY-380, PR #206's F3; founders' decision of 2026-09-05, option A).
+    ///
+    /// **The re-read is gated on this rather than firing on every activation**, which is what the
+    /// decision asks for: the customer pressed the control that resolves the state the line names,
+    /// so coming back to the window is the one moment the line is expected to have changed. An
+    /// ungated re-read would put an authenticated request on every switch back to Sonny for as long
+    /// as the sheet is open, for a value that only a provider webhook can move.
+    ///
+    /// Not `@Published`: nothing renders from it, and publishing it would invite a view to.
+    private(set) var didOpenBillingPortal = false
     /// Why the portal did not open, in the portal's own vocabulary (PR #183, F4).
     ///
     /// **Its own published value rather than `failure`**, because `failure` is a `SignInFailure` and
@@ -295,6 +321,53 @@ final class SonnyAccountModel: ObservableObject {
         subscription = await entitlements.currentSubscription()
     }
 
+    /// Re-read whether a payment failure is outstanding (SONNY-380).
+    ///
+    /// **Its own read rather than folded into `refreshSubscription()` above**, and the same
+    /// reasoning the screen-control allowance already follows in this file: they are two requests to
+    /// two routes, one of them local and instant and the other on the network, and a slow one must
+    /// not hold the other's row off screen. It also leaves `refreshSubscription()`'s
+    /// never-waits-when-the-cache-answered guard exactly as it is, which is a property one test
+    /// exists solely to hold.
+    ///
+    /// **Nothing is reported when it fails, deliberately.** A Mac that has never reached a gateway
+    /// is the ordinary state of this product, not news — the same judgement `refreshSubscription()`
+    /// makes, for the same reason: a warning here would sit under a sign-in the user has just
+    /// completed and would be about a line they can already read.
+    ///
+    /// **It is not gated on a subscription existing, and that costs one cheap request.** The gate
+    /// would have to run after `refreshSubscription()` had answered, which is the coupling the
+    /// paragraph above avoids; and at `.task` time both reads start together, so a gate would skip
+    /// for every account and never retry. The server side is one indexed `SELECT` with no provider
+    /// call, and the allowance read beside it is already unconditional on every Account open.
+    func refreshPaymentState() async {
+        paymentState = try? await service.billingPaymentState()
+    }
+
+    /// Re-read the payment state when the window comes back after the portal was opened
+    /// (SONNY-380, PR #206's F3; founders' decision of 2026-09-05, option A).
+    ///
+    /// **What this fixes is a control that looked like it did nothing.** With `Manage subscription`
+    /// the staleness did not matter, because nothing on the line depended on what the user did in
+    /// the portal. `Update payment` *is* the resolution of the state the line names, so a customer
+    /// who fixed their card and came back to a still-open sheet read `Past due` and the same button
+    /// until they closed and reopened Account.
+    ///
+    /// **It shows whatever the read says, and `Past due` is a correct answer here.** The gateway
+    /// learns from a provider webhook, so a return that beats the delivery honestly still answers
+    /// `past_due` — that is true at that moment and is not an error, which is the half of the
+    /// founders' decision most likely to be mistaken for a bug later.
+    ///
+    /// **The flag is cleared before the read, not after.** Two activations in quick succession
+    /// would otherwise both pass the guard and issue two requests; clearing first makes the second
+    /// one a no-op. It is also cleared on the way out of a failed read, because the guard is about
+    /// a press that happened rather than about a read that succeeded.
+    func refreshPaymentStateAfterReturningFromPortal() async {
+        guard didOpenBillingPortal else { return }
+        didOpenBillingPortal = false
+        await refreshPaymentState()
+    }
+
     /// Open the provider's hosted portal for this account (SONNY-216).
     ///
     /// **The link is fetched per press and never cached**, because the gateway mints a session token
@@ -330,6 +403,10 @@ final class SonnyAccountModel: ObservableObject {
             guard validated.scheme?.lowercased() == "https" else {
                 throw SonnyBackendError.undecodableResponse("billing portal URL")
             }
+            // **Set after the guards, not before the request** (SONNY-380). A press that ended in
+            // a refusal, a bad URL or a scheme this app will not open did not send the customer
+            // anywhere, so there is nothing for their return to be about.
+            didOpenBillingPortal = true
             openPortalURL(validated)
         } catch let error as SonnyBackendError {
             portalFailure = BillingPortalFailure(error)
@@ -369,6 +446,13 @@ final class SonnyAccountModel: ObservableObject {
             // the meantime. `SubscriptionReading`'s session check is what stops that being
             // permanent; this is what stops it happening at all.
             subscription = nil
+            // **Cleared for exactly the reason above** (SONNY-380). A second user signing in would
+            // otherwise meet the previous user's `Past due` and an Update payment button pointing at
+            // a portal that is not theirs, for as long as the read behind it took to answer.
+            paymentState = nil
+            // A pending re-read belongs to the person who pressed the control, not to whoever signs
+            // in next — the same reason the two values above are cleared here (SONNY-380).
+            didOpenBillingPortal = false
             portalFailure = nil
             if case .clearedLocallyOnly = outcome {
                 notice = SignInCopy.signedOutLocallyOnly
@@ -514,6 +598,28 @@ struct SignInDialogView: View {
         .onChange(of: model.step) { _, step in
             guard step == .signedIn else { return }
             Task { await model.refreshSubscription() }
+        }
+        // The payment state is read on the same two occasions and for the same reason (SONNY-380),
+        // and separately for the reason the allowance below is: two of these three go to the
+        // network on every open — this one and the allowance — and neither may hold the other's row
+        // off screen. `refreshSubscription()` is the odd one out, because it usually answers from
+        // the cached claim without a request at all.
+        //
+        // (This read "it is the one of these three that goes to the network on every open", which
+        // was true only of `FirstRunSequence`, the one host that passes
+        // `refreshScreenControlAllowance: nil` — and that is not where the Account row is read.
+        // PR #206's F4.)
+        .task { await model.refreshPaymentState() }
+        .onChange(of: model.step) { _, step in
+            guard step == .signedIn else { return }
+            Task { await model.refreshPaymentState() }
+        }
+        // **And once more when the window comes back, if the portal was opened from here**
+        // (SONNY-380, PR #206's F3; founders' option A of 2026-09-05). `NSApplication`'s
+        // notification rather than `ScenePhase`, because the portal opens in a browser: this app
+        // resigns active and the sheet never disappears, so no SwiftUI lifecycle event fires.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshPaymentStateAfterReturningFromPortal() }
         }
         // The allowance is read on the same two occasions and for the same reason (SONNY-214). Its
         // own read rather than folded into the subscription's, so neither waits on the other: they
@@ -766,22 +872,36 @@ struct SignInDialogView: View {
     /// 2026-08-31). The same absence covers a claim that is stale, unreadable or somebody else's:
     /// in every one of those the honest answer is that this Mac currently knows nothing, and a line
     /// is worse than no line.
+    ///
+    /// **The state a signed claim cannot establish arrives separately, and it wins the word**
+    /// (SONNY-380). A customer whose payment has failed keeps every capability through the grace
+    /// window by §16.4's design, so their claim is byte-identical to a healthy one's and this row
+    /// said `Active` for the length of it. `model.paymentState` is the unsigned read that separates
+    /// them, and the control is named for what it resolves rather than always for the portal it
+    /// opens — one button, two labels, the same destination. Nothing here explains a grace window,
+    /// which is the standing rule and is why the line gained two words rather than a sentence.
     @ViewBuilder
     private var subscriptionRow: some View {
         if let subscription = model.subscription {
+            // **One value read once, so the line and the control cannot disagree** (SONNY-380). Both
+            // derive from the payment state, and reading `model.paymentState` twice would let a
+            // refresh landing between them put `Past due` beside `Manage subscription`.
+            let payment = model.paymentState
+            let line = SubscriptionCopy.line(for: subscription, payment: payment)
+            let control = SubscriptionCopy.controlLabel(for: payment)
             SettingsAdaptiveControlRow {
-                Text(SubscriptionCopy.line(for: subscription))
+                Text(line)
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(SubscriptionCopy.line(for: subscription))
+                    .accessibilityLabel(line)
             } trailing: {
-                Button(SubscriptionCopy.manageLabel) {
+                Button(control) {
                     Task { await model.openBillingPortal() }
                 }
                 .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 160))
                 .disabled(model.isBusy)
-                .accessibilityLabel(SubscriptionCopy.manageLabel)
+                .accessibilityLabel(control)
             }
 
             // **Rendered here rather than in `messages`**, which is the sign-in surface's channel:

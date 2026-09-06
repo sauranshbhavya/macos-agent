@@ -256,7 +256,9 @@ import Testing
 
         #expect(surface.model.subscription == SubscriptionSnapshot(plan: "paid", status: .active))
         // Through the copy, because the line is what the user actually meets.
-        let rendered = surface.model.subscription.map(SubscriptionCopy.line(for:))
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
         #expect(rendered == "Paid · Active")
     }
 
@@ -390,6 +392,413 @@ import Testing
         await surface.model.signOut()
 
         #expect(surface.model.subscription == nil)
+    }
+
+    // MARK: - A customer whose payment has failed (SONNY-380)
+
+    /// A surface whose gateway answers the payment-state read with `payment`, and serves the portal
+    /// nothing.
+    ///
+    /// **The path is asserted inside the stub rather than assumed**, for the reason
+    /// `pressingManageOpensTheLinkTheGatewayMinted` gives: a model that called the wrong route would
+    /// still get a body back from a stub that answered everything, and a test reading only the
+    /// result would pass.
+    static func pastDueSurface(
+        storing compactClaim: String?,
+        signer: Signer,
+        payment: String
+    ) -> Surface {
+        let surface = subscribedSurface(storing: compactClaim, signer: signer)
+        surface.fixture.register { request in
+            guard request.url?.path == "/v1/billing/payment-state" else {
+                return .reply(statusCode: 404, headers: [:], body: Data())
+            }
+            #expect(request.httpMethod == "GET")
+            return portalReply("{\"payment\":\"" + payment + "\"}")
+        }
+        return surface
+    }
+
+    @Test func aDeclinedCardIsNamedOnTheLineInsteadOfActive() async {
+        // **The whole ticket, end to end at the surface.** The claim verifies and grants a
+        // capability — which is what §16.4 requires of a past-due account inside its window — so
+        // `subscription` is `.active` and the line said `Paid · Active` for the length of the
+        // window. The separate read is the only thing that changes it.
+        let signer = Signer()
+        let surface = Self.pastDueSurface(storing: signer.claim(), signer: signer, payment: "past_due")
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+
+        #expect(surface.model.subscription == SubscriptionSnapshot(plan: "paid", status: .active))
+        #expect(surface.model.paymentState == .pastDue)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Past due")
+        #expect(SubscriptionCopy.controlLabel(for: surface.model.paymentState) == "Update payment")
+    }
+
+    @Test func aHealthyAccountStillReadsActive() async {
+        // The control on the test above: a read that answered `past_due` for everyone would pass it
+        // and fail here. Telling a paying customer their payment failed is the worse of the two
+        // mistakes — the same asymmetry SONNY-216's 422 mapping was decided on.
+        let signer = Signer()
+        let surface = Self.pastDueSurface(storing: signer.claim(), signer: signer, payment: "current")
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+
+        #expect(surface.model.paymentState == .current)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Active")
+        #expect(SubscriptionCopy.controlLabel(for: surface.model.paymentState) == "Manage subscription")
+    }
+
+    @Test func aMacWithNoNetworkSaysNothingAboutPaymentAndReportsNothing() async {
+        // The founders' offline decision, at the surface. The claim is cached so the row still
+        // renders; the payment read fails; the line is what the claim proves — and **no warning**,
+        // which is the half that would be easy to lose: a Mac that has never reached a gateway is
+        // the ordinary state of this product, and a failed payment read is not news to put under a
+        // sign-in the user just completed.
+        let signer = Signer()
+        let surface = Self.subscribedSurface(storing: signer.claim(), signer: signer)
+        surface.fixture.register { _ in .failure(URLError(.notConnectedToInternet)) }
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+
+        #expect(surface.model.paymentState == nil)
+        #expect(surface.model.failure == nil)
+        #expect(surface.model.portalFailure == nil)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Active")
+    }
+
+    @Test func aRefusedPaymentReadIsNotAFailureTheUserIsShown() async {
+        // The other shape of the same rule: the gateway answers, and says no. A `401` here is a
+        // session this Mac cannot use — which the *next* authenticated call reports properly — and
+        // an error sentence about it under the subscription row would be about the wrong thing.
+        //
+        // **The code is `auth.unauthenticated`, which is what the gateway actually sends**
+        // (`server/src/auth/gate.ts`'s `REFUSAL_CODE`), and until PR #206's F5 this served
+        // `auth.required` — a string `SonnyBackendErrorCode(wire:)` has no arm for, so it decoded to
+        // `.unknown("auth.required")` and the test ran a branch the product never reaches. The
+        // assertions held on both, so nothing was falsely green; what was missing is that the real
+        // code takes a side effect this one does not, below.
+        let signer = Signer()
+        let surface = Self.subscribedSurface(storing: signer.claim(), signer: signer)
+        surface.fixture.register { _ in
+            Self.portalReply(
+                #"{"error":{"code":"auth.unauthenticated","message":"x","retryable":false,"retry_after_seconds":null,"request_id":"r"}}"#,
+                status: 401
+            )
+        }
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshPaymentState()
+
+        #expect(surface.model.paymentState == nil)
+        #expect(surface.model.failure == nil)
+        #expect(surface.model.portalFailure == nil)
+    }
+
+    @Test func aRefusedPaymentReadDiscardsTheSessionItCouldNotUse() async throws {
+        // **The branch the test above was never reaching** (PR #206's F5). On a `.bearer` request,
+        // `auth.unauthenticated` is §7.2 case 1b — the family is gone — so `SonnyBackendClient`
+        // calls `discardSessionLocally()` before rethrowing. This read is one the *user* never
+        // initiated, so it can wipe the local session from a background refresh, and that is worth
+        // one test naming it rather than being a surprise to whoever meets it next.
+        //
+        // **It is pre-existing rather than this ticket's**: `refreshScreenControlAllowance` already
+        // does the identical thing on the identical sheet. Asserted here because this branch adds a
+        // second unprompted authenticated read to that surface, so the population grew.
+        let signer = Signer()
+        let surface = Self.subscribedSurface(storing: signer.claim(), signer: signer)
+        surface.fixture.register { _ in
+            Self.portalReply(
+                #"{"error":{"code":"auth.unauthenticated","message":"x","retryable":false,"retry_after_seconds":null,"request_id":"r"}}"#,
+                status: 401
+            )
+        }
+        defer { surface.fixture.unregister() }
+        let before = try await surface.fixture.client.restoredIdentity()
+        #expect(before != nil)
+
+        await surface.model.refreshPaymentState()
+
+        // The Keychain entry is gone, which is what "a session this Mac cannot use" means in code.
+        let after = try await surface.fixture.client.restoredIdentity()
+        #expect(after == nil)
+        // And still nothing is reported: the read stays silent even on the failure that changes
+        // local state, because a warning under this row would be about the wrong thing.
+        #expect(surface.model.paymentState == nil)
+        #expect(surface.model.failure == nil)
+        #expect(surface.model.portalFailure == nil)
+    }
+
+    @Test func aPaymentStateThisBuildDoesNotKnowSaysNothingRatherThanFailing() async {
+        // §8.2 item 7 at the surface. The value decodes, is not recognised, and produces the same
+        // line a Mac with no network shows — which is the deliberate answer: an old build cannot
+        // interpret a value it has never heard of, so it asserts nothing about payment.
+        let signer = Signer()
+        let surface = Self.pastDueSurface(storing: signer.claim(), signer: signer, payment: "disputed")
+        defer { surface.fixture.unregister() }
+
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+
+        #expect(surface.model.paymentState == .unrecognised)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Active")
+    }
+
+    /// A surface whose payment-state read answers from a list, one reply per call, so a test can
+    /// say what the gateway knew *before* the portal was opened and what it knows after.
+    ///
+    /// **A queue rather than a mutable stub, because the count is half the property**: a re-read
+    /// that never happened and a re-read that happened twice both have to be distinguishable, and a
+    /// stub that keeps answering the same thing hides both.
+    ///
+    /// **Lock-guarded and `@unchecked Sendable`, not `@MainActor`** — the stub's handler runs on
+    /// URLSession's own thread, so a `MainActor.assumeIsolated` inside it **traps**, and a trapped
+    /// test process names no failing test: the whole run dies with a stack trace and the log looks
+    /// like a hang rather than like a red assertion. (`CLAUDE.md`'s `try #require` gotcha is the
+    /// same family; this is the version that arrives through a test helper's isolation.)
+    final class PaymentReplies: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: [String]
+        private var count = 0
+        init(_ replies: [String]) { remaining = replies }
+        var asked: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return count
+        }
+        func next() -> String {
+            lock.lock()
+            defer { lock.unlock() }
+            count += 1
+            return remaining.isEmpty ? "current" : remaining.removeFirst()
+        }
+    }
+
+    static func portalReturnSurface(signer: Signer, replies: PaymentReplies) -> Surface {
+        let surface = subscribedSurface(storing: signer.claim(), signer: signer)
+        surface.fixture.register { request in
+            if request.url?.path == "/v1/billing/payment-state" {
+                return portalReply("{\"payment\":\"" + replies.next() + "\"}")
+            }
+            return portalReply(#"{"portal_url":"https://portal.example.test/s/abc"}"#)
+        }
+        return surface
+    }
+
+    @Test func returningFromThePortalRereadsThePaymentState() async {
+        // **PR #206's F3, taken as the founders' option A on 2026-09-05.** The customer presses
+        // `Update payment`, fixes the card, and comes back to a sheet that is still open. Before
+        // this the line kept saying `Past due` with the same button until Account was closed and
+        // reopened — indistinguishable from the button having done nothing.
+        let signer = Signer()
+        let replies = Self.PaymentReplies(["past_due", "current"])
+        let surface = Self.portalReturnSurface(signer: signer, replies: replies)
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+        #expect(surface.model.paymentState == .pastDue)
+
+        await surface.model.openBillingPortal()
+        #expect(surface.opened.urls.count == 1)
+        // What the window regaining focus does.
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+
+        #expect(surface.model.paymentState == .current)
+        #expect(replies.asked == 2)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Active")
+        #expect(SubscriptionCopy.controlLabel(for: surface.model.paymentState) == "Manage subscription")
+    }
+
+    @Test func aReturnThatBeatsTheWebhookStillSaysPastDue() async {
+        // **The half of the founders' decision most likely to be read as a bug later.** The gateway
+        // learns from a provider webhook, so a customer who pays and switches back faster than the
+        // delivery arrives gets `Past due` again — which is true at that moment. The row shows
+        // whatever the read says; it does not guess forward, and it does not suppress the answer to
+        // avoid looking wrong.
+        let signer = Signer()
+        let replies = Self.PaymentReplies(["past_due", "past_due"])
+        let surface = Self.portalReturnSurface(signer: signer, replies: replies)
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshSubscription()
+        await surface.model.refreshPaymentState()
+        await surface.model.openBillingPortal()
+
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+
+        #expect(surface.model.paymentState == .pastDue)
+        #expect(replies.asked == 2)
+        let rendered = surface.model.subscription.map {
+            SubscriptionCopy.line(for: $0, payment: surface.model.paymentState)
+        }
+        #expect(rendered == "Paid · Past due")
+    }
+
+    @Test func aWindowComingBackWithNoPressBehindItAsksNothing() async {
+        // **The guard, asserted — which is the thing three rounds of PR #183 kept finding nobody
+        // had done.** Sonny's window becomes active whenever the user switches back to it, and the
+        // Account sheet can sit open for a long time. Without this, every one of those activations
+        // is an authenticated request for a value only a provider webhook can move.
+        let signer = Signer()
+        let replies = Self.PaymentReplies(["past_due"])
+        let surface = Self.portalReturnSurface(signer: signer, replies: replies)
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshPaymentState()
+        #expect(replies.asked == 1)
+
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+
+        #expect(replies.asked == 1)
+        #expect(surface.model.paymentState == .pastDue)
+    }
+
+    @Test func aSecondReturnAfterOnePressAsksOnlyOnce() async {
+        // The flag is cleared by the re-read, not by the next press, so switching away and back
+        // twice after one press is one request rather than two. Same guard, the other direction —
+        // and the direction a mutant clearing the flag *after* the read would leave open.
+        let signer = Signer()
+        let replies = Self.PaymentReplies(["past_due", "current"])
+        let surface = Self.portalReturnSurface(signer: signer, replies: replies)
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshPaymentState()
+        await surface.model.openBillingPortal()
+
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+
+        #expect(replies.asked == 2)
+    }
+
+    @Test func aPressThatOpenedNothingArmsNoReread() async {
+        // The flag is set after the guards rather than before the request: a press that ended in a
+        // refused link, a bad URL, or a scheme this app will not open sent the customer nowhere, so
+        // there is nothing for a return to be about.
+        let signer = Signer()
+        let replies = Self.PaymentReplies(["past_due"])
+        let surface = Self.subscribedSurface(storing: signer.claim(), signer: signer)
+        surface.fixture.register { request in
+            if request.url?.path == "/v1/billing/payment-state" {
+                return Self.portalReply("{\"payment\":\"" + replies.next() + "\"}")
+            }
+            return Self.portalReply(#"{"portal_url":"file:///etc/passwd"}"#)
+        }
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshPaymentState()
+        #expect(replies.asked == 1)
+
+        await surface.model.openBillingPortal()
+        #expect(surface.opened.urls.isEmpty)
+        await surface.model.refreshPaymentStateAfterReturningFromPortal()
+
+        #expect(replies.asked == 1)
+    }
+
+    @Test func signingOutClearsThePaymentStateBeforeTheNextUserSeesIt() async {
+        // **F13's property, for the value this ticket adds.** `signedInStep` renders synchronously
+        // when `step` becomes `.signedIn` while the reads behind it are still in flight, so a
+        // payment state left set is the previous user's `Past due` and an Update payment button on
+        // screen for somebody who has just signed in.
+        let signer = Signer()
+        let surface = Self.pastDueSurface(storing: signer.claim(), signer: signer, payment: "past_due")
+        defer { surface.fixture.unregister() }
+        await surface.model.refreshPaymentState()
+        #expect(surface.model.paymentState == .pastDue)
+
+        await surface.model.signOut()
+
+        #expect(surface.model.paymentState == nil)
+    }
+
+    @Test func theRowDerivesItsLineAndItsControlFromOneReadOfThePaymentState() throws {
+        // **A source scan because the wiring is a SwiftUI body**, which nothing in this suite can
+        // render. The properties above hold what the copy says; this holds that the row asks for it,
+        // asks once, and hands the same answer to both halves — a row that read `model.paymentState`
+        // twice could put `Past due` beside `Manage subscription` if a refresh landed between them.
+        //
+        // Sliced to the row and counted rather than asked `contains`, which is the trap
+        // `CLAUDE.md` records: `SubscriptionCopy.` appears at several sites in this file and a
+        // membership check over the whole of it would be satisfied by any of them.
+        let row = try MacAgentSource.region(
+            of: MacAgentSource.read("SignInView.swift"),
+            from: "private var subscriptionRow: some View {",
+            to: "private var messages: some View"
+        )
+
+        #expect(MacAgentSource.count(of: "model.paymentState", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "let payment = model.paymentState", inText: row) == 1)
+        #expect(
+            MacAgentSource.count(
+                of: "SubscriptionCopy.line(for: subscription, payment: payment)",
+                inText: row
+            ) == 1
+        )
+        #expect(MacAgentSource.count(of: "SubscriptionCopy.controlLabel(for: payment)", inText: row) == 1)
+        // The label reaches the button and the accessibility label from the same local, so a screen
+        // reader cannot be told a different word from the one on screen. Two uses, one source.
+        #expect(MacAgentSource.count(of: "Button(control)", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "accessibilityLabel(control)", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "accessibilityLabel(line)", inText: row) == 1)
+        // And the old shape is gone rather than merely unused: a `manageLabel` left at this site
+        // would render `Manage subscription` under a `Past due` line.
+        #expect(MacAgentSource.count(of: "SubscriptionCopy.manageLabel", inText: row) == 0)
+    }
+
+    @Test func theWindowComingBackIsWiredToTheReread() throws {
+        // The behaviour above is held by real tests; what nothing else can reach is whether the
+        // *view* is subscribed to anything that fires when the customer switches back. A SwiftUI
+        // body is not renderable in this suite, so this is a scan — and it is on the notification
+        // by name, because the wrong one is the whole failure mode: the portal opens in a browser,
+        // so Sonny resigns active and the sheet never disappears. No `ScenePhase` change, no
+        // `onDisappear`, no `onAppear` — `.task` fires once and is done.
+        let source = try MacAgentSource.read("SignInView.swift")
+
+        #expect(
+            MacAgentSource.count(
+                of: "NSApplication.didBecomeActiveNotification",
+                inText: source
+            ) == 1
+        )
+        #expect(
+            MacAgentSource.count(
+                of: "await model.refreshPaymentStateAfterReturningFromPortal()",
+                inText: source
+            ) == 1
+        )
+        // And the ordinary two reads are untouched by it: this is a third occasion, not a
+        // replacement for either of them.
+        #expect(MacAgentSource.count(of: "await model.refreshPaymentState()", inText: source) == 2)
+    }
+
+    @Test func thePaymentStateIsReadOnBothOccasionsTheSubscriptionIs() throws {
+        // The dialog is a sheet: a user who signs in *inside* it never re-appears it, so `.task`
+        // alone leaves the row stale until the next open — the staleness `refreshSubscription()`
+        // already has two call sites for. A payment read wired to only one of the two would be
+        // correct on a relaunch and silently wrong on the sign-in that just happened.
+        let source = try MacAgentSource.read("SignInView.swift")
+
+        #expect(MacAgentSource.count(of: "await model.refreshPaymentState()", inText: source) == 2)
+        #expect(MacAgentSource.count(of: "await model.refreshSubscription()", inText: source) == 2)
     }
 
     // MARK: - What the user is told when the portal does not open (PR #183, F4)

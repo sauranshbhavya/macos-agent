@@ -102,6 +102,7 @@ function recordingStore(
     readonly live?: boolean;
     readonly record?: boolean;
     readonly customer?: string | undefined;
+    readonly payment?: "current" | "past_due";
   } = {},
 ): BillingStore & { readonly calls: BillingApplyInput[] } {
   const calls: BillingApplyInput[] = [];
@@ -121,6 +122,10 @@ function recordingStore(
     // by default for `record`'s reason — a suite that could charge by omission would prove nothing
     // about the refusals.
     billingCustomerFor: async () => answers.customer,
+    // The payment-state read's, which is a fourth question and the only one that takes no provider
+    // (SONNY-380). `"current"` by default for the same reason as the three above: a suite that
+    // reported a payment failure by omission would prove nothing about the state it is asserting.
+    paymentState: async () => answers.payment ?? "current",
   };
 }
 
@@ -640,7 +645,7 @@ describe("what a deployment has to configure", () => {
     await app.close();
   });
 
-  it("mounts exactly the billing routes, two challenged and one carried by its signature", async () => {
+  it("mounts exactly the billing routes, three challenged and one carried by its signature", async () => {
     // **The gate's own population scan cannot see either of these** (PR #178 review, F6):
     // `gate.test.ts` builds from `testConfig()`, which names no provider, so `app.ts` mounts neither
     // route and the scan that exists to catch a route added without thought is blind to anything
@@ -659,6 +664,11 @@ describe("what a deployment has to configure", () => {
       .filter((route) => route.includes("/v1/billing/"));
 
     expect(routes.sort()).toEqual([
+      "GET /v1/billing/payment-state",
+      // Fastify serves `HEAD` for every `GET` it registers, so the read arrives here as two routes
+      // and both are challenged — which is the shape `GET`/`HEAD /v1/account/credits` and
+      // `/v1/account/entitlements` already take in `gate.test.ts`'s own population.
+      "HEAD /v1/billing/payment-state",
       "POST /v1/billing/checkout",
       "POST /v1/billing/portal",
       "POST /v1/billing/webhook",
@@ -670,6 +680,11 @@ describe("what a deployment has to configure", () => {
     // one-line one: an entry added to `PUBLIC_ROUTES` would make a route that mints a link to one
     // customer's invoices reachable with no caller at all. SONNY-216.
     expect(isPublicRoute("POST", "/v1/billing/portal")).toBe(false);
+    // **And the payment-state read is challenged too** (SONNY-380). It takes no parameters, so it
+    // can only ever answer about the caller — which means an entry in `PUBLIC_ROUTES` would not
+    // leak one account's state to another, it would make `callerOf` throw. Asserted anyway, because
+    // "it would fail loudly" is a property of today's handler and not of the route's placement.
+    expect(isPublicRoute("GET", "/v1/billing/payment-state")).toBe(false);
     await app.close();
   });
 
@@ -1251,5 +1266,101 @@ describe("where a subscriber manages the subscription", () => {
     expect(() =>
       billingDepsFrom(testConfig({ ...BILLING_ENV, billingApiBaseUrl: "https://api.example.test/gw" })),
     ).toThrow(ConfigError);
+  });
+});
+
+/**
+ * The read that separates a past-due customer from a healthy one (SONNY-380).
+ *
+ * **What is being asserted here is a route, not a query** — `billing.db.test.ts` owns the SQL, and
+ * these run over a fake store because what can go wrong on this side is the wiring: the wrong
+ * account read, a failure reported as health, or an answer served to a caller nobody challenged.
+ */
+describe("what the app is told about payment", () => {
+  const stateRequest = (app: ReturnType<typeof build>, user = SUPABASE_USER) =>
+    app.inject({
+      method: "GET",
+      url: "/v1/billing/payment-state",
+      headers: { authorization: `Bearer ${accessTokenFor(user)}` },
+    });
+
+  it("says past_due for an account whose payment has failed", async () => {
+    const app = build(recordingStore({ payment: "past_due" }));
+
+    const response = await stateRequest(app);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ payment: "past_due" });
+    await app.close();
+  });
+
+  it("says current for an account with no outstanding failure", async () => {
+    const app = build(recordingStore());
+
+    const response = await stateRequest(app);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ payment: "current" });
+    await app.close();
+  });
+
+  it("never answers current for an account the store reports past due", async () => {
+    // **The property the whole ticket rests on, asserted as a property rather than as a case.** A
+    // handler that dropped the store's answer — a hardcoded `"current"`, a swallowed rejection, a
+    // default in the wrong direction — passes "says current" above and fails only here.
+    for (const payment of ["past_due", "current"] as const) {
+      const app = build(recordingStore({ payment }));
+
+      const response = await stateRequest(app);
+
+      expect(response.json().payment, payment).toBe(payment);
+      await app.close();
+    }
+  });
+
+  it("asks about the caller's own account and nothing else", async () => {
+    // The route takes no parameters, so the only thing it can be wrong about is which account it
+    // reads. `callerOf` is what answers that, and this is what says the handler used it.
+    const asked: string[] = [];
+    const store = recordingStore({ payment: "past_due" });
+    const app = build({ ...store, paymentState: async (accountId) => {
+      asked.push(accountId);
+      return "past_due";
+    } });
+
+    await stateRequest(app);
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toBe(ACCOUNT);
+    await app.close();
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const app = build(recordingStore({ payment: "past_due" }));
+
+    const response = await app.inject({ method: "GET", url: "/v1/billing/payment-state" });
+
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("does not exist on a deployment that takes no payments", async () => {
+    // The same call `app.ts` makes for every billing route: an unmounted billing endpoint is a
+    // gateway that was never configured to take money, not a degraded service.
+    const app = buildApp(
+      testConfig(),
+      { provider: new UnusedAuthProvider(), withConnection: signedInConnection },
+      { entitlementStore: fakeEntitlementStore() },
+    );
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/billing/payment-state",
+      headers: { authorization: `Bearer ${accessTokenFor(SUPABASE_USER)}` },
+    });
+
+    expect(response.statusCode).toBe(404);
+    await app.close();
   });
 });

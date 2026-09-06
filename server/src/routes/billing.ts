@@ -63,6 +63,28 @@ import { verifyWebhookSignature } from "../billing/webhook-signature.js";
  * so the provider remains the thing that decides whether a link exists. `billing/store.ts`'s
  * `hasSubscriptionRecord` carries which question this asks and why it is not the checkout guard's.
  *
+ * ## `GET /v1/billing/payment-state` is the one thing the signed claim cannot say
+ *
+ * A customer whose card was declined keeps every capability until the grace window closes — §16.4,
+ * deliberately, so that billing never interrupts someone mid-task — and the claim carries `plan` and
+ * `capabilities` and nothing else. So a past-due account and a healthy one mint byte-identical
+ * claims, and the app read `Active` for a customer whose payment had failed, for the whole window,
+ * with the provider's own dunning email as their only notice (SONNY-380). §16.4 exists to stop a
+ * surprise wall and that was a quiet route to one.
+ *
+ * **A separate read rather than a field on the claim**, decided by the founders on 2026-09-05: the
+ * claim's shape is §4.1 and §5.3, and §8.2 makes changing it a `/v2` question, which is not a trade
+ * worth making for a status word. So the word travels here instead, unsigned.
+ *
+ * **Unsigned is not a weakness here, because this answer decides nothing.** It picks the word on one
+ * line and the label on one control. Every gate in this system — `admitRequest`, the per-capability
+ * check, the entitlement claim itself — is untouched by it, and a caller who forged this response
+ * would change a sentence on their own screen. That is the whole reason it can live outside the
+ * claim; it would not be if anything were allowed to depend on it.
+ *
+ * **Authenticated like everything else on this surface**, and answering only about the caller's own
+ * account: it takes no parameters, so there is nothing to name somebody else with.
+ *
  * ## `POST /v1/billing/checkout` is authenticated and returns a URL
  *
  * The account id travels to the provider on that URL and comes back on the customer, which is what
@@ -81,6 +103,7 @@ export interface BillingRouteDeps {
 export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
 export const BILLING_PORTAL_PATH = "/v1/billing/portal";
+export const BILLING_PAYMENT_STATE_PATH = "/v1/billing/payment-state";
 
 /**
  * "This account holds no subscription to manage", as **one** answer with two arms behind it — the
@@ -261,5 +284,22 @@ export function registerBillingRoutes(app: FastifyInstance, deps: BillingRouteDe
             }),
           );
     }
+  });
+
+  app.get(BILLING_PAYMENT_STATE_PATH, async (request, reply) => {
+    const caller = callerOf(request);
+    /**
+     * **No provider call, and no refusal for an account with nothing to say.** Unlike the portal
+     * route above, this is a single read of `sonny.entitlement` — so it costs one indexed `SELECT`
+     * and answers the same way for every account, including the majority that hold no subscription
+     * at all. There is deliberately no `entitlement.no_subscription` arm: the portal route refuses
+     * because there is no link to mint, and here there is always an answer — an account with no
+     * failure recorded is `"current"`, which is what a never-subscribed account is.
+     *
+     * **One field, and the client is expected to ignore any other** (§2.1). What a later version
+     * may not do is add a third value to `payment` without §8.4's ladder, which
+     * `BillingPaymentState` in `billing/store.ts` carries the reasoning for.
+     */
+    return reply.send({ payment: await deps.store.paymentState(caller.accountId) });
   });
 }

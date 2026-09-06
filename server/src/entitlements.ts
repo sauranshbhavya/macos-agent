@@ -143,6 +143,22 @@ export async function grant(
             -- account means to restore it, and leaving revoked_at set would mint capability-less
             -- claims for an account the operator can see capabilities on.
             revoked_at = NULL,
+            -- And it clears an outstanding payment failure, for the same reason one sentence
+            -- further on (SONNY-380, PR #206's F2). A comped account is current by definition: the
+            -- operator is the payer now, and nothing at the provider is going to resolve a failure
+            -- recorded against a card the account is no longer being billed on. Leaving these set
+            -- cost two things and the second is worse. paymentStateFor answers past_due, so the
+            -- comped customer reads Past due with an Update payment button INDEFINITELY -- only a
+            -- newer billing delivery clears the column, and for an account being comped one may
+            -- never arrive. And claimFactsFor compares grace_until against now, so a deadline left
+            -- in the past empties the capabilities on every read: the grant three lines above did
+            -- not restore access at all. The two columns move together because migration 0018's
+            -- entitlement_grace_is_whole CHECK requires it -- clearing one alone is a constraint
+            -- violation rather than a partial fix.
+            -- (No backticks in this comment, deliberately: it lives inside a template literal, and
+            -- one would end the string. The compiler says only "',' expected".)
+            past_due_since = NULL,
+            grace_until = NULL,
             updated_at = now()`,
     [input.accountId, input.plan, [...input.capabilities], input.capUnits],
   );
@@ -155,7 +171,30 @@ export async function setRevoked(
 ): Promise<boolean> {
   const result = await client.query(
     `UPDATE sonny.entitlement
-        SET revoked_at = $2, updated_at = now()
+        SET revoked_at = $2,
+            -- Cleared in both directions, and neither is the same argument (SONNY-380, PR
+            -- #206's F2). Revoking: a revoked account is not past due, it is over, and leaving the
+            -- column set makes the line read Past due with an Update payment control for an
+            -- account the operator has just ended -- the opposite of what they did. Un-revoking:
+            -- an operator restoring access is grant's case under another name, and the reasoning
+            -- there applies word for word.
+            --
+            -- Unconditional rather than keyed on the revoked flag, and the two versions DO differ
+            -- on a row that exists (PR #206's F7). The reason first written here was that the
+            -- keyed version is unreachable, on the grounds that no row this gateway writes carries
+            -- revoked_at and past_due_since together -- which is true, and is about the wrong set.
+            -- Where the two differ is any row with past_due_since set that reaches this with
+            -- revoked false: a row written by writeFor's past_due arm is exactly that, revoked_at
+            -- null and past_due_since set, and restore <account-id> is a first-class operator
+            -- command that reaches it. So the keyed version is reachable, and clearing is the
+            -- intended answer there too, for the un-revoking reason above: an operator restoring a
+            -- past-due account is comping it, and a grace deadline left behind would have
+            -- claimFactsFor empty the capabilities the restore exists to hand back.
+            -- anOperatorRestoreEndsAnOutstandingPaymentFailure is what holds that direction; R7
+            -- cannot, because it reverts the whole statement and the revoke test alone kills it.
+            past_due_since = NULL,
+            grace_until = NULL,
+            updated_at = now()
       WHERE account_id = $1`,
     [accountId, revoked ? new Date() : null],
   );
