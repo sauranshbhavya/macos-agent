@@ -64,6 +64,18 @@ accountModel.sessionDidChange = { [weak agentViewModel] in
 // and buying more of it are two capabilities of the same object, and the gate names them separately
 // so that nothing can reach the charging one while thinking about the reading one. Building two
 // services here would be two clients, two sessions and two answers to one question.
+// **The readiness row's entitled half, joined here for the third time and the same reason**
+// (SONNY-336). The Settings account row reports whether this Mac holds an entitlement claim it can
+// verify offline, and the one thing that can answer that is the shared `EntitlementService` — the
+// same instance the gate below is handed, because that actor holds the clock high-water anchor and
+// the single-flight refresh guard, and a second one would be a second answer to one question.
+// `claimConfirmation()` rather than `decision(for:)`: the row must not name a capability, and row 18
+// (SONNY-23) owns which capabilities gate what. Without this line the row reports "Sonny checks your
+// plan when it needs it" and never reports the plan confirmed, which is the honest reading of a
+// build that has not been wired and is never a green row acquired by omission.
+agentViewModel.entitlementConfirmation = { [entitlements = accountModel.entitlements] in
+    await entitlements.claimConfirmation()
+}
 let screenControlAllowanceService = ScreenControlAllowanceService(client: accountModel.backendClient)
 agentViewModel.screenControlGate = SonnyScreenControlGate(
     entitlements: accountModel.entitlements,

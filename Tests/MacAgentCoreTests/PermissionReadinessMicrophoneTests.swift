@@ -16,7 +16,7 @@ struct PermissionReadinessMicrophoneTests {
     private func microphoneRow(_ status: AVAuthorizationStatus) throws -> PermissionReadinessItem {
         let items = PermissionReadinessService
             .deterministic(microphoneStatus: status)
-            .currentStatus(modelAccess: .signedIn, hotKeyReady: true)
+            .currentStatus(modelAccess: .signedIn, planAccess: .confirmed, hotKeyReady: true)
         return try #require(items.first { $0.id == "microphone" })
     }
 
@@ -83,7 +83,7 @@ struct PermissionReadinessMicrophoneTests {
         for status in [AVAuthorizationStatus.authorized, .denied, .restricted, .notDetermined] {
             let items = PermissionReadinessService
                 .deterministic(microphoneStatus: status)
-                .currentStatus(modelAccess: .signedIn, hotKeyReady: true)
+                .currentStatus(modelAccess: .signedIn, planAccess: .confirmed, hotKeyReady: true)
             #expect(items.filter { $0.id == "microphone" }.count == 1)
             #expect(items.first { $0.id == "microphone" }?.title == "Microphone")
         }

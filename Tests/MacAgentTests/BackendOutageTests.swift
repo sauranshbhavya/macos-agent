@@ -249,6 +249,10 @@ struct BackendOutageTests {
         let fixture = try makeFixture(networkFailure: URLError(.cannotConnectToHost))
         defer { fixture.tearDown() }
 
+        // **The plan half held constant at confirmed** (SONNY-336), so the only thing this test
+        // varies is the account answer it is named for. Left unwired the row could never reach
+        // `.ready`, and the wait below would be waiting for a state nothing produces.
+        fixture.viewModel.entitlementConfirmation = { .entitled }
         fixture.viewModel.refreshPermissions()
 
         // Synchronously, before the actor has answered: eight rows, and the account one honestly
@@ -259,7 +263,7 @@ struct BackendOutageTests {
 
         try await waitUntilAccountRow(fixture.viewModel, is: .ready)
         let settled = try #require(fixture.viewModel.permissionItems.first { $0.id == "sonny-account" })
-        #expect(settled.detail == "Signed in.")
+        #expect(settled.detail == "Signed in, and your plan is confirmed.")
     }
 
     /// Waits on the published rows rather than on a clock: the refresh is a `Task` this view model
@@ -335,6 +339,12 @@ struct BackendOutageTests {
             entitlementKeys: SonnyEntitlementKeys.shipped
         )
         account.sessionDidChange = { [weak viewModel = fixture.viewModel] in viewModel?.refreshPermissions() }
+        // **The plan half held constant at confirmed**, for the reason given in the test above: this
+        // one is about the *session* following a sign-in and a sign-out, so the entitled half is
+        // pinned rather than varied. It has to be pinned to something other than this account
+        // model's own service, whose shipped key set verifies no claim — under which the row could
+        // never be `.ready` and this test would be waiting on a state nothing produces (SONNY-336).
+        fixture.viewModel.entitlementConfirmation = { .entitled }
 
         // Signed out to begin with: nothing is in the Keychain.
         fixture.viewModel.refreshPermissions()
@@ -347,7 +357,8 @@ struct BackendOutageTests {
         try #require(account.isSignedIn)
         try await waitUntilAccountRow(fixture.viewModel, is: .ready)
         #expect(
-            fixture.viewModel.permissionItems.first { $0.id == "sonny-account" }?.detail == "Signed in."
+            fixture.viewModel.permissionItems.first { $0.id == "sonny-account" }?.detail
+                == "Signed in, and your plan is confirmed."
         )
 
         await account.signOut()
@@ -385,11 +396,29 @@ struct BackendOutageTests {
 
         await fixture.viewModel.refreshModelAccessReadiness()
         try #require(fixture.viewModel.modelAccessReadiness == .signedIn)
+        // **The entitled half through the same seam** (SONNY-336). Wired to the one source's answer
+        // rather than left unwired, because an unwired fixture reports `.undetermined` and the row
+        // would read the same for a confirmed claim and for a build that never asked — which is
+        // exactly the pair this test exists to tell apart.
+        fixture.viewModel.entitlementConfirmation = { .entitled }
+        await fixture.viewModel.refreshPlanReadiness()
+        try #require(fixture.viewModel.planReadiness == .confirmed)
 
         let details = try Self.readinessDetails(from: fixture.viewModel)
         #expect(
-            details.contains("Sonny account: Ready - Signed in."),
+            details.contains("Sonny account: Ready - Signed in, and your plan is confirmed."),
             "the tool did not carry the view model's answer: \(details)"
+        )
+
+        // **And the plan half's other direction, on the same view model.** A refusal from the one
+        // source has to reach the tool, or the tool is reporting a confirmed plan it never checked.
+        fixture.viewModel.entitlementConfirmation = { .refused(.lapsed) }
+        await fixture.viewModel.refreshPlanReadiness()
+        try #require(fixture.viewModel.planReadiness == .unconfirmed(.lapsed))
+        let whenLapsed = try Self.readinessDetails(from: fixture.viewModel)
+        #expect(
+            whenLapsed.contains("Sonny account: Check when used - Signed in. Sonny couldn't check your plan."),
+            "the tool did not carry the refused plan: \(whenLapsed)"
         )
 
         // **The other direction through the same seam**, so the assertion cannot be satisfied by a
@@ -404,6 +433,10 @@ struct BackendOutageTests {
         defer { signedOut.tearDown() }
         await signedOut.viewModel.refreshModelAccessReadiness()
         try #require(signedOut.viewModel.modelAccessReadiness == .signedOut)
+        // Confirmed on purpose: the signed-out row must not vary with the plan, so the strongest
+        // plan answer is the one that would expose it if it did.
+        signedOut.viewModel.entitlementConfirmation = { .entitled }
+        await signedOut.viewModel.refreshPlanReadiness()
         let whenSignedOut = try Self.readinessDetails(from: signedOut.viewModel)
         #expect(
             whenSignedOut.contains("Sonny account: Needs action - Sign in to Sonny in Command Center."),

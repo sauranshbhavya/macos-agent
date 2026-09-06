@@ -141,7 +141,16 @@ struct UnprivilegedGateTests {
         // which is the branch that decides whether a failed Stop reports on `errorMessage` — the
         // channel for a control the user pressed — rather than on the storage notice, where it would
         // leave the user believing the watcher had stopped.
-        #expect(lockedAndGated == 15, "expected fifteen gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Sixteen since SONNY-232, whose one gated test locks the *recent-artifacts* store's
+        // directory while every other store under the fixture root stays writable — the third
+        // variation of the pair-of-writes shape above, and the first to fail a write that
+        // `AgentRunner` rather than the view model performs:
+        // `ScheduledRoutineRunTests.aRecentArtifactWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun`,
+        // which is the branch that decides whether a scheduled routine whose bookkeeping write fails
+        // reaches any surface at all. It did not, until that ticket: the enumeration that gave the
+        // other bookkeeping writes a channel looked only at the view model's own writes.
+        #expect(lockedAndGated == 16, "expected sixteen gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
