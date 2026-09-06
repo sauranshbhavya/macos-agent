@@ -46,6 +46,37 @@ struct ShellSurfaceDetectorTests {
     /// plus four *(F2)* cases where **nothing on screen has failed** — which is the ordinary state of
     /// a terminal and was the state in which the committed detector let all of them through.
     static let mustRefuse: [Fixture] = [
+        // **The two section-sign panels the fix round measured and did not pin** (PR #209 cycle 2,
+        // N5). Both were rows of the thirteen-document table on SONNY-277 and neither joined the
+        // corpus, which left a mutant alive on the anchor's own leading-whitespace allowance: with
+        // `^[ \t]*` narrowed to `^`, the indented panel goes from two section-sign prompts to zero —
+        // refused to allowed — and the whole suite passed. Six lines of fixture is the fix, and the
+        // reason they are first in this array is that they are the cheapest thing here to delete by
+        // accident; `theCorpusCoversBothDirections` holds a floor on the marker.
+        Fixture(name: "an indented terminal panel (SONNY-277 panel)", signals: [.interactivePrompt, .commandRunInAShell], text: """
+            sauransh@Mac macos-agent \u{00A7} ls
+            README.md Sources
+            sauransh@Mac macos-agent \u{00A7}
+        """),
+
+        // The partial misread: two of the panel's four sigils came back as section signs and two as
+        // ordinary `%`. This is the 12 pt shape — the size whose margin over the floor is exactly
+        // zero — so it is the row that says the two halves compose rather than merely coexist.
+        Fixture(name: "a panel with only two of its sigils misread (SONNY-277 panel)", signals: [.interactivePrompt, .commandRunInAShell], text: """
+        PROBLEMS
+        OUTPUT
+        TERMINAL
+        PORTS
+        sauransh@Mac macos-agent \u{00A7} ls
+        README.md Sources
+        Tests docs
+        sauransh@Mac macos-agent \u{00A7} sudo rm -rf .build
+        Password:
+        sauransh@Mac macos-agent % git status
+        On branch main
+        sauransh@Mac macos-agent %
+        """),
+
         Fixture(name: "Terminal", signals: [.interactivePrompt, .commandRunInAShell, .sessionBanner], text: """
         Last login: Sat Aug 16 09:14:22 on ttys000
         sauransh@Mac ~ % cd Desktop/macos-agent
@@ -591,10 +622,29 @@ struct ShellSurfaceDetectorTests {
         Fixture(name: "a contact table whose lines start with addresses (SONNY-277 adversarial)", signals: [], text: """
         security@acme.example owns \u{00A7} 7.2 of the policy.
         soc@acme.example owns \u{00A7} 7.3 of the policy.
+        """),
+
+        // **The one document the shipped rule gets wrong, in the tree beside the ones it gets right**
+        // (PR #209 cycle 2, N5). An ssh hop shows two prompts under two identities; with both sigils
+        // misread, neither group reaches the floor, so the section-sign form contributes nothing and
+        // the panel rests on its `Last login:` banner alone — one signal, and Sonny would act in it.
+        //
+        // **It sits in `mustNotRefuse` because that is what the detector does, not because it is what
+        // anyone wants.** `main` has no section-sign form at all, so this is exactly where `main`
+        // leaves that shape: the rule declines to fix it rather than regressing it, and the
+        // alternative — dropping the shared-identity condition — refuses the contact table above.
+        // The founder ordering on `minimalPromptRanges` prefers a gap to an unappealable stop.
+        // A future rule that closes this moves the fixture to `mustRefuse`; until then the gap is
+        // asserted rather than described, so it cannot quietly become something else.
+        Fixture(name: "an ssh hop, two prompts under two identities, both sigils misread (SONNY-277 gap)", signals: [.sessionBanner], text: """
+        sauransh@Mac macos-agent \u{00A7} ssh deploy@staging
+        Last login: Tue Sep  2 09:14:11 2026
+        deploy@staging ~ \u{00A7} ls
+        releases current
         """)
     ]
 
-    /// **The panel the recognizer actually returned** (SONNY-277).    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
+    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
     /// verbatim joined text of the 800x600 @ 13pt run in `ShellSurfaceLookAlikeFoldTests`, where
     /// Vision read every `%` sigil as U+00A7 SECTION SIGN. Against the detector at `4a3d0ef6` it
     /// produced **no signals at all** — a terminal panel with `sudo rm -rf .build` typed at it,
@@ -1104,6 +1154,12 @@ struct ShellSurfaceDetectorTests {
         // adversary and is counted here so the pair cannot be split.
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 adversarial)") }.count >= 9)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 control)") }.count >= 1)
+        // **The three rows the fix round measured and did not pin** (PR #209 cycle 2, N5). Deleting
+        // the indented panel alone brings back a mutant that passed the whole suite, which is what a
+        // floor on a marker exists to stop; the gap fixture is held for a different reason, that a
+        // documented failure quietly becoming undocumented is worse than the failure.
+        #expect(Self.mustRefuse.filter { $0.name.contains("(SONNY-277 panel)") }.count >= 2)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 gap)") }.count >= 1)
     }
 }
 

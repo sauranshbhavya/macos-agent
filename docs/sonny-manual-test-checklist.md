@@ -3234,6 +3234,14 @@ what you will see is the storage banner rather than a watcher.
       *"It did not change"*, that is Sonny telling you the wobble was seen — and that is the sentence
       this row wants. Getting *"It did not change"* means the wobble was missed: re-run rather than
       recording a pass.
+
+      **And a "changed" notification here is correct behaviour, not a finding** — expect it about one
+      run in three (PR #209 cycle 2, N6). Forty seconds of hold at a 30-second interval guarantees one
+      check sees the changed version, and lets **two** see it whenever the first lands in the window's
+      opening ten seconds, which is 10 in 30. Two consecutive identical readings is a confirmed
+      change, so Sonny notifies, stops watching, and the expiry sentence this row asks you to read
+      never arrives. Start again rather than reporting it — the same as the mistimed swap in the
+      alternating row above.
 - [ ] **(SONNY-236)** Point a watcher at a URL that 404s. The first seven checks say **nothing**.
       After the eighth — about **four minutes** at a 30-second interval — one notification says
       *Sonny stopped watching “…”. The page could not be read.* A notification per failed fetch is a
