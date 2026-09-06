@@ -77,12 +77,18 @@ public enum StandingWatcherNoticeCopy {
             return "“\(subject)” changed."
         case .expired:
             // **"It did not change" is asserted only when nothing ever differed** (founder decision
-            // on F4). A page alternating between its baseline and one other reading is never
-            // `.changed` — the two never land consecutively — and never `.unwatchable`, because any
-            // return to the baseline resets the instability count; so it runs its whole life and
-            // used to end by asserting the one thing that was certainly false about it. "Nothing
-            // settled" is true of that page and of a page that flickered once and steadied, and it
-            // does not claim to know which.
+            // on F4). The page that reaches expiry with a difference behind it is the *wobbler* —
+            // one that differed once and settled back — and both of the fields that could answer
+            // "did anything move" read as they did at creation for it: `candidateDigest` is cleared
+            // by a reading equal to the baseline, and `unstableReadings` by any two consecutive
+            // readings that agree. "Nothing settled" is true of it and does not claim to know more.
+            //
+            // **The page that alternates forever no longer reaches here at all** (SONNY-390). It
+            // used to: a return to the baseline reset the instability count, so it was never
+            // `.changed` — the two readings never land consecutively — and never `.unwatchable`
+            // either, and it ran its whole life to end on the one sentence certainly false about it.
+            // A return to the baseline is now counted as the movement it is, so that page stops as
+            // `.unwatchable` on the fourth check and this branch's population is the wobbler alone.
             guard watcher.firstDifferenceAt == nil else {
                 return "Sonny stopped watching “\(subject)” after \(dayCount(limits.maxLifetime)). Nothing settled."
             }

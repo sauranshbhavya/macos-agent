@@ -240,7 +240,33 @@ struct ShellSurfaceDetector {
     /// pass that costs hundreds of milliseconds, inside a loop that already sleeps 800 ms between
     /// iterations. Signals that are fixed strings do use `String.contains`, which is not a prefilter
     /// — there the literal *is* the whole check, so there is nothing for it to drift from.
-    static func verdict(for text: String) -> ShellSurfaceVerdict {
+    static func verdict(for recognizedText: String) -> ShellSurfaceVerdict {
+        // **Folded before anything is matched** (SONNY-277). Every pattern below is exact over
+        // ASCII, and the recognizer that produces this text substitutes look-alikes from other
+        // scripts for Latin letters — SONNY-260 measured four of them in one reading. A look-alike
+        // inside `sudo` or inside a prompt's host name is a signal that does not fire, and the
+        // refusal needs two, so one lost signal can be the difference between refusing to act inside
+        // a shell and acting. `SecretTextDetector` folds two calls above this one in
+        // `LocalRedactionService.redactCapture` for the same reason; this closes the asymmetry.
+        //
+        // **Here rather than at the two call sites**, so that the property belongs to the detector
+        // and a third caller cannot arrive without it. Nothing maps back: a verdict carries signal
+        // names and no ranges, which is what makes this cheaper than the secret detector's fold.
+        //
+        // **What it is worth, stated rather than implied by its arrival.** Measured over the seven
+        // realistic capture sizes SONNY-260 pinned, the recognizer substituted *no* foldable scalar
+        // at any of them — so this is bought as a boundary property, not as a fix for a failure
+        // anybody has seen at a realistic size. Its measured cost is likewise zero: every fixture
+        // in `ShellSurfaceDetectorTests.corpus` produces the same verdict folded and unfolded. The
+        // figures and the control that fires are on SONNY-277.
+        //
+        // **The count is deliberately not spelled here** (PR #209 review, F7). It was written as 38,
+        // which was the corpus the measurement really ran over and a true statement about the past
+        // written in the present tense; the corpus grew twice in one branch. A fixture lands most
+        // rounds, so a number in this sentence expires while reading as current — the count belongs
+        // in `theCorpusCoversBothDirections`, where the suite complains when it moves.
+        let text = LatinConfusables.fold(recognizedText).text
+
         // Computed once and shared: two signals read it, and it is the most expensive thing here.
         let prompts = promptRanges(in: text)
 
@@ -305,7 +331,130 @@ struct ShellSurfaceDetector {
         for match in text.matches(of: arrowPrompt) { ranges.append(match.range) }
         for match in text.matches(of: powerShell) { ranges.append(match.range) }
         ranges.append(contentsOf: minimalPromptRanges(in: text))
+        ranges.append(contentsOf: sectionSignPromptRanges(in: text))
         return ranges
+    }
+
+    /// Address-form prompts whose terminating sigil is `\u{00A7}` rather than `$`, `%` or `#` — anchored
+    /// to the start of a line, and counted only when at least ``minimumMinimalPromptLines`` of them
+    /// share one `identity@host`.
+    ///
+    /// **Why the section sign is here at all** (SONNY-277). The measuring round rendered a terminal
+    /// panel at the seven realistic capture sizes SONNY-260 pinned and read it with the shipped
+    /// recognizer: at the three smallest font sizes — 12 pt and 13 pt — Vision reads a prompt's `%`
+    /// as U+00A7 SECTION SIGN, and the verdict collapsed from two signals to **none**, on a panel
+    /// with `sudo rm -rf .build` typed at it. A whole refusal lost to one glyph, at three sizes out
+    /// of seven. `sectionSignPanel` in the test corpus is that recognizer output verbatim. It is the
+    /// same defect the fold in ``verdict(for:)`` covers, arriving through a character no letter fold
+    /// can reach: `LatinConfusables` requires source and target to both be letters, and `\u{00A7}` to
+    /// `%` is symbol to symbol.
+    ///
+    /// **Why two conditions rather than a count, and why a count was the wrong instrument** (PR #209
+    /// review, F1). The other three sigils are safe in prose for a reason this one does not inherit,
+    /// stated on ``promptRanges``' spaced form: in prose a `%` is glued to a digit, while a prompt
+    /// makes it a token of its own. A section mark in a document is written the way a prompt writes
+    /// its sigil — space, sigil, space — so the spaced address form matches real sentences. The first
+    /// version of this answered that with a repetition floor alone, and two such lines is a document
+    /// rather than a contrivance: the review's *"Report incidents to security@acme.example under
+    /// `\u{00A7}` 7.2"* policy page was refused, while the same page with the mark spelled out was
+    /// served. A threshold cannot repair a signal that is not specific, which is PR #57's F1 note on
+    /// this same file.
+    ///
+    /// **The two conditions were measured against each other over 13 documents and neither dominates**
+    /// (the table is on SONNY-277). Requiring a shared `identity@host` — the narrowing the review
+    /// proposed — kills its own three documents and leaves three others: the same prose sentence
+    /// repeated with *one* address, which is how a contract names one party twice, and a terminal
+    /// session quoted in an email reply, which shares an identity by construction. Anchoring to a
+    /// line start kills all of those, because prose puts an address mid-sentence and a quoted
+    /// transcript puts `>` first — and misses a contact table whose lines each *begin* with an
+    /// address. Together they answer 12 of the 13 correctly, against 6 for the shipped floor alone.
+    ///
+    /// **The one they get wrong is a gap, not a false stop, and that ordering is the founder's**
+    /// (2026-08-17, recorded on ``minimalPromptRanges``): an ssh hop whose two prompts carry two
+    /// identities and whose sigils are both misread contributes nothing here. That is exactly where
+    /// `main` leaves it — `main` has no section-sign form at all — so this declines to fix that shape
+    /// rather than regressing it. The alternative, dropping the identity condition, would refuse the
+    /// contact table, and a stop is unappealable while a gap is partly covered by the deny list.
+    ///
+    /// **What the floor does not buy, corrected here because this comment claimed otherwise**
+    /// (PR #209 review, F2). It used to argue the floor costs nothing because "one misread sigil among
+    /// four leaves three ordinary `%` prompts that match without any of this". That is true of
+    /// ``ShellSurfaceSignal/interactivePrompt`` and false of ``ShellSurfaceSignal/commandRunInAShell``,
+    /// which ``hasCommandRunInAShell(_:prompts:)`` computes from the prompt range **on the command's
+    /// own line** — so losing the one prompt that carries the command loses the second signal however
+    /// many other prompts match, and the refusal needs two. A panel is therefore not rescued by its
+    /// neighbours; what the floor really costs is any panel with fewer than two misread prompts
+    /// sharing an identity, single-prompt panels included.
+    ///
+    /// **The margin is one at the smallest size measured** (PR #209 review, F3). The recognizer
+    /// emitted 2, 3 and 4 section signs at the three failing sizes, so all three clear a floor of 2 —
+    /// and `1280x800 @ 12pt` clears it by **nothing**. That size is load-bearing for
+    /// `aRealTerminalPanelIsRefusedAtEveryRealisticCaptureSize`, and `CLAUDE.md`'s SONNY-260 gotcha is
+    /// that this recognizer jitters at the character level and is not monotonic in size, so one fewer
+    /// `\u{00A7}` there turns the product behaviour back into the defect and that test red, with no
+    /// assertion naming the cause. It is written down rather than tuned away: raising the floor helps
+    /// nothing and lowering it to 1 is what the whole first half of this comment refuses.
+    ///
+    /// No trailing-bare-prompt requirement, unlike ``minimalPromptRanges``: that rule exists to tell
+    /// a comment block from a scrollback where the sigil is the *only* evidence, and here the
+    /// address and path in front of it have already done that work.
+    /// Internal rather than `private` **for its ordering test alone** — the same reason
+    /// ``shellCommandNames`` is internal. Nothing outside this file calls it, and
+    /// `theSectionSignRangesComeBackInDocumentOrder` is the one caller in `Tests/`: the property it
+    /// pins has no observable consequence through ``verdict(for:)``, which carries signal names and
+    /// no ranges, so a test that could reach it through the public surface does not exist.
+    static func sectionSignPromptRanges(in text: String) -> [Range<String.Index>] {
+        let colonForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]{0,80}\u{00A7}(?=[ \t]|$)/
+        let spacedForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}[ \t]+\u{00A7}(?=[ \t]|$)/
+        let bracketedForm = /(?m)^[ \t]*[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}\]\u{00A7}(?=[ \t]|$)/
+
+        var hits: [Range<String.Index>] = []
+        for match in text.matches(of: colonForm) { hits.append(match.range) }
+        for match in text.matches(of: spacedForm) { hits.append(match.range) }
+        for match in text.matches(of: bracketedForm) { hits.append(match.range) }
+
+        // Grouped rather than "all hits share one identity": a scrollback that ssh's away keeps the
+        // prompts it had, and the group that repeats is still a scrollback. A group below the floor
+        // contributes nothing rather than dragging the qualifying ones down with it.
+        var byIdentity: [Substring: [Range<String.Index>]] = [:]
+        for hit in hits {
+            byIdentity[identityAtHost(of: text[hit]), default: []].append(hit)
+        }
+        // **Sorted because grouping through a `Dictionary` made the order per-process** (PR #209
+        // cycle 2, N7). Swift seeds `Dictionary` hashing per process, so `values` enumerates the
+        // identity groups in a different order on every run, and `flatMap` inherited that: the same
+        // document returned its section-sign ranges in a different order run to run.
+        //
+        // **No verdict depended on it, which is why this is a sort and not a bug fix.** `promptRanges`
+        // has one consumer, and both of its uses are order-insensitive — `!prompts.isEmpty`, and
+        // `hasCommandRunInAShell` returning true on the first prompt line that begins with a command.
+        // What was wrong is that nothing said they had to stay that way, and run-to-run
+        // nondeterminism inside a refusal boundary is the kind of thing that is cheap now and
+        // expensive to diagnose the day some future signal reads the first range and reports it.
+        //
+        // Every other producer in ``promptRanges`` appends in document order already, so this makes
+        // the whole list consistent rather than only this branch of it.
+        return byIdentity.values
+            .filter { $0.count >= minimumMinimalPromptLines }
+            .flatMap { $0 }
+            .sorted { $0.lowerBound < $1.lowerBound }
+    }
+
+    /// The `identity@host` a prompt match opens with — leading whitespace dropped, then everything up
+    /// to the end of the host token.
+    ///
+    /// Read off the match rather than re-matched: all three forms above begin with the same
+    /// `[A-Za-z0-9._-]+@[A-Za-z0-9._-]+`, so the prefix is already there and a second pattern would be
+    /// a copy to drift from — the reason ``verdict(for:)`` gives for refusing prefilters.
+    private static func identityAtHost(of match: Substring) -> Substring {
+        let body = match.drop(while: { $0 == " " || $0 == "\t" })
+        guard let at = body.firstIndex(of: "@") else { return body }
+        var end = body.index(after: at)
+        while end < body.endIndex, body[end].isLetter || body[end].isNumber
+            || body[end] == "." || body[end] == "_" || body[end] == "-" {
+            end = body.index(after: end)
+        }
+        return body[body.startIndex..<end]
     }
 
     /// Prompts that are nothing but a sigil — `$ `, `% ` — which are only prompts when they repeat

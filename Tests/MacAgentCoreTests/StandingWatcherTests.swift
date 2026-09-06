@@ -356,24 +356,202 @@ struct StandingWatcherTests {
         #expect(reason == .unwatchable)
     }
 
-    /// A reading that comes back to the baseline drops the candidate and resets the instability
-    /// count. Without the reset, a page that wobbled twice a day would reach `maxUnstableReadings`
-    /// across an unrelated week and be declared unwatchable.
+    /// A reading that comes back to the baseline drops the candidate — and **counts toward the
+    /// instability rather than clearing it**, because a page that moved back is a page that moved
+    /// (SONNY-390).
+    ///
+    /// **The reset is a check later, and the test asserts both halves**, because "does not reset" on
+    /// its own is the rule that declared a page wobbling once a day unwatchable on check 146. What
+    /// forgives an ordinary wobble is the *next* reading agreeing with this one.
     @Test
-    func aReadingEqualToTheBaselineClearsTheCandidateAndTheInstabilityCount() {
+    func aReadingEqualToTheBaselineCountsTowardInstabilityAndTheNextAgreementClearsIt() {
         var watcher = sampleWatcher(id: "w1", subject: "the pricing page", baselineDigest: "base")
         watcher.candidateDigest = "moved"
         watcher.unstableReadings = 2
 
         let decision = StandingWatcherEvaluator.apply(reading: "base", to: watcher, now: .fixture)
 
-        guard case .unchanged(let settled) = decision else {
+        guard case .unchanged(let returned) = decision else {
             Issue.record("a reading equal to the baseline is not a change, got \(decision)")
             return
         }
-        #expect(settled.candidateDigest == nil)
-        #expect(settled.unstableReadings == 0)
-        #expect(settled.lastCheckedAt == .fixture)
+        #expect(returned.candidateDigest == nil)
+        #expect(returned.unstableReadings == 3, "the return to the baseline is itself a movement")
+        #expect(returned.lastCheckedAt == .fixture)
+
+        let settled = StandingWatcherEvaluator.apply(
+            reading: "base",
+            to: returned,
+            now: .fixture.addingTimeInterval(900)
+        )
+        guard case .unchanged(let quiet) = settled else {
+            Issue.record("a second baseline reading is not a change either, got \(settled)")
+            return
+        }
+        #expect(quiet.unstableReadings == 0, "two consecutive readings that agree are what forgives")
+        #expect(quiet.candidateDigest == nil)
+    }
+
+    /// **SONNY-390, the bug itself.** A page alternating between its baseline and one other reading
+    /// is `.unwatchable` on the fourth check, where it used to be told nothing for seven days.
+    ///
+    /// The shipped `maxUnstableReadings` is used deliberately rather than a bounded fixture: the
+    /// founders' requirement is four checks at the shipped limits, and a fixture that lowered the
+    /// limit would assert a different sentence.
+    @Test
+    func anAlternatingPageIsUnwatchableOnTheFourthCheck() {
+        var watcher = sampleWatcher(id: "w1", subject: "an alternating page", baselineDigest: "base")
+        let readings = ["other", "base", "other", "base"]
+        var stoppedOn: Int?
+        var reason: StandingWatcherStopReason?
+
+        for (index, reading) in readings.enumerated() {
+            let decision = StandingWatcherEvaluator.apply(
+                reading: reading,
+                to: watcher,
+                now: .fixture.addingTimeInterval(Double(index) * 900)
+            )
+            switch decision {
+            case .pending(let next), .unchanged(let next):
+                watcher = next
+            case .stopped(_, let stopReason):
+                stoppedOn = index + 1
+                reason = stopReason
+            case .notDue:
+                Issue.record("apply never returns notDue")
+            }
+            if stoppedOn != nil { break }
+        }
+
+        #expect(stoppedOn == 4, "the four checks the ticket asks for, at the shipped limits")
+        #expect(reason == .unwatchable)
+    }
+
+    /// **The forgiveness, at every rate the corpus measured.** A page that shows one different
+    /// reading and then settles never accumulates: the counter is back at zero two checks after each
+    /// wobble, so a watcher sees the same verdict — nothing — whether the page wobbles once a
+    /// fortnight or once an hour.
+    ///
+    /// **This is the arm that fails on the rule the ticket proposed literally.** That rule reset only
+    /// on a confirmed pair, and the corpus on SONNY-390 measured it declaring the once-a-day page
+    /// unwatchable on check 146 and the hourly one on check 8.
+    ///
+    /// **The wobbles are placed by count and spread evenly, never by a modulus on the check index.**
+    /// A watcher life is 672 checks at the shipped limits and a fortnight is 1344 of them, so
+    /// `check % 1344` fires never and an archetype written that way is silently the steady page —
+    /// which is what the corpus's first shape did, and this test is what caught it. The counts are
+    /// wobbles per watcher life, and a life is 672 checks at fifteen minutes, which is **seven
+    /// days**: so 1 is weekly, 2 twice a week, 7 daily, 168 hourly. (This said "1 is roughly
+    /// fortnightly" — PR #209 review, F14. One per life is the conservative stand-in for a
+    /// fortnightly page, since half of those lives carry no wobble at all and the informative case
+    /// is the one that does, but the label was arithmetic and the arithmetic was wrong.)
+    @Test(arguments: [1, 2, 7, 28, 84, 168])
+    func aPageThatWobblesAndSettlesIsNeverCalledUnwatchable(wobblesPerLife: Int) {
+        var watcher = sampleWatcher(id: "w1", subject: "a wobbling page", baselineDigest: "base")
+        let life = 672
+        let wobbleChecks = Set((0..<wobblesPerLife).map { (2 * $0 + 1) * life / (2 * wobblesPerLife) })
+
+        for check in 0..<life {
+            let reading = wobbleChecks.contains(check) ? "wobble\(check)" : "base"
+            let decision = StandingWatcherEvaluator.apply(
+                reading: reading,
+                to: watcher,
+                now: .fixture.addingTimeInterval(Double(check) * 900)
+            )
+            switch decision {
+            case .pending(let next), .unchanged(let next):
+                watcher = next
+            case .stopped(_, let stopReason):
+                Issue.record("\(wobblesPerLife) wobbles in a life stopped the watcher on check \(check + 1) as \(stopReason)")
+                return
+            case .notDue:
+                Issue.record("apply never returns notDue")
+                return
+            }
+        }
+
+        #expect(watcher.unstableReadings < StandingWatcherLimits.standard.maxUnstableReadings)
+        #expect(watcher.firstDifferenceAt != nil, "the wobbles really happened")
+    }
+
+    /// **Where the rule fails, pinned so it is a decision rather than a surprise.** The counter is a
+    /// run length of consecutive differing readings, so **any four in a row end the watcher**,
+    /// whatever produced them — and `main` carried every one of these sequences to expiry.
+    ///
+    /// **This test was named `onlyWobblesOneStableReadingApartEndTheWatcher`, and the "only" was
+    /// false** (PR #209 review, F8). Three further shapes end a watcher and are asserted below; the
+    /// `w, base, w, base` alternation is merely the one the ticket's own example reaches. A page
+    /// that shows three different readings and then settles is arguably the more ordinary of the
+    /// two, and a name promising it was safe is worse than no name at all.
+    ///
+    /// What is genuinely forgiven is a run that never reaches four: two wobbles two or more stable
+    /// readings apart, and two adjacent wobbles that then settle. Both are asserted, because the
+    /// finding is the boundary rather than "clustered wobbles are fatal".
+    @Test
+    func fourConsecutiveDifferingReadingsEndTheWatcherHoweverTheyArrive() {
+        func verdict(_ readings: [String]) -> StandingWatcherStopReason? {
+            var watcher = sampleWatcher(id: "w", subject: "a page", baselineDigest: "base")
+            for (index, reading) in readings.enumerated() {
+                let decision = StandingWatcherEvaluator.apply(
+                    reading: reading,
+                    to: watcher,
+                    now: .fixture.addingTimeInterval(Double(index) * 900)
+                )
+                switch decision {
+                case .pending(let next), .unchanged(let next):
+                    watcher = next
+                case .stopped(_, let reason):
+                    return reason
+                case .notDue:
+                    return nil
+                }
+            }
+            return nil
+        }
+
+        // Four in a row, four ways in. Every one of these reads `nothing` under the rule on `main`.
+        #expect(verdict(["w1", "base", "w2", "base", "base"]) == .unwatchable, "one stable reading apart")
+        #expect(verdict(["w1", "w2", "w3", "base", "base"]) == .unwatchable, "three adjacent, then settles")
+        #expect(verdict(["w1", "w2", "base", "w3", "base", "base"]) == .unwatchable, "two adjacent, one apart")
+        #expect(verdict(["w1", "base", "w2", "w3", "base", "base"]) == .unwatchable, "one apart, two adjacent")
+        // And the runs that stop at three.
+        #expect(verdict(["w1", "base", "base", "w2", "base", "base"]) == nil, "two apart is forgiven")
+        #expect(verdict(["w1", "w2", "base", "base"]) == nil, "two adjacent, then settles, is forgiven")
+    }
+
+    /// **The two-reading rule is untouched, which the ticket puts out of scope.** A real change is
+    /// still notified on the second identical reading, and a wobble earlier in the watcher's life
+    /// does not delay or prevent it.
+    @Test
+    func aRealChangeIsStillConfirmedOnTheSecondIdenticalReadingAfterAWobble() {
+        var watcher = sampleWatcher(id: "w1", subject: "the pricing page", baselineDigest: "base")
+
+        for (index, reading) in ["wobble", "base", "base", "moved"].enumerated() {
+            let decision = StandingWatcherEvaluator.apply(
+                reading: reading,
+                to: watcher,
+                now: .fixture.addingTimeInterval(Double(index) * 900)
+            )
+            switch decision {
+            case .pending(let next), .unchanged(let next):
+                watcher = next
+            default:
+                Issue.record("check \(index + 1) should not have stopped the watcher, got \(decision)")
+                return
+            }
+        }
+
+        let confirmed = StandingWatcherEvaluator.apply(
+            reading: "moved",
+            to: watcher,
+            now: .fixture.addingTimeInterval(3600)
+        )
+        guard case .stopped(let settled, let reason) = confirmed else {
+            Issue.record("the second identical reading confirms the change, got \(confirmed)")
+            return
+        }
+        #expect(reason == .changed)
+        #expect(settled.baselineDigest == "moved")
     }
 
     /// Failures are tolerated and then are not, and a success in between clears the count. The
@@ -441,10 +619,10 @@ struct StandingWatcherTests {
     /// **F4's cheap half: `.expired` may not assert "It did not change" when a difference was ever
     /// seen** (founder decision, PR #184).
     ///
-    /// The case it is about is a page alternating between its baseline and one other reading: never
-    /// `.changed`, because the two never land consecutively, and never `.unwatchable`, because any
-    /// return to the baseline resets the instability count. It runs its whole life and used to end by
-    /// asserting the one thing certainly false about it.
+    /// The case it is about is a page that saw one difference and settled back. Since SONNY-390 the
+    /// page that alternates *forever* stops as `.unwatchable` instead of reaching expiry, so the
+    /// population reaching `.expired` with a difference behind it is the wobbler — which is exactly
+    /// the record built below, and the sentence is owed to it for the same reason.
     ///
     /// **The control is the unchanged page in the same test**, which still gets the stronger
     /// sentence — otherwise "does not say it did not change" is satisfied by never saying it.
@@ -456,8 +634,9 @@ struct StandingWatcherTests {
                 == "Sonny stopped watching “a quiet page” after 7 days. It did not change."
         )
 
-        // One difference, then back to the baseline — the alternating page, at the moment its last
-        // reading matched, which is where `candidateDigest` and `unstableReadings` are both clear.
+        // One difference, then back to the baseline twice — the wobbler, run to the point where the
+        // counter has been forgiven and `candidateDigest` cleared, which is where every field that
+        // could answer "did anything ever move" reads as it did at creation.
         var flickered = sampleWatcher(id: "flickers", subject: "a flickering page", baselineDigest: "base")
         guard case .pending(let sawDifference) = StandingWatcherEvaluator.apply(
             reading: "other", to: flickered, now: .fixture
@@ -471,7 +650,13 @@ struct StandingWatcherTests {
             Issue.record("a reading equal to the baseline is unchanged")
             return
         }
-        flickered = backToBaseline
+        guard case .unchanged(let settledAgain) = StandingWatcherEvaluator.apply(
+            reading: "base", to: backToBaseline, now: .fixture.addingTimeInterval(1800)
+        ) else {
+            Issue.record("a second baseline reading is unchanged")
+            return
+        }
+        flickered = settledAgain
         #expect(flickered.candidateDigest == nil, "precondition: the reset really happened")
         #expect(flickered.unstableReadings == 0, "precondition: the reset really happened")
         #expect(flickered.firstDifferenceAt != nil, "the record must outlive the reset, or the sentence cannot")

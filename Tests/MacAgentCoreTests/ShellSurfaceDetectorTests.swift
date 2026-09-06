@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import MacAgentCore
@@ -45,6 +46,37 @@ struct ShellSurfaceDetectorTests {
     /// plus four *(F2)* cases where **nothing on screen has failed** — which is the ordinary state of
     /// a terminal and was the state in which the committed detector let all of them through.
     static let mustRefuse: [Fixture] = [
+        // **The two section-sign panels the fix round measured and did not pin** (PR #209 cycle 2,
+        // N5). Both were rows of the thirteen-document table on SONNY-277 and neither joined the
+        // corpus, which left a mutant alive on the anchor's own leading-whitespace allowance: with
+        // `^[ \t]*` narrowed to `^`, the indented panel goes from two section-sign prompts to zero —
+        // refused to allowed — and the whole suite passed. Six lines of fixture is the fix, and the
+        // reason they are first in this array is that they are the cheapest thing here to delete by
+        // accident; `theCorpusCoversBothDirections` holds a floor on the marker.
+        Fixture(name: "an indented terminal panel (SONNY-277 panel)", signals: [.interactivePrompt, .commandRunInAShell], text: """
+            sauransh@Mac macos-agent \u{00A7} ls
+            README.md Sources
+            sauransh@Mac macos-agent \u{00A7}
+        """),
+
+        // The partial misread: two of the panel's four sigils came back as section signs and two as
+        // ordinary `%`. This is the 12 pt shape — the size whose margin over the floor is exactly
+        // zero — so it is the row that says the two halves compose rather than merely coexist.
+        Fixture(name: "a panel with only two of its sigils misread (SONNY-277 panel)", signals: [.interactivePrompt, .commandRunInAShell], text: """
+        PROBLEMS
+        OUTPUT
+        TERMINAL
+        PORTS
+        sauransh@Mac macos-agent \u{00A7} ls
+        README.md Sources
+        Tests docs
+        sauransh@Mac macos-agent \u{00A7} sudo rm -rf .build
+        Password:
+        sauransh@Mac macos-agent % git status
+        On branch main
+        sauransh@Mac macos-agent %
+        """),
+
         Fixture(name: "Terminal", signals: [.interactivePrompt, .commandRunInAShell, .sessionBanner], text: """
         Last login: Sat Aug 16 09:14:22 on ttys000
         sauransh@Mac ~ % cd Desktop/macos-agent
@@ -488,10 +520,155 @@ struct ShellSurfaceDetectorTests {
         \u{276F} open the retro
         \u{276F} find owners
         \u{276F}
+        """),
+
+        // **The cost of admitting the section sign as a prompt sigil, bounded** (SONNY-277). It is
+        // accepted only in the address forms, so a legal document carrying section marks — including
+        // one whose last is bare, which is what `minimalPromptRanges` reads as a waiting prompt for
+        // `$` and `%` — stays invisible. This fixture is what would refuse if the sigil were added to
+        // the minimal set instead, and it is the reason it was not.
+        Fixture(name: "a legal page of section marks ending in a bare one (SONNY-277 adversarial)", signals: [], text: """
+        Terms of Service
+
+        \u{00A7} 4.1 The service is provided as is.
+
+        \u{00A7} 4.2 Liability is limited to fees paid.
+
+        \u{00A7}
+        """),
+
+        // A section mark on a line that also carries an address. Not a prompt: no path token sits
+        // between the address and the sigil, which is the guard PR #57 N1 put on the spaced form.
+        Fixture(name: "an address and a section mark in prose (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        The clause priya@acme.io cited is \u{00A7} 3 and it is 82% settled.
+        """),
+
+        // **PR #209's F1 documents, and the three that defeat the narrowing it proposed** (SONNY-277).
+        // Every one of these is refused by the repetition floor this branch first shipped. They are
+        // marked *(SONNY-277 adversarial)* so `theCorpusCoversBothDirections` can hold a floor on
+        // them; the measurement that chose the rule is on the ticket. Two of them keep one signal
+        // apiece — a document may mention an ssh error or end a menu in `logout` and still not be a
+        // shell — which is the threshold doing its job, and is why the expected sets are asserted
+        // exactly rather than through `showsShell`.
+        Fixture(name: "an incident policy naming two parties under section marks (SONNY-277 adversarial)", signals: [.shellDiagnostic], text: """
+        Incident Response Policy
+
+        Report incidents to security@acme.example under \u{00A7} 7.2 within one hour.
+        Escalations go to soc@acme.example under \u{00A7} 7.3 within four hours.
+
+        If your key is rejected the agent prints Permission denied (publickey) and you must re-enrol.
+        """),
+
+        // The same document with the mark spelled out. **This is the control that makes the fixture
+        // above mean something**: the two differ only in whether they write the section sign, so a
+        // rule that refuses one and serves the other is refusing the glyph rather than the shell. It
+        // keeps its shell-diagnostic signal in both, which is why neither reaches two.
+        Fixture(name: "the same incident policy with the mark spelled out (SONNY-277 control)", signals: [.shellDiagnostic], text: """
+        Incident Response Policy
+
+        Report incidents to security@acme.example under clause 7.2 within one hour.
+        Escalations go to soc@acme.example under clause 7.3 within four hours.
+
+        If your key is rejected the agent prints Permission denied (publickey) and you must re-enrol.
+        """),
+
+        Fixture(name: "a help page whose menu ends in logout, beside two contact lines (SONNY-277 adversarial)", signals: [.sessionBanner], text: """
+        Account help
+
+        Billing questions go to billing@acme.example under \u{00A7} 4 of the agreement.
+        Access questions go to identity@acme.example under \u{00A7} 5 of the agreement.
+
+        Menu
+        profile
+        settings
+        logout
+        """),
+
+        // The branch's own adversarial sentence written twice, which is what the repetition floor
+        // could not tell from a scrollback.
+        Fixture(name: "the address-and-section-mark sentence twice, two addresses (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        Write to soc@acme.example about \u{00A7} 13 before Monday.
+        """),
+
+        // **The three that defeat a shared-identity rule on its own** — written by asking what the
+        // review's proposed narrowing does not reach, rather than by checking it against its own
+        // examples. One address repeated is the ordinary way a contract names a single party.
+        Fixture(name: "the same sentence twice with one address (SONNY-277 adversarial)", signals: [], text: """
+        Write to counsel@acme.example about \u{00A7} 12 before Friday.
+        Write to counsel@acme.example about \u{00A7} 13 before Monday.
+        """),
+
+        Fixture(name: "one party, one section mark, three times (SONNY-277 adversarial)", signals: [], text: """
+        Under the contract legal@acme.example owns \u{00A7} 1 and reviews it yearly.
+        Under the contract legal@acme.example owns \u{00A7} 2 and reviews it yearly.
+        Under the contract legal@acme.example owns \u{00A7} 3 and reviews it yearly.
+        """),
+
+        // A real terminal, quoted in an email. Not a live shell, and it shares its identity by
+        // construction — so a shared-identity rule alone refuses it and the line anchor is what does
+        // not.
+        Fixture(name: "a terminal session quoted in an email reply (SONNY-277 adversarial)", signals: [], text: """
+        On Tuesday priya wrote:
+        > sauransh@Mac macos-agent \u{00A7} ls
+        > README.md Sources
+        > sauransh@Mac macos-agent \u{00A7}
+        Can you try again?
+        """),
+
+        // **The one the line anchor alone gets wrong**, which is why both conditions are kept: a
+        // contact table puts its addresses at the start of every line.
+        Fixture(name: "a contact table whose lines start with addresses (SONNY-277 adversarial)", signals: [], text: """
+        security@acme.example owns \u{00A7} 7.2 of the policy.
+        soc@acme.example owns \u{00A7} 7.3 of the policy.
+        """),
+
+        // **The one document the shipped rule gets wrong, in the tree beside the ones it gets right**
+        // (PR #209 cycle 2, N5). An ssh hop shows two prompts under two identities; with both sigils
+        // misread, neither group reaches the floor, so the section-sign form contributes nothing and
+        // the panel rests on its `Last login:` banner alone — one signal, and Sonny would act in it.
+        //
+        // **It sits in `mustNotRefuse` because that is what the detector does, not because it is what
+        // anyone wants.** `main` has no section-sign form at all, so this is exactly where `main`
+        // leaves that shape: the rule declines to fix it rather than regressing it, and the
+        // alternative — dropping the shared-identity condition — refuses the contact table above.
+        // The founder ordering on `minimalPromptRanges` prefers a gap to an unappealable stop.
+        // A future rule that closes this moves the fixture to `mustRefuse`; until then the gap is
+        // asserted rather than described, so it cannot quietly become something else.
+        Fixture(name: "an ssh hop, two prompts under two identities, both sigils misread (SONNY-277 gap)", signals: [.sessionBanner], text: """
+        sauransh@Mac macos-agent \u{00A7} ssh deploy@staging
+        Last login: Tue Sep  2 09:14:11 2026
+        deploy@staging ~ \u{00A7} ls
+        releases current
         """)
     ]
 
-    static var corpus: [Fixture] { mustRefuse + mustNotRefuse }
+    /// **The panel the recognizer actually returned** (SONNY-277). Not written by hand: this is the
+    /// verbatim joined text of the 800x600 @ 13pt run in `ShellSurfaceLookAlikeFoldTests`, where
+    /// Vision read every `%` sigil as U+00A7 SECTION SIGN. Against the detector at `4a3d0ef6` it
+    /// produced **no signals at all** — a terminal panel with `sudo rm -rf .build` typed at it,
+    /// allowed.
+    static let sectionSignPanel = Fixture(
+        name: "a terminal panel whose sigils the recognizer read as section signs (SONNY-277)",
+        signals: [.interactivePrompt, .commandRunInAShell],
+        text: """
+        PROBLEMS
+        OUTPUT
+        TERMINAL
+        PORTS
+        sauransh@Mac macos-agent \u{00A7} ls
+        README.md Sources
+        Tests docs
+        sauransh@Mac macos-agent \u{00A7} sudo rm -rf .build
+        Password:
+        sauransh@Mac macos-agent \u{00A7} git status
+        On branch main
+        sauransh@Mac macos-agent \u{00A7}
+        """
+    )
+
+    static var corpus: [Fixture] { mustRefuse + mustNotRefuse + [sectionSignPanel] }
 
     // MARK: - The corpus, asserted
 
@@ -967,6 +1144,22 @@ struct ShellSurfaceDetectorTests {
         #expect(Self.mustRefuse.filter { $0.name.contains("(N2)") }.count >= 4)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(N1)") }.count >= 3)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(N2 adversarial)") }.count >= 5)
+        // **SONNY-277's anchor, and it is not decoration** (PR #209 review, F11). Both of the
+        // branch's first two section-mark fixtures could be deleted with the suite staying green,
+        // because `mustNotRefuse.count >= 22` sat exactly at the count minus two — and deleting the
+        // address-and-section-mark sentence alone is what makes the repetition floor's mutant
+        // survive, while deleting the legal page alone takes a killer off the minimal-set mutant.
+        // The floor is nine because that is what the F1 round left: two from the first version and
+        // seven documents from the review's round, one of which is a control rather than an
+        // adversary and is counted here so the pair cannot be split.
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 adversarial)") }.count >= 9)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 control)") }.count >= 1)
+        // **The three rows the fix round measured and did not pin** (PR #209 cycle 2, N5). Deleting
+        // the indented panel alone brings back a mutant that passed the whole suite, which is what a
+        // floor on a marker exists to stop; the gap fixture is held for a different reason, that a
+        // documented failure quietly becoming undocumented is worse than the failure.
+        #expect(Self.mustRefuse.filter { $0.name.contains("(SONNY-277 panel)") }.count >= 2)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(SONNY-277 gap)") }.count >= 1)
     }
 }
 
@@ -1095,5 +1288,212 @@ struct ShellSurfaceVerdictStructureTests {
 
     private static func coreFile(_ name: String) -> URL {
         coreDirectory.appendingPathComponent(name)
+    }
+}
+
+// MARK: - The look-alike fold (SONNY-277)
+
+/// **The measuring round SONNY-277 owes, and the check that keeps its answer true.**
+///
+/// The ticket asks two questions and forbids the change until both are answered: how often the
+/// on-device recognizer substitutes a cross-script look-alike inside a shell prompt or a command
+/// word at realistic capture sizes, and what folding those look-alikes back does to the two-signal
+/// threshold on ordinary pages. SONNY-260 had seen the substitution only at one oversized synthetic
+/// width, so "live gap or theoretical one" was genuinely open.
+///
+/// **The answer, measured here and recorded on the ticket: theoretical for letters, live for the
+/// sigil.** No foldable scalar was emitted at any of the seven realistic sizes — and at the three
+/// smallest the recognizer read the prompt's `%` as U+00A7 SECTION SIGN on every prompt line, which
+/// cost not one signal of two but the whole verdict. The fold is bought as a boundary property; the
+/// sigil is the fix for something that happens.
+///
+/// **Serialized for the reason `LocalRedactionLiveVisionTests` is** (PR #113 review, F5): every test
+/// below drives the shared on-device recognizer, and concurrent `VNRecognizeTextRequest`s stall the
+/// test process rather than failing it — which arrives as a timeout pointing at no assertion.
+@Suite(.serialized)
+struct ShellSurfaceLookAlikeFoldTests {
+    /// The seven realistic capture sizes SONNY-260 pinned for this same recognizer, with their font
+    /// sizes. A measurement at one oversized width is what left this question open, so the sweep is
+    /// the population and no single size is the answer.
+    static let captureSizes: [(name: String, width: Int, height: Int, fontSize: CGFloat)] = [
+        ("1280x800 @ 12pt", 1280, 800, 12),
+        ("1280x800 @ 14pt", 1280, 800, 14),
+        ("1440x900 @ 13pt", 1440, 900, 13),
+        ("1440x900 @ 26pt", 1440, 900, 26),
+        ("2560x1600 @ 26pt", 2560, 1600, 26),
+        ("2880x1800 @ 28pt", 2880, 1800, 28),
+        ("800x600 @ 13pt", 800, 600, 13)
+    ]
+
+    /// A terminal panel that must refuse: a prompt, and commands typed at it.
+    static let scrollback = [
+        "PROBLEMS   OUTPUT   TERMINAL   PORTS",
+        "sauransh@Mac macos-agent % ls",
+        "README.md  Sources  Tests  docs",
+        "sauransh@Mac macos-agent % sudo rm -rf .build",
+        "Password:",
+        "sauransh@Mac macos-agent % git status",
+        "On branch main",
+        "sauransh@Mac macos-agent %"
+    ]
+
+    /// **The frequency measurement, and the regression guard the sigil fix needs.**
+    ///
+    /// Renders the panel at each realistic size, reads it with the shipped recognizer, prints what
+    /// came back, and asserts that the panel is refused — which is the property that was false at
+    /// three of these seven sizes before this branch.
+    ///
+    /// **It asserts what is durable and prints what is not**, which is SONNY-260's rule after a
+    /// fixture was tuned until it passed. Vision improves, so asserting that it *misreads* a glyph
+    /// breaks on an OS update: the assertion is that a real terminal panel refuses however the sigil
+    /// came back, and the scalar counts go to the record. The `§` case is pinned separately and
+    /// exactly, on text the recognizer really produced, by `sectionSignPanel` in the corpus above.
+    @Test(arguments: ShellSurfaceLookAlikeFoldTests.captureSizes.map(\.name))
+    func aRealTerminalPanelIsRefusedAtEveryRealisticCaptureSize(sizeName: String) async throws {
+        let size = try #require(Self.captureSizes.first { $0.name == sizeName })
+        let lineHeight = size.fontSize * 1.6
+        let lines = Self.scrollback.enumerated().map { index, text in
+            (text: text, topLeft: CGPoint(x: 40, y: 40 + CGFloat(index) * lineHeight))
+        }
+        let png = ImageFixtures.renderedTextPNG(
+            width: size.width,
+            height: size.height,
+            lines: lines,
+            fontSize: size.fontSize
+        )
+
+        let observations = try await VisionImageTextRecognizer()
+            .recognizeText(inPNGData: png, pixelWidth: size.width, pixelHeight: size.height)
+        let joined = observations.map(\.string).joined(separator: "\n")
+
+        let nonASCII = joined.unicodeScalars.filter { $0.value >= 0x80 }
+        let foldable = zip(joined.unicodeScalars, LatinConfusables.fold(joined).text.unicodeScalars)
+            .filter { $0 != $1 }
+        let verdict = ShellSurfaceDetector.verdict(for: joined)
+
+        print("SHELL-FOLD-MEASUREMENT \(size.name): observations=\(observations.count) "
+            + "nonASCII=\(nonASCII.count) foldable=\(foldable.count) "
+            + "scalars=[\(nonASCII.map { String(format: "U+%04X", $0.value) }.joined(separator: " "))] "
+            + "signals=\(verdict.signals.map(\.rawValue))")
+
+        // The recognizer returned the panel at all — without this the verdict below is a claim about
+        // an empty string, and a recognizer that returned nothing would look like a detector defect.
+        #expect(observations.count >= Self.scrollback.count - 2, "the panel was read at \(size.name)")
+        #expect(verdict.showsShell, "a real terminal panel must refuse at \(size.name)")
+    }
+
+    /// **The cost measurement: what the fold does to the corpus of ordinary pages.**
+    ///
+    /// The fold turns non-ASCII letters into ASCII ones, so the risk it carries is manufacturing a
+    /// prompt or a command word out of another script — the false-refusal direction, the one that
+    /// stops a user's real work. Measured over the whole corpus rather than a chosen example.
+    ///
+    /// **What this test can and cannot do, since the fold moved inside `verdict(for:)`** (PR #209
+    /// review, F10). It used to assert `verdict(for: fold(text)) == fixture.signals` and claim that
+    /// as a folded-versus-unfolded comparison; the fold is idempotent and now runs inside the
+    /// verdict, so that expression was byte-equivalent to the corpus test beside it and had no
+    /// unfolded branch to compare against. It compares against the **unfolded** verdict now, which
+    /// is reachable because `LatinConfusables` is `@testable`-visible and the pure ASCII path is not
+    /// something `verdict(for:)` can undo: a fixture whose text folds to itself is asserted to be
+    /// unchanged by the fold, and a fixture that does fold is asserted to reach the same verdict
+    /// either way.
+    ///
+    /// **The property itself is covered by something stronger than this test**, and that is worth
+    /// stating rather than leaving to be rediscovered: the pre-existing fixtures carry expected
+    /// signal sets authored before the fold existed, so the corpus test passing at all is the
+    /// evidence that the fold moved none of them.
+    @Test(arguments: ShellSurfaceDetectorTests.corpus.map(\.name))
+    func theFoldChangesNoVerdictOnTheExistingCorpus(name: String) throws {
+        let fixture = try #require(ShellSurfaceDetectorTests.corpus.first { $0.name == name })
+        let folded = LatinConfusables.fold(fixture.text).text
+        #expect(
+            ShellSurfaceDetector.verdict(for: folded).signals == fixture.signals,
+            "the fold moved \(fixture.name)"
+        )
+        // The half the old version could not perform: for every fixture whose text the fold leaves
+        // alone — which on this ASCII corpus is all of them — folding is provably a no-op on the
+        // input rather than merely on the output, so the equality above is not an identity.
+        #expect(folded == fixture.text, "this corpus is ASCII; a fixture that folds needs its own pin")
+    }
+
+    /// **The section-sign ranges come back in document order** (PR #209 cycle 2, N7).
+    ///
+    /// Grouping the hits by `identity@host` put them through a `Dictionary`, and Swift seeds
+    /// `Dictionary` hashing per process — so `values` enumerated the groups in a different order on
+    /// every run and `flatMap` inherited it. The same document returned its ranges in a different
+    /// order run to run, inside a refusal boundary.
+    ///
+    /// **The fixture is built so this test can fail, which is the whole difficulty of pinning it.**
+    /// One identity group returns in insertion order whatever the dictionary does, so a
+    /// single-identity document would pass with the sort deleted and assert nothing. This document
+    /// has **two** groups of two, interleaved, so the two possible group orders give `[1,3,2,4]` and
+    /// `[2,4,1,3]` by position and neither is ascending — only the sort produces `[1,2,3,4]`.
+    ///
+    /// **Repeated in-process, and that is a deliberate limit rather than thoroughness.** The hash
+    /// seed is fixed for a process, so re-running inside one cannot vary the group order; what this
+    /// arm actually pins is that the result is stable and ascending, and the cross-process half is
+    /// what the sort makes unnecessary to test. The mutant that deletes the sort is what shows the
+    /// assertion bites, and it is in the branch's plan as S8.
+    @Test
+    func theSectionSignRangesComeBackInDocumentOrder() {
+        let document = """
+        alice@host1 dir \u{00A7} ls
+        bob@host2 dir \u{00A7} ls
+        alice@host1 dir \u{00A7} pwd
+        bob@host2 dir \u{00A7} pwd
+        """
+
+        let ranges = ShellSurfaceDetector.sectionSignPromptRanges(in: document)
+
+        // Four hits across two qualifying identity groups — the precondition that makes the order
+        // assertion below capable of failing.
+        #expect(ranges.count == 4, "two identity groups of two, or this test asserts nothing")
+        #expect(
+            Set(ranges.map { String(document[$0]).prefix(5) }).count == 2,
+            "the two groups really are distinct identities"
+        )
+
+        let ascending = zip(ranges, ranges.dropFirst()).allSatisfy { $0.lowerBound < $1.lowerBound }
+        #expect(ascending, "section-sign ranges must be in document order")
+
+        // Stable across calls in this process, which is what a caller reading position would rely on.
+        let again = ShellSurfaceDetector.sectionSignPromptRanges(in: document)
+        #expect(again == ranges, "the same document must return the same order")
+    }
+
+    /// The same question asked of text the corpus does not contain: ordinary prose in scripts the
+    /// fold reaches. None of it may gain a signal.
+    ///
+    /// **The control is the second half**, a Cyrillic string shaped like a prompt line, which folds
+    /// into one and *does* gain signals. Without it, "the fold changes nothing" would be satisfied by
+    /// a fold that never fires, and every assertion above it would be vacuous.
+    @Test
+    func foldingOrdinaryNonASCIIProseGainsNoSignalAndTheControlFires() {
+        let prose = [
+            "Documentation en fran\u{00E7}ais \u{2014} installez avec le gestionnaire de paquets.",
+            "\u{041F}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442}, \u{044D}\u{0442}\u{043E} \u{0441}\u{0442}\u{0440}\u{0430}\u{043D}\u{0438}\u{0446}\u{0430} \u{0434}\u{043E}\u{043A}\u{0443}\u{043C}\u{0435}\u{043D}\u{0442}\u{0430}\u{0446}\u{0438}\u{0438}.",
+            "\u{00DC}bersicht: 82% der Nutzer haben priya@acme.io 82% open gelesen.",
+            "Se\u{00F1}or Garc\u{00ED}a escribi\u{00F3}: el total es 50% m\u{00E1}s r\u{00E1}pido."
+        ]
+        for line in prose {
+            let scalars = line.unicodeScalars.map { String(format: "U+%04X", $0.value) }.joined(separator: " ")
+            #expect(
+                ShellSurfaceDetector.verdict(for: line).signals.isEmpty,
+                "the fold gained a signal on ordinary prose: \(scalars)"
+            )
+        }
+
+        // The control: a prompt line with seven of its Latin letters replaced by the Cyrillic
+        // look-alikes SONNY-260 measured the recognizer emitting. Written as scalars deliberately —
+        // pasting the rendered characters is what `.claude/rules/macagentcore-conventions.md` bans.
+        let disguised = "\u{0455}\u{0430}ur\u{0430}nsh@M\u{0430}\u{0441} m\u{0430}\u{0441}os-\u{0430}gent % ls"
+        #expect(
+            ShellSurfaceDetector.verdict(for: disguised).signals == [.interactivePrompt, .commandRunInAShell],
+            "the fold must recover a panel the recognizer disguised"
+        )
+        #expect(ShellSurfaceDetector.verdict(for: disguised).showsShell, "and it refuses")
+        // And the same string with the fold's job undone by hand is what it looked like before: the
+        // Cyrillic letters are not in `[A-Za-z0-9._-]`, so no address form can match.
+        #expect(disguised.unicodeScalars.contains { $0.value >= 0x80 }, "precondition: it is disguised")
     }
 }
