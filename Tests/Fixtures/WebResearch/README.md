@@ -1,6 +1,6 @@
 # Web-research fixtures
 
-Four real pages, saved verbatim, that `RestrictedContentDetectorTests` runs the wall check over.
+Six real pages, saved verbatim, that `RestrictedContentDetectorTests` runs the wall check over.
 
 They exist because the tests that were here before **could not have caught SONNY-245**. A
 hand-written `"<html>…captcha…</html>"` behaves identically under the rule that shipped the bug and
@@ -8,9 +8,10 @@ under the rule that fixes it — both refuse it. Only a real page separates them
 that separates them is where in a real page the word actually sits: in a script blob, in an
 attribute, or in a sentence addressed to the reader.
 
-All four were fetched on 2026-08-23 with the headers `URLSessionWebPageFetcher` sends —
-`User-Agent: Sonny/1.0`, `Accept: text/html,application/xhtml+xml` — so they are what Sonny itself
-would receive, not what a browser would.
+The first four were fetched on 2026-08-23 and the last two on 2026-09-05 (SONNY-256), all with the
+headers `URLSessionWebPageFetcher` sends — `User-Agent: Sonny/1.0`,
+`Accept: text/html,application/xhtml+xml` — so they are what Sonny itself would receive, not what a
+browser would.
 
 | File | Source | HTTP | Bytes | What it is |
 | --- | --- | --- | --- | --- |
@@ -18,6 +19,8 @@ would receive, not what a browser would.
 | `wikipedia-captcha.html` | `https://en.wikipedia.org/wiki/CAPTCHA` | 200 | 331 832 | A page *about* a wall — it says "captcha" to a reader 167 times. The other half of the reported class. |
 | `zillow-perimeterx-block.html` | `https://www.zillow.com/` | 403 | 5 776 | A genuine bot wall (PerimeterX). Its message is drawn by JavaScript, so it says nothing at all to a reader who does not run scripts. |
 | `sciencedirect-captcha-challenge.html` | `https://www.sciencedirect.com/science/article/pii/S0004370221000862` | 403 | 1 207 697 | A genuine CAPTCHA gate that *does* speak: "Are you a robot? Please confirm you are a human by completing the captcha challenge below." |
+| `simonwillison-botbouncer.html` | `https://simonwillison.net/2006/Dec/19/botbouncer/` | 200 | 13 942 | SONNY-256's reported page. A link-blog post, 1 110 visible characters, one sentence of which mentions a CAPTCHA service. Refused by SONNY-245's rule. |
+| `hackernews-paywall-comment.html` | `https://news.ycombinator.com/item?id=9997770` | 200 | 3 469 | The same class from a different template. A comment page, 327 visible characters, whose body is one comment asking for a reference not behind a paywall. |
 
 ## Why these four
 
@@ -30,6 +33,14 @@ The CAPTCHA article is the ticket's other half: "a page *about* a thing is treat
 *guarded by* that thing." Unlike the machine-learning article it really does carry the word in its
 visible prose, 167 times, so what serves it is the interstitial limit rather than the word being
 invisible — a different mechanism, and one no other fixture exercises.
+
+The two SONNY-256 pages are the class the absolute length limit could not separate: a *short* page
+whose subject is a wall. They are two different templates on purpose, so that the fix cannot be read
+as a property of one blog's markup — and neither is synthetic for the same reason the other four are
+not. A hand-written page saying `captcha` in a paragraph is refused by SONNY-245's rule and served by
+SONNY-256's, so it separates them; what it cannot show is that a *real* short page carries the word
+in ordinary prose surrounded by ordinary furniture, which is the thing that was actually
+misclassified. Both were part of the 122-page corpus measured on 2026-09-05, recorded on SONNY-256.
 
 The two block pages are the two shapes a real wall comes in, and they need different evidence to
 catch, which is why both are here rather than one. Zillow's shows 0 characters of text — the only

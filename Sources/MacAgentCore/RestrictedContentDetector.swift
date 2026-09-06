@@ -15,16 +15,17 @@ import SwiftSoup
 /// visible to a reader; neither has anything to do with fetching the article. The user asked Sonny
 /// to summarize an encyclopedia article and was told "Sonny will not bypass CAPTCHAs".
 ///
-/// **The rule now: a wall phrase is evidence only on a page that has nothing else to show.** A wall
-/// is a page whose whole purpose is the wall, so it has no article on it. An article that discusses
-/// CAPTCHAs is still an article.
+/// **The rule now: a wall phrase is evidence only on a page that has nothing else to show, and what
+/// a reader can see is evidence only when it is something only a wall would say.** A wall is a page
+/// whose whole purpose is the wall. An article that discusses CAPTCHAs is still an article.
 ///
 /// Two stages, each with its own limit, because the two kinds of evidence are not equally strong:
 ///
 /// 1. **What the page says to the reader** is direct evidence, so it is trusted on any page short
-///    enough to be an interstitial (`interstitialVisibleTextLimit`). ScienceDirect's gate — "Are you
-///    a robot? Please confirm you are a human by completing the captcha challenge below." — is this
-///    shape.
+///    enough to be an interstitial (`interstitialVisibleTextLimit`) — but only for `wallSpeechPhrases`,
+///    the phrases that address *this reader* about *this page's* access. ScienceDirect's gate — "Are
+///    you a robot? Please confirm you are a human by completing the captcha challenge below." — is
+///    this shape. SONNY-256 is why that second condition exists, and the measurement is below.
 /// 2. **What the page's markup mentions** is circumstantial — a script src, a config key, a CSS
 ///    class — so it is trusted only when the page shows a reader essentially nothing
 ///    (`contentlessVisibleTextLimit`). That is the shape of every modern bot wall: the message is
@@ -42,7 +43,7 @@ import SwiftSoup
 ///   ticketmaster 4 442, nytimes 6 119, newyorker 7 770, seekingalpha 12 179, harpers 13 232,
 ///   nature 38 469, wikipedia 130 932.
 ///
-/// Not one of the 48 — wall or article — said any of the seven phrases to a reader except
+/// Not one of the 48 — wall or article — said any of those seven phrases to a reader except
 /// ScienceDirect's gate. That is why stage 2 exists at all: read only what a reader sees and the
 /// check stops catching the modern web's walls entirely, which would be the false-accept trade the
 /// ticket asks not to make silently.
@@ -68,14 +69,13 @@ import SwiftSoup
 /// login walls, or robots restrictions".
 ///
 /// - **Gone:** every false refusal driven by *markup* on a page that has an article — Wikipedia,
-///   Nature, the NYT, the CAPTCHA article. **Not the whole reported class, and the first version of
-///   this comment said it was** (PR #108 review, F1). A *short* article about a wall is still
-///   refused as one, because the corroboration is an absolute length: measured on 2026-08-23,
-///   `simonwillison.net/2006/Dec/19/botbouncer/` is HTTP 200 with 1 080 visible characters, one
-///   sentence of which mentions a CAPTCHA service, and it is refused; a 2 136-character post on the
-///   same blog, same template, same subject, is served. 136 characters apart, opposite verdicts.
-///   **SONNY-256** holds that residual and the ratio proposal for it — do not attempt that fix from
-///   here, it needs its own corpus and measuring round.
+///   Nature, the NYT, the CAPTCHA article. **That was not the whole reported class, and the first
+///   version of this comment said it was** (PR #108 review, F1): a *short* article about a wall was
+///   still refused, because the corroboration was an absolute length. `simonwillison.net/2006/Dec/19/botbouncer/`
+///   is HTTP 200 with 1 110 visible characters, one sentence of which mentions a CAPTCHA service,
+///   and it was refused, while a 2 166-character post on the same blog, same template, same subject,
+///   was served. **SONNY-256 closed that**, and the split between `wallSpeechPhrases` and
+///   `subjectPhrases` is the whole of the fix.
 /// - **Accepted, knowingly:** a gate that renders its own form and chrome, where the only trace is
 ///   a vendor script. The measured instances are **LinkedIn's feed** (HTTP 200, 703 visible
 ///   characters, and the extractor gets 556 characters of "article" out of the sign-in chrome) and
@@ -91,7 +91,7 @@ import SwiftSoup
 ///   would be, and the note names its source.
 /// - **What the accepted set actually is, since three earlier sentences understated it:** between
 ///   `contentlessVisibleTextLimit` and `interstitialVisibleTextLimit` — 200 to 2 000 visible
-///   characters — **neither stage fires unless the page says one of the seven phrases to a reader**,
+///   characters — **neither stage fires unless the page says a `wallSpeechPhrases` entry to a reader**,
 ///   and that band is where most real walls measured live (ScienceDirect 526, FT 565, Bloomberg 657,
 ///   LinkedIn 703, IEEE 717, Medium 720, Instagram 792, Telegraph 888, and — measured by PR #108's
 ///   reviewer on other URLs — a Tumblr dashboard at 265 and a pixiv artwork page at 335).
@@ -178,18 +178,45 @@ public enum RestrictedContentDetector {
     /// direction SONNY-245 exists to correct.
     public static let contentlessVisibleTextLimit = 200
 
-    /// Phrase to the noun the refusal names. Unchanged from the rule this replaces: SONNY-245 is
-    /// about the evidence, not about coverage, and widening this list is its own decision with its
-    /// own false-refusal risk.
-    static let phrases: [(phrase: String, reason: String)] = [
-        ("captcha", "CAPTCHAs"),
-        ("verify you are human", "CAPTCHAs"),
+    /// **Wall speech**: a phrase that addresses *this reader* about *this page's* access. Only a
+    /// wall issues one, so it is what visible-text evidence is searched for.
+    ///
+    /// `you are human` replaces SONNY-245's `verify you are human` and is strictly wider — it also
+    /// matches "confirm you are human", "prove you are human" and Cloudflare's "Verifying you are
+    /// human", which `interstitialVisibleTextLimit`'s own doc comment names as a wall this check
+    /// used to miss. `you are a human` is the article variant, and it is ScienceDirect's actual
+    /// wording: "please confirm you are a human by completing the captcha challenge below".
+    ///
+    /// Nothing here was added speculatively. `to continue reading` was tested against the corpus
+    /// and rejected — it matches a Hacker News comment — and five further paywall wordings that
+    /// matched nothing on either side were left out rather than added on the strength of no
+    /// evidence.
+    static let wallSpeechPhrases: [(phrase: String, reason: String)] = [
+        ("you are human", "CAPTCHAs"),
+        ("you are a human", "CAPTCHAs"),
+        ("are you a robot", "CAPTCHAs"),
         ("please log in", "login walls"),
         ("sign in to continue", "login walls"),
-        ("subscribe to continue", "paywalls"),
+        ("subscribe to continue", "paywalls")
+    ]
+
+    /// **Subject nouns**: a phrase that names the thing rather than addressing the reader. A page is
+    /// allowed to have a subject, so these are never visible-text evidence — they are what a page
+    /// *about* a wall says, and they were the whole of SONNY-256's false-refusal population.
+    ///
+    /// They remain full evidence in markup, where `contentlessVisibleTextLimit` corroborates them
+    /// and the measurement says that limit is correctly set: no innocent page in the corpus is under
+    /// 200 visible characters, and every page that is, is a wall.
+    static let subjectPhrases: [(phrase: String, reason: String)] = [
+        ("captcha", "CAPTCHAs"),
         ("subscription required", "paywalls"),
         ("paywall", "paywalls")
     ]
+
+    /// What *markup* evidence is searched for: both kinds. A superset of the seven phrases SONNY-245
+    /// shipped, since `you are human` contains the `verify you are human` it replaces — so stage 2
+    /// loses no coverage to SONNY-256's split.
+    static let phrases: [(phrase: String, reason: String)] = wallSpeechPhrases + subjectPhrases
 
     /// The refusal reason for `html`, or `nil` if the page is not a wall.
     public static func reason(inHTML html: String) -> String? {
@@ -202,7 +229,7 @@ public enum RestrictedContentDetector {
         let visibleLength = visible.count
 
         if visibleLength < interstitialVisibleTextLimit,
-           let hit = firstPhrase(in: visible) {
+           let hit = firstPhrase(among: wallSpeechPhrases, in: visible) {
             return Finding(
                 reason: hit.reason,
                 phrase: hit.phrase,
@@ -212,7 +239,7 @@ public enum RestrictedContentDetector {
         }
 
         if visibleLength < contentlessVisibleTextLimit,
-           let hit = firstPhrase(in: html) {
+           let hit = firstPhrase(among: phrases, in: html) {
             return Finding(
                 reason: hit.reason,
                 phrase: hit.phrase,
@@ -277,9 +304,12 @@ public enum RestrictedContentDetector {
         }
     }
 
-    private static func firstPhrase(in text: String) -> (phrase: String, reason: String)? {
+    private static func firstPhrase(
+        among candidates: [(phrase: String, reason: String)],
+        in text: String
+    ) -> (phrase: String, reason: String)? {
         let haystack = normalized(text)
-        return phrases.first { haystack.contains($0.phrase) }
+        return candidates.first { haystack.contains($0.phrase) }
     }
 
     /// Case- and diacritic-folded, with every run of whitespace collapsed to one space.
