@@ -4085,13 +4085,16 @@ formality.
       you out.** Against a deployed gateway, with the app signed in and left alone: follow
       `server/README.md`'s "Rotating the Supabase JWT secret with no sign-out" — deploy step 1, then
       rotate the JWT secret in the Supabase dashboard, then deploy step 3. Do not touch the Mac at any
-      point. Expected: the Mac keeps working throughout, with no sign-in prompt and no interruption to
-      a command run at any stage. **What would be a finding:** the app asking you to sign in again at
+      point. **Set the step-1 deadline for the whole rotation, not for the leg you are on** — it is
+      the time by which steps 2 and 3 must both have happened, and a lapse before step 2 signs
+      everyone out. Expected: the Mac keeps working throughout, with no sign-in prompt and no
+      interruption to a command run at any stage. **What would be a finding:** the app asking you to sign in again at
       any of the three steps — which is the exact failure this work exists to remove.
 
 - [ ] **(SONNY-238, waits on SONNY-192)** **The overlap really ends, and only the retired secret ends
       with it.** After the rotation above, leave the gateway running with the retired secret still in
-      `SUPABASE_JWT_SECRET_2` and let its `..._ACCEPTED_UNTIL` instant pass without deploying
+      `SUPABASE_JWT_SECRET_2` and let its `..._ACCEPTED_UNTIL` instant — an ISO-8601 instant carrying
+      an offset, e.g. `2026-09-14T00:00:00Z` — pass without deploying
       anything. Expected: the Mac is still working normally on tokens signed with the *current*
       secret. **What would be a finding:** the app being signed out when that instant passes, which
       would mean the ending is reaching the current secret and not only the retired one. (Set a
@@ -4099,8 +4102,10 @@ formality.
       there is no minimum.)
 
 - [ ] **(SONNY-238, waits on SONNY-192)** **A gateway told to hold a secret it would ignore refuses to
-      start rather than starting quietly.** Deploy with `SUPABASE_JWT_SECRET_3` set to anything, or
-      with `SUPABASE_JWT_SECRET_2` set and no `..._ACCEPTED_UNTIL` beside it. Expected: the container
+      start rather than starting quietly.** Deploy with `SUPABASE_JWT_SECRET_3` set to a **non-empty**
+      value (an empty one is deliberately not a refusal — nobody setting the variable), or with
+      `SUPABASE_JWT_SECRET_2` set and no `..._ACCEPTED_UNTIL` beside it, or with that deadline
+      written without a zone (`2026-09-14T00:00:00`) or as a bare year. Expected: the container
       exits at startup naming the variable, and `/v1/health` never comes up. **What would be a
       finding:** it starting and serving — because an ignored signing secret means every token signed
       with it is refused, which is the sign-out this work removes, arriving silently.

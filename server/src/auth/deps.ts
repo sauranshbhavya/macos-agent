@@ -7,6 +7,7 @@ import {
   requireSupabaseJwtPolicy,
   type Config,
 } from "../config.js";
+import type { SupabaseJwtPolicy } from "./token.js";
 import { pooledConnections } from "../db/pool.js";
 import type { AuthDeps } from "../routes/auth.js";
 import { DEADLINE_MS } from "../model/limits.js";
@@ -140,8 +141,76 @@ export function intendsAuth(config: Config): boolean {
  * report *all* the missing names in one message instead of one per restart, and to distinguish
  * "nothing configured" from "half configured", which no individual `require*` can see.
  */
-export function authWiringFrom(config: Config): AuthWiring | undefined {
+/**
+ * Seams this function has for a test and a caller has no reason to set (SONNY-238; PR #218's F2).
+ *
+ * `now` is threaded rather than read twice so the policy's own deadline check and the warning below
+ * judge the same instant; `warn` exists because this runs **before any logger exists** — `server.ts`
+ * calls it between `loadConfig` and `buildApp`, and `app.log` is `buildApp`'s.
+ */
+export interface AuthWiringOptions {
+  readonly now?: Date;
+  readonly warn?: (message: string) => void;
+}
+
+/**
+ * The default sink: stderr, the same channel `server.ts` writes a refused configuration to.
+ *
+ * A container's stderr is where a startup complaint belongs and is where a founder looking at
+ * `docker logs` will find it. It is deliberately not `app.log`, which does not exist yet on this
+ * path — see `AuthWiringOptions`.
+ */
+function writeToStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+/**
+ * Say so, once, when this deployment holds an overlap secret whose instant has already passed
+ * (SONNY-238; PR #218's F2).
+ *
+ * **This changes no decision and adds no refusal.** The founders' ruling of 2026-08-30 stands
+ * exactly as it was: a deadline already past is *not* a startup failure, because refusing to boot on
+ * leftover bookkeeping would be the sign-out the overlap slot exists to prevent. What was missing was
+ * any signal at all — `git grep -n '\.secrets\b' -- server/src` answers one line, the verifier's own
+ * loop, `/v1/health` publishes status, version and environment, and nothing on the configuration path
+ * logs — so a gateway holding a dead slot was byte-for-byte indistinguishable, from outside and from
+ * the logs, from one holding no slot at all.
+ *
+ * **The direction that makes this worth a line is not the one the records emphasise.** Every sentence
+ * about this deadline explains it as a bound on a *retired* secret. But the runbook's step 1 puts the
+ * **incoming** secret in the slot, and a past instant *there* is not leftover bookkeeping — it is a
+ * typo that disables the secret the rotation is about to depend on, and nothing in the design can
+ * tell the two apart. So the message names both readings rather than assuming one.
+ *
+ * **It names the variable and the instant and never a value.** A deadline is a date, not a secret;
+ * the secret itself is not in scope here and is not read.
+ */
+function reportARetiredOverlapSecret(
+  policy: SupabaseJwtPolicy,
+  now: Date,
+  warn: (message: string) => void,
+): void {
+  const retired = policy.secrets.find(
+    (accepted) =>
+      accepted.acceptedUntil !== undefined && now.getTime() >= accepted.acceptedUntil.getTime(),
+  );
+  if (!retired) return;
+  warn(
+    `SUPABASE_JWT_SECRET_2 is configured and is NOT being accepted: its ` +
+      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL passed at ${retired.acceptedUntil!.toISOString()}. ` +
+      "This is not an error — a deadline in the past ends the overlap, which is what it is for — " +
+      "but it means this gateway is verifying with one secret only. If the rotation is finished, " +
+      "remove both variables. If it has not started, the deadline is a typo and the secret the " +
+      "rotation depends on is not being accepted.",
+  );
+}
+
+export function authWiringFrom(
+  config: Config,
+  options: AuthWiringOptions = {},
+): AuthWiring | undefined {
   if (!intendsAuth(config)) return undefined;
+  const now = options.now ?? new Date();
 
   const missing = [...AUTH_INTENT, ...AUTH_ALSO_REQUIRED]
     .filter(([, read]) => !read(config))
@@ -165,7 +234,8 @@ export function authWiringFrom(config: Config): AuthWiring | undefined {
 
   // Order matters only in that these throw before anything is opened: a refused configuration must
   // not leave a pool behind, and a `ConfigError` raised after `pooledConnections` would.
-  const policy = requireSupabaseJwtPolicy(config);
+  const policy = requireSupabaseJwtPolicy(config, now);
+  reportARetiredOverlapSecret(policy, now, options.warn ?? writeToStderr);
   const { anonKey, serviceRoleKey } = requireSupabaseAuthCredentials(config);
   requireRateLimitSalt(config);
   // The presence sweep above says the key is *there*; this says it parses as an Ed25519 PKCS#8 key.

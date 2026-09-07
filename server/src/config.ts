@@ -728,11 +728,23 @@ export function parseTrustedProxies(raw: string): boolean | string[] {
 /**
  * The one overlap slot this gateway reads, and every other numbered spelling of it.
  *
- * `SUPABASE_JWT_SECRET` and `SUPABASE_JWT_SECRET_2` are read; `SUPABASE_JWT_SECRET_1`, `_3` and
- * anything else numbered are read by nothing.
+ * `SUPABASE_JWT_SECRET` and `SUPABASE_JWT_SECRET_2` are read; `SUPABASE_JWT_SECRET_1`, `_3`, the
+ * zero-padded `_02` and anything else numbered are read by nothing. **The padded spellings are the
+ * point of the comparison being textual** — see `READ_JWT_SECRET_SLOT` below.
  */
 const JWT_SECRET_SLOT = /^SUPABASE_JWT_SECRET_(\d+)$/;
-const READ_JWT_SECRET_SLOT = 2;
+/**
+ * The slot suffix this gateway reads, **as text**.
+ *
+ * A string rather than a number, and compared with `!==` against the captured text rather than
+ * through `Number()` (PR #218's F1). `Number("02") === 2`, so a numeric comparison read
+ * `SUPABASE_JWT_SECRET_02` and `_002` as "the slot we read" and let them past the guard — while the
+ * Zod schema reads the literal name and nothing else. The variable was then set, unread and
+ * unreported: exactly the state the refusal below says it exists to prevent, reached through the
+ * guard written to prevent it. Zero-padding an environment variable's index is an ordinary thing to
+ * do in a compose file or a systemd unit, and nothing about the name looks wrong.
+ */
+const READ_JWT_SECRET_SLOT = "2";
 
 /**
  * Refuse a numbered `SUPABASE_JWT_SECRET_<n>` this gateway does not read, rather than ignoring it
@@ -759,7 +771,8 @@ function refuseUnreadJwtSecretSlots(env: NodeJS.ProcessEnv): void {
       if (!match) return false;
       // An empty or whitespace-only value is nobody setting the slot, which is not a misconfiguration.
       if (!env[name]?.trim()) return false;
-      return Number(match[1]) !== READ_JWT_SECRET_SLOT;
+      // The captured TEXT, never its numeric value: `Number("02") === 2` and `"02" !== "2"`.
+      return match[1] !== READ_JWT_SECRET_SLOT;
     })
     .map(([name]) => name)
     .sort();
@@ -1237,18 +1250,7 @@ function overlapSecret(config: Config, now: Date): readonly AcceptedJwtSecret[] 
     );
   }
 
-  // A bare `new Date(s)` accepts a great deal that is not an instant — `new Date("2026")` is a year,
-  // and anything unparseable is an Invalid Date whose every comparison is false, so an unchecked one
-  // would read as "not yet reached" forever. Both are refused here, with the value, because a date is
-  // not a secret and a deadline nobody can see is a deadline nobody can fix.
-  const acceptedUntil = new Date(until);
-  if (Number.isNaN(acceptedUntil.getTime())) {
-    throw new ConfigError(
-      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL must be an ISO-8601 instant, e.g. 2026-09-14T00:00:00Z ` +
-        `— got ${JSON.stringify(until)}, which is not a date. It decides when the previous secret ` +
-        "stops being accepted, so an unreadable one would leave the overlap with no end.",
-    );
-  }
+  const acceptedUntil = parseOverlapDeadline(until);
 
   // **The stated maximum, made mechanical** (founder decision of 2026-08-30; the founders left the
   // number and whether anything checks it to whoever built this). The overlap only has to outlive the
@@ -1278,6 +1280,97 @@ function overlapSecret(config: Config, now: Date): readonly AcceptedJwtSecret[] 
   // turn leftover bookkeeping into every user being signed out, the exact failure this slot exists to
   // avoid, and it would buy nothing: a secret past its instant authorises nothing here.
   return [{ value, acceptedUntil }];
+}
+
+/**
+ * An ISO-8601 instant **carrying an offset**, in the extended format, and nothing else.
+ *
+ * `Z` or `±HH:MM` is required rather than optional, which is the whole point of having a pattern
+ * here at all. The three groups are the calendar date, checked below for a rollover the parser would
+ * otherwise absorb.
+ */
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * The overlap's end, or a startup failure naming the value (SONNY-238; PR #218's F3).
+ *
+ * **`new Date(until)` alone accepted three spellings the refusal message promised it refused**, and
+ * the message is the one an operator reads. `new Date("2026")` is the first instant of that year, so
+ * a bare year in the past booted clean with the slot never accepted — an overlap dead on arrival.
+ * `new Date("Sep 8 2026")` parsed, and is not an ISO-8601 instant by any reading. Worst of the three,
+ * a **zone-less** spelling like `2026-09-08T00:00:00` is read in the *process's* local zone, so the
+ * same string means a different instant on a host west of UTC than east of it — silently moving the
+ * end of a second signing key's life by up to fourteen hours, on the one variable whose entire job is
+ * to bound exactly that. A shape check is what makes the message true, and a false statement about
+ * what a security boundary refuses is the class this repository keeps re-recording.
+ *
+ * **The calendar check is not the shape check and closes a fourth spelling.** ECMAScript's own ISO
+ * parser absorbs a day-of-month overflow rather than rejecting it: `new Date("2026-02-30T00:00:00Z")`
+ * is `2026-03-02`. The pattern above cannot see that — `30` is two digits — so the written fields are
+ * compared against what the parser produced. Same family as the zone-less case: the operator wrote
+ * one instant and the bound became another, with nothing saying so.
+ *
+ * **The value is reported and that is deliberate.** A deadline is not a secret — it is a date — and
+ * a refusal that will not say what it read is one nobody can act on. Every message on this path that
+ * touches a *secret* reports a length or a name and never a value; this one is the exception because
+ * the thing it is about is public.
+ */
+function parseOverlapDeadline(until: string): Date {
+  const shape = ISO_INSTANT.exec(until);
+  if (!shape) {
+    throw new ConfigError(
+      "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL must be an ISO-8601 instant carrying an offset, e.g. " +
+        `2026-09-14T00:00:00Z or 2026-09-14T00:00:00-04:00 — got ${JSON.stringify(until)}. A bare ` +
+        "year, a date with no time, or a time with no zone are all refused: this decides when a " +
+        "second key that can mint a token for any user stops being accepted, and a spelling with no " +
+        "zone would be read in whatever zone the container happens to run in.",
+    );
+  }
+  const acceptedUntil = new Date(until);
+  if (Number.isNaN(acceptedUntil.getTime())) {
+    throw new ConfigError(
+      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL is shaped like an instant but is not one — got ` +
+        `${JSON.stringify(until)}, which names no moment in time. An unreadable deadline would ` +
+        "leave the overlap with no end, because every comparison against it is false.",
+    );
+  }
+  // **The written digits against the parsed fields, and `Date.UTC` is deliberately not on either
+  // side.** It normalises exactly the way the parser does, so building a `Date` from the written
+  // fields and comparing the two rolls both and reports agreement — which is what the first version
+  // of this check did, and it accepted `2026-02-30T00:00:00Z` while claiming to refuse it. The
+  // offset is undone first so that what is compared is the calendar date as written, whatever zone
+  // it was written in.
+  const [, year, month, day] = shape as unknown as [string, string, string, string];
+  const asWritten = new Date(acceptedUntil.getTime() + offsetMillis(until));
+  if (
+    asWritten.getUTCFullYear() !== Number(year) ||
+    asWritten.getUTCMonth() !== Number(month) - 1 ||
+    asWritten.getUTCDate() !== Number(day)
+  ) {
+    throw new ConfigError(
+      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL names a date that does not exist — got ` +
+        `${JSON.stringify(until)}, which reads as ${acceptedUntil.toISOString()}. A day past the ` +
+        "end of its month is rolled forward rather than refused by the date parser, so the bound " +
+        "would silently be a different one from the bound you wrote.",
+    );
+  }
+  return acceptedUntil;
+}
+
+/**
+ * The offset a shape-checked instant declares, in milliseconds — `Z` is zero.
+ *
+ * Used only to recover the calendar date *as written* so it can be compared with the digits the
+ * operator typed. Nothing else reads it: the instant itself is already absolute, and the sign is the
+ * one this returns rather than the one applied to it — `2026-09-14T00:00:00-04:00` is the instant
+ * `04:00Z`, so adding the declared offset back gets to `00:00` on the written day.
+ */
+function offsetMillis(until: string): number {
+  if (until.endsWith("Z")) return 0;
+  const sign = until.slice(-6, -5) === "-" ? -1 : 1;
+  const hours = Number(until.slice(-5, -3));
+  const minutes = Number(until.slice(-2));
+  return sign * (hours * 60 + minutes) * 60 * 1000;
 }
 
 /** The current secret, read the one way `requireSupabaseJwtPolicy` has already proved is present. */

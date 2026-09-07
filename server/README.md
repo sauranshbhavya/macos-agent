@@ -552,7 +552,7 @@ rather than at request time:
 |---|---|
 | `SUPABASE_JWT_SECRET` | The project's JWT Secret. **Gateway-only** — never in the app, never in this repo. Refused under 32 characters. |
 | `SUPABASE_JWT_SECRET_2` | The one overlap slot, set only during a rotation (SONNY-238). Same floor, same gateway-only rule. Any other numbered spelling — `_1`, `_3` — is a startup refusal rather than a silently ignored variable. |
-| `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` | When the slot above stops being accepted. ISO-8601, required whenever that slot is set, refused more than `MAX_JWT_SECRET_OVERLAP_DAYS` away. Not a secret. |
+| `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` | When the slot above stops being accepted. An **ISO-8601 instant carrying an offset** (`2026-09-14T00:00:00Z`, `2026-09-14T00:00:00-04:00`); a bare year, a date with no time and a zone-less time are refused with the value. Required whenever that slot is set, refused more than `MAX_JWT_SECRET_OVERLAP_DAYS` away. Not a secret. |
 | `SUPABASE_JWT_ISSUER` | The project's auth URL, compared exactly against each token's `iss`. |
 | `SUPABASE_JWT_AUDIENCE` | Defaults to Supabase's own `authenticated`. |
 
@@ -943,6 +943,20 @@ forgotten" is indistinguishable from never having rotated at all — and that a 
 better than nothing and worse than a check. So:
 
 - `SUPABASE_JWT_SECRET_2` **requires** a deadline. Startup refuses the slot without one.
+- **The deadline you set at step 1 is the deadline for doing step 2 *and* step 3 — set it for the
+  whole rotation, not for the leg you are on.** This is the one thing about the variable that reads
+  backwards, because every other sentence here explains it as a bound on a *retired* secret, and at
+  step 1 the slot holds the **incoming** one. If it lapses before step 2, the gateway quietly goes
+  back to accepting `old` alone; you then rotate in the dashboard, every token Supabase mints from
+  that moment is refused, and every user is signed out within one token lifetime until step 3 is
+  deployed — this ticket's own failure mode, produced by following this runbook. The manual-test row
+  that suggests a deadline "a few minutes out" is testing the *ending*, not rehearsing a rotation.
+- **An ISO-8601 instant carrying an offset**, and startup refuses anything else with the value:
+  `2026-09-14T00:00:00Z` or `2026-09-14T00:00:00-04:00`. A bare year, a date with no time, and a time
+  with no zone are all refused — a zone-less spelling would be read in whatever zone the container
+  happens to run in, which moves the end of a second signing key's life by the host's offset. A
+  day-of-month past the end of its month is refused too, rather than rolled forward the way the date
+  parser would.
 - The deadline may be at most `MAX_JWT_SECRET_OVERLAP_DAYS` (**7**) away. Startup refuses one further
   out, naming the maximum. Seven because the overlap only has to outlive the longest-lived token
   signed with the retiring secret — Supabase's default access-token lifetime is an hour, plus the
@@ -955,6 +969,10 @@ better than nothing and worse than a check. So:
 - A deadline **already past is not a startup failure**. It means the overlap is over. Refusing to boot
   on leftover bookkeeping would turn it into every user being signed out — the exact failure this slot
   exists to prevent — and would buy nothing, because a secret past its instant authorises nothing here.
+  **It is not silent either**: the gateway writes one line to stderr at startup naming the variable and
+  the instant that passed, saying that it is verifying with one secret only, and that the state means
+  either a finished rotation to clean up or a typo in a deadline the rotation is about to depend on.
+  The line names no secret value.
 
 **What that does not prevent, said rather than implied:** the bound is on the *remaining* overlap at
 each startup, because this gateway does not know when the rotation began. An operator redeploying

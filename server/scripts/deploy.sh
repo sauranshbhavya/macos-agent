@@ -166,8 +166,8 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 PASSTHROUGH=(
   SUPABASE_JWT_SECRET
   # SONNY-238's two, forwarded on this list's own rule -- what `src/config.ts` reads, not what is
-  # sensitive. Both are unset except while a rotation is in flight, and `add_env` below skips an
-  # unset name, so an ordinary container is unchanged. Without them here a rotation could not be
+  # sensitive. Both are unset except while a rotation is in flight, and `collect_passthrough` below
+  # skips an unset name, so an ordinary container is unchanged. Without them here a rotation could not be
   # exercised against `deploy.sh local` at all, which is the one place the three deploys can be
   # walked before a host exists.
   SUPABASE_JWT_SECRET_2
