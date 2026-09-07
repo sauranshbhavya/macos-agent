@@ -87,6 +87,43 @@ entitlement_key="$(openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null |
 check "an entitlement signing key is refused" 1 "ENTITLEMENT_SIGNING_KEY=${entitlement_key}"
 check "its lowercase YAML spelling is refused" 1 "  entitlement_signing_key: \"${entitlement_key}\""
 check "the key ID beside it is not a secret"  0 "ENTITLEMENT_SIGNING_KEY_ID=entitlement-2026-08-28-a"
+# SONNY-238: the JWT secret's one overlap slot. `SUPABASE_JWT_SECRET_2` holds a real project secret
+# during a rotation -- the whole point is that both values are live at once -- and the bare name on
+# that list could not catch it, because after `SUPABASE_JWT_SECRET` the pattern wants `[=:]` and
+# finds `_`. Measured blind before the suffix was added and caught after. Three directions, because
+# the widening is the kind that can take too much with it: the slot is refused, its lowercase YAML
+# spelling is refused, and the DEADLINE beside it -- a date, and the one thing an operator must be
+# able to write down -- is not a secret. That last arm is what a blanket `_[0-9]+` or a trailing
+# `.*` would break, along with the ENTITLEMENT_SIGNING_KEY_ID arm directly above.
+jwt_secret_2="$(openssl rand -hex 24 2>/dev/null)"
+[[ -n "$jwt_secret_2" ]] || jwt_secret_2="$(printf 'j%.0s' {1..48})"
+check "the JWT secret's overlap slot is refused"  1 "SUPABASE_JWT_SECRET_2=${jwt_secret_2}"
+# PR #218's F1, on the scanner's side of it. The gateway reads only the literal `_2` and refuses
+# every other numbered spelling at startup -- but a secret committed under `_02` is a leak whether or
+# not any code reads that name, and nothing else in this file would catch it: a Supabase project
+# secret carries no vendor prefix, no JWT shape and no PEM header. So the anchor is `_[0-9]+`, wider
+# than the reader on purpose, and these are the spellings that proves it on.
+check "a zero-padded overlap slot is refused"     1 "SUPABASE_JWT_SECRET_02=${jwt_secret_2}"
+check "a doubly-padded one is refused"            1 "SUPABASE_JWT_SECRET_002=${jwt_secret_2}"
+check "a two-digit slot nothing reads is refused" 1 "SUPABASE_JWT_SECRET_10=${jwt_secret_2}"
+# Named distinctly rather than reusing the "its lowercase YAML spelling" wording three arms above
+# use: this file reports by name, and four identical names make a failure line say which secret only
+# by counting.
+check "the overlap slot's YAML spelling is refused" 1 "  supabase_jwt_secret_2: \"${jwt_secret_2}\""
+check "the overlap deadline beside it is not a secret" 0 "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL=2026-09-14T00:00:00Z"
+# **The arm above passes under a WIDER pattern too, and this one does not** -- found by mutating the
+# scanner and running this file against it. Replacing the suffix with `.*` leaves all the other arms
+# green, because an extended-format instant carries colons and its longest run of value-class
+# characters is `2026-09-14T00`, thirteen, under the sixteen the pattern needs. The BASIC ISO format
+# has no separators at all: `20260914T000000Z` is sixteen, so `.*` reaches past the name and reports
+# a date as a credential. That is the whole difference between the shipped pattern and the
+# over-general one, and without this line the selftest could not tell them apart -- exactly the
+# shared-marker shape `CLAUDE.md` warns about, arriving as a fixture that could not reach the
+# property. **It still separates them after PR #218 widened the suffix to `_[0-9]+`**: digits cannot
+# reach past the `_` that follows them, and `.*` can. (`requireSupabaseJwtPolicy` refuses this
+# spelling separately, now by a shape check rather than by the date parser -- a different mechanism
+# and not this one's job. A scanner that flags a date teaches people to baseline the scanner.)
+check "a basic-format deadline is not a secret either" 0 "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL=20260914T000000Z"
 # SONNY-211: the webhook endpoint secret. The second name on that list whose leak is a WRITE --
 # whoever holds it can sign a `subscription.active` delivery for any account, against a route that
 # has to be reachable by anyone on the internet. An opaque provider-issued string with no vendor

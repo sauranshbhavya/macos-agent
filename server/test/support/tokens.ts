@@ -14,8 +14,19 @@ import type { SupabaseJwtPolicy } from "../../src/auth/token.js";
  * `MIN_JWT_SECRET_LENGTH` — a test that had to work around the floor would be a test that stopped
  * proving the floor exists.
  */
+export const TEST_JWT_SECRET = "sonny-gateway-test-signing-key-not-a-real-one";
+
+/**
+ * The secret an overlap deploy would put in `SUPABASE_JWT_SECRET_2` (SONNY-238).
+ *
+ * Kept beside the one above rather than written inline where it is used, so that "signed with the
+ * other accepted secret" and "signed with a secret this gateway has never heard of" are two named
+ * constants a test picks between rather than two string literals a reader has to compare.
+ */
+export const TEST_JWT_OVERLAP_SECRET = "sonny-gateway-test-overlap-key-not-a-real-one";
+
 export const TEST_JWT_POLICY: SupabaseJwtPolicy = {
-  secret: "sonny-gateway-test-signing-key-not-a-real-one",
+  secrets: [{ value: TEST_JWT_SECRET, acceptedUntil: undefined }],
   issuer: "https://project-ref.supabase.co/auth/v1",
   audience: "authenticated",
 };
@@ -38,7 +49,11 @@ export const TEST_JWT_POLICY: SupabaseJwtPolicy = {
  * a `Config` at all.
  */
 export const TEST_SUPABASE_CONFIG = {
-  supabaseJwtSecret: TEST_JWT_POLICY.secret,
+  supabaseJwtSecret: TEST_JWT_SECRET,
+  // No rotation in flight, which is the ordinary shape and the one every suite but `config.test.ts`
+  // should be describing. A test about the overlap builds its own `Config` rather than moving these.
+  supabaseJwtSecret2: undefined,
+  supabaseJwtSecret2AcceptedUntil: undefined,
   supabaseJwtIssuer: TEST_JWT_POLICY.issuer,
   supabaseJwtAudience: TEST_JWT_POLICY.audience,
   supabaseAnonKey: undefined,
@@ -53,7 +68,7 @@ export function base64url(value: string): string {
 export function signToken(
   header: Record<string, unknown>,
   claims: Record<string, unknown>,
-  secret: string = TEST_JWT_POLICY.secret,
+  secret: string = TEST_JWT_SECRET,
 ): string {
   const encodedHeader = base64url(JSON.stringify(header));
   const encodedClaims = base64url(JSON.stringify(claims));
@@ -130,7 +145,7 @@ export function tokenWithClaims(
   return signToken(
     options.header ?? { alg: "HS256", typ: "JWT" },
     claims,
-    options.secret ?? TEST_JWT_POLICY.secret,
+    options.secret ?? TEST_JWT_SECRET,
   );
 }
 

@@ -114,7 +114,29 @@ PATTERNS_CI=(
   # and cancel button -- without touching this gateway. Opaque and vendor-prefixless like the two
   # above, so again only the name can catch it. `BILLING_API_BASE_URL` beside it is deliberately NOT
   # here, for the reason the checkout link is not: an API origin is a hostname, not a credential.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|BILLING_PROVIDER_ACCESS_TOKEN|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  # `SUPABASE_JWT_SECRET(_[0-9]+)?` is SONNY-238's widening. That ticket gives the JWT secret a single
+  # overlap slot -- `SUPABASE_JWT_SECRET_2` -- so a rotation is three deploys instead of every user
+  # being signed out; the slot holds a real project secret and the bare name anchored here could not
+  # catch it, because after `SUPABASE_JWT_SECRET` the pattern wants `[=:]` and finds `_`.
+  #
+  # **`_[0-9]+` rather than `_2`, and the two are not interchangeable** (PR #218's F1). This shipped
+  # as `(_2)?` on the reasoning that a narrow suffix is safer, and narrow was the wrong axis: the
+  # gateway reads only `_2`, but the SCANNER's question is not "does this deployment read it", it is
+  # "is a credential-shaped value sitting in this repository under a credential-shaped name". A real
+  # project secret committed as `SUPABASE_JWT_SECRET_02` is a leak whether or not any code reads that
+  # name, and nothing else here would catch it -- `PATTERNS` above is vendor prefixes, a JWT shape, a
+  # PEM header and a Postgres URL, and a Supabase project secret has none of those shapes. So the
+  # scanner is deliberately WIDER than `config.ts`'s reader, which refuses every numbered spelling it
+  # does not read.
+  #
+  # **What the widening still must not take with it, which is why it is `_[0-9]+` and not `.*`**: the
+  # deadline beside the slot, `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, is a date an operator has to be
+  # able to write down. `_[0-9]+` cannot reach it -- after the digits the pattern wants `[=:]` and
+  # finds `_`, and dropping the group leaves `_` in the same position -- while `.*` reaches straight
+  # past the name and flags a basic-format instant, which is exactly sixteen value-class characters.
+  # The `ENTITLEMENT_SIGNING_KEY_ID` case three lines above is the same shape and the same hazard.
+  # Every one of those directions has its own selftest arm.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET(_[0-9]+)?|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|BILLING_PROVIDER_ACCESS_TOKEN|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the

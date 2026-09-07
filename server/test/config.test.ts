@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
+  MAX_JWT_SECRET_OVERLAP_DAYS,
   MIN_JWT_SECRET_LENGTH,
   acceptedKeys,
   activeKey,
@@ -16,7 +17,22 @@ const base = { SONNY_ENV: "local" } as NodeJS.ProcessEnv;
 // known-secret variable followed by a long literal -- which is the shape `npm run check:secrets`
 // refuses, correctly, wherever it appears.
 const secret = "a-signing-key-long-enough-to-clear-the-floor";
+const overlapSecret = "the-other-signing-key-also-past-the-floor";
 const issuer = "https://project-ref.supabase.co/auth/v1";
+
+/** A fixed instant, so every deadline in the overlap tests is a fixed distance from a fixed now. */
+const NOW = new Date("2026-09-07T12:00:00.000Z");
+const daysFromNow = (days: number): string =>
+  new Date(NOW.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+
+/** The environment of a deployment mid-rotation, before whichever field a test is about is changed. */
+const rotating = {
+  ...base,
+  SUPABASE_JWT_SECRET: secret,
+  SUPABASE_JWT_ISSUER: issuer,
+  SUPABASE_JWT_SECRET_2: overlapSecret,
+  SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(1),
+} as NodeJS.ProcessEnv;
 
 describe("configuration", () => {
   it("refuses to start on an unknown environment rather than guessing one", () => {
@@ -120,8 +136,11 @@ describe("provider credentials — two live keys per provider", () => {
       expect(config.supabaseJwtSecret).toBe(secret);
       expect(config.supabaseJwtIssuer).toBe(issuer);
       expect(config.supabaseJwtAudience).toBe("authenticated");
-      expect(requireSupabaseJwtPolicy(config))
-        .toEqual({ secret, issuer, audience: "authenticated" });
+      expect(requireSupabaseJwtPolicy(config)).toEqual({
+        secrets: [{ value: secret, acceptedUntil: undefined }],
+        issuer,
+        audience: "authenticated",
+      });
     });
 
     it("takes a non-default audience when the project uses one", () => {
@@ -175,7 +194,7 @@ describe("provider credentials — two live keys per provider", () => {
       )).toThrow(ConfigError);
       expect(requireSupabaseJwtPolicy(
         loadConfig({ ...base, SUPABASE_JWT_SECRET: floor, SUPABASE_JWT_ISSUER: issuer }),
-      ).secret).toBe(floor);
+      ).secrets[0]!.value).toBe(floor);
     });
 
     it("refuses an issuer that is not a URL, and says so with the value", () => {
@@ -206,6 +225,283 @@ describe("provider credentials — two live keys per provider", () => {
         expect(() => loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_AUDIENCE: blank }))
           .toThrow(ConfigError);
       }
+    });
+  });
+
+  describe("rotating the JWT secret with an overlap (SONNY-238)", () => {
+    // **What this is for.** A Supabase access token is verified locally against
+    // `SUPABASE_JWT_SECRET`, so replacing that value used to invalidate every token signed with the
+    // old one at the instant the new one deployed -- every signed-in user signed out, with no
+    // overlap. One slot fixes that, and the whole risk of the fix is that the slot is a second key
+    // able to mint a token for any user. So the tests below come in two halves: the rotation works,
+    // and the slot cannot be a permanent second key.
+
+    it("walks the three deploys of a rotation, with a usable secret at every one", () => {
+      // The mirror of the provider-credential walk above, and the direction is opposite: a provider
+      // key is one this gateway SENDS, so that list is "what to try", while this is one Supabase
+      // signs with and this gateway only verifies, so this list is "what to accept". The overlap
+      // therefore has to straddle the moment Supabase's own value changes -- which is why the slot
+      // holds the INCOMING secret at step 1 and the RETIRING one at step 2.
+      const incoming = overlapSecret;
+      const steps: readonly (readonly [string, NodeJS.ProcessEnv])[] = [
+        ["1 — accept the incoming secret before Supabase signs with it", {
+          ...base, SUPABASE_JWT_ISSUER: issuer,
+          SUPABASE_JWT_SECRET: secret,
+          SUPABASE_JWT_SECRET_2: incoming,
+          SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(2),
+        }],
+        ["2 — Supabase has switched; keep accepting the retiring one", {
+          ...base, SUPABASE_JWT_ISSUER: issuer,
+          SUPABASE_JWT_SECRET: incoming,
+          SUPABASE_JWT_SECRET_2: secret,
+          SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(2),
+        }],
+        ["3 — the overlap is removed", {
+          ...base, SUPABASE_JWT_ISSUER: issuer,
+          SUPABASE_JWT_SECRET: incoming,
+        }],
+      ];
+
+      const accepted = steps.map(([, env]) =>
+        requireSupabaseJwtPolicy(loadConfig(env), NOW).secrets.map((entry) => entry.value));
+
+      // Step 1 accepts both, so no token minted before the switch is refused.
+      expect(accepted[0]).toEqual([secret, incoming]);
+      // Step 2 accepts both, so no token minted before the switch is refused HERE either -- which is
+      // the deploy the whole overlap exists for.
+      expect(accepted[1]).toEqual([incoming, secret]);
+      // Step 3 has retired it, and only then.
+      expect(accepted[2]).toEqual([incoming]);
+      // Every step has a usable secret, which is the property the three-deploy shape buys.
+      for (const values of accepted) expect(values.length).toBeGreaterThan(0);
+    });
+
+    it("gives the overlap slot an end and the current secret none", () => {
+      // The asymmetry is the whole mechanism: an end on the current secret would be a date after
+      // which this gateway refuses every token, which is the outage an overlap exists to prevent.
+      const policy = requireSupabaseJwtPolicy(loadConfig(rotating), NOW);
+      expect(policy.secrets).toHaveLength(2);
+      expect(policy.secrets[0]).toEqual({ value: secret, acceptedUntil: undefined });
+      expect(policy.secrets[1]!.value).toBe(overlapSecret);
+      expect(policy.secrets[1]!.acceptedUntil).toEqual(new Date(daysFromNow(1)));
+    });
+
+    it("refuses an overlap secret with no end, because that is a permanent second key", () => {
+      // The founders decided on 2026-08-30 that a retired secret gets a stated maximum overlap, on
+      // the ground that "left in the environment and forgotten" is indistinguishable from never
+      // having rotated. An unbounded slot is exactly that state.
+      const { SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: _drop, ...noDeadline } = rotating;
+      expect(() => requireSupabaseJwtPolicy(loadConfig(noDeadline), NOW)).toThrow(ConfigError);
+      expect(() => requireSupabaseJwtPolicy(loadConfig(noDeadline), NOW))
+        .toThrow(/SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL/);
+    });
+
+    it("refuses a deadline that names no secret, and says which half is missing", () => {
+      // A half-applied rotation deploy is how one of these arrives alone, and which half is missing
+      // decides what the operator does next -- so the two messages are different rather than one
+      // message saying "one of these is wrong".
+      const { SUPABASE_JWT_SECRET_2: _drop, ...noSecret } = rotating;
+      expect(() => requireSupabaseJwtPolicy(loadConfig(noSecret), NOW)).toThrow(ConfigError);
+      expect(() => requireSupabaseJwtPolicy(loadConfig(noSecret), NOW))
+        .toThrow(/SUPABASE_JWT_SECRET_2 is not/);
+    });
+
+    it("refuses a deadline further away than the stated maximum, and never echoes the secret", () => {
+      const tooFar = {
+        ...rotating,
+        SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(MAX_JWT_SECRET_OVERLAP_DAYS + 1),
+      };
+      try {
+        requireSupabaseJwtPolicy(loadConfig(tooFar), NOW);
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).toContain(String(MAX_JWT_SECRET_OVERLAP_DAYS));
+        // A date is not a secret and is reported; the secrets are not.
+        expect(message).not.toContain(overlapSecret);
+        expect(message).not.toContain(secret);
+      }
+      // The boundary itself is accepted, so the maximum is a maximum rather than an exclusive bound.
+      const atTheLimit = {
+        ...rotating,
+        SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(MAX_JWT_SECRET_OVERLAP_DAYS),
+      };
+      expect(requireSupabaseJwtPolicy(loadConfig(atTheLimit), NOW).secrets).toHaveLength(2);
+    });
+
+    it("keeps a deadline already past rather than refusing to start on it", () => {
+      // **The direction here is deliberate and is the opposite of the one above.** Refusing to boot
+      // on leftover bookkeeping would turn it into every user being signed out -- the exact failure
+      // this slot exists to avoid -- and it would buy nothing, because a secret past its instant
+      // authorises nothing: `verifyAccessToken` skips it. `token.test.ts` is where that is asserted.
+      const finished = { ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(-1) };
+      const policy = requireSupabaseJwtPolicy(loadConfig(finished), NOW);
+      expect(policy.secrets).toHaveLength(2);
+      expect(policy.secrets[1]!.acceptedUntil!.getTime()).toBeLessThan(NOW.getTime());
+    });
+
+    it("accepts only an ISO-8601 instant carrying an offset, and refuses the rest with the value", () => {
+      // **Three of these were accepted and the refusal message said they were not** (PR #218's F3).
+      // `new Date("2026")` is the first instant of that year, so a bare year in the past booted clean
+      // with the slot never accepted -- an overlap dead on arrival. `Sep 8 2026` parsed. Worst of the
+      // three, a ZONE-LESS spelling is read in the process's local zone, so the same string means a
+      // different instant on a host west of UTC than east of it, moving the end of a second signing
+      // key's life by the host's offset -- on the one variable whose whole job is to bound that.
+      for (const bad of [
+        "2026",                     // a bare year: accepted before, as 1 January
+        "2026-09-08T00:00:00",      // zone-less: read in whatever zone the container runs in
+        "Sep 8 2026",               // not ISO-8601 by any reading, and parsed before
+        "2026-09-08",               // a date with no time
+        "20260908T000000Z",         // basic format, which the date parser rejects anyway
+        "nonsense", "next tuesday", "14/09/2026",
+      ]) {
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
+        ), bad).toThrow(/must be an ISO-8601 instant carrying an offset/);
+        // The value IS reported, unlike a secret: a deadline is a date, and one nobody can see is
+        // one nobody can fix.
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
+        ), bad).toThrow(new RegExp(bad.replace(/[/\\]/g, "\\$&")));
+      }
+
+      // **The accepted forms, which are what every example in `.env.example`, the README table and
+      // the runbook now spell.** Without these the refusals above would pass just as well from a
+      // parser that refused everything.
+      const accepted: readonly (readonly [string, string])[] = [
+        ["2026-09-08T00:00:00Z", "2026-09-08T00:00:00.000Z"],
+        ["2026-09-08T00:00:00-04:00", "2026-09-08T04:00:00.000Z"],
+        ["2026-09-08T00:00:00+05:30", "2026-09-07T18:30:00.000Z"],
+        ["2026-09-08T00:00:00.500Z", "2026-09-08T00:00:00.500Z"],
+      ];
+      for (const [written, instant] of accepted) {
+        const policy = requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: written }), NOW,
+        );
+        expect(policy.secrets[1]!.acceptedUntil!.toISOString(), written).toBe(instant);
+      }
+    });
+
+    it("refuses a spelling that is shaped like an instant and names no moment", () => {
+      // **The gap the shape check opened, found by its own battery** (PR #218, round 1's R8). Before
+      // the shape check, everything unparseable reached the `NaN` branch and a test driving
+      // `"nonsense"` covered it. Afterwards the shape check refuses all of those first, so the `NaN`
+      // branch is reachable only by a spelling that is well-formed and still names no moment — a
+      // month of 13, an hour of 25 — and nothing drove one. The mutant neutralising that branch
+      // survived the whole suite. It is the branch that matters most if it ever goes: an Invalid
+      // Date compares false against everything, so an unchecked one reads as "not yet reached"
+      // forever, which is an overlap with no end.
+      for (const bad of ["2026-13-01T00:00:00Z", "2026-09-08T25:00:00Z", "2026-00-01T00:00:00Z"]) {
+        // Shape-valid, so this is the second message and not the first — asserted by wording,
+        // because a test that only checks `ConfigError` cannot tell the two refusals apart and a
+        // mutant that swaps one for the other would pass.
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
+        ), bad).toThrow(/is shaped like an instant but is not one/);
+      }
+      // The control: a spelling that is NOT shaped like an instant reaches the first message
+      // instead, so the two branches are distinguished rather than merely both throwing.
+      expect(() => requireSupabaseJwtPolicy(
+        loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: "nonsense" }), NOW,
+      )).toThrow(/must be an ISO-8601 instant carrying an offset/);
+    });
+
+    it("refuses a day past the end of its month rather than rolling it forward", () => {
+      // ECMAScript's own ISO parser absorbs a day-of-month overflow: `new Date("2026-02-30T00:00:00Z")`
+      // is 2 March. The shape check cannot see it -- `30` is two digits -- so the written digits are
+      // compared against the parsed fields. Same family as the zone-less case above: the operator
+      // wrote one instant and the bound became another, with nothing saying so.
+      for (const bad of ["2026-02-30T00:00:00Z", "2026-02-30T00:00:00+05:30", "2026-04-31T00:00:00Z"]) {
+        // By wording, not merely by type: these are shape-valid and parseable, so `ConfigError`
+        // alone cannot tell this refusal from the two above it.
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
+        ), bad).toThrow(/names a date that does not exist/);
+      }
+      // The controls: the last real day of each of those months is accepted, so the check is about
+      // the overflow and not about February or about a `30`.
+      for (const good of ["2026-02-28T00:00:00Z", "2026-04-30T00:00:00Z", "2026-03-30T00:00:00Z"]) {
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: good }), NOW,
+        ), good).not.toThrow();
+      }
+      // And an offset that carries the instant into the NEXT UTC day is still the written day, so
+      // the comparison is against what was typed rather than against the UTC reading of it.
+      expect(requireSupabaseJwtPolicy(
+        loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: "2026-09-08T23:00:00-04:00" }),
+        NOW,
+      ).secrets[1]!.acceptedUntil!.toISOString()).toBe("2026-09-09T03:00:00.000Z");
+    });
+
+    it("refuses the same value in both slots, which reads as an overlap and is not one", () => {
+      expect(() => requireSupabaseJwtPolicy(
+        loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2: secret }), NOW,
+      )).toThrow(ConfigError);
+    });
+
+    it("holds the overlap secret to the same length floor as the current one", () => {
+      // The ticket's own words: a rotation that quietly relaxed a check for the second key would be
+      // worse than the sign-out it avoids. The floor is the check a second slot could most easily
+      // have skipped, because nothing else in the file would have noticed.
+      const short = "0123456789abcdef";
+      try {
+        requireSupabaseJwtPolicy(loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2: short }), NOW);
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).toContain("SUPABASE_JWT_SECRET_2");
+        expect(message).toContain(String(MIN_JWT_SECRET_LENGTH));
+        expect(message).not.toContain(short);
+      }
+    });
+
+    it("refuses a numbered slot nothing reads, rather than ignoring it", () => {
+      // **Where this departs from `providerCredentials` above, and why.** That function stops at the
+      // first gap in silence, and a skipped provider key costs a credential to try. A skipped
+      // VERIFYING secret means every token signed with it is refused -- the sign-out this whole
+      // feature exists to prevent, reached through the fix for it, and reached silently.
+      // **`_02` and `_002` are in this loop because they were not, and passed** (PR #218's F1). The
+      // guard compared `Number(match[1])` to the slot number, and `Number("02") === 2`, so a
+      // zero-padded spelling read as "the slot we read" while the Zod schema reads the literal name
+      // and nothing else: set, unread, and unreported. Zero-padding an index is an ordinary thing to
+      // write in a compose file, and the comparison is textual now.
+      for (const name of [
+        "SUPABASE_JWT_SECRET_1", "SUPABASE_JWT_SECRET_3", "SUPABASE_JWT_SECRET_4",
+        "SUPABASE_JWT_SECRET_02", "SUPABASE_JWT_SECRET_002", "SUPABASE_JWT_SECRET_20",
+      ]) {
+        expect(() => loadConfig({ ...rotating, [name]: overlapSecret })).toThrow(ConfigError);
+        expect(() => loadConfig({ ...rotating, [name]: overlapSecret })).toThrow(new RegExp(name));
+      }
+      // The two names this gateway DOES read are the control: without them the refusal above would
+      // pass just as well from a function that refused everything.
+      expect(() => loadConfig(rotating)).not.toThrow();
+      // **And the deadline is not a numbered slot, though its name begins with one.** This line was
+      // `loadConfig({ ...rotating })` — a shallow copy of the line above it, so it re-ran that check
+      // and asserted nothing about the property the comment names (PR #218's R5). The deadline is
+      // spelled out here rather than relied on through `rotating`, so removing it from that fixture
+      // cannot quietly empty this assertion.
+      expect(() => loadConfig({
+        ...base,
+        SUPABASE_JWT_SECRET: secret,
+        SUPABASE_JWT_ISSUER: issuer,
+        SUPABASE_JWT_SECRET_2: overlapSecret,
+        SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: daysFromNow(1),
+      })).not.toThrow();
+    });
+
+    it("is silent about an unread slot that is set to nothing", () => {
+      // An empty value is nobody setting the variable -- a compose file with a blank line, an unset
+      // shell variable expanded into an env block -- and refusing it would refuse a deployment that
+      // has done nothing wrong.
+      expect(() => loadConfig({ ...rotating, SUPABASE_JWT_SECRET_3: "" })).not.toThrow();
+      expect(() => loadConfig({ ...rotating, SUPABASE_JWT_SECRET_3: "   " })).not.toThrow();
+    });
+
+    it("loads and starts with no rotation in flight, which is the ordinary shape", () => {
+      const policy = requireSupabaseJwtPolicy(
+        loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: issuer }), NOW,
+      );
+      expect(policy.secrets).toEqual([{ value: secret, acceptedUntil: undefined }]);
     });
   });
 

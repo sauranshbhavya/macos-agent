@@ -50,10 +50,53 @@ import { isExpiryAcceptable } from "./clock.js";
  * `providerSessionId` below, in `gate.ts` and in `server/README.md`.
  */
 
-/** The three project-specific values a verification is judged against. */
-export interface SupabaseJwtPolicy {
+/**
+ * One secret this gateway will verify a signature against, and the instant it stops doing so.
+ *
+ * **A verifying secret is a signing secret** — HS256 is symmetric, so anyone holding this value can
+ * mint a token for any user. That is the whole reason `SUPABASE_JWT_SECRET` was a single value until
+ * SONNY-238: every extra secret the gateway still honours extends the blast radius of a leaked one,
+ * and the sign-out that a rotation caused was judged the smaller cost. What changes that trade is
+ * giving the extra secret an **end**, which is what `acceptedUntil` is.
+ */
+export interface AcceptedJwtSecret {
   /** The project's JWT secret. Gateway-only: never in the app, never in this repository. */
-  readonly secret: string;
+  readonly value: string;
+  /**
+   * The instant after which this secret is no longer accepted, or `undefined` for one that is
+   * accepted for as long as it is configured.
+   *
+   * **Only the current secret carries `undefined`**, and `requireSupabaseJwtPolicy` is what builds it
+   * that way. An overlap secret with no end is the failure the founders decided against on
+   * 2026-08-30 — "left in the environment and forgotten" is indistinguishable from never having
+   * rotated — so the configuration refuses one at startup rather than leaving the ending to a person.
+   *
+   * **Read against the server's clock inside `verifyAccessToken`, not once at startup.** A deadline
+   * checked at boot ends the overlap on the next restart, which on a gateway that does not restart is
+   * no ending at all; checked per request, it ends on time whatever the process has been doing.
+   */
+  readonly acceptedUntil: Date | undefined;
+}
+
+/** The project-specific values a verification is judged against. */
+export interface SupabaseJwtPolicy {
+  /**
+   * The secrets a signature may match, in the order they are tried. Index 0 is the current one.
+   *
+   * **An ordered list rather than a `current`/`previous` pair**, for the reason `server/README.md`
+   * gives for the provider credentials being one: with two named fields, retiring the current secret
+   * means editing two variables at once and a deploy that catches them half-applied has either a
+   * duplicate or none. **The direction is the mirror of a provider credential's**, which is worth
+   * having straight before reading the runbook: a provider key is one this gateway *sends*, so that
+   * list is "what to try"; this is one Supabase *signs* with and this gateway only verifies, so this
+   * list is "what to accept" and the overlap has to straddle the moment Supabase's own value changes.
+   * `SUPABASE_JWT_SECRET_2` is therefore the *incoming* secret in one deploy and the *retiring* one in
+   * the next.
+   *
+   * Never empty: `requireSupabaseJwtPolicy` refuses a configuration with no current secret. A policy
+   * built by hand with an empty list refuses every token, which is the safe direction.
+   */
+  readonly secrets: readonly AcceptedJwtSecret[];
   /** The project's auth URL, e.g. `https://<ref>.supabase.co/auth/v1`. Compared exactly. */
   readonly issuer: string;
   /** Supabase's own default is `authenticated`. Compared exactly, or against each array member. */
@@ -233,13 +276,36 @@ export function verifyAccessToken(
 
   const signature = decodeSegment(encodedSignature);
   if (!signature) return { ok: false, refusal: "malformed" };
-  const expected = createHmac("sha256", policy.secret)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest();
-  // `timingSafeEqual` throws on a length mismatch, so the length is compared first. That comparison
-  // is not constant-time and does not need to be: the length of an HMAC-SHA256 digest is public.
-  if (signature.length !== expected.length) return { ok: false, refusal: "signature" };
-  if (!timingSafeEqual(signature, expected)) return { ok: false, refusal: "signature" };
+  // **The overlap, and the whole of it** (SONNY-238). Each accepted secret is tried in order and the
+  // first match wins, which is at most two HMACs. Everything that decides whether a token is
+  // acceptable — the pin above, and `iss`, `aud`, `sub`, `session_id`, `nbf` and `exp` below — sits
+  // outside this loop and always did, so a second accepted secret cannot arrive with a relaxed check
+  // behind it. The ticket names that as the thing that would be worse than the sign-out it avoids;
+  // `theSecondSecretGetsNoWeakerChecksThanTheFirst` in `token.test.ts` is what holds it.
+  //
+  // **A secret past its `acceptedUntil` is skipped rather than matched**, judged against the same
+  // `now` every other time-dependent check here uses. This is where the overlap actually ends: no
+  // restart, no deploy, no operator. `>=` rather than `>` so the stated instant is the first one at
+  // which the secret is refused, matching how `acceptedUntil` reads.
+  let signatureMatched = false;
+  for (const accepted of policy.secrets) {
+    if (accepted.acceptedUntil !== undefined && now.getTime() >= accepted.acceptedUntil.getTime()) {
+      continue;
+    }
+    const expected = createHmac("sha256", accepted.value)
+      .update(`${encodedHeader}.${encodedPayload}`)
+      .digest();
+    // `timingSafeEqual` throws on a length mismatch, so the length is compared first. That comparison
+    // is not constant-time and does not need to be: the length of an HMAC-SHA256 digest is public.
+    if (signature.length !== expected.length) continue;
+    if (timingSafeEqual(signature, expected)) {
+      signatureMatched = true;
+      break;
+    }
+  }
+  // Reached with no accepted secret configured, with every one of them retired, and with a signature
+  // matching none — three different configurations, one answer, and the safe one in all three.
+  if (!signatureMatched) return { ok: false, refusal: "signature" };
 
   const payloadBytes = decodeSegment(encodedPayload);
   if (!payloadBytes) return { ok: false, refusal: "malformed" };

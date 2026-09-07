@@ -427,3 +427,86 @@ describe("what the wiring hands the adapter", () => {
     await expect(wiring.close()).resolves.toBeUndefined();
   });
 });
+
+describe("a retired overlap secret is reported at startup (SONNY-238; PR #218's F2)", () => {
+  // **The founders' fail-open is untouched and that is the first thing each of these asserts.** A
+  // deadline already past is deliberately not a startup failure — refusing to boot on leftover
+  // bookkeeping would be the sign-out the overlap slot exists to prevent. What was missing was any
+  // signal at all: nothing on the configuration path logs, `/v1/health` publishes status, version
+  // and environment, and the verifier's loop is the only thing that reads the list. So a gateway
+  // holding a dead slot was indistinguishable from one holding no slot.
+  const NOW = new Date("2026-09-07T12:00:00.000Z");
+  const at = (days: number): string =>
+    new Date(NOW.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  const overlapSecret = "the-other-signing-key-also-past-the-floor";
+  const rotating = {
+    ...AUTH_ENV,
+    SUPABASE_JWT_SECRET_2: overlapSecret,
+    SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: at(1),
+  };
+
+  /** Every line the wiring wrote, so an assertion can be about the whole of what an operator sees. */
+  function warningsFrom(env: NodeJS.ProcessEnv, now: Date): { lines: string[]; close: () => Promise<void> } {
+    const lines: string[] = [];
+    const wiring = authWiringFrom(loadConfig(env), { now, warn: (line) => lines.push(line) });
+    return { lines, close: () => wiring?.close() ?? Promise.resolve() };
+  }
+
+  it("says so, once, when the deadline has already passed — and still starts", async () => {
+    const { lines, close } = warningsFrom(
+      { ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: at(-1) }, NOW,
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("SUPABASE_JWT_SECRET_2");
+    expect(lines[0]).toContain("SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL");
+    expect(lines[0]).toContain(at(-1));
+    // Both readings, because the design cannot tell them apart and the operator can: leftover
+    // bookkeeping after a finished rotation, or a typo before one starts.
+    expect(lines[0]).toContain("remove both variables");
+    expect(lines[0]).toContain("typo");
+    await close();
+  });
+
+  it("never puts a secret value in that line", async () => {
+    const { lines, close } = warningsFrom(
+      { ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: at(-1) }, NOW,
+    );
+    expect(lines[0]).not.toContain(overlapSecret);
+    expect(lines[0]).not.toContain(AUTH_ENV.SUPABASE_JWT_SECRET);
+    await close();
+  });
+
+  it("says nothing while the overlap is live, or when there is no overlap at all", async () => {
+    // The control in both directions: without it the assertion above would pass just as well from a
+    // function that warned on every startup.
+    const live = warningsFrom(rotating, NOW);
+    expect(live.lines).toEqual([]);
+    await live.close();
+
+    const none = warningsFrom(AUTH_ENV, NOW);
+    expect(none.lines).toEqual([]);
+    await none.close();
+  });
+
+  it("treats the deadline's own instant as passed, the same way the verifier does", async () => {
+    // `>=` at the instant itself, matching `verifyAccessToken`'s skip — otherwise the warning and
+    // the behaviour it describes would disagree by one millisecond.
+    const exact = warningsFrom(rotating, new Date(at(1)));
+    expect(exact.lines).toHaveLength(1);
+    await exact.close();
+
+    const justBefore = warningsFrom(rotating, new Date(new Date(at(1)).getTime() - 1));
+    expect(justBefore.lines).toEqual([]);
+    await justBefore.close();
+  });
+
+  it("still refuses what it always refused, so the warning replaced no check", async () => {
+    // The fail-open is for a PAST deadline and nothing else. A missing one, and one beyond the
+    // maximum, are still startup failures.
+    const { SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: _drop, ...noDeadline } = rotating;
+    expect(() => authWiringFrom(loadConfig(noDeadline), { now: NOW })).toThrow(ConfigError);
+    expect(() => authWiringFrom(
+      loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: at(30) }), { now: NOW },
+    )).toThrow(ConfigError);
+  });
+});

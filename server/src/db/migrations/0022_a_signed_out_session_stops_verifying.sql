@@ -55,8 +55,18 @@ CREATE TABLE sonny.revoked_provider_session (
   -- second sign-out presenting another token of the same session is an upsert rather than a row.
   session_id uuid PRIMARY KEY,
 
-  -- When this gateway was asked to stop honouring it. Nothing reads this for correctness; it is what
-  -- makes a support question answerable at all, and it costs one column.
+  -- The MOST RECENT time this gateway was asked to stop honouring it, refreshed when a second
+  -- sign-out presents another token of the same session. Nothing reads this for correctness; it is
+  -- what makes a support question answerable at all, and it costs one column.
+  --
+  -- **"The first ask" is not available to mean here, which is what settled this** (PR #215's fix
+  -- round). The prune deletes an expired row in the same statement that records a new revocation, so
+  -- a session re-revoked after some other user's sign-out pruned its row has no first ask left to
+  -- report — the column would silently mean "the first ask, or a later one, depending on traffic
+  -- nobody involved can see". The most recent ask is reachable on every path, and it keeps one row
+  -- internally consistent: `expires_at` already describes the latest token the session was signed
+  -- out with, so a `revoked_at` from a token lifetime earlier would describe a different act sitting
+  -- beside it.
   revoked_at timestamptz NOT NULL DEFAULT now(),
 
   -- The instant after which this row can be dropped: the revoked token's own `exp` plus the skew
@@ -72,6 +82,12 @@ COMMENT ON TABLE sonny.revoked_provider_session IS
   '/v1/auth/signout. NOT contract 5.2''s task session, which is a different thing with the same '
   'spelling. A row is kept until the token would have expired anyway and is then pruned by the next '
   'write (SONNY-237; retention decided by the founders 2026-08-30).';
+
+COMMENT ON COLUMN sonny.revoked_provider_session.revoked_at IS
+  'The MOST RECENT time this gateway was asked to stop honouring this session, refreshed by the '
+  'ON CONFLICT arm when a second sign-out presents another token of the same session. Not the first '
+  'ask: the prune destroys an expired row, so a re-revoked session may have no first ask left to '
+  'report. Nothing reads this for correctness; it is what makes a support question answerable.';
 
 COMMENT ON COLUMN sonny.revoked_provider_session.expires_at IS
   'The revoked token''s exp PLUS auth/clock.ts''s EXPIRY_SKEW_TOLERANCE_SECONDS, because the gate '

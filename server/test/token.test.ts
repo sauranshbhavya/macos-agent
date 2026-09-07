@@ -1,10 +1,12 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { EXPIRY_SKEW_TOLERANCE_SECONDS } from "../src/auth/clock.js";
-import { verifyAccessToken, type TokenRefusal } from "../src/auth/token.js";
 import {
-  TEST_JWT_POLICY, accessTokenFor, base64url, claimsFor, providerSessionFor, signToken,
-  signatureSecondSpelling, tokenWithBrokenSignature, tokenWithClaims,
+  verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal,
+} from "../src/auth/token.js";
+import {
+  TEST_JWT_OVERLAP_SECRET, TEST_JWT_POLICY, TEST_JWT_SECRET, accessTokenFor, base64url, claimsFor,
+  providerSessionFor, signToken, signatureSecondSpelling, tokenWithBrokenSignature, tokenWithClaims,
 } from "./support/tokens.js";
 
 /**
@@ -215,7 +217,7 @@ describe("verifyAccessToken — the signature", () => {
     // decode is the only thing that refuses.
     const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
     const padded = `${base64url(JSON.stringify(claimsFor(USER, { now: NOW })))}=`;
-    const signature = createHmac("sha256", TEST_JWT_POLICY.secret)
+    const signature = createHmac("sha256", TEST_JWT_SECRET)
       .update(`${header}.${padded}`).digest("base64url");
     expect(refusalOf(`${header}.${padded}.${signature}`)).toBe("malformed");
   });
@@ -239,7 +241,7 @@ describe("verifyAccessToken — the signature", () => {
     const claims = claimsFor(USER, { now: NOW });
     const reordered = Object.fromEntries(Object.entries(claims).reverse());
     const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-    const honestSignature = createHmac("sha256", TEST_JWT_POLICY.secret)
+    const honestSignature = createHmac("sha256", TEST_JWT_SECRET)
       .update(`${header}.${base64url(JSON.stringify(claims))}`)
       .digest("base64url");
     expect(refusalOf(`${header}.${base64url(JSON.stringify(reordered))}.${honestSignature}`))
@@ -383,7 +385,7 @@ describe("verifyAccessToken — shapes that are not tokens", () => {
   it("refuses a payload that is valid JSON but not an object", () => {
     const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
     const claims = base64url("[1,2,3]");
-    const signature = createHmac("sha256", TEST_JWT_POLICY.secret)
+    const signature = createHmac("sha256", TEST_JWT_SECRET)
       .update(`${header}.${claims}`).digest("base64url");
     expect(refusalOf(`${header}.${claims}.${signature}`)).toBe("malformed");
   });
@@ -445,5 +447,122 @@ describe("verifyAccessToken — the provider session claim", () => {
       USER, { session_id: "not-a-uuid" }, { secret: "a-different-secret-of-adequate-length" },
     );
     expect(refusalOf(forged)).toBe("signature");
+  });
+});
+
+describe("verifyAccessToken — the rotation overlap (SONNY-238)", () => {
+  // **What this suite is defending.** Rotating `SUPABASE_JWT_SECRET` used to invalidate every token
+  // signed with the previous value at the instant the new one deployed: every signed-in user signed
+  // out. A second accepted secret fixes that and is, by construction, a second key that can mint a
+  // token for any user — so the tests below are two claims, not one. The rotation must work, AND the
+  // second secret must be held to every check the first one is and must stop being accepted.
+
+  /** Mid-rotation: the current secret, plus one overlap secret good for another hour. */
+  const OVERLAP_ENDS = new Date("2026-08-22T13:00:00Z");
+  const rotating: SupabaseJwtPolicy = {
+    ...TEST_JWT_POLICY,
+    secrets: [
+      { value: TEST_JWT_SECRET, acceptedUntil: undefined },
+      { value: TEST_JWT_OVERLAP_SECRET, acceptedUntil: OVERLAP_ENDS },
+    ],
+  };
+  const verdictOf = (token: string, policy: SupabaseJwtPolicy, now: Date = NOW) => {
+    const verdict = verifyAccessToken(token, policy, now);
+    return verdict.ok ? "accepted" : verdict.refusal;
+  };
+
+  it("accepts a token signed with the overlap secret, which is the whole point", () => {
+    const token = tokenWithClaims(USER, {}, { secret: TEST_JWT_OVERLAP_SECRET });
+    // The control: the same token against a policy without the overlap is refused, so the acceptance
+    // above is the second secret doing something rather than the assertion being vacuous.
+    expect(verdictOf(token, TEST_JWT_POLICY)).toBe("signature");
+    expect(verdictOf(token, rotating)).toBe("accepted");
+  });
+
+  it("still accepts a token signed with the current secret while the overlap is live", () => {
+    // A rotation that accepted only the incoming secret would be the sign-out it was meant to avoid,
+    // arriving one deploy earlier.
+    expect(verdictOf(accessTokenFor(USER, { now: NOW }), rotating)).toBe("accepted");
+  });
+
+  it("stops accepting the overlap secret at its instant, with no deploy and nobody remembering", () => {
+    // **This is the founders' 2026-08-30 decision made mechanical**: a retired secret gets a stated
+    // maximum overlap, and their own note was that a number nothing checks is worse than a check.
+    // The check is here rather than at startup, because a deadline read once at boot ends the overlap
+    // on the next restart — which, on a gateway that does not restart, is no ending at all.
+    const overlapToken = tokenWithClaims(
+      USER,
+      { exp: Math.floor(OVERLAP_ENDS.getTime() / 1000) + 7200 },
+      { secret: TEST_JWT_OVERLAP_SECRET },
+    );
+    const aMomentBefore = new Date(OVERLAP_ENDS.getTime() - 1);
+    const atTheInstant = OVERLAP_ENDS;
+    const wellAfter = new Date(OVERLAP_ENDS.getTime() + 60_000);
+
+    expect(verdictOf(overlapToken, rotating, aMomentBefore)).toBe("accepted");
+    // The stated instant is the first one at which it is refused, which is how `acceptedUntil` reads.
+    expect(verdictOf(overlapToken, rotating, atTheInstant)).toBe("signature");
+    expect(verdictOf(overlapToken, rotating, wellAfter)).toBe("signature");
+  });
+
+  it("does not let the overlap's end touch the current secret", () => {
+    // The asymmetry is load-bearing: if the ending applied to index 0 as well, this gateway would
+    // refuse every token from that instant — the outage the overlap exists to prevent, arriving from
+    // inside the fix for it. The current secret's token is minted to outlive the overlap's end.
+    const long = tokenWithClaims(USER, { exp: Math.floor(OVERLAP_ENDS.getTime() / 1000) + 7200 });
+    expect(verdictOf(long, rotating, new Date(OVERLAP_ENDS.getTime() + 60_000))).toBe("accepted");
+  });
+
+  it("theSecondSecretGetsNoWeakerChecksThanTheFirst", () => {
+    // **The ticket names this as the thing that would be worse than the sign-out it avoids**: "a
+    // rotation that quietly relaxed the pin for the second key would be worse". Every refusal below
+    // is asserted against a token signed with the OVERLAP secret, so a verifier that had grown a
+    // second, laxer path for it would be caught here rather than in production.
+    const withOverlap = (claims: Record<string, unknown>, header?: Record<string, unknown>) =>
+      verdictOf(
+        tokenWithClaims(USER, claims, {
+          secret: TEST_JWT_OVERLAP_SECRET,
+          ...(header === undefined ? {} : { header }),
+        }),
+        rotating,
+      );
+
+    // The pin. `alg: "none"` and algorithm confusion, the two forgeries the pin exists for.
+    expect(withOverlap({}, { alg: "none", typ: "JWT" })).toBe("algorithm");
+    expect(withOverlap({}, { alg: "HS512", typ: "JWT" })).toBe("algorithm");
+    expect(withOverlap({}, { alg: "RS256", typ: "JWT" })).toBe("algorithm");
+    // `crit`, which names header parameters a verifier must understand and this one understands none.
+    expect(withOverlap({}, { alg: "HS256", typ: "JWT", crit: ["x"] })).toBe("malformed");
+    // The claim checks, each in its own right.
+    expect(withOverlap({ iss: "https://elsewhere.supabase.co/auth/v1" })).toBe("issuer");
+    expect(withOverlap({ aud: "someone-else" })).toBe("audience");
+    expect(withOverlap({ sub: "not-a-uuid" })).toBe("subject");
+    expect(withOverlap({ session_id: "not-a-uuid" })).toBe("session");
+    // The one-directional skew rule: tolerance past `exp`, none before `nbf`.
+    expect(withOverlap({ nbf: Math.floor(NOW.getTime() / 1000) + 60 })).toBe("not_yet_valid");
+    expect(withOverlap({ exp: Math.floor(NOW.getTime() / 1000) - 60 })).toBe("expired");
+    expect(withOverlap({ exp: undefined })).toBe("malformed");
+    // And the control that says the battery above is refusing for its stated reasons rather than
+    // refusing everything signed with this secret.
+    expect(withOverlap({})).toBe("accepted");
+  });
+
+  it("refuses a secret that is in neither slot", () => {
+    const stranger = tokenWithClaims(USER, {}, { secret: "a-third-secret-nobody-configured-here" });
+    expect(verdictOf(stranger, rotating)).toBe("signature");
+  });
+
+  it("refuses everything when every accepted secret has retired, rather than letting one through", () => {
+    // Not a configuration `requireSupabaseJwtPolicy` can build — it gives index 0 no end — and
+    // asserted anyway, because the loop's fail-open direction would be silent: a policy whose
+    // secrets are all skipped must reach the same refusal an unmatched signature does.
+    const allRetired: SupabaseJwtPolicy = {
+      ...TEST_JWT_POLICY,
+      secrets: rotating.secrets.map((entry) => ({ ...entry, acceptedUntil: OVERLAP_ENDS })),
+    };
+    const after = new Date(OVERLAP_ENDS.getTime() + 60_000);
+    expect(verdictOf(accessTokenFor(USER, { now: NOW }), allRetired, after)).toBe("signature");
+    expect(verdictOf(accessTokenFor(USER, { now: NOW }), { ...TEST_JWT_POLICY, secrets: [] }))
+      .toBe("signature");
   });
 });
