@@ -83,7 +83,7 @@ struct LocalDataQuarantineTests {
 
     /// The same walk, one step further: the mechanism clears every one of them.
     ///
-    /// **This is the claim the fix rests on** — that recovery is one mechanism rather than thirteen.
+    /// **This is the claim the fix rests on** — that recovery is one mechanism rather than one per store.
     /// It operates on a file URL and knows nothing about what is in it, which is exactly why it can
     /// run at all: every door into a store loads before it acts, so a recovery written *inside* a
     /// store would be a recovery that cannot run on the file it exists for.
@@ -206,9 +206,9 @@ struct LocalDataQuarantineTests {
     ///
     /// `LocalDataQuarantine` deliberately leaves the user's bytes on disk under another name. Those
     /// bytes are theirs — folder paths, commands, whole routines — so a Settings wipe that deleted
-    /// only the thirteen exact filenames would report "Deleted 13 local data files" while leaving
-    /// every set-aside file untouched. Sonny not being able to read them is not the same as their
-    /// holding nothing.
+    /// only the stores' own exact filenames would report a count covering every one of them while
+    /// leaving every set-aside file untouched. Sonny not being able to read them is not the same as
+    /// their holding nothing.
     @Test
     func theWholeDataWipeDeletesTheFilesTheQuarantineLeftBehind() throws {
         let root = try makeDirectory()

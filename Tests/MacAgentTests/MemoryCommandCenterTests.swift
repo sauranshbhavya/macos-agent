@@ -3823,7 +3823,7 @@ private struct MemoryFixture {
     /// **The founder's failure of 2026-08-23 reproduced, rather than a malformed-bytes stand-in.**
     /// SONNY-240's fixtures wrote real store files under the deterministic test key and the packaged
     /// app then could not open them; a Keychain item replaced by a restore or a migration does the
-    /// same thing to all thirteen at once. Bytes that merely fail to parse would exercise the JSON
+    /// same thing to every store at once. Bytes that merely fail to parse would exercise the JSON
     /// half of `LocalStorageEncryption.decode` and say nothing about the decrypt half, which is the
     /// half that actually happened.
     ///

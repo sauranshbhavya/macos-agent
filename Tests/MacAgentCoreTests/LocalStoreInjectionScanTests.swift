@@ -159,7 +159,7 @@ struct LocalStoreInjectionScanTests {
 
     /// Parameters that are not stores and are required for the same reason.
     ///
-    /// `clipboardHistoryMonitor` carries the thirteenth store and the system pasteboard.
+    /// `clipboardHistoryMonitor` carries the clipboard-history store and the system pasteboard.
     /// `localDataDeletionService` is worse than either: its default is the real file list and the
     /// service *deletes* what it is given, so a fixture that let it default and then exercised the
     /// wipe would have erased the developer's data rather than corrupted it.
@@ -201,7 +201,7 @@ struct LocalStoreInjectionScanTests {
             }
             expectedLabels.insert(label)
         }
-        // Twelve of the thirteen; `.clipboardHistory` is the one inside the monitor.
+        // Every store but one; `.clipboardHistory` is the one inside the monitor.
         #expect(expectedLabels.count == LocalStore.allCases.count - 1)
 
         var checkedLabels: Set<String> = []
@@ -757,7 +757,7 @@ struct LocalStoreInjectionScanTests {
     /// **The third door, closed rather than documented** (PR #109 re-check, round two).
     ///
     /// The name-population check above catches anything that *calls* the real-store factory. It does
-    /// not catch a wrapper that builds the thirteen stores inline and hands over an
+    /// not catch a wrapper that builds the stores inline and hands over an
     /// `AgentViewModel` without naming the factory at all — and the sentence that used to sit here
     /// claimed such a wrapper was mitigated, because a test reaching it "would have to construct
     /// those stores itself, which `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` refuses".

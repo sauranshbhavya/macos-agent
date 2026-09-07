@@ -54,8 +54,8 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 /// destructive control wants to know — whether their own thing is in it. A figure would also go
 /// stale exactly the way the list did, while reading as current.
 ///
-/// **It names every store rather than every Memory row**, which would have been four phrases
-/// shorter — nine against thirteen, `MemoryCategory` having nine cases
+/// **It names every store rather than every Memory row**, which would have been shorter — there
+/// are fewer rows than stores, `MemoryCategory` having nine cases
 /// (`awk '/^public enum MemoryCategory/,/^    public var id: String/' Sources/MacAgentCore/MemorySettings.swift | grep -cE '^    case '`
 /// → 9). The Memory page folds the vision journal, plan details and Shortcut history under Task
 /// history, so a row-derived sentence would stop saying "records of what Sonny did on screen" — the
@@ -236,8 +236,8 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// **The set-aside files go too, and that is load-bearing rather than tidy** (SONNY-239).
     /// `LocalDataQuarantine` renames an unreadable file instead of unlinking it, so a store the user
     /// cleared from the Memory page leaves its bytes on disk under a suffixed name. Those bytes are
-    /// the user's — folder paths, commands, routines — and a wipe that deleted only the exact
-    /// thirteen names would leave them behind while reporting that everything was erased. Sonny
+    /// the user's — folder paths, commands, routines — and a wipe that deleted only the stores'
+    /// own exact filenames would leave them behind while reporting that everything was erased. Sonny
     /// cannot read them, which is not the same as their holding nothing.
     ///
     /// **Two doors reach the set-aside files — this one and `deleteSetAsideFilesOnly()` — and
