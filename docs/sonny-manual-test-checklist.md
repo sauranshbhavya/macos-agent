@@ -2887,6 +2887,22 @@ entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
 - [ ] **(SONNY-215) — nothing else moved.** With the switch **on** and the account **not** low, run
       the everyday free things and an ordinary screen-control session. **No purchase happens**
       (`sonny.credit_topup` stays empty) and nothing about the run changes.
+- [ ] **(SONNY-430) ⚠️ the charge that outruns the deadline.** The route now gives up after **30
+      seconds** and answers `502 topup.unconfirmed`, not `504 provider.timeout`. Reproducing it needs
+      a stalled provider, so this row **waits on a way to stall Polar** — the practical one is a
+      proxy in front of `POLAR_API_BASE_URL` that accepts the finalize and never answers. With that:
+      with the switch on and the account at zero, ask for a session. **The app gets an answer in
+      about half a minute rather than hanging**, and the answer is not the retryable timeout code.
+      Then bring the proxy back and ask again: **no second order appears at Polar**, and
+      `SELECT outcome, provider_order_id FROM sonny.credit_topup` shows **one** row that keeps its
+      order id and moves to `granted`. The finding is two paid orders, a row with a NULL order id, or
+      a request that hangs past a minute.
+- [ ] **(SONNY-430) ⚠️ the read-back shares the finalize's budget.** Same proxy, answering the
+      finalize `412` immediately and then stalling the order read. **The whole charge still ends
+      inside about twelve seconds of provider time, not twenty-four**, and the attempt is recorded
+      `unconfirmed` with its order id rather than declined. This row waits on the same proxy as the
+      one above; it is separate because it is the adapter's bound rather than the route's, and a
+      single stall exercises only one of the two.
 
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 

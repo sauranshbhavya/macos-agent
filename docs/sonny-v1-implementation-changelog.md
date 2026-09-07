@@ -170,6 +170,54 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/the-top-up-route-keeps-one-deadline
+Status: complete — SONNY-430 done
+Date: 2026-09-07
+Tickets: **SONNY-430** — `POST /v1/account/credits/top-up` ran three sequential twelve-second provider calls against a §12 row allowing ten upstream and fifteen total, and the contract said nothing bounded it. Filed from review-212's F4 on PR #212. One session, from `main` at `0aa5691f`.
+Reviewed by: fresh session at deep depth, per the ticket — it is money.
+
+Spec sections covered: §12 in full for this route — the table gains a row and the prose gains the derivation and the one decision that row does not follow. §7.2's `topup.unconfirmed` is reused rather than extended.
+
+Files changed: `server/src/billing/polar.ts`, `server/src/model/limits.ts`, `server/src/routes/credits.ts`, `server/src/app.ts`, `server/test/topup.test.ts`, `server/test/model.test.ts`, `docs/sonny-backend-api-contract.md`, `docs/sonny-manual-test-checklist.md` and this file. `git diff --name-only 0aa5691f..a11c4d10` lists **7** of those — everything except the two docs files this paragraph's own commit adds.
+
+**Two of those six are outside the kickoff note's file list and both were forced rather than chosen.** `server/test/model.test.ts` asserts `DEADLINE_MS` **whole**, by value, and went red the moment the row landed — which is that test working exactly as its own comment says it should ("the table is asserted whole, so a sixth row has to be written here as well as beside the routes that read it"). `server/src/app.ts` carries one line wiring the deadline's test seam, beside the two top-up seams already there. Neither is on the never-touch list, and nothing under `server/src/credit/` — SONNY-431's live lane — was touched: `git diff --name-only 0aa5691f..a11c4d10 -- server/src/credit server/test/topup.db.test.ts` prints nothing, with the same command minus the path filter printing six files as the control that it prints anything at all.
+
+Tests: the server half's own commands, all at `a11c4d10`, each exit read from a file the command wrote rather than through a pipe. `npm run build` exit **0**; `npm run typecheck` exit **0**; `npm test` exit **0** — **850 passed, 445 skipped (1295)**, against the base's **843 passed, 445 skipped** at `0aa5691f`, the difference being exactly this branch's seven new tests; `npm run test:db` exit **0** — **53 files, 1295 tests** against the base's **1288**, the same seven; `npm run check:secrets` exit **0** over 636 tracked files. `scripts/changelog-order` exit **0**, **190 entries**, both eras, against exit **0** and **189** at `0aa5691f` — the one new entry is this one. **No Swift command is owed and none was run**: `git diff --name-only 0aa5691f..a11c4d10 -- Sources Tests Package.swift` prints nothing, so `swift build`, the flagged suite and `scripts/warnings` provably cannot see this diff (`WORKFLOW.md` step 7's server-only case).
+
+**Mutation via `scripts/mutate` at `a11c4d10`: 6 mutants, 6 killed, 0 survived, 0 unattributed**, baseline `PASSED 850 passed | 445 skipped (1295)`, suite command `cd server && npx vitest run`. Three remove a bound and three abandon a charge, which is the pairing the ticket asked for:
+
+- **B1** the route's total deadline removed — killed by 2, the stall test and the resolvable-row test.
+- **B2** the read-back minting its own deadline again, restoring the 36-second worst case — killed by 1, `gives the finalize and its read-back one deadline between them, not one each`.
+- **B3** the row's upstream widened to 36 s — killed by 3, `model.test.ts`'s whole-table assertion and both of this branch's derivation tests.
+- **A1** the timeout settling the attempt row, closing a charge that may have been accepted — killed by 1, `leaves the stalled charge resolvable, with its order id on the row`.
+- **A2** the timeout answering the retryable `504 provider.timeout` — killed by 1, `answers inside its promised time when the provider stalls, and answers unconfirmed`.
+- **A3** the read-back's exhausted-budget answer turned terminal — killed by 1, `reads an exhausted budget on the read-back as unconfirmed, never as a closed order`.
+
+Behavior added:
+
+- **`polarFinalizeTopUpOrder` creates one `AbortSignal` and hands the same object to the read-back it may make on a `412`**, so the pair spends one twelve-second budget instead of two. A top-up's worst case falls from three calls and 36 s to two and 24 s.
+- **§12 has a row for the route** — `upstream: 24_000, total: 30_000` — enforced at the adapter and at the route respectively, the same split the `auth` row already documents.
+- **The route answers `502 topup.unconfirmed` when its total deadline elapses**, logged at `warn` with the account and the bound.
+
+Behavior preserved (required, no blanket claims):
+
+- **Every existing top-up answer.** The 402 decline, the `topup.not_permitted` refusal, the not-retryable `topup.unconfirmed`, the consent refusal and the `limit_reached` path are untouched; `topup.test.ts` holds **66** tests now, of which this branch's describe block is exactly **7** — measured rather than subtracted: `npx vitest run test/topup.test.ts -t "keeps one deadline"` reports `7 passed | 59 skipped (66)` at `a11c4d10`, so the 59 that were there before are named by the same run.
+- **PR #196's F1 recovery, which this branch leans on rather than changes.** `attemptTopUp` still resolves an outstanding order before claiming a slot, still writes the order id before anything can charge, and still settles `unconfirmed` on every non-terminal answer. Nothing in `server/src/credit/` moved.
+- **The other five `DEADLINE_MS` rows and everything reading them.** `model.test.ts`'s whole-table assertion passes with one row added and five unchanged.
+- **The cross-half relation `topup.test.ts` already pinned.** `keeps its outbound budget under the Mac's own, across BOTH of its calls` asserted `TOPUP_CHARGE_TIMEOUT_MS * 2 < 40_000` before this branch and still does — see the first pitfall below for why it passed against the defect.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+- **A test that pins a constant cannot see a third call, and this one did not.** `keeps its outbound budget under the Mac's own, across BOTH of its calls` was written to hold exactly the relation this branch restores, and it was **green the whole time the code spent 36 seconds** — because it asserts `TOPUP_CHARGE_TIMEOUT_MS * 2 < 40_000`, which is a statement about a *number* and not about how many times that number is spent. The same shape as `CLAUDE.md`'s held-sample gotcha: the assertion is specific, non-vacuous, lands on the right constant, and would fail if the constant moved. What it never traverses is the call path. The test this branch adds asserts the two fetches receive **the same signal object** (`expect(seen[1]).toBe(seen[0])`), which is a statement about the path, and B2 is the mutant proving it holds — two signals carrying the same number would pass the old test and fail the new one.
+- **The either/or in the ticket was answerable only as "both", and the arithmetic is what settles it.** A row derived from three attempts is 36 s upstream and wants a total near 42 s, which is longer than the Mac's 40 s client timeout and inverts §12's governing rule — and the client's number is on the app half, which this ticket could not touch. Folding the charge into the existing 10 s row is the other direction and is the money-unsafe one: three calls inside 10 s is about 3.3 s each, `TOPUP_CHARGE_TIMEOUT_MS`'s own derivation argues that even eight is not clearly above a healthy card authorisation, and every second cut converts a slow-but-working charge into an abort recorded `unconfirmed` — granting nothing for money that may have moved. So the third call had to go, and the row had to exist.
+- **The deadline bounds the answer and never the work, and that is a money property rather than an implementation detail.** `withinTotalDeadline` races `attemptTopUp` and does **not** cancel the loser. Cancelling it is the one way this branch could have abandoned an accepted charge — killing the settle after the money moved — which is precisely PR #196's F1. Because the order id is written before anything can charge, the work runs on, settles its row, and the account's next attempt resolves it either way. A1 is the mutant for the opposite mistake, closing the row on a guess, and it dies.
+- **The no-op `catch` on the raced promise is load-bearing and reads as dead code.** Once the timer has decided the race, a later rejection from `attemptTopUp` has no handler attached, and an unhandled rejection in Node ends the process — so the gateway would fall over exactly when a payment provider began failing slowly. Removing it breaks nothing a test can see today, which is why it carries a comment saying so.
+- **`504 provider.timeout` is the wrong answer on this route, and §12 already had precedent for saying so.** That code is marked retryable, and at the instant this deadline elapses a charge may be in flight — "try again" is how F1 bought a second pack. The section already records two auth routes that do not answer `504` on their deadline; this is the third, and the contract now says so rather than leaving a reader to infer the table's column applies uniformly.
+- **Sharing a deadline is only safe because every exit from the read-back is non-terminal.** An exhausted budget arrives there as a rejected `fetch` and leaves as `unconfirmed`, which keeps the order id on the row. If that path could return `declined` the shared deadline would close orders on a guess — A3 is that mutant, and it dies.
+- **The route's file is `server/src/routes/credits.ts`, not `server/src/routes/billing.ts`.** The kickoff note named the latter; `git grep -n 'app.post(TOP_UP_PATH' -- server/src` answers `server/src/routes/credits.ts:311` at `0aa5691f` and `routes/billing.ts` holds the webhook, checkout, portal and payment-state routes. Recorded because the two names are one letter apart and the never-touch directory is `server/src/credit/`, which is a third thing again.
+
+Known limitations / deferred scope: **the two manual rows this branch adds are both marked ⚠️ and both wait on the same thing** — a way to stall Polar, in practice a proxy in front of `POLAR_API_BASE_URL` that accepts a call and never answers. Nobody on this project has run an order against real Polar, which is SONNY-215's standing limitation and not this branch's; what this branch adds to it is that the deadline's behaviour is the one thing a fake provider proves completely, since the fake is what stalls. No deferral was taken and no discovery ticket was filed.
+
 ### Branch: fix/the-task-routes-keep-their-deadlines
 Status: complete — SONNY-428 done
 Date: 2026-09-07
