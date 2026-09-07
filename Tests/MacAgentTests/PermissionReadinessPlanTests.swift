@@ -162,6 +162,53 @@ struct PermissionReadinessPlanTests {
         #expect(fixture.viewModel.planReadiness == .confirmed)
     }
 
+    /// **`refreshPermissions()` refreshes both halves, and this test exists to be *attributable*.**
+    ///
+    /// The property is that the Settings page's own door does not refresh the session and skip the
+    /// plan. Two existing tests already fail when it does — but both fail by *waiting* for a row
+    /// state that never arrives, so their only signal is a `HangBackstop` timeout, and every wording
+    /// that type emits is declared untrustworthy in `scripts/mutate-untrusted-failures` because a
+    /// wait that times out may only be reporting the shared main actor's queue depth. A mutant whose
+    /// sole opposition is those two therefore comes back `UNATTRIBUTED` on a run where the tests
+    /// failed for exactly the right reason — `CLAUDE.md` records this as the mechanism working
+    /// rather than a seam, and says the remedy is the caller's. This is that remedy, in the form
+    /// that suited this property: the mutant was reported unattributed by the battery at
+    /// `230d4dae`, and this test is what makes it a named kill.
+    ///
+    /// **The wait is on a precondition the mutant does not break**, which is the whole trick. The
+    /// row's detail leaves its never-asked sentence at the *final* recompute, which happens whether
+    /// or not the plan half was refreshed — so the wait completes either way and every assertion
+    /// below it is a plain one. A backstop can still fire here, but only if the refresh Task never
+    /// ran at all, which is a different failure and an honest one.
+    @Test
+    func refreshingPermissionsRefreshesThePlanHalfAndNotOnlyTheSession() async throws {
+        let fixture = try PlanReadinessFixture()
+        defer { fixture.cleanUp() }
+        let asked = EntitlementAskCounter()
+        fixture.viewModel.entitlementConfirmation = {
+            await asked.record()
+            return .entitled
+        }
+
+        fixture.viewModel.refreshPermissions()
+        try await HangBackstop.waitOrAbandon(for: "the account row to leave its never-asked state") {
+            fixture.viewModel.permissionItems
+                .first { $0.id == "sonny-account" }?
+                .detail.hasPrefix("Signed in") == true
+        }
+
+        // Plain assertions from here: a refresh that skipped the plan half leaves both false.
+        // The count is read out of the actor first — `#expect`'s autoclosure cannot `await`.
+        let asks = await asked.count
+        #expect(asks == 1, "the plan half was asked \(asks) times")
+        #expect(fixture.viewModel.planReadiness == .confirmed)
+        // And the row the page renders carries it, rather than the plan being refreshed into a
+        // value nothing re-reads.
+        let row = try #require(fixture.viewModel.permissionItems.first { $0.id == "sonny-account" })
+        #expect(row.state == .ready)
+        #expect(row.detail == "Signed in, and your plan is confirmed.")
+    }
+
     /// The row the app renders, from the view model's own recompute — the same function
     /// `refreshPermissions()` calls, so the `planAccess:` argument inside it is on the path rather
     /// than reproduced here. Synchronous, because both readiness values are already published by the
@@ -314,5 +361,15 @@ private final class FakePasteboardReader: PasteboardReading {
 
     func stringValue() -> String? {
         nil
+    }
+}
+
+/// Counts how many times the readiness refresh asked the one source. An actor because the seam is
+/// `@Sendable`, and a count rather than a Bool because "asked twice" is its own defect.
+actor EntitlementAskCounter {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }
