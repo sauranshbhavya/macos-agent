@@ -3981,7 +3981,7 @@ formality.
       account**, it reads **Ready**, and its sentence is *"Signed in, and your plan is confirmed."*
       **What would be a finding:** the row saying **Ready** while its sentence says nothing about the
       plan, which is the state this ticket replaced.
-- [ ] **(new 2026-09-06, SONNY-336; headline corrected 2026-09-06, PR #216's review F4)** **A plan
+- [ ] **(new 2026-09-06, SONNY-336; headline corrected 2026-09-06, PR #216's review F3)** **A plan
       that cannot be confirmed reads "Check when used" — grey, never the amber "Needs action".**
       Signed in, then take the Mac fully offline and leave it long enough that the cached claim is
       past its grace (or sign in on a build that has never been online). Press **Refresh** on the
