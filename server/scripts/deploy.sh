@@ -409,7 +409,7 @@ collect_passthrough() {
 # say "the three SUPABASE_ names" while the `not set here` line above it listed four** (PR #137
 # review, N5): `PASSTHROUGH` carried four `SUPABASE_`-prefixed names and only three of them were the
 # switch, `SUPABASE_JWT_AUDIENCE` being defaulted and therefore no signal of intent. **It carries six
-# since SONNY-238** (`grep -cE '^  SUPABASE_' scripts/deploy.sh` -> 6 at `FILLSHA`, this file's own
+# since SONNY-238** (`grep -cE '^  SUPABASE_' scripts/deploy.sh` -> 6 at `c68a2954`, this file's own
 # array being the only place that prefix sits at that indent), and the switch is still the same
 # three: `SUPABASE_JWT_SECRET_2` and its deadline are set only while a rotation is in flight, so a
 # deployment that has never rotated has neither and a deployment that intends sign-in may still have

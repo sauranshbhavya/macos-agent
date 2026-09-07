@@ -170,6 +170,72 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-secret-can-rotate-with-an-overlap
+Status: complete
+Date: 2026-09-07
+Tickets: **SONNY-238** (rotating `SUPABASE_JWT_SECRET` signed every user out — the one place in `server/` where a credential was not an ordered list). One session, from `main` at `061a2c36`, a lane of its own after three passes of the follow-up gateway lane each stopped with this ticket still on the board.
+Reviewed by: pending — this entry is written before the PR opens, per `WORKFLOW.md` step 7.
+
+Spec sections covered: none of the wire contract. Nothing a caller can observe changes: a request that would have been answered is still answered, and the codes, headers and bodies are untouched. What changes is which secrets a signature may match, which is entirely inside `server/src/auth/token.ts` and `server/src/config.ts`.
+
+Files changed — **12 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 12 at `<HEADSHA>`, the bare form of the same command answering **13** as the control that says the stage is doing the excluding (writing this entry puts the changelog into the population its own citation counts — `CLAUDE.md`'s ninth write-the-command defect, and PR #215's F4 in the entry directly below):
+- `server/src/auth/token.ts` — `SupabaseJwtPolicy` carries an ordered `secrets` list of `AcceptedJwtSecret` instead of one `secret`, and the single HMAC becomes a loop that stops at the first match and skips a secret past its `acceptedUntil`
+- `server/src/config.ts` — `SUPABASE_JWT_SECRET_2` and `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` in the schema, on `Config`, and read; `MAX_JWT_SECRET_OVERLAP_DAYS`; `requireSupabaseJwtPolicy` builds the list and enforces the deadline rules; `refuseUnreadJwtSecretSlots` in `loadConfig`; the length floor extracted so both secrets are held to one copy of it
+- `server/src/db/migrations/0022_a_signed_out_session_stops_verifying.sql` — `revoked_at`'s source comment made true, plus a `COMMENT ON COLUMN`
+- `server/scripts/check-secrets.sh` — the name-anchored pattern widened to `SUPABASE_JWT_SECRET(_2)?`
+- `server/scripts/check-secrets-selftest.sh` — three arms, two refusing and one passing
+- `server/scripts/deploy.sh` — both names on `PASSTHROUGH`, and a stale count corrected in passing
+- `server/.env.example`, `server/README.md` (the rotation runbook, the credential table, the signing-key paragraph, the deploy list), `docs/sonny-manual-test-checklist.md` (three rows, all waiting on SONNY-192)
+- Tests: `server/test/config.test.ts`, `server/test/token.test.ts`, `server/test/support/tokens.ts`
+
+**`server/test/support/config.ts` is the one file that looked owed and is not**, stated because the opening comment's file list did not name it and a reader checking the list against the diff will wonder: `testConfig()` spreads `TEST_SUPABASE_CONFIG`, so the two new `Config` fields arrive there by adding them to `tokens.ts`. The typecheck named it before that was done, which is the compiler doing what `CLAUDE.md`'s store-injection note describes on the Swift side. Nothing else was added to or dropped from that list.
+
+Tests (`cd server`), all at `<HEADSHA>`:
+- `npm run build` → exit 0
+- `npm run typecheck` → exit 0
+- `npm test` → exit 0, **862 passed / 445 skipped (1307)**, against the base's 843/445 (1288)
+- `npm run test:db` against `sonny-gw-db-lane-238` on a Docker-assigned port → exit 0, **1307 passed (1307)**, against the base's 1288
+- `npm run check:secrets` → exit 0, clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)
+- `./scripts/check-secrets-selftest.sh` → exit 0, **56 passed, 0 failed**, against the base's 53
+- `scripts/changelog-order` → `<CHANGELOGORDER>`
+- No Swift suite and no `scripts/warnings` are owed, measured rather than asserted: `git diff --name-only 061a2c36 HEAD -- Sources Tests` prints nothing, exit 0. `Package.swift`'s five targets all carry a `path:` naming `Sources/…` or `Tests/…`, so nothing under `server/` reaches a Swift target.
+
+Behavior added:
+- `SUPABASE_JWT_SECRET_2` — one overlap slot. A rotation is now three deploys of this gateway around one Supabase dashboard change, each valid on its own, with a usable secret at every step and nobody signed out.
+- `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` — the overlap's end, read on every request. Past it the slot stops being accepted with no deploy.
+- A numbered `SUPABASE_JWT_SECRET_<n>` this gateway does not read is a startup refusal naming the variable, rather than a silently ignored one.
+- Migration 0022's `revoked_at` carries a `COMMENT ON COLUMN`, and its source comment says what the column means.
+
+Behavior preserved (no blanket claims — each named):
+- **A deployment with no rotation in flight is byte-for-byte the deployment it was.** `requireSupabaseJwtPolicy` returns a one-element list, `verifyAccessToken` computes one HMAC, and `loadConfig` refuses nothing new. `loads and starts with no rotation in flight, which is the ordinary shape` is the assertion.
+- **Every forgery `token.test.ts` already refused is still refused** — the pin, `crit`, `typ`, the strict base64url decode, `iss`, `aud`, `sub`, the `session_id` shape check, `nbf` with no tolerance and `exp` with it. That file's original 55 tests are untouched and pass; `theSecondSecretGetsNoWeakerChecksThanTheFirst` re-asserts eleven of them against a token signed with the *overlap* secret.
+- **The check order is unchanged**: the signature is still decided before any claim is read, so a forgery is still never told which claim was wrong. `refuses the claim AFTER the signature` passes unchanged.
+- **`requireSupabaseJwtPolicy`'s existing refusals** — both variables named when both are missing, the 32-character floor with the length reported and the value not, the issuer parsed and its value reported — all pass unchanged; the floor now runs through one function that both secrets use.
+- **SONNY-237's denylist is untouched.** `server/src/auth/denylist.ts` and `gate.ts` are not in the diff; only 0022's comments moved, and `migration-round-trip.db.test.ts` walks the ledger green.
+- **`auth/deps.ts` did not move**, which was predicted before the edit rather than discovered after: `AUTH_INTENT` is the three names meaning "this deployment serves sign-in", and an optional overlap slot is not one — a deployment mid-rotation and one that has never rotated must both be able to serve.
+
+Architectural decisions / pitfalls discovered:
+
+- **The direction is the mirror of a provider credential's, and a runbook written the other way is wrong.** A provider key is one this gateway *sends*, so `<PROVIDER>_API_KEY_2` is "another thing to try". This is one Supabase *signs* with and this gateway only *verifies*, so the list is "what to accept" and the overlap must straddle the moment Supabase's own value changes — which is not a deploy of this gateway at all. `SUPABASE_JWT_SECRET_2` therefore holds the **incoming** secret in the first deploy and the **retiring** one in the third. Written down because "the previous secret" is the natural name and is false half the time.
+- **One overlap slot, not an unbounded list, and a numbered name outside `{none, _2}` is a startup refusal.** This is a deliberate departure from the description's letter, which said "the same shape as the provider credentials … stopping at the first gap". The two lists fail in opposite directions: `providerCredentials` stopping silently at a gap costs a credential to try, while a silently skipped *verifying* secret means every token signed with it is refused — the sign-out this ticket exists to prevent, reached through its own fix, with nothing in the logs. The count is two because the ticket's own security argument settles it: every extra accepted secret is another key that can mint a token for any user, and a rotation needs exactly one overlap slot.
+- **The overlap's end is read per request, not at startup, and that is the whole difference between a number and a check.** The founders decided on 2026-08-30 that a retired secret gets a stated maximum overlap and left the number and whether anything checks it open, noting that "a number in a runbook that nothing checks is better than nothing and worse than a check". A deadline evaluated once at boot ends the overlap on the next restart — which on a gateway that does not restart is no ending at all — so `verifyAccessToken` skips a retired secret against the same `now` every other time-dependent check uses. The retired secret stops being able to mint a token for any user at the stated instant, with nobody remembering.
+- **A deadline already past is deliberately not a startup failure, and this is the one place the design refuses to fail closed.** Every other invalid value here is a startup refusal, on this file's own stated reasoning that a gateway which boots and then refuses every request is indistinguishable from every user being signed out. A *past* deadline is the exception because refusing it would produce exactly that outcome — an outage caused by leftover bookkeeping — while allowing it costs nothing: a secret past its instant authorises nothing, because the verifier skips it. Fail-closed on the values somebody just typed, fail-open on the passage of time.
+- **What the maximum does not prevent, stated rather than implied.** It bounds the *remaining* overlap at each startup, because this gateway cannot know when the rotation began. An operator redeploying every week with a fresh seven-day deadline extends the overlap indefinitely and nothing here sees it. What the bound does catch is the realistic mistake — a deadline typed months out, or with the wrong year — at the moment somebody typed it.
+- **Seven days, and where the number comes from.** The overlap only has to outlive the longest-lived access token signed with the retiring secret: Supabase's default access-token lifetime is one hour and `auth/clock.ts` grants `EXPIRY_SKEW_TOLERANCE_SECONDS` past `exp` on top, so the functional requirement is hours. The rest is slack for three deploys done by people, possibly across a weekend.
+- **The scanner's suffix is written out rather than generalised, and the reason is a measurement.** `SUPABASE_JWT_SECRET(_2)?` rather than `_[0-9]+` or a trailing `.*`: the looser forms sweep in `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, which is a date an operator must be able to write down, and they break the `ENTITLEMENT_SIGNING_KEY_ID` arm sitting three lines above — a name deliberately not a secret with an arm asserting it passes. Both directions are in the selftest.
+- **The selftest's new arms were proved to fire rather than assumed to.** Running the selftest against a copy of the scanner with the suffix removed and nothing else changed: **54 passed, 2 failed, exit 1** — the two refusal arms failing and the deadline arm still passing — against **56 passed, 0 failed, exit 0** with the suffix in place. That comparison is what says the widening rather than the arms is doing the work; a new arm that passes both ways is a test of nothing.
+- **A test name that collides with three others makes a failure line unreadable.** The obvious name for the YAML-spelling arm was `its lowercase YAML spelling is refused`, which this file already uses three times for three different secrets; the control run above printed two failures under names indistinguishable from the passing ones. Renamed to name its own secret. Same family as `CLAUDE.md`'s shared-marker rule, arriving in a shell script's report rather than in a scan.
+- **Migration 0022's `revoked_at` comment was made true rather than left as a below-the-bar residual.** It said "when this gateway was asked", which PR #215's fix round falsified by refreshing the column on conflict, and review-215 recorded the condition on this ticket: a source-comment edit does not move the migration's content hash while adding SQL does, and 0022 is applied to no environment. That condition still holds — `./scripts/deploy.sh staging` and `production` are stubs that exit 3, no host exists, and the first real remote deploy is owed on SONNY-126 — so both were done. The comment now records why "the most recent ask" is the only meaning available: the prune destroys an expired row, so a re-revoked session may have no first ask left to report.
+
+Known limitations / deferred scope:
+- Nothing mechanically notices an operator who extends the overlap by redeploying with a fresh deadline each week; the bound is on the remaining overlap, as recorded above.
+- The three manual-test rows all wait on SONNY-192, because a rotation cannot be exercised without a deployed gateway and a real Supabase project. `deploy.sh local` forwards both names, which is as close as this can be taken today.
+- **SONNY-401 is the same overlap one layer away and is deliberately not built here.** There this gateway signs entitlement claims and the Mac verifies, so index 0 is special and `/v1/meta` has to publish the set; here nothing is special about index 0 beyond being tried first. It stays in Backlog, untriaged.
+
+Open questions: none.
+
+Next branch: per the roadmap and the coordinator's routing.
+
 ### Branch: fix/the-top-up-route-keeps-one-deadline
 Status: complete — SONNY-430 done (fix round 1 after PR #220's review, same day)
 Date: 2026-09-07
