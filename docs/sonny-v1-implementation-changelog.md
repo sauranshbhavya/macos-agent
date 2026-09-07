@@ -176,6 +176,8 @@ Date: 2026-09-06
 Tickets: **SONNY-237** (a Supabase access token is self-contained, so signing out revoked the *refresh* family at the provider and left the token already in the user's hand verifying until its own `exp` plus the skew tolerance). One session, from `main` at `35519b50`, third and last pass of the follow-up gateway lane. **Not done: SONNY-238** (an ordered `SUPABASE_JWT_SECRET` list so a rotation has an overlap) — never claimed, never started, and nothing in this branch anticipates it: `git diff --name-only 35519b50 HEAD -- server/src/config.ts server/.env.example server/scripts/check-secrets.sh server/scripts/deploy.sh` prints nothing.
 Reviewed by: pending.
 
+**Every figure above is stamped at `e6b291a5` and the docs commits on top of it moved no server file**, which is step 5's tree-identity proof rather than a carry by assertion: `git rev-parse e6b291a5:server <head>:server` prints `3411407fb1b1d29eda048dfc19950f04147e21f8` twice, exit 0 read with nothing between the command and `$?`. The control that stops an identical pair reading as a match is the other direction — the same command over `35519b50:server` prints `af002be670c19a949864d80d999026f337179ac9`, a different hash.
+
 Spec sections covered: contract §3.6 (the sign-out paragraph gains what the presented access token now does, and the two exclusions), §14 (one row), §7.2 (`auth.token_revoked` on a state it already defined, not a new code).
 
 Files changed (`22abf0cf`, `8a29c8b4`, `e6b291a5`, plus this entry's commits) — **27 paths**, `git diff --name-only 35519b50 HEAD | wc -l` → 27:
