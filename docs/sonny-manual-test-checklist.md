@@ -3942,6 +3942,34 @@ deployment has them, rather than reconstructing them later from a ticket.
       deliberately poor connection (macOS Network Link Conditioner, or a phone hotspot with one bar).
       **What would be a finding:** a normal-length command failing on a slow connection. That is the
       one way this change could hurt a real user, and it is the row worth spending the most care on.
+### A slow database cannot hold a request open (new 2026-09-07, SONNY-427)
+
+**Both rows wait on a deployed gateway (SONNY-192), for the same reason the gateway-hardening rows
+above do**: this change is entirely server-side, `./scripts/deploy.sh staging` and `production` are
+still stubs that exit 3, and nothing in the packaged Mac app changed. **Please do not attempt these
+until a host exists** — trying now would exercise either nothing or a local container, which is not
+what they ask about. They are written now so whoever runs the first real deployment has them.
+
+- [ ] **(SONNY-427, waits on SONNY-192)** **A request behind a stuck database transaction gives up
+      instead of hanging forever.** A terminal check rather than an app action, because no app
+      control can produce it. Against the deployed gateway's database, open a `psql` session and run
+      `BEGIN; LOCK TABLE sonny.identity IN ACCESS EXCLUSIVE MODE;` — and leave it open. Now make any
+      signed-in request from the app, or `curl` any authenticated route with a valid token. Expected:
+      an answer within roughly **ten seconds**, with the same JSON shape every other Sonny error has
+      — an `error` object with `code`, `message`, `retryable` and `request_id` — and that `code`
+      reading **`server.error`** with `retryable: true`. Then `ROLLBACK` in the `psql` session and
+      make the same request again. Expected: it succeeds normally. **What would be a finding:** the
+      request sitting open for as long as you leave the lock held, which is what happened before this
+      change and is the whole thing it exists to stop; or the gateway still answering slowly after
+      the `ROLLBACK`, which would mean a connection came back from the pool damaged.
+- [ ] **(SONNY-427, waits on SONNY-192)** **A migration still gets as long as it needs.** The bound
+      above is deliberately *not* applied to the migration runner, and this is the row that says so.
+      With no lock held, run `npm run migrate -- status` and then apply a migration on staging the way
+      `server/README.md`'s four steps describe. Expected: it behaves exactly as it always has, however
+      long it takes. **What would be a finding:** a migration failing with a message about a statement
+      being cancelled — that would mean the bound reached the runner, which would make a large
+      backfill impossible to deploy.
+
 ### Sonny refuses to drive a window showing a shell, even when the recognizer misreads it (new 2026-09-05, SONNY-277)
 
 **Needs a packaged build and screen control**, the same as every other screen-control row. What is

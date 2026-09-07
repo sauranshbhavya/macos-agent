@@ -1,4 +1,5 @@
 import pg from "pg";
+import { DEADLINE_MS } from "../model/limits.js";
 import type { WithConnection } from "./connection.js";
 
 /**
@@ -13,6 +14,27 @@ import type { WithConnection } from "./connection.js";
  * **In its own file rather than beside the type**, deliberately: `db/connection.ts` is a type
  * declaration two lanes import, and a new file cannot conflict with a branch running in parallel.
  */
+
+/**
+ * How long any one statement issued on this pool may run, in milliseconds — **contract §12's number
+ * rather than a number chosen here** (SONNY-427).
+ *
+ * §12's last row is *auth, account, meta, health, delete* at 10 s upstream, 15 s total, 20 s at the
+ * client, and every route whose slow work is the database sits in it. On a route with a provider,
+ * `upstream` bounds the one external wait and the five seconds left over to `total` are the
+ * handler's own margin. On these routes the **database statement is that one external wait**, so it
+ * takes that row's `upstream` and leaves the same margin — which is the derivation, and is why this
+ * reads `DEADLINE_MS.auth.upstream` instead of spelling `10_000`. A literal that matched the
+ * contract would be indistinguishable from wiring and would stop matching the first time §12 moved;
+ * PR #212's W9 is the worked example of that going wrong one layer up, in the adapter this same row
+ * bounds.
+ *
+ * **Routes on the longer rows are held by this too, and lose nothing.** A model route's own budget
+ * is 90 s or 60 s upstream, but its *database* work is the gate's attribution read, a metering
+ * write, an idempotency claim — none of which is meant to approach ten seconds. A statement that
+ * does has stopped by any route's standard.
+ */
+export const STATEMENT_TIMEOUT_MS = DEADLINE_MS.auth.upstream;
 
 /** Tunables, all with reasons. Nothing here reads the environment; `deps.ts` owns that. */
 export interface PoolOptions {
@@ -37,6 +59,17 @@ export interface PoolOptions {
   readonly connectionTimeoutMillis?: number;
   /** How long an unused connection is kept. Thirty seconds — enough to survive ordinary bursts. */
   readonly idleTimeoutMillis?: number;
+  /**
+   * How long one statement may run before Postgres cancels it. `STATEMENT_TIMEOUT_MS` by default,
+   * and injected only by tests that need a bound they can reach inside a test's patience.
+   *
+   * **A parameter here rather than a value each caller supplies**, unlike the adapter's `timeoutMs`
+   * one layer up: there is exactly one spelling of this number in the tree — `DEADLINE_MS.auth`'s
+   * `upstream` — and the default *is* the read of it, so there is no second spelling for a deleted
+   * wiring to be reproduced from. What W9 forbids is a default that duplicates a literal a caller
+   * passes; nothing passes this in production.
+   */
+  readonly statementTimeoutMillis?: number;
   /**
    * How the pool is constructed. Injected only by tests, the same seam and the same reason as
    * `SupabaseAuthConfig.fetch`.
@@ -77,6 +110,50 @@ export function pooledConnections(
     max: options.max ?? 10,
     connectionTimeoutMillis: options.connectionTimeoutMillis ?? 5_000,
     idleTimeoutMillis: options.idleTimeoutMillis ?? 30_000,
+    /**
+     * **The one bound Postgres enforces rather than this process** (SONNY-427). `pg` sends it as a
+     * session setting in the startup packet, so the backend cancels the statement itself and hands
+     * the connection back usable, and the cancellation covers time spent *queued behind another
+     * connection's lock* — which is the case this exists for, and the one `lock_timeout` would not
+     * cover, bounding only the acquisition rather than the whole statement.
+     *
+     * **`pg`'s own `query_timeout` was the alternative and is the wrong tool.** That one is a
+     * JavaScript timer: on expiry `client.js` errors the query, sets `query.callback = () => {}`
+     * with the comment "just do nothing if query completes", and outside pipeline mode leaves the
+     * socket alone — so the statement keeps running on the backend, still holding its locks, on a
+     * connection that then goes back to the pool for the next lessee. That is PR #212's F1 one layer
+     * lower: a deadline around work holding a database connection that abandons rather than ends it.
+     *
+     * **It has to arrive in the startup packet and not as a `SET` after connect, and that is the
+     * one thing about this line a later simplification must not undo** (SONNY-428's neighbour). A
+     * route may set its own bound on a connection it has leased — `model/routing.ts`'s
+     * `withDatabaseDeadline` does, per statement, for the four content-deletion routes — and clears
+     * it with `RESET statement_timeout` on the way out. `RESET` restores a parameter to its
+     * *reset value*, which a startup parameter sets and a session `SET` does not. So the two shapes
+     * differ in production and in nothing a casual test would show. Measured on `postgres:17`,
+     * reading `setting`/`reset_val`/`source` from `pg_settings` around a route's `SET 15000` and its
+     * `RESET`: from the startup packet, `10000/10000/client` -> `15000/10000/session` ->
+     * `10000/10000/client`, the bound restored; from a `SET` after connect, `10000/0/session` ->
+     * `15000/0/session` -> **`0/0/default`**, which is byte-identical to a connection that was never
+     * bounded at all. The first content deletion on a connection would take the bound off it for
+     * every later lessee.
+     *
+     * **How the two compose, since both are session settings and the last one wins in either
+     * direction.** Measured the same way with a 600 ms stand-in for this bound and
+     * `SELECT pg_sleep(5)` as the work: under the default alone it is cancelled at 614 ms; under a
+     * route's larger `SET 2000` at 2008 ms; under a route's smaller `SET 150` at 154 ms; after each
+     * `RESET`, at 602 ms again. The control — the same statement with no bound — completes in
+     * 1018 ms, which is what makes the five cancellations readings rather than a probe that cancels
+     * everything. So a route's own budget governs the statements it wraps, wider or narrower, and
+     * this is what governs everywhere else: the gate's attribution read, which takes its own lease
+     * before any handler runs, and every route that wraps nothing.
+     *
+     * **A `statement_timeout` in the connection string wins over this**, because
+     * `ConnectionParameters` assigns the parsed string over the config it was given. Nothing in this
+     * repository sets one, and `statement-timeout.db.test.ts` reads the *effective* setting off a
+     * leased connection rather than trusting that this option took.
+     */
+    statement_timeout: options.statementTimeoutMillis ?? STATEMENT_TIMEOUT_MS,
   });
 
   /**

@@ -1994,13 +1994,15 @@ safe to repeat.
 `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider, no network — so
 a deadline around either is a timer that cannot fire, and the row's numbers are true of them only in
 the sense that any bound is. **Three of the four `/v1/account/*` routes remain owed**: they wait on
-the database rather than on a provider, and this gateway sets no statement timeout on the pool —
-only a connection timeout — so bounding *every* authenticated route is a change to how the gateway
-reaches Postgres rather than a wrapper at a few call sites, which is **SONNY-427**. What SONNY-428
-did is narrower and composes with it: a per-statement budget set by four routes for their own work,
-which a pool-wide default would sit underneath rather than replace. **The fourth was `POST
-/v1/account/credits/top-up`, which is nothing of the kind — it charges at the payment provider — and
-it has its own row above now** (SONNY-430).
+the database rather than on a provider, and **the pool now bounds every statement they issue** — the
+paragraph below is that bound, and it replaces this sentence's own former claim that this gateway set
+no statement timeout on the pool. What they are still owed is the *total* half of this row, because a
+per-statement bound cannot stop several statements summing past 15 s, and that is **SONNY-434**. What
+SONNY-428 did is narrower and composes with it: a per-statement budget four routes set for their own
+work, on top of a pool-wide default that is restored the moment they clear it — **not the tighter of
+the two winning**, because the innermost `SET` governs in either direction, which the paragraph below
+measures. **The fourth was `POST /v1/account/credits/top-up`, which is nothing of the kind — it
+charges at the payment provider — and it has its own row above now** (SONNY-430).
 
 **The top-up row, and why its numbers are what they are** (SONNY-430). The charge is a draft order
 and then a finalize, each bounded at twelve seconds inside `server/src/billing/polar.ts`, so the
@@ -2025,6 +2027,42 @@ such decision this table does not override.** It answers **`502 topup.unconfirme
 The deadline bounds the *answer* and never the work: the attempt row already carries the provider's
 order id, written before anything can charge, so the charge that outran the deadline settles that row
 and the account's next attempt resolves it rather than starting again.
+
+**Underneath all of that, the pool sets a `statement_timeout`, and it is the only bound in this
+document the database itself enforces** (SONNY-427). Every other number here is a timer this process
+owns, which is why every other one can be outrun by a statement that never returns: a stalled or
+lock-blocked query holds the request past whatever the handler promised, and no deadline written in
+JavaScript can reach inside it. The gateway builds exactly one pool, and every connection it hands
+out carries **10 000 ms** — **this row's own `upstream`**, not a number chosen here. The derivation is
+the row: for a route with a provider, `upstream` bounds the one external wait and the five seconds
+left to `total` are the handler's own margin; for a route whose slow work is the database, the
+statement *is* that wait, so it takes the same number and leaves the same margin. Routes on the
+longer rows are held by it too and lose nothing — their database work is a gate read, a metering
+write, an idempotency claim, none of which is meant to approach ten seconds.
+
+**Its reach is every statement issued on that pool**: each route handler's own work, the gate's
+attribution read that runs before every authenticated request, and the content-expiry sweeper, which
+leases from the same pool. **It deliberately does not reach the migration runner or the operator
+commands**, which each open a connection of their own — a backfill that legitimately runs for minutes
+must not be cut at ten seconds, and `server/README.md`'s still-owed `lock_timeout` decision is about
+that other end of the same stall and is not discharged by this.
+
+**What it bounds is a statement, and saying so precisely matters twice.** It cannot bound
+*composition* — a handler issuing several statements can still sum past this row's `total`, which is
+the paragraph above's SONNY-434 — and it cannot bound a transaction sitting *idle* between
+statements, which is a different setting and a different failure. What it does bound is the one thing
+nothing else could: a single statement, including one queued behind another connection's lock, which
+is where a migration's `ACCESS EXCLUSIVE` puts every reader.
+
+**It is carried in the connection's startup parameters, and that is a mechanism rather than a
+detail.** A route may set a tighter or wider budget on a connection it has leased and clear it with
+`RESET statement_timeout` on the way out. `RESET` restores a parameter to the value it would have had
+with no `SET` in the session — which a startup parameter supplies and a `SET` issued after connecting
+does not. Had this bound been applied the second way, the first route to clear its own budget would
+have taken this one off that connection for every later request that leased it, leaving a connection
+indistinguishable from one that was never bounded. The two shapes are identical to read and differ
+only in production. The composition that follows is that the innermost `SET` governs, wider or
+narrower, and `RESET` returns to this bound rather than to none.
 
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying
