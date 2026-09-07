@@ -1064,6 +1064,13 @@ describe("the numbers this ticket is held to", () => {
       // SONNY-425. It is asserted here for the reason the other five are — the table is asserted
       // whole, so a sixth row has to be written here as well as beside the routes that read it.
       auth: { upstream: 10_000, total: 15_000 },
+      // The charge route's own row (SONNY-430). It came out of the row above because that row's
+      // routes wait on a database and this one charges a card: three sequential provider calls of
+      // twelve seconds could run for thirty-six, against a row allowing fifteen. The 24_000 is
+      // `TOPUP_CHARGE_TIMEOUT_MS` doubled and `topup.test.ts` holds that derivation; this file's job
+      // is the one it has always had, which is that no row reaches the table without being written
+      // down twice.
+      topUp: { upstream: 24_000, total: 30_000 },
     });
     // **The invariant is the ordering, not a fixed gap** — a first draft of this test asserted
     // fifteen seconds on every row and went red on `search`, whose margin is five. §12's table has

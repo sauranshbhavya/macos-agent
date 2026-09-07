@@ -1934,6 +1934,7 @@ own opaque transport timeout, which it cannot tell apart from a dead network.
 | `POST /v1/plan` | 60 s | 75 s | 90 s |
 | `POST /v1/transcriptions` | 60 s | 75 s | 90 s |
 | `POST /v1/search` | 20 s | 25 s | 30 s |
+| `POST /v1/account/credits/top-up` | 24 s | 30 s | 40 s |
 | auth, account, meta, health, delete | 10 s | 15 s | 20 s |
 
 SONNY-404's three deletes are in that last row and take no row of their own: they are the same
@@ -1997,12 +1998,30 @@ the database rather than on a provider, and this gateway sets no statement timeo
 only a connection timeout — so bounding *every* authenticated route is a change to how the gateway
 reaches Postgres rather than a wrapper at a few call sites, which is **SONNY-427**. What SONNY-428
 did is narrower and composes with it: a per-statement budget set by four routes for their own work,
-which a pool-wide default would sit underneath rather than replace. **The fourth is `POST
-/v1/account/credits/top-up` and it is nothing of the kind: it charges at the payment provider, with
-up to three sequential calls of twelve seconds each, so its upstream work can run for far longer than
-this row allows.** Whether it gets a row of its own derived from those attempts, or the attempts are
-bounded to fit this one, is **SONNY-430** (2026-09-06), filed so the route has an owner; nothing
-bounds it today.
+which a pool-wide default would sit underneath rather than replace. **The fourth was `POST
+/v1/account/credits/top-up`, which is nothing of the kind — it charges at the payment provider — and
+it has its own row above now** (SONNY-430).
+
+**The top-up row, and why its numbers are what they are** (SONNY-430). The charge is a draft order
+and then a finalize, each bounded at twelve seconds inside `server/src/billing/polar.ts`, so the
+route's 24 s upstream is that constant doubled rather than a number picked to fit. A third HTTP call
+exists — the read-back the finalize makes when the provider answers `412`, meaning the order is no
+longer a draft — and it **shares the finalize's budget instead of taking a third**; until SONNY-430 it
+took its own, so one top-up could spend thirty-six seconds against a row that allowed fifteen. Thirty-six
+was never available as a row either: the client's timeout here is 40 s and is derived on the Mac from
+those same two calls, so a 36 s upstream would want a total above the client's and invert this
+section's governing rule. Folding the charge into the last row instead was rejected as the unsafe
+direction — three calls inside 10 s is about 3.3 s each, which is below a healthy card authorisation,
+and a charge aborted mid-flight is recorded as unconfirmed, granting nothing for money that may have
+moved.
+
+**This route does not answer `504 provider.timeout` when its deadline elapses, and that is the third
+such decision this table does not override.** It answers **`502 topup.unconfirmed`**, which section
+7.2 marks not retryable. At the instant the total deadline elapses a charge may be in flight, and
+`provider.timeout` invites the retry that buys a second pack — the defect PR #196 found and closed.
+The deadline bounds the *answer* and never the work: the attempt row already carries the provider's
+order id, written before anything can charge, so the charge that outran the deadline settles that row
+and the account's next attempt resolves it rather than starting again.
 
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying

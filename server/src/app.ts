@@ -276,6 +276,14 @@ export interface AppOverrides {
    * one that has quietly restated `billing.test.ts`'s fixtures.
    */
   readonly topUpProvider?: BillingProvider;
+  /**
+   * §12's total deadline for the top-up charge, in milliseconds (SONNY-430).
+   *
+   * The eighth seam and the eighth reason: what is worth testing about a deadline is what the route
+   * answers when it elapses, and at the shipped thirty seconds that is a thirty-second test. The
+   * shipped default is asserted separately, so overriding it here cannot become the deployed bound.
+   */
+  readonly topUpTotalDeadlineMs?: number | undefined;
 }
 
 export function buildApp(
@@ -765,6 +773,7 @@ export function buildApp(
               }
             : undefined,
         now: auth.now,
+        topUpTotalDeadlineMs: overrides.topUpTotalDeadlineMs,
       });
     }
   }

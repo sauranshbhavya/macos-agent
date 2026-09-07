@@ -486,6 +486,15 @@ const FINALIZE_PATH = (orderId: string) => `/v1/orders/${encodeURIComponent(orde
  * How long this gateway waits for **each** of the two calls a top-up makes: **twelve seconds**
  * (SONNY-215).
  *
+ * **Two budgets across three HTTP calls, which is SONNY-430's correction and not a contradiction.**
+ * The draft creation spends one and the finalize spends the other; the read-back the finalize may
+ * make on a `412` shares the finalize's rather than taking a third, because it is the second half of
+ * that operation. Before SONNY-430 it took its own, so the sentence above was true of the design and
+ * false of the code — one top-up could spend thirty-six seconds, which no §12 row has ever allowed
+ * and which the Mac's own forty-second client timeout is not sized for.
+ * `DEADLINE_MS.topUp.upstream` is this number doubled, and `topup.test.ts` holds that relation so it
+ * is a derivation rather than two literals that happen to agree.
+ *
  * `PORTAL_SESSION_TIMEOUT_MS`'s three surviving reasons apply unchanged, and the number differs from
  * its eight for one reason that is specific to this call: **there are two of them, and the Mac's own
  * budget has to clear both.** A draft creation and a finalize run in sequence, so the ceiling this
@@ -607,6 +616,24 @@ async function polarFinalizeTopUpOrder(
   const call = config.fetchImplementation ?? fetch;
   const base = config.apiBaseUrl ?? POLAR_API_BASE_URL;
 
+  /**
+   * **One deadline for this call and the read-back it may make, not one each** (SONNY-430).
+   *
+   * The `412` path below asks the provider what an order became, and it is the second half of *this*
+   * operation rather than an operation of its own — so it spends what is left of this budget instead
+   * of starting a fresh one. Two independent twelve-second signals made a single top-up cost
+   * thirty-six seconds of provider time across its three calls, against the twenty-four that
+   * `TOPUP_CHARGE_TIMEOUT_MS` above and `SonnyBackendTimeouts.topUp` on the Mac both derive their own
+   * numbers from; §12 has no row that ever allowed the thirty-six.
+   *
+   * **Sharing it cannot abandon a charge**, which is the property that decided the shape. An
+   * exhausted budget reaches `polarReadPaidOrder` as a rejected `fetch`, and every exit from there is
+   * `unconfirmed` — so the order id stays on the row and the account's next attempt resolves it,
+   * which is the recovery PR #196's F1 built. A shared deadline can lose the *answer* to a charge
+   * here; it can never close the row on one.
+   */
+  const deadline = AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS);
+
   let finalized: Response;
   try {
     finalized = await call(new URL(FINALIZE_PATH(orderId), base), {
@@ -616,7 +643,7 @@ async function polarFinalizeTopUpOrder(
       // deliberately not sent: choosing which of a customer's cards to charge is not a decision this
       // gateway has any basis for, and the customer's own default is what they set at the provider.
       body: "{}",
-      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+      signal: deadline,
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : "request failed";
@@ -632,7 +659,7 @@ async function polarFinalizeTopUpOrder(
     // **The order stopped being a draft, which is what being paid looks like — so ask.** This is the
     // recovery path and the reason a second call is a question rather than a charge.
     case finalized.status === 412:
-      return await polarReadPaidOrder(config, orderId);
+      return await polarReadPaidOrder(config, orderId, deadline);
     case finalized.status === 429:
       return { kind: "unavailable", reason: "provider answered 429" };
     case finalized.status >= 500:
@@ -657,6 +684,7 @@ async function polarFinalizeTopUpOrder(
 async function polarReadPaidOrder(
   config: PolarProviderConfig,
   orderId: string,
+  deadline: AbortSignal,
 ): Promise<TopUpCharge> {
   const call = config.fetchImplementation ?? fetch;
   let read: Response;
@@ -664,7 +692,11 @@ async function polarReadPaidOrder(
     read = await call(new URL(`${ORDERS_PATH}${encodeURIComponent(orderId)}`, config.apiBaseUrl ?? POLAR_API_BASE_URL), {
       method: "GET",
       headers: polarHeaders(config),
-      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+      // **The finalize's remaining budget, never a fresh one** (SONNY-430). An already-exhausted
+      // signal rejects this `fetch` immediately, which the catch below reads as `unconfirmed` — the
+      // answer that keeps the order resolvable, so running out of time here costs a question rather
+      // than a charge.
+      signal: deadline,
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : "request failed";

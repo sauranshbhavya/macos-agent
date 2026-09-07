@@ -6,6 +6,7 @@ import { creditBalance, type CreditBalance } from "../credit/balance.js";
 import type { CreditCatalogue } from "../credit/catalogue.js";
 import type { CreditFacts, CreditStore } from "../credit/store.js";
 import { attemptTopUp, type TopUpDeps, type TopUpRefusal } from "../credit/topup.js";
+import { DEADLINE_MS } from "../model/limits.js";
 
 /**
  * `GET /v1/account/credits` — **the one number a user tracks**, served (SONNY-212) — and the two
@@ -71,6 +72,16 @@ export interface CreditRouteDeps {
   readonly topUp?: Omit<TopUpDeps, "pack"> | undefined;
   /** Tests only. Nothing a deployment sets, the same seam and reason as the entitlement route's. */
   readonly now?: (() => Date) | undefined;
+  /**
+   * §12's total deadline for the charge, in milliseconds — **tests only**, defaulting to
+   * `DEADLINE_MS.topUp.total` (SONNY-430).
+   *
+   * The seam exists because the property worth testing is what the route *does* when the deadline
+   * elapses, and a test that waited the real thirty seconds to find out would be a thirty-second
+   * test. `topup.test.ts` asserts separately that the shipped default is §12's number, so overriding
+   * it here cannot quietly become the deployed bound.
+   */
+  readonly topUpTotalDeadlineMs?: number | undefined;
 }
 
 export const CREDITS_PATH = "/v1/account/credits";
@@ -256,10 +267,57 @@ function refuse(
   }
 }
 
+/**
+ * What the charge's total deadline resolves to when it elapses — a value, deliberately, not a throw
+ * (SONNY-430).
+ *
+ * A thrown timeout would reach `sendUpstreamFailure`'s `504 provider.timeout`, and that answer is
+ * marked retryable. On this route it must not be: at the instant the deadline elapses a charge may
+ * be in flight at the provider, and "the provider did not answer in time, try again" is how PR
+ * #196's F1 bought a second pack. The route answers `topup.unconfirmed` instead, which is the code
+ * this state already has and which §7.2 marks not retryable.
+ */
+const TOP_UP_DEADLINE_ELAPSED = Symbol("the top-up route's total deadline elapsed");
+
+/**
+ * Race `work` against §12's total deadline for this route.
+ *
+ * **The losing work is not cancelled, and that is the property rather than an oversight.**
+ * `attemptTopUp` writes the provider's order id onto the attempt row *before* anything can charge,
+ * so a charge still in flight when this returns is one whose row already names the object it is
+ * charging: the work runs on, settles that row, and the account's next attempt resolves it either
+ * way. Cancelling it here would be the one way to abandon a charge the provider has accepted —
+ * killing the settle after the money moved — which is exactly the shape PR #196's F1 exists to close.
+ * So this bounds the *answer*, never the work.
+ *
+ * The no-op `catch` is load-bearing. Once the race has been decided by the timer, a later rejection
+ * from `work` has no handler attached to it, and an unhandled rejection in Node ends the process —
+ * so this gateway would fall over precisely when a payment provider started failing slowly.
+ */
+async function withinTotalDeadline<T>(
+  totalMs: number,
+  work: Promise<T>,
+): Promise<T | typeof TOP_UP_DEADLINE_ELAPSED> {
+  work.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<typeof TOP_UP_DEADLINE_ELAPSED>((resolve) => {
+        timer = setTimeout(() => resolve(TOP_UP_DEADLINE_ELAPSED), totalMs);
+      }),
+    ]);
+  } finally {
+    // Or the timer holds the event loop open for the rest of the deadline on every fast charge.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps): void {
   const now = deps.now ?? (() => new Date());
   const pack = deps.catalogue.topUp;
   const topUpConfigured = pack !== undefined && deps.topUp !== undefined;
+  const topUpTotalDeadlineMs = deps.topUpTotalDeadlineMs ?? DEADLINE_MS.topUp.total;
 
   /** The account's whole position, read once. Every route below answers with it. */
   async function position(accountId: string, at: Date) {
@@ -315,15 +373,29 @@ export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps
     const outcome =
       deps.topUp === undefined
         ? ({ kind: "refused", refusal: "not_offered" } as const)
-        : await attemptTopUp(
-            { ...deps.topUp, pack },
-            {
-              accountId: caller.accountId,
-              balance,
-              consentedAt: facts.autoTopUpOptedInAt,
-              now: at,
-            },
+        : await withinTotalDeadline(
+            topUpTotalDeadlineMs,
+            attemptTopUp(
+              { ...deps.topUp, pack },
+              {
+                accountId: caller.accountId,
+                balance,
+                consentedAt: facts.autoTopUpOptedInAt,
+                now: at,
+              },
+            ),
           );
+    if (outcome === TOP_UP_DEADLINE_ELAPSED) {
+      // **Logged at `warn`, unlike the ordinary refusals below.** Every other refusal is a decision
+      // this gateway made and can explain; this one means the gateway stopped waiting for an answer
+      // about money, and the attempt row is left for the account's next try to resolve. That is an
+      // operator's business, and SONNY-408 is the surface that will read those rows.
+      request.log.warn(
+        { accountId: caller.accountId, totalDeadlineMs: topUpTotalDeadlineMs },
+        "top-up did not answer inside its total deadline",
+      );
+      return refuse(request, reply, "unconfirmed");
+    }
     if (outcome.kind === "refused") {
       // The reason is logged and never sent, exactly as the webhook's refusal reason and the
       // portal's are: five of the ten collapse into one code above, and this is where the difference
