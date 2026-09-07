@@ -220,17 +220,27 @@ describeDb("a sign-out, against a real denylist", () => {
     // **The prune and the upsert touch one row in one statement, and this is the case that finds
     // out.** One user signing out twice more than a token lifetime apart, with no other sign-out in
     // between to have pruned the row, so the prune's `DELETE` and the insert's `ON CONFLICT` are
-    // both about the same `session_id`. It resolves cleanly on Postgres 17 — the delete is what the
-    // arbiter sees, so the insert proceeds as an insert — and this test is what says so rather than
-    // the reasoning in `denylist.ts`, which was wrong in the other direction before it was measured.
-    // What would fail here is a `500` on a route that must not have one.
+    // both about the same `session_id`.
+    //
+    // **`revoked_at` is what tells the two possible mechanisms apart, and the version of this test
+    // that did not read it passed under both** (PR #215's F2). `DO UPDATE` sets only the columns it
+    // names, so a genuine insert restamps `revoked_at` and an update on the pruned tuple cannot —
+    // and asserting one row with a future `expires_at`, which is all this test used to do, is true
+    // either way. What actually happens is the update, and this branch then chose to make it
+    // restamp: `denylist.ts` carries the reasoning, which is that "the first ask" is not a meaning
+    // the storage can keep across a prune while "the most recent ask" is.
+    //
+    // The `2000` plant is far enough from anything the run produces that a stale value cannot be
+    // mistaken for a fresh one, and `signedOutAt` below is the assertion the mechanism decides.
     const app = build();
     await signIn(app, "twice@example.com");
+    const plantedRevokedAt = new Date("2000-01-01T00:00:00.000Z");
     await client.query(
       `INSERT INTO sonny.revoked_provider_session (session_id, revoked_at, expires_at)
-       VALUES ($1, now() - interval '3 hours', now() - interval '2 hours')`,
-      [providerSessionFor(SESSION_USER)],
+       VALUES ($1, $2, now() - interval '2 hours')`,
+      [providerSessionFor(SESSION_USER), plantedRevokedAt],
     );
+    const beforeSignOut = Date.now();
 
     const answered = await app.inject({
       method: "POST", url: "/v1/auth/signout",
@@ -238,14 +248,18 @@ describeDb("a sign-out, against a real denylist", () => {
     });
 
     expect(answered.statusCode).toBe(204);
-    const { rows } = await client.query<{ expires_at: Date }>(
-      "SELECT expires_at FROM sonny.revoked_provider_session WHERE session_id = $1",
+    const { rows } = await client.query<{ revoked_at: Date; expires_at: Date }>(
+      "SELECT revoked_at, expires_at FROM sonny.revoked_provider_session WHERE session_id = $1",
       [providerSessionFor(SESSION_USER)],
     );
-    // One row, and its window is the new token's rather than the dead one's — the upsert refreshed
-    // it instead of the prune taking it away.
+    // One row, and its window is the new token's rather than the dead one's.
     expect(rows).toHaveLength(1);
     expect(rows[0]!.expires_at.getTime()).toBeGreaterThan(Date.now());
+    // And the row says it was signed out just now rather than in 2000, which is the half the
+    // previous version of this test could not see.
+    const signedOutAt = rows[0]!.revoked_at.getTime();
+    expect(signedOutAt).not.toBe(plantedRevokedAt.getTime());
+    expect(signedOutAt).toBeGreaterThanOrEqual(beforeSignOut - 1000);
     await app.close();
   });
 

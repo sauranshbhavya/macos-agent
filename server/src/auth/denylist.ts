@@ -88,6 +88,16 @@ export function denylistedUntil(accessTokenExpiresAt: Date): Date {
  * prune's boundary exactly; the same reason `token.ts` takes its `now`. It is never a value a caller
  * sent.
  *
+ * **`revoked_at` is refreshed on conflict, and choosing that over keeping the first ask is a
+ * decision the storage makes for us** (PR #215's F2). Migration 0022 calls this column the thing
+ * that makes a support question answerable at all, so it has to mean one thing on every path. "The
+ * first time this gateway was asked" cannot: the prune destroys the row, so a session re-revoked
+ * after some *other* user's sign-out pruned it has no first ask left to report, and the column would
+ * silently mean "the first ask, or a later one, depending on traffic nobody involved can see".
+ * "The most recent ask" is reachable on every path, and it is also the reading that keeps one row
+ * internally consistent: `expires_at` already describes the latest token this session was signed out
+ * with, and a `revoked_at` from a token lifetime earlier describes a different act sitting beside it.
+ *
  * **`GREATEST` on conflict, because a second sign-out must never shorten the first.** Two sign-outs
  * for one session are ordinary — a client retrying a `502`, or a `504` the caller retries under §9.3
  * — and they may present different tokens of the same session, since `session_id` survives a
@@ -99,20 +109,31 @@ export function denylistedUntil(accessTokenExpiresAt: Date): Date {
  * is a narrower residual than the one this table closes, and it is written down rather than assumed
  * away.
  *
- * **The prune and the upsert touch the same row and that is fine, which was measured rather than
- * reasoned about.** The obvious worry is that a sign-out for a session whose own row has already
- * passed `expires_at` has the prune delete the very row the upsert then conflicts on — a
- * data-modifying `WITH` runs on the statement's own snapshot while `ON CONFLICT`'s arbiter reads
- * the index as it stands, and Postgres does refuse to *update* a tuple the same command has already
- * modified. It does not arise here: the delete is what the arbiter sees, so the insert proceeds as a
- * plain insert. Measured on Postgres 17.11 in both directions — an expired row pruned and reinserted,
- * and a live row deleted by a widened boundary and reinserted — each leaving exactly one row
- * carrying the new expiry, and neither raising. **An earlier version of this function carried an
- * `AND session_id <> $1` on the prune to sidestep an interaction that turned out not to happen, and
- * it is gone rather than kept as belt and braces**, for the reason `token.ts` gives for deleting its
- * unreachable `4n+1` guard: a condition that cannot change an answer is not a second defence, it is a
- * claim the next reader will reason from. `re-revokes a session whose own row has already expired`
- * in `denylist.db.test.ts` is what keeps this measured rather than remembered.
+ * **The prune and the upsert touch the same row, and what happens then is the `ON CONFLICT` arm
+ * running on the tuple the prune matched — not a fresh insert.** Measured on Postgres 17.11 by
+ * running this exact statement, lifted out of this file rather than retyped, with `revoked_at` as
+ * the discriminator: `DO UPDATE` sets only the columns it names, so a genuine insert restamps that
+ * column and an update cannot. With no pre-existing row it comes back stamped today; with an
+ * expired row belonging to a **different** session it comes back stamped today, which is the control
+ * saying the prune really does delete; and with an expired row belonging to **this** session it
+ * comes back carrying the planted timestamp. Both controls fire, so the probe can produce either
+ * answer. **The delete and the conflict check do not race and neither loses**: a data-modifying
+ * `WITH` runs on the statement's own snapshot while the arbiter reads a dirty one, so the row is
+ * still there to conflict on, and nothing raises. The outcome is what this function wants either
+ * way — one row, the later expiry — which is why the mechanism went unnoticed while the sentence
+ * describing it was wrong twice.
+ *
+ * **This paragraph is the second correction of the same three lines, and the reason it earned one is
+ * the sentence rather than the code.** The first version carried an `AND session_id <> $1` on the
+ * prune to sidestep an interaction that does not happen, and that condition is gone for the reason
+ * `token.ts` gives for deleting its unreachable `4n+1` guard: a condition that cannot change an
+ * answer is not a second defence, it is a claim the next reader will reason from. The replacement
+ * then asserted the opposite mechanism, equally unmeasured, and it is the sentence somebody would
+ * reason from when they next change the statement — which is exactly the cost that guard was deleted
+ * for, arriving in prose instead of in code. `re-revokes a session whose own row has already expired`
+ * in `denylist.db.test.ts` reads `revoked_at` back for that reason: it is the one assertion that can
+ * tell an update on the pruned tuple from a fresh insert, and the version of that test which did not
+ * read it passed under both.
  */
 export async function revokeProviderSession(
   client: pg.Client,
@@ -127,7 +148,8 @@ export async function revokeProviderSession(
      INSERT INTO sonny.revoked_provider_session (session_id, revoked_at, expires_at)
      VALUES ($1, $3, $2)
      ON CONFLICT (session_id) DO UPDATE
-       SET expires_at = GREATEST(EXCLUDED.expires_at, sonny.revoked_provider_session.expires_at)`,
+       SET expires_at = GREATEST(EXCLUDED.expires_at, sonny.revoked_provider_session.expires_at),
+           revoked_at = EXCLUDED.revoked_at`,
     [providerSessionId, expiresAt, now],
   );
 }

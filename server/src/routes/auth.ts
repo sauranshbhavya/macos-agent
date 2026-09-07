@@ -708,6 +708,15 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * either way, so there is no outcome of that call for which the row is wrong. The database is
    * demonstrably reachable at this point, because the gate read it for this very request.
    *
+   * **The cost of that order, which the paragraph above states only one direction of** (PR #215's
+   * review, recorded below the bar and corrected here because it is one sentence). The write sits
+   * outside the `try`, so a database failure between the gate's lease and this one answers `500` and
+   * the provider is never asked — where before this ticket the route needed no database at all. The
+   * window is narrow, since the gate has just leased a connection successfully and a pool that is
+   * fully down refuses at the gate first, and `500 server.error` is in `idempotency/hook.ts`'s
+   * `RELEASE_ON_CODES`, so the claim releases and the Mac's retry re-runs the whole handler. It is
+   * the mirror of the trade the paragraph above makes, and both halves belong in the record.
+   *
    * **An unreachable provider answers `502 provider.unavailable` and not `204`, and that was a
    * decision rather than a copy of the route above** (SONNY-311, whose own text asked for one).
    * `204` here would be this gateway asserting a revocation that did not happen: the refresh-token
