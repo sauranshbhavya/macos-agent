@@ -281,7 +281,11 @@ export interface AppOverrides {
    *
    * The eighth seam and the eighth reason: what is worth testing about a deadline is what the route
    * answers when it elapses, and at the shipped thirty seconds that is a thirty-second test. The
-   * shipped default is asserted separately, so overriding it here cannot become the deployed bound.
+   * default this overrides is held by a test that drives the route **without** an override and
+   * advances the route's own timer (`runs on §12's own total when nothing overrides it`), so
+   * overriding it here cannot become the deployed bound. Until PR #220's F2 the only thing backing
+   * that sentence was an assertion about the constant, which the default could stop reading with the
+   * whole suite green.
    */
   readonly topUpTotalDeadlineMs?: number | undefined;
 }

@@ -173,12 +173,26 @@ export const DEADLINE_MS = {
    *
    * ## The six seconds of margin, and what enforces each column
    *
-   * `total` covers the route's own database work around the charge — the position read, the customer
-   * lookup, the outstanding query, the claim, the order-id write, the settle and the re-read — and
-   * 30 s leaves the client's 40 s ten seconds of headroom.
+   * `total` covers `attemptTopUp` — the customer lookup, the outstanding query, the claim, the
+   * order-id write, the charge and the settle — and 30 s leaves the client's 40 s ten seconds of
+   * headroom for it. **Two database reads sit outside it and are named rather than implied**
+   * (PR #220's F4): `routes/credits.ts` awaits `position()` before the wrapper and again after it, so
+   * the route's worst-case answer is this number plus those two round trips. This gateway sets no
+   * statement timeout — the `auth` row above and SONNY-427 both say so — so that remainder is not
+   * bounded by anything here; in practice it is milliseconds, and the honest statement is that the
+   * bound is on the charge rather than on the handler. An earlier version of this sentence listed
+   * both reads among the seven things `total` covers, which is the enumerate-before-you-subtract
+   * shape in the file that defines the number.
    *
    * **`upstream` is enforced at the adapter and `total` at the route**, which is the same split the
-   * `auth` row's last paragraph describes. What differs is the answer when `total` elapses:
+   * `auth` row's last paragraph describes — and it is that row's *mechanism* too, not just its shape:
+   * `billing/polar.ts` reads `TOPUP_CHARGE_TIMEOUT_MS` off this field (`upstream / 2`, two calls being
+   * what a top-up makes), exactly as `auth/deps.ts` passes `DEADLINE_MS.auth.upstream` into the
+   * Supabase adapter. **That arrow used to point the other way and the sentence was unbacked**
+   * (PR #220's F1): the adapter held a `12_000` of its own and this field had no production reader,
+   * so a mutant tripling the budget at its use site passed all 1295 tests — and 36 s of upstream under
+   * a 30 s total inverts the two, cutting every slow charge off mid-flight. What differs from the
+   * `auth` row is the answer when `total` elapses:
    * `routes/credits.ts` sends `502 topup.unconfirmed` and **not** `504 provider.timeout`, because a
    * charge may be in flight at that instant and `provider.timeout` is marked retryable — telling a
    * client to retry is how PR #196's F1 bought a second pack. §12 records two auth routes that

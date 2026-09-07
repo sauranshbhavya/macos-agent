@@ -1,3 +1,4 @@
+import { DEADLINE_MS } from "../model/limits.js";
 import type {
   BillingProvider,
   PortalLink,
@@ -257,6 +258,18 @@ export interface PolarProviderConfig {
    * the same shape `BillingRouteDeps.now` uses for the clock.
    */
   readonly fetchImplementation?: typeof fetch | undefined;
+  /**
+   * How this adapter mints the deadline for a top-up call. **Tests only** — nothing a deployment
+   * sets (SONNY-430, PR #220's F1).
+   *
+   * Injected for exactly `fetchImplementation`'s reason one field up, in the other direction: that
+   * seam lets a test assert what was *sent* without a network, and this one lets a test assert what
+   * was *spent* without waiting twelve seconds for it. What the tests read is the millisecond figure
+   * each call hands over, which is the budget the adapter really spends rather than the constant it
+   * is supposed to spend — the distinction PR #220's F1 was about, where a mutant tripling the number
+   * at its use site passed all 1295 tests because every assertion was about the constant.
+   */
+  readonly deadlineFactory?: ((milliseconds: number) => AbortSignal) | undefined;
 }
 
 /** Polar's production API origin. Overridden by `apiBaseUrl` for sandbox deployments. */
@@ -492,8 +505,15 @@ const FINALIZE_PATH = (orderId: string) => `/v1/orders/${encodeURIComponent(orde
  * that operation. Before SONNY-430 it took its own, so the sentence above was true of the design and
  * false of the code — one top-up could spend thirty-six seconds, which no §12 row has ever allowed
  * and which the Mac's own forty-second client timeout is not sized for.
- * `DEADLINE_MS.topUp.upstream` is this number doubled, and `topup.test.ts` holds that relation so it
- * is a derivation rather than two literals that happen to agree.
+ *
+ * **This is §12's row halved, not a literal that agrees with it** (PR #220's F1). It was written the
+ * other way round — a `12_000` here with the table's 24 described as "this number doubled" — and the
+ * consequence was that `DEADLINE_MS.topUp.upstream` had **no production reader at all**: a mutant
+ * tripling the budget at its use site passed the whole suite, and at 36 s upstream under a 30 s total
+ * the two invert, so every slow charge is cut off mid-flight and recorded `unconfirmed`. The arrow now
+ * points from the contract to the code, which is what `limits.ts` claims and what `auth/deps.ts` does
+ * with `DEADLINE_MS.auth.upstream`. Two calls is the divisor because two calls is what a top-up makes;
+ * `topup.test.ts` measures what the adapter really spends rather than asserting this constant.
  *
  * `PORTAL_SESSION_TIMEOUT_MS`'s three surviving reasons apply unchanged, and the number differs from
  * its eight for one reason that is specific to this call: **there are two of them, and the Mac's own
@@ -508,7 +528,18 @@ const FINALIZE_PATH = (orderId: string) => `/v1/orders/${encodeURIComponent(orde
  * slower than minting a session token; eight seconds is comfortably above a healthy one of those and
  * is not obviously above a healthy charge. Twelve keeps the doubled budget inside the client's.
  */
-export const TOPUP_CHARGE_TIMEOUT_MS = 12_000;
+export const TOPUP_CHARGE_TIMEOUT_MS = DEADLINE_MS.topUp.upstream / 2;
+
+/**
+ * §12's budget for one top-up call, minted the way this adapter's config says to.
+ *
+ * **The wrapper rather than a bare `config.deadlineFactory ?? AbortSignal.timeout`**: that static is
+ * called with `AbortSignal` as its receiver, and handing the bare reference around detaches it.
+ */
+function topUpDeadline(config: PolarProviderConfig): AbortSignal {
+  const mint = config.deadlineFactory ?? ((ms: number) => AbortSignal.timeout(ms));
+  return mint(TOPUP_CHARGE_TIMEOUT_MS);
+}
 
 /** The order status Polar reports for an order it actually charged. */
 const PAID = "paid";
@@ -547,7 +578,7 @@ async function polarCreateTopUpOrder(
       method: "POST",
       headers: polarHeaders(config),
       body: JSON.stringify({ customer_id: request.customerId, product_id: request.productId }),
-      signal: AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS),
+      signal: topUpDeadline(config),
     });
   } catch (error) {
     // **However this ended, no money moved.** A draft charges nothing, so there is no unconfirmed
@@ -632,7 +663,7 @@ async function polarFinalizeTopUpOrder(
    * which is the recovery PR #196's F1 built. A shared deadline can lose the *answer* to a charge
    * here; it can never close the row on one.
    */
-  const deadline = AbortSignal.timeout(TOPUP_CHARGE_TIMEOUT_MS);
+  const deadline = topUpDeadline(config);
 
   let finalized: Response;
   try {

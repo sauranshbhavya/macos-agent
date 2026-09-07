@@ -2011,9 +2011,12 @@ took its own, so one top-up could spend thirty-six seconds against a row that al
 was never available as a row either: the client's timeout here is 40 s and is derived on the Mac from
 those same two calls, so a 36 s upstream would want a total above the client's and invert this
 section's governing rule. Folding the charge into the last row instead was rejected as the unsafe
-direction — three calls inside 10 s is about 3.3 s each, which is below a healthy card authorisation,
-and a charge aborted mid-flight is recorded as unconfirmed, granting nothing for money that may have
-moved.
+direction — three calls inside 10 s is about 3.3 s each, and `server/src/billing/polar.ts` will only
+say that eight seconds "is not obviously above a healthy charge", so 3.3 is well under a bound nobody
+has been able to call generous; a charge aborted mid-flight is recorded as unconfirmed, granting
+nothing for money that may have moved. **The hedge is deliberate and this sentence used to drop it**
+(PR #220's O3): nobody on this project has yet watched a real card authorisation through this
+provider, so "below a healthy authorisation" is a measurement no one here has taken.
 
 **This route does not answer `504 provider.timeout` when its deadline elapses, and that is the third
 such decision this table does not override.** It answers **`502 topup.unconfirmed`**, which section

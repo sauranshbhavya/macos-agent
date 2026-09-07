@@ -78,8 +78,14 @@ export interface CreditRouteDeps {
    *
    * The seam exists because the property worth testing is what the route *does* when the deadline
    * elapses, and a test that waited the real thirty seconds to find out would be a thirty-second
-   * test. `topup.test.ts` asserts separately that the shipped default is §12's number, so overriding
-   * it here cannot quietly become the deployed bound.
+   * test.
+   *
+   * **What holds the default is `runs on §12's own total when nothing overrides it`, which drives
+   * this route with no override at all and advances its own timer** — not the constant assertion
+   * this comment used to point at. That one asserted `DEADLINE_MS.topUp.total === 30_000`, a fact
+   * about the table that says nothing about the route reading it, so pointing the `??` below at the
+   * `auth` row's fifteen seconds passed the whole suite (PR #220's F2) — deploying the charge on a
+   * bound shorter than its own upstream budget.
    */
   readonly topUpTotalDeadlineMs?: number | undefined;
 }
@@ -290,14 +296,21 @@ const TOP_UP_DEADLINE_ELAPSED = Symbol("the top-up route's total deadline elapse
  * killing the settle after the money moved — which is exactly the shape PR #196's F1 exists to close.
  * So this bounds the *answer*, never the work.
  *
- * The no-op `catch` is load-bearing. Once the race has been decided by the timer, a later rejection
- * from `work` has no handler attached to it, and an unhandled rejection in Node ends the process —
- * so this gateway would fall over precisely when a payment provider started failing slowly.
+ * **The no-op `catch` is defensive, not load-bearing, and the reason first given for it was wrong**
+ * (PR #220's F5). That reason was that a rejection arriving after the timer decided the race would be
+ * unhandled and end the process. `Promise.race` subscribes to every promise it is handed, so a late
+ * rejection is already handled; the reviewer measured it on node v22.23.1 with this line removed —
+ * the process stayed alive and an `unhandledRejection` listener saw nothing, against a control in the
+ * same harness where a genuinely unhandled rejection was observed and set a non-zero exit. It is kept
+ * because it makes the handling explicit at the one place a reader asks the question, and because it
+ * would still hold if the race were ever replaced by something that does not subscribe. What it is
+ * not is the thing standing between this route and a crash.
  */
 async function withinTotalDeadline<T>(
   totalMs: number,
   work: Promise<T>,
 ): Promise<T | typeof TOP_UP_DEADLINE_ELAPSED> {
+  // Defensive, not load-bearing — see this function's doc comment and PR #220's F5.
   work.catch(() => {});
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

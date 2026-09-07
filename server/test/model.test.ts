@@ -1084,10 +1084,18 @@ describe("the numbers this ticket is held to", () => {
     // The client half of every row lives in `SonnyBackendTimeouts` on the Swift side, each above the
     // matching `total` here. `ModelRouteNumbersTests` asserts the five model routes against these
     // same literals, so those two halves of §12's table cannot move independently without one of
-    // the two failing. **The `auth` row's client half is `SonnyBackendTimeouts.auth`, 20 s, and it
-    // is NOT paired by that test** — it was 20 s before this row existed and no Swift assertion
-    // reaches it, so §12's governing rule holds here by reading rather than by a guard. Said rather
-    // than implied, because a reader who knows the five are paired will assume the sixth is.
+    // the two failing.
+    //
+    // **The other two rows are pinned on the Swift side as well, and this paragraph used to say the
+    // opposite** (PR #220's O2). It read that the `auth` row "is NOT paired by that test … no Swift
+    // assertion reaches it", which is false in both halves: `ModelRouteNumbersTests.swift:43` asserts
+    // `SonnyBackendTimeouts.auth == 20` and `:79` asserts `auth - 15 == 5`. The `topUp` row's client
+    // half is `SonnyBackendTimeouts.topUp`, 40 s, pinned by
+    // `ScreenControlAllowanceTests.swift:559` — a different suite from the one named above, which is
+    // the whole reason to say where rather than to say whether. So every row in this table has a
+    // Swift assertion behind its client half; what varies is which suite holds it. Said rather than
+    // implied, because this paragraph exists to stop a reader assuming a row is unpaired, and for two
+    // rows it was doing the opposite.
   });
 
   it("ANSWERS 408 on a stalled upload instead of holding the connection open", async () => {

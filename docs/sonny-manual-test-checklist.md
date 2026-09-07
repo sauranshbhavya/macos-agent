@@ -2814,8 +2814,13 @@ entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
   which is the first row below.
 - a Polar **one-time product** for the pack, a customer with a saved payment method, and
   `BILLING_PROVIDER_ACCESS_TOKEN` carrying the `orders:write` scope. **Nobody on this project has
-  run an order against real Polar yet**, which is why the two rows marked ⚠️ are the ones to run
-  first and record verbatim.
+  run an order against real Polar yet**, which is why **every row marked ⚠️** is one to run first and
+  record verbatim. **A row marked 🚧 is one nobody can run yet**: it names the thing it waits on, and
+  it is not a candidate for the first pass until that exists. (This sentence used to count the marked rows —
+  "the two rows marked" — and was stale by two before SONNY-430 arrived. It is a description rather
+  than a number now, deliberately: a legend that counts the population it introduces goes stale every
+  time a row joins it, and no reader is told when. The figures are in the changelog entry, where they
+  are a dated record instead of a live claim.)
 
 - [ ] **(SONNY-215) — off by default, and this is the row that matters most.** On a fresh account
       with `topUp` configured, open Command Center › the account row › Account. The runs-left line is
@@ -2887,7 +2892,7 @@ entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
 - [ ] **(SONNY-215) — nothing else moved.** With the switch **on** and the account **not** low, run
       the everyday free things and an ordinary screen-control session. **No purchase happens**
       (`sonny.credit_topup` stays empty) and nothing about the run changes.
-- [ ] **(SONNY-430) ⚠️ the charge that outruns the deadline.** The route now gives up after **30
+- [ ] **(SONNY-430) 🚧 the charge that outruns the deadline.** The route now gives up after **30
       seconds** and answers `502 topup.unconfirmed`, not `504 provider.timeout`. Reproducing it needs
       a stalled provider, so this row **waits on a way to stall Polar** — the practical one is a
       proxy in front of `POLAR_API_BASE_URL` that accepts the finalize and never answers. With that:
@@ -2897,12 +2902,18 @@ entitlement key override, `CREDIT_PLANS`) **plus two things of their own**:
       `SELECT outcome, provider_order_id FROM sonny.credit_topup` shows **one** row that keeps its
       order id and moves to `granted`. The finding is two paid orders, a row with a NULL order id, or
       a request that hangs past a minute.
-- [ ] **(SONNY-430) ⚠️ the read-back shares the finalize's budget.** Same proxy, answering the
-      finalize `412` immediately and then stalling the order read. **The whole charge still ends
-      inside about twelve seconds of provider time, not twenty-four**, and the attempt is recorded
-      `unconfirmed` with its order id rather than declined. This row waits on the same proxy as the
-      one above; it is separate because it is the adapter's bound rather than the route's, and a
-      single stall exercises only one of the two.
+- [ ] **(SONNY-430) 🚧 the read-back shares the finalize's budget.** Same proxy. **Hold the finalize
+      for about ten seconds before answering it `412`**, then stall the order read that follows.
+      **The whole charge ends about two seconds later — roughly twelve seconds in total, not
+      twenty-two.** Then the attempt is recorded `unconfirmed` keeping its order id, never
+      `declined`. **The ten-second hold is the whole row and is not a detail to trim**: answer the
+      `412` immediately instead and the shipped code and the code it replaced both finish at about
+      twelve seconds, because the replaced read-back minted a fresh twelve-second budget starting
+      from zero — so a founder who runs it that way, sees twelve seconds and ticks it has checked
+      nothing. The two only separate when the `412` lands late in the finalize's own budget, which is
+      what the hold creates. This row waits on the same proxy as the one above; it is separate
+      because it is the adapter's bound rather than the route's, and a single stall exercises only
+      one of the two.
 
 ### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
 
