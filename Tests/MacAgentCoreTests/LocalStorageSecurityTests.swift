@@ -373,7 +373,9 @@ struct LocalStorageSecurityTests {
         // let Sonny control. Twelve since row 13 (SONNY-209): `output-locations.json` holds which
         // folders their work comes out into. Nine, not eight, was SONNY-154's correction — the vision session
         // journal was the store this test did not create, so the only place the wipe's behaviour is
-        // actually exercised covered every store except the most sensitive one.
+        // actually exercised covered every store except the most sensitive one. Fourteen since
+        // SONNY-333's queue of the deletions this Mac owes the gateway, which repeated the
+        // journal's history exactly and was found by SONNY-423 and closed by SONNY-432.
         //
         // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
         // between the fixture's files and its returned URLs — the two deletion counts below already
@@ -384,14 +386,24 @@ struct LocalStorageSecurityTests {
         // too. That question going unasked is how the journal stayed uncovered. The number is
         // deliberately not spelled in this sentence, since a sentence that names it is a fourth
         // place to update and this one already went stale once (PR #89 cycle 2, F3).
-        #expect(fileURLs.count == 13)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 13, missingFileCount: 0))
+        //
+        // **What it cannot do, and what does it now** (SONNY-432). A tripwire on the fixture's size
+        // fires when the fixture changes and stays silent when it should have changed and did not,
+        // so it caught nothing when the fourteenth store arrived unfixtured. `createAllLocalStoreFiles`
+        // compares the names it returns against `LocalStore.allCases` itself now, so that direction
+        // fails there, with both populations printed. This assertion is kept for the direction it
+        // was written for, and that comparison is the wrong instrument for it: being
+        // population-relative, the comparison passes for a fixture and an app narrowed together,
+        // which is the mutation `theEveryStoreWipeReachesExactlyTheClassifiedStores` records the
+        // same way one screen up.
+        #expect(fileURLs.count == 14)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 14, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 13))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 14))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -776,6 +788,16 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("resumable-tasks.json"),
         encryption: encryption
     )
+    // The fourteenth (SONNY-333): the queue of task deletions this Mac still owes the gateway. It
+    // reached the app, the wipe's URL list and the classification and not this helper, so the only
+    // test that runs `deleteAllLocalData()` over real files ran it over thirteen of fourteen —
+    // the journal's own history above, repeated on the store that came after it. Nothing was red,
+    // because the three numerals in the calling test all agreed with the short fixture. What stops
+    // the fifteenth arriving the same way is the population assertion at the end of this helper.
+    let pendingServerDeletionStore = PendingServerDeletionStore(
+        fileURL: root.appendingPathComponent("pending-server-deletions.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -847,8 +869,17 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         // clipboard age-out.
         now: .fixture
     )
+    // Written to and not merely constructed, for the reason every store above records. `.fixture`
+    // rather than `enqueue`'s own `Date()` default, so this file's bytes do not depend on when the
+    // suite runs; unlike `resumableTaskStore` directly above, a fixed instant in the past is safe
+    // here because nothing in this store ages an entry out — `capped` trims only above `maxItems`.
+    try pendingServerDeletionStore.enqueue(
+        taskID: "delete-pending-server-deletion",
+        accountID: nil,
+        deletedAt: .fixture
+    )
 
-    return [
+    let fileURLs = [
         routineStore.fileURL,
         workspaceStore.fileURL,
         clipboardStore.fileURL,
@@ -861,8 +892,38 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         taskPlanDetailStore.fileURL,
         approvedAppStore.fileURL,
         outputLocationStore.fileURL,
-        resumableTaskStore.fileURL
+        resumableTaskStore.fileURL,
+        pendingServerDeletionStore.fileURL
     ]
+
+    // **This fixture's population is `LocalStore.allCases`, and it is pinned by name** (SONNY-432).
+    //
+    // The calling test's `fileURLs.count` literal is a tripwire on this fixture's *size* and its own
+    // comment says so: it makes extending the fixture cost a second edit in a second place. What a
+    // tripwire on the size cannot do is fire when nobody extends the fixture at all — a store added
+    // to the app and not to this helper moves neither that literal nor either deletion count, which
+    // is how `pending-server-deletions.json` sat outside this fixture from SONNY-333 until
+    // SONNY-432 with the suite green, and how `vision-sessions.json` sat outside it before that
+    // (SONNY-154). So both are kept, and they guard opposite directions: the literal guards this
+    // fixture against being changed, and this guards it against not being changed.
+    //
+    // A count against `LocalStore.allCases.count` would close the same direction. This is a set
+    // rather than a count because a count says only that the sizes differ: this prints both
+    // populations, so the failure carries the missing store's own filename, and it also fails for a
+    // fixture that writes the wrong file at the right size, which no count can see.
+    #expect(
+        Set(fileURLs.map(\.lastPathComponent))
+            == Set(LocalStore.allCases.map { $0.fileURL().lastPathComponent })
+    )
+    // And that every one of them was written rather than only named — the half of SONNY-154's
+    // lesson no list of URLs can carry, since `LocalDataDeletionService`'s own list named
+    // `vision-sessions.json` correctly the whole time this helper was failing to write it.
+    let unwritten = fileURLs
+        .filter { !FileManager.default.fileExists(atPath: $0.path) }
+        .map(\.lastPathComponent)
+    #expect(unwritten == [])
+
+    return fileURLs
 }
 
 private func assertRoutineMigration(root: URL, encryption: LocalStorageEncryption) throws {
