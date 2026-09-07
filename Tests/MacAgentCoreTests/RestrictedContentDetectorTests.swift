@@ -262,7 +262,8 @@ struct RestrictedContentDetectorTests {
     /// asserted that until PR #210's F3 — the claim was checked against the Zillow fixture, which
     /// carries no wall-speech phrase and therefore cannot exercise the ordering at all.
     ///
-    /// `phrases` is `wallSpeechPhrases + subjectPhrases`, so a contentless page whose markup carries
+    /// `phrases` is `wallSpeechPhrases + readerQuotedPhrases + subjectPhrases`, so a contentless page
+    /// whose markup carries
     /// both a reCAPTCHA vendor script and a login wording is refused as a **login wall**, not as a
     /// CAPTCHA — the order changed that from SONNY-245, where `captcha` was first. Fail-closed is
     /// intact either way; what moved is the noun the user is shown, and that is worth pinning rather
@@ -597,9 +598,12 @@ struct RestrictedContentDetectorTests {
     /// string. Measured over 425 real pages sampled on these three wordings themselves, they refused
     /// **56 innocent in-band pages** and **0 of 22 real gates in the band**.
     ///
-    /// The served set below is four of those real comments, verbatim, so this test fails if any of
-    /// the three comes back into `wallSpeechPhrases` — the same control shape PR #210's F1 forced on
-    /// `wallSpeechReachesRealGateWordingsAndNotReadersTalkingAboutThem`.
+    /// The served set below is four of those real comments — real text, lowercased, and two of them
+    /// abridged, which is what "verbatim" overstated before PR #222 recorded it — so this test fails
+    /// if any of the three comes back into `wallSpeechPhrases`. It is the control shape PR #210's F1
+    /// forced on `wallSpeechReachesRealGateWordingsAndNotReadersTalkingAboutThem`. The case fold they
+    /// therefore skip is covered by `matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace` and
+    /// `phraseMatchingIsLocaleIndependent`.
     @Test
     func aReaderQuotingALoginOrPaywallWallIsServedInTheInterstitialBand() {
         let served = [
@@ -627,9 +631,12 @@ struct RestrictedContentDetectorTests {
     /// The other half of the same change: the three keep every bit of their markup coverage, so
     /// stage 2 is untouched and `phrases` stays a literal superset of SONNY-245's seven.
     ///
-    /// Measured over 14 real gate wordings on pages below `contentlessVisibleTextLimit` with nothing
-    /// planted in their markup, the rule before this change refuses 8 of 14 and the rule after it
-    /// refuses the identical 8 — so below 200 visible characters this change costs nothing at all.
+    /// **Every sample here used to sit in an HTML comment, which is a page shape the surviving route
+    /// always sees** (PR #222, F3). A phrase in a comment can never be split by an inline tag and
+    /// never carries an entity, so the test could not exercise the claim its own doc comment made —
+    /// which is about a page whose *visible text* is the gate's sentence. That is `CLAUDE.md`'s
+    /// held-sample gotcha in its milder form: nothing asserted was wrong, and what it did not touch
+    /// was upstream of it.
     @Test
     func theThreeQuotedWordingsAreStillMarkupEvidenceOnAContentlessPage() {
         for (phrase, reason) in RestrictedContentDetector.readerQuotedPhrases {
@@ -649,6 +656,46 @@ struct RestrictedContentDetectorTests {
         #expect(RestrictedContentDetector.finding(inHTML: roomy) == nil)
     }
 
+    /// The shape the test above could not reach: a real login wall below `contentlessVisibleTextLimit`
+    /// whose **visible text** is the gate's sentence, written the three ways a gate is really written.
+    ///
+    /// This is PR #222's F2. Stage 1 reads rendered text and stage 2 read raw markup, so a phrase
+    /// that renders contiguously is not necessarily contiguous in the source: an inline `<a>` on the
+    /// words "log in", or a `&nbsp;` between them, survives in the markup and defeats the substring
+    /// match. Measured over 14 gate wordings, the pre-SONNY-429 rule refuses 8 and the first version
+    /// of SONNY-429's rule refused **0** of the anchored pages and **0** of the entity pages. Stage 2
+    /// reads the rendered text as well now, which restores all three constructions to the same
+    /// verdict.
+    ///
+    /// The plain row is the control: it passed before the fix too, so a green plain row alone never
+    /// distinguished the fixed rule from the broken one.
+    @Test
+    func aGateBelowTheContentlessLimitIsRefusedHoweverItsSentenceIsWrittenInTheMarkup() throws {
+        let constructions: [(label: String, body: String)] = [
+            ("plain", "Please log in to continue."),
+            ("inline anchor", "Please <a href=\"/account\">log in</a> to continue."),
+            ("entities", "Please&nbsp;log&nbsp;in&nbsp;to&nbsp;continue.")
+        ]
+        for (label, body) in constructions {
+            let html = "<html><head><title>Access</title></head><body><main><h1>\(body)</h1>"
+                + "<form action=\"/account\" method=\"post\"><input type=\"email\"></form></main></body></html>"
+            let visible = RestrictedContentDetector.visibleText(inHTML: html)
+            #expect(visible.count < RestrictedContentDetector.contentlessVisibleTextLimit, "\(label) is in range")
+
+            let refused = try #require(RestrictedContentDetector.finding(inHTML: html), "construction \(label)")
+            #expect(refused.reason == "login walls", "construction \(label)")
+            #expect(refused.phrase == "please log in", "construction \(label)")
+            #expect(refused.evidence == .markup, "construction \(label)")
+        }
+
+        // The control that says the fold is doing this rather than the page being short: a page of
+        // the same three shapes carrying no phrase at all is served.
+        for body in ["Welcome <a href=\"/x\">back</a>.", "Welcome&nbsp;back&nbsp;here."] {
+            let html = "<html><body><main><h1>\(body)</h1></main></body></html>"
+            #expect(RestrictedContentDetector.finding(inHTML: html) == nil, "control \(body)")
+        }
+    }
+
     /// Case and diacritics fold, and a phrase broken across markup whitespace still matches.
     @Test
     func matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace() {
@@ -664,6 +711,17 @@ struct RestrictedContentDetectorTests {
         let entities = "<html><body><p>Confirm&nbsp;you&nbsp;are&nbsp;a&nbsp;human now \(String(repeating: "a", count: 400))</p></body></html>"
         #expect(RestrictedContentDetector.reason(inHTML: entities) == "CAPTCHAs")
         #expect(RestrictedContentDetector.finding(inHTML: entities)?.evidence == .visibleText)
+
+        // **The assertion this branch deleted, restored** (PR #222, F2). It was dropped when the
+        // login wordings stopped being visible-text evidence, and it is the one line in the suite
+        // that would have gone red on the raw-markup gap: below the contentless limit an entity
+        // inside the phrase survives in the source, so this page is reachable only once stage 2
+        // reads rendered text too. The inline-anchor twin beside it is the same property in the
+        // construction a real login wall actually uses.
+        #expect(RestrictedContentDetector.reason(
+            inHTML: "<html><body><p>Please&nbsp;log&nbsp;in now</p></body></html>") == "login walls")
+        #expect(RestrictedContentDetector.reason(
+            inHTML: "<html><body><p>Please <a href=\"/a\">log in</a> now</p></body></html>") == "login walls")
     }
 
     // MARK: - Helpers

@@ -2072,23 +2072,41 @@ Measured over 425 pages, 56 innocent pages stop being refused and none that was 
 refused. All three rows below are one direct-URL summarization each.
 
 - [ ] **(SONNY-429)** **A comment page quoting a login wall is read.** Run **"summarize
-      https://news.ycombinator.com/item?id=42644950 and save it as Markdown"**. The whole page is one
-      comment reading `"Sign in to continue" - as you are new to HN I can tell you that is a big
-      stopper right there.` **Expected:** a real note, naming that URL as its source. **What would be
+      https://news.ycombinator.com/item?id=42644950 and save it as Markdown"**. Its top comment reads
+      `"Sign in to continue" - as you are new to HN I can tell you that is a big stopper right
+      there.` and it has one reply. **Expected:** a real note, naming that URL as its source. **What would be
       a finding:** the refusal **"Sonny will not bypass login walls."**, which is what this page got
-      before the change.
+      before the change. **If you get an HTTP error instead, that is not a finding** — Hacker News
+      rate-limits uncached item pages and answered 403 to Sonny on 2026-09-07, while its front page
+      and `item?id=1` answered 200. `PublicWebPageLoader` refuses on the status before the detector
+      runs, so a 403 tells you nothing either way about this change. Try again later, or skip to the
+      Google row below, which answers reliably.
 - [ ] **(SONNY-429)** **A comment page quoting a paywall is read.** Run **"summarize
-      https://news.ycombinator.com/item?id=22224690 and save it as Markdown"**. Its one comment opens
-      `"You are in private mode. Subscribe to continue reading."` and then complains about it.
+      https://news.ycombinator.com/item?id=22224690 and save it as Markdown"**. Its top comment opens
+      `"You are in private mode. Subscribe to continue reading."` and then complains about it; it has
+      two replies.
       **Expected:** a real note. **What would be a finding:** **"Sonny will not bypass paywalls."**
+      **An HTTP error is not a finding**, for the reason on the row above.
 - [ ] **(SONNY-429)** **A real login wall or paywall is still refused — this is the row worth most.**
       Ask Sonny to summarize a page you know is gated behind a sign-in or a subscription. **Expected:**
       either Sonny declines and names the wall, or it reports that it could not find anything readable
       on the page. **What would be a finding, and it is the important one:** a note whose *content* is
       the gate's own message — "Please log in to continue", "Subscribe to continue reading", a sign-up
       form's labels. This change knowingly gives up refusing a gate in the 200-to-2 000 visible-character
-      band whose only wording is one of those three; no such page was found among 68 real gates measured,
-      but if you find one it is exactly what we want to know.
+      band whose only wording is one of those three. **One such page is known and named in the row
+      below** — the record used to say none had been found, and PR #222's reviewer found one.
+- [ ] **(SONNY-429)** **The accepted cost, on a page that answers reliably — this is the one to judge
+      the trade on.** Run **"summarize https://accounts.google.com/signin/v2/identifier?service=mail
+      and save it as Markdown"**. This is Google's account sign-in interstitial: HTTP 200, 843 visible
+      characters, and its visible text opens `Sign in to continue to Gmail`. It is the exact shape this
+      change gives up, it is reachable (Sonny's robots check allows it), and it is one of the most
+      common login walls on the web. **Expected:** Sonny reports it could not find anything readable
+      on the page — the extractor throws on all four of Google's sign-in hostnames, so no summary of
+      the sign-in form is produced. **Before this change you would have got "Sonny will not bypass
+      login walls.", which is the better message, and losing it is the cost.** **What would be a
+      finding:** an actual summary — the email field, the "Forgot email?" link, the language picker —
+      which would mean Sonny is describing a login form to you as though it were content. **If you
+      would rather keep the old refusal than accept this, say so: this row is where that veto lands.**
 
 ### Prompt-text folds — screen control and web research (new 2026-08-26, SONNY-226 / SONNY-231)
 
