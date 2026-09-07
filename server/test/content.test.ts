@@ -32,7 +32,6 @@ import type { WithConnection } from "../src/db/connection.js";
 import { CONTENT_DELETION_DEADLINE_MS } from "../src/model/limits.js";
 import { withDatabaseDeadline } from "../src/model/routing.js";
 import { ProviderTimedOut } from "../src/model/upstream.js";
-import { itUnderHangBackstop } from "./support/backstop.js";
 
 /**
  * Contract §10's content store, driven through the whole real app (SONNY-134).
@@ -1057,9 +1056,15 @@ function stallingConnection(record: string[]): WithConnection {
           void values;
           return { rows: [{ account_id: ACCOUNT }] };
         }
-        // The route's own first statement, and it stalls. **Only a timeout in force ends it**,
-        // exactly as a real backend does — so this branch is the wiring assertion.
-        if (timeoutMs === undefined) return new Promise<never>(() => {});
+        // **The route's own work, and this is where the wiring is pinned.** A statement under a
+        // `statement_timeout` is the one a real backend cancels; a statement under none runs to
+        // completion however long it takes. So an unwired route reaches the second branch, answers
+        // its ordinary 200, and fails the assertion below on a status — loudly and attributably,
+        // rather than by hanging. That matters beyond tidiness: a test whose only failure signal is
+        // a backstop timeout can never be counted a mutation kill, because every wording that type
+        // emits is declared untrusted, so the mutant would come back UNATTRIBUTED on a run where
+        // the test failed for exactly the right reason (`CLAUDE.md`, SONNY-259).
+        if (timeoutMs === undefined) return { rows: [], rowCount: 0 };
         throw Object.assign(new Error("canceling statement due to statement timeout"), {
           code: "57014",
         });
@@ -1105,8 +1110,8 @@ describe("§12's deadline on the four content-deletion routes", () => {
   ];
 
   for (const route of ROUTES) {
-    itUnderHangBackstop(
-      `${route.name} answers §7.2's 504 when its store stalls, inside §12's budget`,
+    it(
+      `${route.name} answers §7.2's 504 when its store is cancelled inside §12's budget`,
       async () => {
         const record: string[] = [];
         const app = buildWithStall(record);
