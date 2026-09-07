@@ -174,7 +174,7 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: complete
 Date: 2026-09-07
 Tickets: **SONNY-427** (contract §12 promises the database-bound routes a 10 s upstream and a 15 s total, and nothing bounded a statement, so a stalled or lock-blocked query held the request past every one of those numbers). One session, from `main` at `39be942c`.
-Reviewed by: PENDING — fresh session, deep depth per the ticket's kickoff note.
+Reviewed by: pending — fresh session at deep depth, per the ticket's kickoff note.
 
 Spec sections covered: contract §12 (the pool's bound, its derivation, its reach, and the correction of that section's own claim that this gateway set no statement timeout anywhere).
 
@@ -184,11 +184,13 @@ Files changed:
 - `server/test/statement-timeout.db.test.ts` (**new**) — three tests
 - `docs/sonny-manual-test-checklist.md`, and this entry
 
-Tests, at `PENDING`: `npm run build` exit 0; `npm test` exit 0, **843 passed / 449 skipped (1292)**; `npm run test:db` against a lane-named Postgres exit 0, **1292 passed (1292)**; `npm run typecheck` exit 0; `npm run check:secrets` exit 0 (`clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `scripts/changelog-order` exit 0, **191 entries**. The base at `39be942c` read 843/446 and 1289, so the whole difference is this branch's three tests — they skip without a database, which is why the passing count of `npm test` does not move at all.
+Tests, at `de17ebfe`: `npm run build` exit 0; `npm test` exit 0, **843 passed / 449 skipped (1292)**; `npm run test:db` against a lane-named Postgres exit 0, **1292 passed (1292)**; `npm run typecheck` exit 0; `npm run check:secrets` exit 0 (`clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `scripts/changelog-order` exit 0, **191 entries**. The base at `39be942c` read 843/446 and 1289, so the whole difference is this branch's three tests — they skip without a database, which is why the passing count of `npm test` does not move at all.
 
 **No Swift suite and no `scripts/warnings` are owed, and that is measured rather than asserted**: `git diff --name-only 39be942c HEAD -- Sources Tests` prints nothing, exit 0.
 
-**Mutation battery: PENDING.**
+**Mutation battery: 3 mutants, 3 killed, 0 survived, 0 unattributed, at `de17ebfe`** (`scripts/mutate`, suite filtered to `test/statement-timeout.db.test.ts test/pool.db.test.ts test/pool.test.ts`, baseline `PASSED 13 passed (13)` so the tests demonstrably ran). One per property rather than one per changed line. **W1** removes the bound from the pool entirely — KILLED by 3, every test in the new file, *theBoundOnALeasedConnectionIsSection12sOwnNumber*, *aRoutesOwnResetReturnsToThisBoundRatherThanToNoBound* and *aRouteBlockedOnAnotherConnectionsLockAnswersInsteadOfWaitingForIt*. **W2** applies the bound with a `SET` after connecting instead of in the startup packet — KILLED by 2, the first two. **W3** wires it to a number that is not §12's — KILLED by 2, the same two.
+
+**W2's killer list is the part worth reading, because it is what says the middle test is load-bearing rather than decoration.** The blocked-route test does not kill W2 and could not: nothing issues a `RESET` inside it, so under the after-connect shape the bound is still in force for the whole of that test and the route answers exactly as it should. The defect W2 is is invisible until a *neighbouring* branch's route resets the setting on a connection this pool then hands to somebody else — which is why a test had to be written for the mechanism and not only for the outcome. **W1's list is the other half**: the blocked-route test appears in it, which is only true because that test admits defeat in wording of its own instead of hanging into the declared backstop.
 
 Behavior added:
 - **Every statement any authenticated route issues is bounded at 10 000 ms by Postgres itself.** The gateway builds one pool (`git grep -nE 'new (pg\.)?Pool\(' 39be942c -- server/src` → one line, `server/src/db/pool.ts:74`), so the reach is every route handler's own work, the gate's attribution read that runs before every authenticated request, and the content-expiry sweeper, which leases from the same pool. A cancelled statement raises `57014`, which nothing maps, so the route answers §7.2's case 6 — `500 server.error`, retryable — in §7.1's envelope. The point is that it answers at all.
