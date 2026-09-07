@@ -375,11 +375,13 @@ struct RestrictedContentDetectorTests {
     /// asserts is a constant anyone may quietly change.
     @Test
     func aPhraseAReaderCanSeeCountsUpToTheInterstitialLimitAndNotBeyondIt() {
-        let atLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit - 1, saying: "please log in")
-        let pastLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit, saying: "please log in")
+        // A `wallSpeechPhrases` entry, because SONNY-429 moved the login and paywall wordings to
+        // markup-only and this test's subject is the limit rather than the phrase.
+        let atLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit - 1, saying: "confirm you are a human")
+        let pastLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit, saying: "confirm you are a human")
 
         let refused = RestrictedContentDetector.finding(inHTML: atLimit)
-        #expect(refused?.reason == "login walls")
+        #expect(refused?.reason == "CAPTCHAs")
         #expect(refused?.evidence == .visibleText)
         #expect(refused?.visibleTextLength == 1_999)
 
@@ -419,8 +421,9 @@ struct RestrictedContentDetectorTests {
     @Test
     func aCommentAndAnAttributeAreNotWhatAPageSaysToAReader() {
         let filler = String(repeating: "a", count: 1_000)
-        let hidden = "<html><body><p title=\"please log in\">\(filler)</p><!-- please log in --></body></html>"
-        let spoken = "<html><body><p>please log in \(filler)</p></body></html>"
+        let hidden = "<html><body><p title=\"confirm you are a human\">\(filler)</p>"
+            + "<!-- confirm you are a human --></body></html>"
+        let spoken = "<html><body><p>confirm you are a human \(filler)</p></body></html>"
 
         #expect(RestrictedContentDetector.visibleText(inHTML: hidden).count == 1_000)
         #expect(RestrictedContentDetector.finding(inHTML: hidden) == nil)
@@ -554,7 +557,9 @@ struct RestrictedContentDetectorTests {
             ("confirm you are human", "CAPTCHAs"),
             ("confirm you are a human", "CAPTCHAs"),
             ("proves you are human", "CAPTCHAs"),
-            ("proves you are a human", "CAPTCHAs"),
+            ("proves you are a human", "CAPTCHAs")
+        ]
+        let expectedReaderQuoted = [
             ("please log in", "login walls"),
             ("sign in to continue", "login walls"),
             ("subscribe to continue", "paywalls")
@@ -567,24 +572,98 @@ struct RestrictedContentDetectorTests {
 
         #expect(RestrictedContentDetector.wallSpeechPhrases.map { [$0.phrase, $0.reason] }
             == expectedWallSpeech.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.readerQuotedPhrases.map { [$0.phrase, $0.reason] }
+            == expectedReaderQuoted.map { [$0.0, $0.1] })
         #expect(RestrictedContentDetector.subjectPhrases.map { [$0.phrase, $0.reason] }
             == expectedSubjects.map { [$0.0, $0.1] })
         #expect(RestrictedContentDetector.phrases.map { [$0.phrase, $0.reason] }
-            == (expectedWallSpeech + expectedSubjects).map { [$0.0, $0.1] })
+            == (expectedWallSpeech + expectedReaderQuoted + expectedSubjects).map { [$0.0, $0.1] })
 
-        for (phrase, reason) in expectedWallSpeech + expectedSubjects {
+        // Every phrase still names its own noun. A page carrying only the phrase is under
+        // `contentlessVisibleTextLimit`, so the three markup-only entries are reached here too.
+        for (phrase, reason) in expectedWallSpeech + expectedReaderQuoted + expectedSubjects {
             let html = "<html><body><p>\(phrase)</p></body></html>"
             #expect(RestrictedContentDetector.reason(inHTML: html) == reason, "phrase \(phrase)")
         }
     }
 
+    /// SONNY-429's property: the three login and paywall wordings SONNY-245 introduced are no longer
+    /// visible-text evidence, because a reader discussing a wall quotes it **verbatim**.
+    ///
+    /// This is a different failure from the one `wallSpeechPhrases` guards against. There the person
+    /// of the verb separates a wall from a reader — a wall says "verifying you are human", a reader
+    /// asks "how do you prove you are human?". Here there is no difference to find: the commenter is
+    /// pasting the gate's own sentence, so the wall's string and the reader's string are the same
+    /// string. Measured over 425 real pages sampled on these three wordings themselves, they refused
+    /// **56 innocent in-band pages** and **0 of 22 real gates in the band**.
+    ///
+    /// The served set below is four of those real comments, verbatim, so this test fails if any of
+    /// the three comes back into `wallSpeechPhrases` — the same control shape PR #210's F1 forced on
+    /// `wallSpeechReachesRealGateWordingsAndNotReadersTalkingAboutThem`.
+    @Test
+    func aReaderQuotingALoginOrPaywallWallIsServedInTheInterstitialBand() {
+        let served = [
+            "\"please log in to continue.\" seriously? one might think they would prioritize "
+                + "raising awareness over increasing facebook userbase.",
+            "\"sign in to continue\" - as you are new to hn i can tell you that is a big stopper right there.",
+            "\"you are in private mode. subscribe to continue reading.\" ok, that's one more i will "
+                + "not open anymore; seems bloomberg started using similar \"privacy mode\" detection as nyt.",
+            "> we noticed you still have your ad blocker on, please log in to continue to the site. "
+                + "> login with forbes but they don't actually say how to signup."
+        ]
+        for comment in served {
+            let html = page(visibleCharacters: 600, saying: comment)
+            #expect(RestrictedContentDetector.finding(inHTML: html) == nil, "comment \(comment)")
+        }
+
+        // The control that says the band is reachable at all: a CAPTCHA-side wall speech phrase on a
+        // page of the identical size is still refused, so these four are served by the phrase table
+        // rather than by the page being out of range.
+        let stillRefused = page(visibleCharacters: 600, saying: "Please confirm you are a human.")
+        #expect(RestrictedContentDetector.finding(inHTML: stillRefused)?.reason == "CAPTCHAs")
+        #expect(RestrictedContentDetector.finding(inHTML: stillRefused)?.evidence == .visibleText)
+    }
+
+    /// The other half of the same change: the three keep every bit of their markup coverage, so
+    /// stage 2 is untouched and `phrases` stays a literal superset of SONNY-245's seven.
+    ///
+    /// Measured over 14 real gate wordings on pages below `contentlessVisibleTextLimit` with nothing
+    /// planted in their markup, the rule before this change refuses 8 of 14 and the rule after it
+    /// refuses the identical 8 — so below 200 visible characters this change costs nothing at all.
+    @Test
+    func theThreeQuotedWordingsAreStillMarkupEvidenceOnAContentlessPage() {
+        for (phrase, reason) in RestrictedContentDetector.readerQuotedPhrases {
+            let filler = String(repeating: "a", count: 100)
+            let html = "<html><body><p>\(filler)</p><!-- \(phrase) --></body></html>"
+            let refused = RestrictedContentDetector.finding(inHTML: html)
+            #expect(refused?.reason == reason, "phrase \(phrase)")
+            #expect(refused?.phrase == phrase, "phrase \(phrase)")
+            #expect(refused?.evidence == .markup, "phrase \(phrase)")
+            #expect(refused?.visibleTextLength == 100, "phrase \(phrase)")
+        }
+
+        // The control: the same comment on a page above the contentless limit is not evidence, so
+        // what refuses the pages above is the limit rather than the comment existing.
+        let filler = String(repeating: "a", count: 300)
+        let roomy = "<html><body><p>\(filler)</p><!-- please log in --></body></html>"
+        #expect(RestrictedContentDetector.finding(inHTML: roomy) == nil)
+    }
+
     /// Case and diacritics fold, and a phrase broken across markup whitespace still matches.
     @Test
     func matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace() {
+        // Markup route: every page here is under `contentlessVisibleTextLimit`, and raw markup is
+        // folded before it is searched, so a phrase broken across indentation still matches.
         #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>CAPTCHA</p></body></html>") == "CAPTCHAs")
-        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Vérify you are human</p></body></html>") == "CAPTCHAs")
         #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Please\n   log\tin</p></body></html>") == "login walls")
-        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Please&nbsp;log&nbsp;in now</p></body></html>") == "login walls")
+
+        // Visible-text route. `&nbsp;` is an entity in the markup and U+00A0 only after SwiftSoup
+        // renders it, so this line can match through `visibleText` and through nothing else — which
+        // is why it needs a phrase visible text is still trusted for (SONNY-429).
+        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Vérify you are human</p></body></html>") == "CAPTCHAs")
+        let entities = "<html><body><p>Confirm&nbsp;you&nbsp;are&nbsp;a&nbsp;human now \(String(repeating: "a", count: 400))</p></body></html>"
+        #expect(RestrictedContentDetector.reason(inHTML: entities) == "CAPTCHAs")
+        #expect(RestrictedContentDetector.finding(inHTML: entities)?.evidence == .visibleText)
     }
 
     // MARK: - Helpers
