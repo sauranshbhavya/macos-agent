@@ -33,18 +33,40 @@ struct PermissionReadinessModelAccessTests {
     ///
     /// **Spelled out rather than sampled**, because the sweeps below are population checks — a row
     /// naming a provider, or moving a row that is not its own, is only caught on the input that
-    /// produces it. `EntitlementRefusal` is not `CaseIterable`, so this is a hand-written list and
-    /// `everyRefusalIsAnsweredByName` is what stops it going quietly stale: it fails when the enum
-    /// grows a case this array does not carry.
-    static let everyRefusal: [EntitlementRefusal] = [
-        .notSignedIn,
-        .noClaim,
-        .unreadableClaim,
-        .claimIsForAnotherSession,
-        .clockUnusable,
-        .lapsed,
-        .notEntitled
-    ]
+    /// produces it. `EntitlementRefusal` is not `CaseIterable`, so the list is hand-written and two
+    /// things hold it: **the exhaustive `switch` below, which stops this file compiling when the
+    /// enum grows a case**, and the count in `everyRefusalIsAnsweredByName`, which then has to be
+    /// bumped by hand rather than drifting. That is `EntitlementCopyTests.allRefusals`' idiom, for
+    /// the same enum, copied deliberately.
+    ///
+    /// **It said the test alone held this and that was wrong** (PR #216's review, F1). The test
+    /// asserted nothing about the array's length and built its own second hand-written five-case
+    /// literal besides, so an eighth case left out of both would have kept every assertion green:
+    /// `planSentence(for:)` would have stopped compiling, and the cheapest repair there is to add
+    /// the case to its shared arm — after which nothing anywhere mentions that the row was never
+    /// rendered in the new state at all. Five sweeps rest on `everyPlanReadiness`, which is derived
+    /// from this array, so a refusal missing here is a refusal none of them ever exercises.
+    static let everyRefusal: [EntitlementRefusal] = {
+        let cases: [EntitlementRefusal] = [
+            .notSignedIn,
+            .noClaim,
+            .unreadableClaim,
+            .claimIsForAnotherSession,
+            .clockUnusable,
+            .lapsed,
+            .notEntitled
+        ]
+        // The switch is the check: adding a case to the enum stops this compiling until it is added
+        // above as well. The value is not the point — the exhaustiveness is.
+        for refusal in cases {
+            switch refusal {
+            case .notSignedIn, .noClaim, .unreadableClaim, .claimIsForAnotherSession,
+                 .clockUnusable, .lapsed, .notEntitled:
+                continue
+            }
+        }
+        return cases
+    }()
     static let everyPlanReadiness: [PlanReadiness] =
         [.confirmed, .undetermined] + everyRefusal.map { PlanReadiness.unconfirmed($0) }
 
@@ -242,14 +264,21 @@ struct PermissionReadinessModelAccessTests {
         #expect(noClaim == "Signed in. Connect once so Sonny can check your plan.")
         #expect(clock == "Signed in. Your Mac's date and time are too far off to check your plan.")
         #expect(noClaim != clock)
-        // The remaining five share one sentence, deliberately, and it is neither of the two above.
-        let shared = Set(
-            try [EntitlementRefusal.unreadableClaim, .claimIsForAnotherSession, .lapsed, .notSignedIn, .notEntitled]
-                .map { try accountRow(.signedIn, .unconfirmed($0)).detail }
-        )
+        // Everything else shares one sentence, deliberately, and it is neither of the two above.
+        // **Derived from the population rather than written out again** (PR #216's review, F1): a
+        // second hand-written literal here was the other half of what made this test's staleness
+        // claim hollow, since an eighth case would have been absent from both lists at once.
+        let others = Self.everyRefusal.filter { $0 != .noClaim && $0 != .clockUnusable }
+        let shared = Set(try others.map { try accountRow(.signedIn, .unconfirmed($0)).detail })
         #expect(shared == ["Signed in. Sonny couldn't check your plan."])
+        #expect(others.count == Self.everyRefusal.count - 2)
         // Three groups, not one and not seven — the decision above, asserted as a count.
         #expect(Set(sentences).count == 3)
+        // **The population's own size, which is what makes the doc on `everyRefusal` true.** The
+        // switch beside that array stops a stale list compiling; this is the half that makes a new
+        // case a deliberate decision rather than a silent join of the shared group. Same pair, same
+        // enum, as `EntitlementCopyTests.everyRefusalIsCovered`.
+        #expect(Self.everyRefusal.count == 7)
     }
 
     /// **The plan is not consulted while the session says signed out or undetermined.**

@@ -3505,6 +3505,18 @@ final class AgentViewModel: ObservableObject {
     /// claim signed by a key this build does not hold — since `EntitlementService`'s rule is that a
     /// check that could not be completed is a refusal rather than an error. So every outcome is
     /// already one of the two cases below, and the refusal is carried whole rather than collapsed.
+    ///
+    /// **This call can start a gateway request, and that is new to the readiness page** (SONNY-336,
+    /// PR #216's review, F2). It does not *block* on one — the answer below is always the cached
+    /// claim's, which is what keeps this row a presence check and §16.3 satisfied — but
+    /// `EntitlementService.evaluate` starts a detached, single-flight `refreshNow()` on five paths,
+    /// and one of them is the confirmed one, fired once a third of the claim's life has elapsed
+    /// (`EntitlementJudgement.shouldRefresh`). So a normally signed-in Mac starts a request more
+    /// often than not whenever `refreshPermissions()` runs — a Command Center appearance, the
+    /// Refresh button, a session change — where before this ticket that function reached no network
+    /// at all. Written down here because it is a behaviour change nothing else in the call chain
+    /// announces, and because the first version of this branch's changelog entry asserted the
+    /// opposite from reading only what the call returns.
     func refreshPlanReadiness() async {
         guard let entitlementConfirmation else {
             planReadiness = .undetermined

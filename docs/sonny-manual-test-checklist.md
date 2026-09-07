@@ -3947,31 +3947,55 @@ formality.
       handed back, which shows up as another request's data going wrong rather than as anything on
       this screen. PR #212's F1.)
 
-- [ ] **(new 2026-09-06, SONNY-232)** **A scheduled routine whose recent-artifacts note cannot be
-      saved says so, and is not reported as a failed run.** Make Sonny's own storage folder
-      unwritable for one occurrence: quit Sonny, run `chmod 500 ~/Library/Application\ Support/Sonny`,
-      relaunch, and let a routine that **writes a file** run on schedule (a routine with a
-      "create a local draft" step is the easy one — a routine that only does arithmetic writes
-      nothing and will not exercise this). **Expected:** the routine runs, the file it was asked to
-      write is on disk, the scheduled-run notice still says *"… ran on schedule"*, **and** a storage
-      notice appears saying Sonny could not update its recent-artifacts list. **What would be a
-      finding:** silence — no notice of any kind, which is exactly what this ticket fixes — or the
-      opposite, the run being reported as *failed* when it did what it was asked. Put the permissions
-      back afterwards: `chmod 700 ~/Library/Application\ Support/Sonny`.
+- [ ] **(new 2026-09-06, SONNY-232; method corrected 2026-09-06, PR #216's review F4)** **A scheduled
+      routine whose recent-artifacts note cannot be saved says so, and is not reported as a failed
+      run.** **Lock exactly one file, not the folder** — the reason is below, and it decides whether
+      this test can pass at all.
+      1. Let a routine that **writes a file** run once normally, so the store exists. A routine with
+         a *"create a local draft"* step is the easy one; a routine that only does arithmetic writes
+         nothing, never asks this store to save anything, and cannot exercise this at all.
+      2. Make that one store's file unwritable, leaving every other store alone:
+         `chflags uchg ~/Library/Application\ Support/Sonny/recent-artifacts.json`
+      3. Let the routine run on schedule again.
+
+      **Expected:** the routine runs, the file it was asked to write is on disk, the scheduled-run
+      notice still says *"… ran on schedule"*, **and** the storage notice in the app reads
+      *"Sonny could not update its recent-artifacts list: …"*. **What would be a finding:** silence —
+      no notice of any kind, which is exactly what this ticket fixes — or the opposite, the run being
+      reported as *failed* when it did what it was asked. Undo with
+      `chflags nouchg ~/Library/Application\ Support/Sonny/recent-artifacts.json`.
+
+      **Why not `chmod 500` on the whole `Sonny` folder, which is what this row said until the
+      correction:** the scheduled path has **four** bookkeeping write channels and they all publish
+      through one property that keeps only the last value written. In order they are recent artifacts,
+      output locations, this routine's run history, and the scheduled run's task-history row — every
+      one of them a file in that same folder. Locking the folder fails all four, and the sentence
+      left on screen is the **last** one, *"Sonny could not save this scheduled run to task
+      history: …"*, not the one this row is about. (Outside the app you would get a burst of
+      notifications, the first of which is the right one — so the old step could pass or fail on
+      nothing but where you happened to be looking.) Locking the single file is what the automated
+      test does for the same reason, and it is what lets the sentence above mean something.
 - [ ] **(new 2026-09-06, SONNY-336)** **The Sonny account row reports your plan as well as your
       session.** Signed in, with the gateway up and reachable at least once so a claim has been
       cached: open **Settings → Permission Readiness**. **Expected:** the first row is **Sonny
       account**, it reads **Ready**, and its sentence is *"Signed in, and your plan is confirmed."*
       **What would be a finding:** the row saying **Ready** while its sentence says nothing about the
       plan, which is the state this ticket replaced.
-- [ ] **(new 2026-09-06, SONNY-336)** **A plan that cannot be confirmed is amber, not red, and never
-      green.** Signed in, then take the Mac fully offline and leave it long enough that the cached
-      claim is past its grace (or sign in on a build that has never been online). Press **Refresh**
-      on the readiness page. **Expected:** the row reads **Check when used** — not *Needs action* —
-      and its sentence still begins *"Signed in."* while saying Sonny could not check your plan.
-      **What would be a finding:** **Ready** with an unconfirmed plan, which is the row claiming
-      something it did not check; or **Needs action**, which would be telling you to fix something
-      that is not stopping you from doing anything — nothing in Sonny is gated on a plan yet.
+- [ ] **(new 2026-09-06, SONNY-336; headline corrected 2026-09-06, PR #216's review F4)** **A plan
+      that cannot be confirmed reads "Check when used" — grey, never the amber "Needs action".**
+      Signed in, then take the Mac fully offline and leave it long enough that the cached claim is
+      past its grace (or sign in on a build that has never been online). Press **Refresh** on the
+      readiness page. **Expected:** the row reads **Check when used** — not *Needs action* — and its
+      sentence still begins *"Signed in."* while saying Sonny could not check your plan. On screen
+      that is the **grey** question-mark row, the same look every "Check when used" row on that page
+      already has. **What would be a finding:** **Ready** with an unconfirmed plan, which is the row
+      claiming something it did not check; or **Needs action** — the amber triangle — which would be
+      telling you to fix something that is not stopping you from doing anything, since nothing in
+      Sonny is gated on a plan yet. **Two colour notes so nothing here reads as a regression:** the
+      **Ready** state on this page is **blue**, not green, and nothing on this page is ever red — so
+      "never red" in the founders' decision means "never Needs action", which is the amber one. (The
+      headline said *amber* until this correction, which named the colour of the one state this row
+      exists to rule out; the states themselves are unchanged and so is the decision.)
 - [ ] **(new 2026-09-06, SONNY-336)** **Signed out is unchanged.** Sign out and press **Refresh**.
       **Expected:** exactly what it said before this branch — **Needs action**, *"Sign in to Sonny in
       Command Center."*, with no second sentence about a plan. **What would be a finding:** the row
