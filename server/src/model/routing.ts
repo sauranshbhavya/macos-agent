@@ -152,12 +152,20 @@ const TRANSACTION_CONTROL: ReadonlySet<string> = new Set(["BEGIN", "COMMIT", "RO
  * routes rather than a hot path, and the alternative is a promise the table does not make.
  *
  * **Transaction control is exempt from both the bound and the refusal, and that is the whole of the
- * connection-safety argument.** A `ROLLBACK` that this helper refused — or that Postgres cancelled
- * under a one-millisecond remainder — leaves the connection in an aborted-transaction state, and
- * `withConnection` then returns it to the pool poisoned: the next request's first statement fails
- * with `current transaction is aborted`. That is this ticket's own defect reached through its own
- * fix, so `BEGIN`, `COMMIT` and `ROLLBACK` pass through unbounded. They carry no user work, and the
- * statements that do are already bounded ahead of them.
+ * connection-safety argument.** A `ROLLBACK` that this helper refused leaves the connection in an
+ * aborted-transaction state, and `withConnection` then returns it to the pool poisoned: the next
+ * request's first statement fails with `current transaction is aborted`. That is this ticket's own
+ * defect reached through its own fix, so `BEGIN`, `COMMIT` and `ROLLBACK` pass through unbounded.
+ * They carry no user work, and the statements that do are already bounded ahead of them.
+ *
+ * **The refusal is the whole of that reason, and a second reason this comment used to give is not
+ * real** (PR #221's review). It also said Postgres might *cancel* a `ROLLBACK` under a
+ * one-millisecond remainder; the reviewer could not reproduce that in 300 trials of `BEGIN; SET
+ * statement_timeout TO 1; <a statement that is cancelled>; ROLLBACK;` — 300 cancellations of the
+ * statement, which is the control, and **0** `current transaction is aborted`. Postgres disables the
+ * statement timer before it does the transaction-completion work, so these statements are not
+ * cancellable this way at all. The exemption is unchanged and right; only the sentence was stronger
+ * than the evidence.
  */
 export async function withDatabaseDeadline<T>(
   deadline: { readonly total: number },
@@ -176,6 +184,16 @@ export async function withDatabaseDeadline<T>(
           return (target.query as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
         }
         const remaining = expiresAt - Date.now();
+        // **`<=` and not `<`, and that one character is the difference between this bound and no
+        // bound at all** (PR #221's review, F1). `SET statement_timeout TO 0` is Postgres for *no
+        // timeout*, so a remainder of exactly zero — reachable whenever `Date.now()` here equals
+        // `expiresAt` — would otherwise be handed to the backend as a licence to run forever, and
+        // the request would answer its ordinary 200 with §12's promise silently switched off. The
+        // shipped guard was already right and nothing held it: the loosened mutant survived the
+        // whole suite. `refuses a remainder of exactly zero…` in `content.test.ts` is what holds it
+        // now, on a frozen clock, and it asserts the empty statement list as well as the throw —
+        // the throw alone cannot tell a refusal apart from a `TO 0` that failed for some other
+        // reason.
         if (remaining <= 0) {
           throw new ProviderTimedOut("the route's total deadline elapsed");
         }

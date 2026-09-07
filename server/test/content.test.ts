@@ -1188,6 +1188,39 @@ describe("withDatabaseDeadline, apart from the routes", () => {
     expect(firstBudget).toBeLessThanOrEqual(15_000);
   });
 
+  it("refuses a remainder of exactly zero, the one value that would set no bound at all", async () => {
+    // **PR #221's review, F1 — the one character between this deadline and no deadline.** The guard
+    // is `remaining <= 0`, and loosening it to `< 0` survived the entire suite: a remainder of
+    // exactly zero would then be handed to Postgres as `SET statement_timeout TO 0`, which is that
+    // server's spelling of *no timeout at all* (measured against Postgres 17: under `TO 0` a
+    // sixty-million-row scan completed, and the byte-identical control at `TO 1` was cancelled). The
+    // route would run its delete unbounded, answer its ordinary 200, and still emit the `RESET`, so
+    // none of the four route tests could see it either.
+    //
+    // **The clock is frozen rather than raced.** `{ total: 0 }` with `Date.now` held at one instant
+    // puts `remaining` on exactly zero at the guard, deterministically; a tiny `total` plus a sleep
+    // would be the wall-clock bet `CLAUDE.md` warns about, and it would race the very mutant this
+    // exists to catch instead of catching it. `Date.now` alone rather than vitest's fake timers,
+    // because that is the only clock this helper reads and replacing the timers would reach `pg` and
+    // the hang backstop, which `auth.db.test.ts` records as a run that hangs with no output at all.
+    const record: string[] = [];
+    const { client } = recorder(record);
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      await expect(
+        withDatabaseDeadline({ total: 0 }, client, async (db) => {
+          await db.query("DELETE FROM sonny.retained_content");
+        }),
+      ).rejects.toThrow(ProviderTimedOut);
+    } finally {
+      clock.mockRestore();
+    }
+    // **The empty list is the half that distinguishes a refusal from a `TO 0`**, and it is empty
+    // rather than merely free of the delete: nothing was set, so nothing needed resetting either.
+    expect(record).toEqual([]);
+  });
+
   it("refuses a statement once the budget is gone, without a round trip", async () => {
     // The sequence-level half of the bound: work that ran out of budget between statements is
     // stopped here rather than handed to Postgres with a one-millisecond timeout.
