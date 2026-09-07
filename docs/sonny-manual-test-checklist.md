@@ -1982,7 +1982,9 @@ service."* That is the honest sentence for that state, not an outage.
 #### Waits on SONNY-280's resume (a local gateway and a real sign-in)
 
 - [ ] **(new 2026-08-28, SONNY-136)** Signed in, with the local gateway up: **Settings → Permission
-      Readiness** shows the Sonny account row as **Ready**, reading *"Signed in."* Sign out and press
+      Readiness** shows the Sonny account row as **Ready**. Its sentence is *"Signed in, and your
+      plan is confirmed."* since SONNY-336 — it read *"Signed in."* when this row was written, and
+      the row now reports the plan as well as the session. Sign out and press
       Refresh: it returns to **Needs action**. This is the row that replaced the one reporting on a
       credential nothing reads.
 - [ ] **(new 2026-08-28, SONNY-136)** Signed in, gateway up, then **stop the container** (`docker
@@ -3944,6 +3946,41 @@ formality.
       used to answer early and leave its clean-up writing to a database connection it had already
       handed back, which shows up as another request's data going wrong rather than as anything on
       this screen. PR #212's F1.)
+
+- [ ] **(new 2026-09-06, SONNY-232)** **A scheduled routine whose recent-artifacts note cannot be
+      saved says so, and is not reported as a failed run.** Make Sonny's own storage folder
+      unwritable for one occurrence: quit Sonny, run `chmod 500 ~/Library/Application\ Support/Sonny`,
+      relaunch, and let a routine that **writes a file** run on schedule (a routine with a
+      "create a local draft" step is the easy one — a routine that only does arithmetic writes
+      nothing and will not exercise this). **Expected:** the routine runs, the file it was asked to
+      write is on disk, the scheduled-run notice still says *"… ran on schedule"*, **and** a storage
+      notice appears saying Sonny could not update its recent-artifacts list. **What would be a
+      finding:** silence — no notice of any kind, which is exactly what this ticket fixes — or the
+      opposite, the run being reported as *failed* when it did what it was asked. Put the permissions
+      back afterwards: `chmod 700 ~/Library/Application\ Support/Sonny`.
+- [ ] **(new 2026-09-06, SONNY-336)** **The Sonny account row reports your plan as well as your
+      session.** Signed in, with the gateway up and reachable at least once so a claim has been
+      cached: open **Settings → Permission Readiness**. **Expected:** the first row is **Sonny
+      account**, it reads **Ready**, and its sentence is *"Signed in, and your plan is confirmed."*
+      **What would be a finding:** the row saying **Ready** while its sentence says nothing about the
+      plan, which is the state this ticket replaced.
+- [ ] **(new 2026-09-06, SONNY-336)** **A plan that cannot be confirmed is amber, not red, and never
+      green.** Signed in, then take the Mac fully offline and leave it long enough that the cached
+      claim is past its grace (or sign in on a build that has never been online). Press **Refresh**
+      on the readiness page. **Expected:** the row reads **Check when used** — not *Needs action* —
+      and its sentence still begins *"Signed in."* while saying Sonny could not check your plan.
+      **What would be a finding:** **Ready** with an unconfirmed plan, which is the row claiming
+      something it did not check; or **Needs action**, which would be telling you to fix something
+      that is not stopping you from doing anything — nothing in Sonny is gated on a plan yet.
+- [ ] **(new 2026-09-06, SONNY-336)** **Signed out is unchanged.** Sign out and press **Refresh**.
+      **Expected:** exactly what it said before this branch — **Needs action**, *"Sign in to Sonny in
+      Command Center."*, with no second sentence about a plan. **What would be a finding:** the row
+      mentioning a plan at all while signed out, which would be two rows' worth of advice about one
+      problem.
+- [ ] **(new 2026-09-06, SONNY-336)** **Ask Sonny itself.** Type *"check my permissions"* (the
+      `show_permission_readiness` tool). **Expected:** the account line it reports matches the
+      Settings page exactly — same state word, same sentence. **What would be a finding:** the two
+      disagreeing, which would mean the tool and the page are reading different answers.
 
 ## 8. How to report back
 
