@@ -178,7 +178,7 @@ Reviewed by: pending — this entry is written before the PR opens, per `WORKFLO
 
 Spec sections covered: none of the wire contract. Nothing a caller can observe changes: a request that would have been answered is still answered, and the codes, headers and bodies are untouched. What changes is which secrets a signature may match, which is entirely inside `server/src/auth/token.ts` and `server/src/config.ts`.
 
-Files changed — **12 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 12 at `<HEADSHA>`, the bare form of the same command answering **13** as the control that says the stage is doing the excluding (writing this entry puts the changelog into the population its own citation counts — `CLAUDE.md`'s ninth write-the-command defect, and PR #215's F4 in the entry directly below):
+Files changed — **12 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 12 at `25148d59`, the bare form of the same command answering **13** as the control that says the stage is doing the excluding (writing this entry puts the changelog into the population its own citation counts — `CLAUDE.md`'s ninth write-the-command defect, and PR #215's F4 in the entry directly below):
 - `server/src/auth/token.ts` — `SupabaseJwtPolicy` carries an ordered `secrets` list of `AcceptedJwtSecret` instead of one `secret`, and the single HMAC becomes a loop that stops at the first match and skips a secret past its `acceptedUntil`
 - `server/src/config.ts` — `SUPABASE_JWT_SECRET_2` and `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` in the schema, on `Config`, and read; `MAX_JWT_SECRET_OVERLAP_DAYS`; `requireSupabaseJwtPolicy` builds the list and enforces the deadline rules; `refuseUnreadJwtSecretSlots` in `loadConfig`; the length floor extracted so both secrets are held to one copy of it
 - `server/src/db/migrations/0022_a_signed_out_session_stops_verifying.sql` — `revoked_at`'s source comment made true, plus a `COMMENT ON COLUMN`
@@ -190,14 +190,14 @@ Files changed — **12 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs
 
 **`server/test/support/config.ts` is the one file that looked owed and is not**, stated because the opening comment's file list did not name it and a reader checking the list against the diff will wonder: `testConfig()` spreads `TEST_SUPABASE_CONFIG`, so the two new `Config` fields arrive there by adding them to `tokens.ts`. The typecheck named it before that was done, which is the compiler doing what `CLAUDE.md`'s store-injection note describes on the Swift side. Nothing else was added to or dropped from that list.
 
-Tests (`cd server`), all at `<HEADSHA>`:
+Tests (`cd server`), all at `25148d59` — **the head the figures were measured at, and every commit above it touches only this file** (`git diff --name-only 25148d59 HEAD` lists `docs/sonny-v1-implementation-changelog.md` and nothing else), which is why the operand is that commit rather than a head that moves each time this paragraph is edited:
 - `npm run build` → exit 0
 - `npm run typecheck` → exit 0
 - `npm test` → exit 0, **862 passed / 445 skipped (1307)**, against the base's 843/445 (1288)
 - `npm run test:db` against `sonny-gw-db-lane-238` on a Docker-assigned port → exit 0, **1307 passed (1307)**, against the base's 1288
 - `npm run check:secrets` → exit 0, clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)
 - `./scripts/check-secrets-selftest.sh` → exit 0, **56 passed, 0 failed**, against the base's 53
-- `scripts/changelog-order` → `<CHANGELOGORDER>`
+- `scripts/changelog-order` → exit 0, **189 entries**, against the base's 188
 - No Swift suite and no `scripts/warnings` are owed, measured rather than asserted: `git diff --name-only 061a2c36 HEAD -- Sources Tests` prints nothing, exit 0. `Package.swift`'s five targets all carry a `path:` naming `Sources/…` or `Tests/…`, so nothing under `server/` reaches a Swift target.
 
 Behavior added:
