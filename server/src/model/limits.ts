@@ -124,8 +124,11 @@ export const DEADLINE_MS = {
    *
    * - `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider — so a
    *   deadline around them is a timer that cannot fire. §12 carries that in prose beside its table.
-   * - `DELETE /v1/tasks/{task_id}` was on this ticket's never-touch list while PR #207 held
-   *   `routes/tasks.ts`, and is owed its own change rather than a reach across that line.
+   * - **The four content-deletion routes in `routes/tasks.ts` are wired now, and not by this
+   *   wrapper** (SONNY-428). They were on SONNY-425's never-touch list while PR #207 held that file.
+   *   They reach no provider and every one of them holds a pooled connection, so `withDeadlines` is
+   *   forbidden for them by PR #212's F1 and the `upstream` half of this row has nothing to bound:
+   *   they take `CONTENT_DELETION_DEADLINE_MS` below, through `withDatabaseDeadline`.
    * - Three of the four account routes (`routes/entitlements.ts`, and the read and the consent
    *   switch in `routes/credits.ts`) wait on the database rather than on a provider, and
    *   `db/pool.ts` sets no statement timeout — so bounding those is a wider change than one route's
@@ -214,3 +217,21 @@ export const BODY_READ_DEADLINE_MS = 90_000;
  * broken, and never the thing an ordinary user meets.
  */
 export const MAXIMUM_AUDIO_DURATION_SECONDS = 180;
+
+/**
+ * §12's last row applied to the four content-deletion routes in `routes/tasks.ts` (SONNY-428).
+ *
+ * **Derived from `DEADLINE_MS.auth` rather than written as a second pair of literals**, because §12
+ * refuses these routes a row of their own in as many words: "SONNY-404's three deletes are in that
+ * last row and take no row of their own: they are the same database work as 4.6's, over more rows
+ * or over fewer columns, and none of them calls a provider." Two literals that have to stay equal
+ * are two literals that can drift, and the table `test/model.test.ts` asserts whole is the one
+ * place §12's numbers live.
+ *
+ * **`total` alone, and the missing `upstream` is the point rather than an omission.** Every other
+ * consumer of that row is bounding a call to a provider; these four reach no provider at all, so an
+ * `upstream` field here would be a number nothing applies — and `withDatabaseDeadline` takes
+ * `{ total }` precisely so a caller cannot wire a signal that bounds nothing. What binds these
+ * routes is the whole-handler deadline, enforced against Postgres rather than against a socket.
+ */
+export const CONTENT_DELETION_DEADLINE_MS = { total: DEADLINE_MS.auth.total } as const;

@@ -1664,4 +1664,66 @@ describeDb("the content store, its clocks, and what reaches training", () => {
       expect(report).toContain("recorded");
     });
   });
+  /**
+   * §12's deadline, against a real backend (SONNY-428).
+   *
+   * **`content.test.ts` proves the four routes are wired and this proves the wiring bounds
+   * anything**, and neither half is worth much alone. There the store is a fake that honours a
+   * `statement_timeout`, so what it establishes is that each route sets one and answers §7.2's
+   * envelope when a statement is cancelled; nothing in a fake says Postgres would really cancel.
+   * Here the statement is genuinely blocked — by a lock another connection holds, which is the
+   * production shape of a deletion that will not finish — and the cancellation is the real server's.
+   *
+   * **A lock rather than a sleep, deliberately.** `CLAUDE.md`'s wall-clock rule is about a test that
+   * races something; this waits on nothing and bets on nothing. The blocking transaction is opened
+   * before the delete is attempted and is still open when the assertion runs, so the statement
+   * cannot proceed for any reason other than the one under test, and the only thing that ends it is
+   * the timeout.
+   */
+  describe("§12's deadline, enforced by the backend rather than by a race", () => {
+    itUnderHangBackstop(
+      "cancels a delete that a lock is holding, and hands back the code the mapper answers",
+      async () => {
+        const accountId = CONSENTING;
+        const taskId = `task-${randomUUID()}`;
+        await insertRetainedContent(client, content({ accountId, taskId }));
+
+        // A second connection takes a lock the delete must have, and keeps it.
+        const blocker = new pg.Client({ connectionString: url });
+        await blocker.connect();
+        try {
+          await blocker.query("BEGIN");
+          await blocker.query("LOCK TABLE sonny.retained_content IN ACCESS EXCLUSIVE MODE");
+
+          // 250 ms rather than §12's 15 s: what is under test is that the bound is real and that
+          // the backend reports it the way the mapper reads, neither of which is a property of the
+          // number. The number itself is pinned in `content.test.ts` against the constant.
+          await client.query("SET statement_timeout TO 250");
+          let code: string | undefined;
+          try {
+            await deleteContentForTask(client, { accountId, taskId });
+          } catch (error) {
+            code = (error as { code?: string }).code;
+          } finally {
+            await client.query("RESET statement_timeout");
+          }
+
+          // **57014 is the whole hinge.** `withDatabaseDeadline` reads this code and nothing else to
+          // decide a statement was cancelled, so a backend reporting anything else here would leave
+          // every one of the four routes answering 500 for a timeout.
+          expect(code).toBe("57014");
+        } finally {
+          await blocker.query("ROLLBACK").catch(() => {});
+          await blocker.end();
+        }
+
+        // **And the connection survived it**, which is the property the whole mechanism was chosen
+        // for: the store rolled its transaction back, so this client is usable rather than stuck in
+        // an aborted transaction — which is what `withConnection` would otherwise hand to the next
+        // request.
+        const after = await client.query("SELECT 1 AS ok");
+        expect(after.rows[0]).toEqual({ ok: 1 });
+      },
+    );
+  });
 });
