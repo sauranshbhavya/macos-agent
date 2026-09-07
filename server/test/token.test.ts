@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { EXPIRY_SKEW_TOLERANCE_SECONDS } from "../src/auth/clock.js";
 import { verifyAccessToken, type TokenRefusal } from "../src/auth/token.js";
 import {
-  TEST_JWT_POLICY, accessTokenFor, base64url, claimsFor, signToken, signatureSecondSpelling,
-  tokenWithBrokenSignature, tokenWithClaims,
+  TEST_JWT_POLICY, accessTokenFor, base64url, claimsFor, providerSessionFor, signToken,
+  signatureSecondSpelling, tokenWithBrokenSignature, tokenWithClaims,
 } from "./support/tokens.js";
 
 /**
@@ -391,5 +391,59 @@ describe("verifyAccessToken — shapes that are not tokens", () => {
   it("refuses an oversized token before spending an HMAC on it", () => {
     const honest = accessTokenFor(USER, { now: NOW });
     expect(refusalOf(`${honest}${"A".repeat(8192)}`)).toBe("malformed");
+  });
+});
+
+/**
+ * The `session_id` claim (SONNY-237), which is the only claim this verifier reads that another
+ * component then *acts* on: `auth/denylist.ts` keys a revocation on it.
+ *
+ * Two directions matter and they are one line apart in the code. A claim that is present and
+ * unusable must be a refusal rather than an absence — treating it as absent would make the token
+ * silently undenylistable, which is the whole property. And an absent claim must be accepted, because
+ * GoTrue declares it `omitempty` and handles the absence itself, so a token without one is a shape
+ * the provider mints rather than a forgery.
+ */
+describe("verifyAccessToken — the provider session claim", () => {
+  it("carries a well-formed session_id through to the verdict", () => {
+    const verdict = verifyAccessToken(accessTokenFor(USER, { now: NOW }), TEST_JWT_POLICY, NOW);
+    expect(verdict.ok).toBe(true);
+    if (!verdict.ok) return;
+    expect(verdict.token.providerSessionId).toBe(providerSessionFor(USER));
+  });
+
+  it("accepts a token that carries none, and reports it as absent", () => {
+    const verdict = verifyAccessToken(
+      tokenWithClaims(USER, { session_id: undefined }), TEST_JWT_POLICY, NOW,
+    );
+    expect(verdict.ok).toBe(true);
+    if (!verdict.ok) return;
+    expect(verdict.token.providerSessionId).toBeUndefined();
+  });
+
+  it("refuses a session_id that is present and not a uuid, rather than reading it as absent", () => {
+    // Every one of these is a token that would otherwise verify. `session` and not `subject`: the
+    // log line is how an operator tells a re-keyed project from a forged claim, and collapsing the
+    // two would cost that.
+    for (const spelling of ["not-a-uuid", "", "3f1d0c8e1c5a4a9f9f6b2b6f5f2a77aa", " "]) {
+      expect(refusalOf(tokenWithClaims(USER, { session_id: spelling })))
+        .toBe("session");
+    }
+  });
+
+  it("refuses a session_id that is not a string at all", () => {
+    for (const shape of [null, 7, true, ["a"], { id: "a" }]) {
+      expect(refusalOf(tokenWithClaims(USER, { session_id: shape })))
+        .toBe("session");
+    }
+  });
+
+  it("refuses the claim AFTER the signature, so a forgery is never told which claim was wrong", () => {
+    // Check order is the file's own rule: nothing about the claims may be reported for a token this
+    // gateway did not sign. A junk session_id on a wrongly-signed token reads as `signature`.
+    const forged = tokenWithClaims(
+      USER, { session_id: "not-a-uuid" }, { secret: "a-different-secret-of-adequate-length" },
+    );
+    expect(refusalOf(forged)).toBe("signature");
   });
 });

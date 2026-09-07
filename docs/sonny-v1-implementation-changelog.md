@@ -170,6 +170,185 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-signed-out-token-stops-working-and-a-secret-can-rotate
+Status: partial — SONNY-237 complete; **SONNY-238 not started and handed back untouched** (the lane stopped at its ninety-minute mark per `WORKFLOW.md` step 5, at a green tree between tickets, which is that rule's expected shape rather than a failure — the third pass of this lane to stop in it)
+Date: 2026-09-06 (fix round after PR #215's review, same day; rebased onto `main` at `70c5663d` 2026-09-07)
+Tickets: **SONNY-237** (a Supabase access token is self-contained, so signing out revoked the *refresh* family at the provider and left the token already in the user's hand verifying until its own `exp` plus the skew tolerance). One session, from `main` at `35519b50`, rebased onto `70c5663d` three merges later, third and last pass of the follow-up gateway lane. **Not done: SONNY-238** (an ordered `SUPABASE_JWT_SECRET` list so a rotation has an overlap) — never claimed, never started, and nothing in this branch anticipates it: `git diff --name-only 70c5663d HEAD -- server/src/config.ts server/.env.example server/scripts/check-secrets.sh server/scripts/deploy.sh` prints nothing.
+Reviewed by: **fresh-session adversarial review of PR #215 at `cce9ac42`, deep — cycle-1 verdict: fix round warranted, no live product defect found.** The design held: the reviewer walked every exclusion rather than assuming them and found no route where a denylisted token still works, confirmed the exemption's blast radius as one route and one act, checked its justification against the Mac's retry-in-place rather than taking it on trust, and replayed six mutants matching this branch's killer names. Five findings, all taken in one round: **F1**, the exemption set could be widened to any route and nothing disagreed — the reviewer's own mutant adding two delete routes survived all 1283 tests while the same widening on `PUBLIC_ROUTES` died by nine; **F2**, this branch's replacement comment about the prune-and-upsert was false in a new way and the test named as holding it could not see the difference; **F3**, the shared fake answered the sign-out's *write* as if it were the gate's consult, contradicting its own promise to throw on anything else; **F4**, a path count of 27 beside a command answering 28; **F5**, an option with no caller. Six things were recorded below the bar and left, two of which are corrected here anyway, being one sentence each.
+
+**Every figure below is stamped at `baaf0275`, the fix round's head after the rebase, and it is a measurement *of* that head rather than one re-stamped at it** — which is the only thing step 5 lets cross a moved base. **The proof is that `main` did not touch `server/` in the three merges this branch hopped over**: `git rev-parse 35519b50:server 70c5663d:server` prints `af002be670c19a949864d80d999026f337179ac9` twice, exit 0 read with nothing between the command and `$?`, so the tree these figures were measured against is the tree they now describe. **Stated in its strongest form as well**, because that one is about the heads rather than the bases: `git rev-parse 684dd3f6:server 2cc78462:server` prints `e6d9a7a31aad8c6a773257ecc1a0526a62d059ad` twice — and it answers the same at whatever this branch's head turns out to be, because **every commit above `baaf0275` here touches only this file** (`git diff --name-only baaf0275 <head>` lists `docs/sonny-v1-implementation-changelog.md` and nothing else), which is why the operand is the last code-bearing commit rather than a head that moves each time this paragraph is edited. **Two controls, so neither identical pair can read as a broken invocation**: the same command over `35519b50:server 684dd3f6:server` prints those two *different* hashes, and over `35519b50:docs 70c5663d:docs` prints `8c839f4010eb7c515e1e1a04aa8fc6e5956e2b48` and `b904260d3042e8f402f52afd84da2d76e7c74cdd` — `docs/` is where the three merged branches did land. Every SHA here is written literally rather than through a shell variable, because in zsh `$sha:server` is not a path expression and answers the commit's own SHA. The suites were therefore **not** re-run on the new base, and that is the rule working rather than a corner cut: with a proof of the right scope, step 5 says carry.
+
+Spec sections covered: contract §3.6 (the sign-out paragraph gains what the presented access token now does, and the two exclusions), §14 (one row), §7.2 (`auth.token_revoked` on a state it already defined, not a new code).
+
+Files changed (`ed66e98e`, `42391189`, `dff767fa`, the fix round's `baaf0275`, plus this entry's commits — **all post-rebase SHAs**; the pre-rebase ones this entry used to cite are orphaned and listed at the end rather than repointed) — **27 paths**, `git diff --name-only 70c5663d HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 27, the bare form of the same command answering **28**. **Every command in this entry that names a base names `70c5663d`, because that is this branch's base now** — against the pre-rebase base this same pair answers 51 and 52, which counts the merged range's paths rather than this branch's, and is the shape a rebase leaves in any citation written against a base. **The exclusion is the point rather than tidiness** (PR #215's F4): writing this entry put the changelog into the population its own citation counts, which is `CLAUDE.md`'s ninth write-the-command defect — a citation that greps a population its own file belongs to — reached through a `git diff` instead of a `git grep`. The list below enumerates 27 and does not include the changelog, so before the exclusion the set and the number disagreed with each other as well as with the command. The control that says the stage is doing the excluding is the bare form answering exactly one more:
+- `server/src/db/migrations/0022_a_signed_out_session_stops_verifying.sql` — **new**, `sonny.revoked_provider_session`, with its `-- @rollback`
+- `server/src/auth/denylist.ts` — **new**; the consult, the recording upsert with its prune, and `denylistedUntil`
+- `server/src/auth/token.ts` — the `session_id` claim reaches `VerifiedAccessToken`, and a new `session` refusal
+- `server/src/auth/gate.ts` — the consult before attribution on the connection it already leases; `DENYLIST_EXEMPT_ROUTES`; `AuthenticatedCaller` gains the session and the expiry
+- `server/src/routes/auth.ts` — the sign-out handler records the row before it calls the provider
+- `docs/sonny-backend-api-contract.md`, `server/README.md`, `docs/sonny-manual-test-checklist.md` (three rows, all waiting on SONNY-192)
+- Tests: `server/test/denylist.test.ts` and `server/test/denylist.db.test.ts` (**new**), `server/test/support/connection.ts` (**new**), `token.test.ts`, `support/tokens.ts`, `migration-round-trip.db.test.ts`, `auth.db.test.ts`, `authgate.db.test.ts`, and eleven suites that carried a copy of the gate's fake connection — `git diff 70c5663d HEAD -- server/test | grep -cE '^\+ *(it|itUnderHangBackstop)\('` → **27** at `6650ce8d`, and the same with `^-` → **0**, so nothing was removed
+
+Tests, all stamped at `baaf0275` — measurements *of* that head under the tree-identity proof above rather than re-runs on it, which is the one thing step 5 lets cross a moved base: `npm run build` exit 0; `npm test` exit 0, **843 passed / 445 skipped (1288)**; `npm run test:db` against a lane-named Postgres exit 0, **1288 passed (1288)**; `npm run typecheck` exit 0; `npm run check:secrets` exit 0 (`clean (635 tracked files scanned, 12 patterns, 8 baselined fixtures)`); `./scripts/check-secrets-selftest.sh` exit 0, **53 passed, 0 failed**; `scripts/changelog-order` exit 0, **185 entries**. The baseline at `35519b50` was 826/435 (1261) and 1261, so the twenty-seven added tests are the whole of the difference, and the split across the two runs is theirs: **ten** are in `denylist.db.test.ts`, which is skipped without a database, and the other **seventeen** are the twelve in `denylist.test.ts` and the five in `token.test.ts` (`grep -cE '^ *(it|itUnderHangBackstop)\(' server/test/denylist.db.test.ts server/test/denylist.test.ts` → 10 and 12, and `git diff 70c5663d HEAD -- server/test/token.test.ts | grep -cE '^\+ *it\('` → 5, all at `6650ce8d`) — so passed moves by seventeen and skipped by ten.
+
+**No Swift suite and no `scripts/warnings` are owed, and that is measured rather than asserted**: `git diff --name-only 70c5663d HEAD -- Sources Tests` prints nothing, exit 0 — **named at the new base deliberately**, because the merged range moved nine files under `Sources/` and fourteen under `Tests/`, so the same command against the pre-rebase base answers **23** paths, every one of them `main`'s and none of them this branch's. `Package.swift`'s five targets all carry a `path:` naming `Sources/…` or `Tests/…`, so nothing under `server/` reaches a Swift target.
+
+**Mutation battery: 10 mutants, 10 killed, stamped at `baaf0275` under the same proof** — one per property the ticket claims rather than one per changed file. D1 the gate never consults the denylist; D2 the sign-out records nothing; D3 the row is kept only to `exp`; D4 the prune drops every row rather than the expired ones; D5 a second sign-out shortens the window a longer-lived token had earned; D6 the sign-out route is not exempt; D7 a malformed `session_id` reads as an absent one; D8 the row is written only after the provider accepts; D9 the exemption is read for every route; and, added by the fix round, **D10** `revoked_at` is not refreshed on conflict. Killers by name are in SONNY-237's closing comment and its fix-round addendum.
+
+**The first round left D4 alive, and the test that could not see it is the one whose name says it does.** `prunes a row whose token has expired, and only that row` plants one dead row, signs one live session out, and asserts what survived — which a prune widened to *every* row satisfies exactly, because the row it planted was the row meant to go. What separates the two is a **live row belonging to another session**: under the widened boundary, signing one user out un-revokes every other signed-out session in the system, which is this ticket's own defect arriving through its fix. The landing test signs two sessions of one user out in turn and asserts both rows present and both tokens still refused. Same family as `CLAUDE.md`'s held-sample rule — the assertion was specific, non-vacuous and on the right line, and the fixture could not reach the property.
+
+**The whole plan was re-run rather than scoped to D4, and the re-run is what says why.** The round's edit is a test file, and `denylist.db.test.ts` is the killing test file of six of the nine — `WORKFLOW.md` step 5's second condition, which "what I just changed" does not see. Three verdicts moved: **D1 6 → 7, D2 8 → 9, D9 9 → 10**, the new test joining each. A scoped re-run would have touched none of them and left three stale numbers reading exactly as clean as the true ones.
+
+Behavior added:
+- **A sign-out stops the access token it was made with.** `POST /v1/auth/signout` records the token's `session_id` in `sonny.revoked_provider_session`, and every authenticated route then answers `401 auth.token_revoked` — §7.2's existing meaning, "clears the Keychain entry, opens sign-in". No wire code was added and none changed meaning.
+- A row is kept until the token would have expired anyway and pruned by the next write (founder decision 2026-08-30), where "expired" is `exp` **plus** `EXPIRY_SKEW_TOLERANCE_SECONDS`.
+
+Behavior preserved (required, no blanket claims):
+- **The same user's other sessions are untouched.** The adapter asks Supabase for `?scope=local` precisely so signing out on one Mac does not sign out another, and a denylist keyed per session is what keeps the gateway agreeing with it.
+- **`POST /v1/auth/signout` still answers `204` when the provider rejects the token, `502` when it cannot be reached and `504` when it times out**, and is still idempotent — the route is exempt from the consult, so the second call is not refused by the first call's own row.
+- A token carrying no `session_id` is served exactly as before; the route logs that it could deny nothing.
+- Every existing auth outcome is unchanged: `refresh`'s `401 auth.token_revoked` on a rotated-away token, `email/verify`'s three 400s, `email/start`'s uniform `200`, and `DELETE /v1/account`'s `204` and its cooperative drain deadline.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+- **A local verifier cannot un-issue a token and can still stop honouring one, and the difference is where the ticket's whole design sits.** SONNY-203's residual was written as a consequence of local verification, which reads as "nothing can be done short of asking the provider". Asking the provider is not the only way to learn a session is over: this gateway is *told*, by the sign-out request it serves. What the residual actually cost was a table.
+- **The exemption for the sign-out route is a correctness requirement, and leaving it out is worse than the defect.** The row is written before the provider call, so without `DENYLIST_EXEMPT_ROUTES` a §9.3 retry of a sign-out the provider answered `502` to meets the record its own first attempt wrote, is refused `401` at the gate, and **the provider-side revocation becomes unreachable by anyone** — the local half succeeding closes the only path to the remote half. It is reachable on the first provider blip. D6 is the mutant, and two of its four killers are pre-existing `auth.db.test.ts` tests, which is the shape of the regression: the exemption is what kept them green.
+- **The claim's absence is a real shape and the provider itself handles it, which is why refusing it would have been wrong and reading a *malformed* one as absent would also have been wrong.** GoTrue declares `session_id` `omitempty`; `internal/api/logout.go:52` logs `"user has an empty session_id claim"` and then falls through to `models.Logout(tx, u.ID)` — a **global** logout whatever scope was asked for. So absent is served and undenylistable, and present-but-not-a-uuid is a refusal, because treating it as absent would make the token silently undenylistable, which is the one property the mechanism provides. That is D7.
+- **The provider fact the ticket said to verify was verified against published source rather than a project, and the method is `auth/supabase.ts`'s own.** No Supabase project exists to point at. Read 2026-09-06 at `supabase/auth` master `0907af9bd6be3c76f472c40a7dcc0dc34abeffaf`: `internal/tokens/service.go:88` declares `SessionId` inside `AccessTokenClaims`, `:726` sets it on every token that service mints, and `internal/api/token.go:311` reads it back with `uuid.FromString`, which is where the column type comes from. Dated rather than pinned, because it is somebody else's file — the same convention that file's 43-path count uses.
+- **The same three lines were described wrongly twice, and the second time is the one worth reading.** The prune and the upsert touch one row in one statement. The first version carried an `AND session_id <> $1` to sidestep an interaction — `ON CONFLICT DO UPDATE` refusing a tuple the same command already modified — that does not arise; the condition changed no answer and was deleted, for the reason `token.ts` gives for deleting its unreachable `4n+1` guard. **The replacement then asserted the opposite mechanism, equally unmeasured, and it was false** (PR #215's F2): what happens is the `ON CONFLICT` arm running **on the tuple the prune matched**, not a fresh insert. Measured on Postgres 17.11 with the statement lifted out of `denylist.ts` rather than retyped and `revoked_at` as the discriminator, because `DO UPDATE` sets only the columns it names: no pre-existing row → stamped today; an expired row belonging to a **different** session → stamped today, which is the control saying the prune really does delete; an expired row belonging to **this** session → the planted timestamp. Both controls fire. **The outcome was right under either mechanism** — one row, the later expiry, no error — which is exactly why a wrong sentence survived a battery and a review round. The cost is the one the deleted guard was cited for, arriving in prose instead of in code: the sentence is what somebody reasons from when they next change the statement.
+- **Eleven test files held a byte-identical fake of the gate's one database read, and the duplication was survivable until the gate grew a second one.** Each answered `accountForSupabaseUser` and threw on anything else, which is the right shape — an unexpected query fails loudly rather than returning a plausible row. Adding the consult turned all eleven into `unexpected query` at once. The fake is `test/support/connection.ts` now; the loudness is preserved and is why `where` is a required argument rather than a defaulted one.
+- **One fixed `session_id` literal in the test token minter would have been a shared-state hazard rather than a detail.** Signing one user out records that id, so a single literal denies every *other* user's token in the same file. `support/tokens.ts` derives one id per Supabase user; and because the table references the account tree nowhere, a `TRUNCATE … CASCADE` on `sonny.account` does not reach it — the two suites that sign out truncate it by name, and without that line `auth.db.test.ts` failed with 401s and two sixty-second hangs naming nothing. The hangs are the shape to recognise: a test waiting on a deadline timer the gate had already refused the request before reaching.
+
+Known limitations / deferred scope:
+- **SONNY-238 is not started.** `SUPABASE_JWT_SECRET` is still a single value, `server/src/config.ts` and `server/scripts/check-secrets.sh` are untouched, and nothing here half-builds it. Its closing state is on SONNY-237's stop-and-report comment.
+- **A token with no `session_id` claim keeps the old window** — its own `exp` plus thirty seconds. Nothing this gateway holds can key on it.
+- **The row covers the tokens this gateway has been shown.** `session_id` survives a refresh, so `GREATEST` keeps the latest expiry across sign-outs; a client that signed out with a stale token while holding a fresher one would leave the fresher one working to its own `exp`. In practice the presented token is the newest, because refreshing is what produces a newer one.
+- **The consult is a second statement on every authenticated request** whose token carries a session claim — one extra round trip on the connection attribution was going to lease anyway, a primary-key lookup on a table bounded by one token lifetime's sign-outs. Not measured under load; no host exists to measure on.
+- **Nothing prunes when nobody signs out.** The prune rides on the write, so expired rows linger until the next sign-out. They change no answer — a token whose row is past `expires_at` is refused by `verifyAccessToken` first — and the table cannot grow without sign-outs to grow it.
+
+Open questions (required, write "none" if true): none.
+
+**The fix round after PR #215's review (2026-09-06).** Five findings, none of them a live product defect, and the
+first is the one worth reading twice.
+
+- **F1 — a set that could be widened to anything, and the asymmetry that made it visible.**
+  `DENYLIST_EXEMPT_ROUTES` is the one door through which a token this gateway has been told to stop honouring is
+  still served, and nothing in the suite said which routes it holds. The reviewer measured it rather than arguing
+  it: a mutant adding `DELETE /v1/account/content` and `DELETE /v1/tasks` — which would let a signed-out token
+  delete every task the account has ever stored — **survived all 1283 tests**, while the same widening applied to
+  `PUBLIC_ROUTES`, the sibling set one screen up, was **killed by nine**. One set was pinned by value and the other
+  was described only in prose, and the prose was this branch's own docstring saying "one route". **The second half
+  of the finding is where the pin had to go**: every test that held the exemption's behaviour was database-gated,
+  so the documented `npm test` — 445 skipped — said nothing about it at all. The pin is a value table in
+  `denylist.test.ts`, which opens no socket, for the reason `theWipesOwnSentenceNamesEveryStoreItDeletes` is one in
+  the Swift half: a containment check sees a missing entry and never an extra one, and an extra one is the whole
+  risk. Re-run against it under the documented command, stamped at `baaf0275`, baseline `PASSED 843 passed | 445 skipped
+  (1288)`: **W1 KILLED by 1** — *is exactly the sign-out route, and nothing else* — and the control **W2 KILLED by
+  2**, `gate.test.ts`'s two population scans. W2's count is 2 here against the reviewer's 9 because the reviewer ran
+  it with a database and the seven `content.db.test.ts` killers are skipped without one; the mutant and the coverage
+  are the same, the suite is not.
+- **F2 — the same three lines described wrongly twice, and the second description is the one that earned a round.**
+  The replacement comment this branch shipped one round earlier asserted that the prune's `DELETE` is what the
+  arbiter sees, so the upsert proceeds as a plain insert. It is the other way round: the `ON CONFLICT … DO UPDATE`
+  arm runs **on the tuple the prune matched**. Measured on Postgres 17.11 with the statement lifted out of
+  `denylist.ts` rather than retyped, using `revoked_at` as the discriminator because `DO UPDATE` sets only the
+  columns it names — no pre-existing row → stamped today; an expired row for a **different** session → stamped
+  today, the control saying the prune really does delete; an expired row for **this** session → the planted
+  timestamp. **Behaviour was right under either mechanism** — one row, the later expiry, no error — which is why a
+  battery, a review and a coordinator's verification all passed over a false sentence. **And the test named as
+  keeping it measured could not see it**: `re-revokes a session whose own row has already expired` asserted one row
+  with a future `expires_at`, true either way. It reads `revoked_at` back now, which is the one assertion that
+  separates the two, and `D10` is the mutant that proves it — removing the refresh, **KILLED by 1**, by that test
+  alone. This is `CLAUDE.md`'s held-sample rule for the second time on this branch, after D4 one round earlier.
+- **`revoked_at` is refreshed on conflict, and the storage decided it rather than taste.** Migration 0022 calls the
+  column the thing that makes a support question answerable at all, so it has to mean one thing on every path.
+  "The first time this gateway was asked" cannot be that thing: the prune destroys the row, so a session re-revoked
+  after some other user's sign-out pruned it has no first ask left, and the column would silently mean "the first
+  ask, or a later one, depending on traffic nobody involved can see". "The most recent ask" is reachable on every
+  path, and it keeps one row internally consistent — `expires_at` already describes the latest token the session was
+  signed out with.
+- **F3 — a fake whose promise to be loud had quietly stopped applying to the newest statement.**
+  `signedInConnectionTo` answers the auth path's statements for eleven suites that are not about the gate, and its
+  whole value is that a statement it has never heard of throws instead of returning an empty result set.
+  `revokeProviderSession` opens with `WITH pruned AS (DELETE FROM sonny.revoked_provider_session …)`, so a dispatch
+  keyed on the table name matched the **write** on the consult's branch. Nothing any suite asserted was wrong; the
+  loudness was gone, for exactly the statement this branch added, and only a test of the fake itself could notice.
+  The write has its own branch, tested first because its own text contains the consult's table name, and three arms
+  drive the real statements through the fake with a control that throws. **What those arms cannot see is stated
+  where they live**: both branches answer `{rows: []}`, so they would pass under the pre-fix dispatch too — what the
+  separate branch buys is that the write is *declared*, so a later change to either answer can no longer silently
+  apply to the other.
+- **F4 — a count of 27 beside a command answering 28.** Writing this entry put the changelog into the population its
+  own citation counts, which is `CLAUDE.md`'s ninth write-the-command defect reached through a `git diff` rather
+  than a `git grep`. The enumerated list was right and complete at 27; the numeral and the command disagreed with
+  each other. The command excludes the citing file now and the bare form is quoted beside it as the control.
+- **F5 — an option with no caller**, deleted for the reason this branch had already given one commit earlier for
+  deleting a condition that could not change an answer.
+- **And this round shipped the defect the rule it was fixing exists to catch, which is recorded rather than
+  quietly corrected.** The F4 sentence went into the tree carrying `<FIXSHA>` where the fix round's commit belongs,
+  and was committed that way — SONNY-210's exact failure, a template left unfilled inside the very sentence
+  demonstrating the rule. Filled in the docs commit above; it is written down because the count of times this has
+  happened is the only thing that makes the next session check.
+
+**Six things the review recorded below the bar and left, two of them corrected here anyway.** Corrected: the
+sign-out docstring stated only one direction of the write-before-provider trade, and now records that a database
+failure between the gate's lease and the route's answers `500` and never reaches the provider — narrow, and
+`500 server.error` is in `RELEASE_ON_CODES` so the claim releases and the Mac's retry re-runs the handler; and the
+closing comment named two additions to the pre-edit file list and not the one drop, `server/test/gate.test.ts`,
+which is recorded in the fix-round addendum on the ticket. Left as recorded: rolling migration 0022 back under a
+live image 500s every authenticated request carrying a session claim, which is a pre-existing class (0002 and 0010
+have it for `sonny.identity`) and a sentence SONNY-126 owes rather than this branch; the prune's `<=` and
+`isExpiryAcceptable`'s `<=` coinciding at exactly one instant, checked and not a hole; a second route to the
+stale-token residual through a sign-out whose provider call failed, which fails safe because the consult has no
+time predicate; and the reviewer's own D1/D9 killer counts differing from this branch's because the mutants differ
+rather than the coverage.
+
+**The rebase onto `main` at `70c5663d` (2026-09-07), three merges past the base, and what it owed.** This lane
+was last of the wave's four, so the hop is one rather than three — `WORKFLOW.md` step 3's rule that a lane
+finishes on its base, pushes and holds, and hops exactly once when it is genuinely next.
+
+- **Outside `docs/` this branch met nothing, and that is measured rather than assumed.** PRs #213, #214 and #216
+  changed `CLAUDE.md`, `docs/` and the Swift half; `git diff --name-only 35519b50 70c5663d` lists 1 path under
+  `CLAUDE.md`, 2 under `docs/`, 9 under `Sources/` and 14 under `Tests/`, and **none under `server/`**. That is
+  the whole reason the server figures carry, and the proof of it is the tree-identity pair at the top of this
+  entry.
+- **This branch's own patch survived byte for byte**, which is the other half and is the check a tree-identity
+  proof cannot make: `git diff 35519b50 684dd3f6 -- server | git patch-id --stable` and
+  `git diff 70c5663d 2cc78462 -- server | git patch-id --stable` both print
+  `ace2523bdbe7acdf65f849c00e11d275277fdf5c`, over **2069** diff lines on each side — non-empty both ways, which
+  is the control that stops an empty diff reading as a match. **The `docs/` control differs**, as it must:
+  `1b56a00ff5555e68b62949b6550d302969af07d3` before and `aca934ea7e1741ae170c026259624045c52ef575` after.
+- **Both conflicts were in `docs/` and both were two sets of additions to one insertion point.** The
+  manual-test checklist: three branches appended rows before "How to report back", and the resolution keeps all of
+  them — 288 `- [ ]` rows on `main`, 284 on this branch, **291** merged, with every row from each side present and
+  nothing in the merged file belonging to neither. The changelog: both sides wrote at the top of `## Entries`, and
+  this branch's entry sits **above** #216's because only the newest entry may be unmerged and this one has not
+  merged. **The resolution was rebuilt from the two files rather than from the hunks**, and the check is the one
+  that makes that safe: stripping this entry back out of the merged file reproduces `70c5663d`'s copy **byte for
+  byte**, and the entry itself is byte-identical to the pre-rebase head's. `scripts/changelog-order` exits 0 with
+  **188 entries**, read with nothing between the command and `$?`.
+- **The last commit was dropped as already upstream, and that is the resolution working rather than a loss.**
+  Rebuilding the changelog from the final pre-rebase file carried the content of `684dd3f6` — a one-paragraph
+  correction to this entry's own identity proof — into the commit before it, so `git rebase` found nothing left to
+  apply and said so. The entry is byte-identical to what that commit produced, which is the check that settles it.
+- **`CLAUDE.md`'s rebase gotcha was the thing to watch and it did not bite.** The conflicted-file list is not the
+  population a merge can break, and the range moved `Sources/` and `Tests/`, where a changed signature meets a new
+  caller. Nothing here can reach either: this branch adds no Swift file and no Swift caller, and
+  `git diff --name-only 70c5663d 2cc78462 -- Sources Tests` prints nothing, exit 0 — so no Swift suite and no
+  `scripts/warnings` are owed at the new base either, for the same reason they were not owed at the old one.
+- **The pre-rebase SHAs are orphaned, and they are recorded rather than repointed.** `git merge-base --is-ancestor
+  <sha> HEAD` exits **1** for every head this entry cited before the hop: `22abf0cf`, `8a29c8b4`, `e6b291a5`,
+  `f5572f8d`, `cce9ac42`, `6650ce8d`, `d80984b0` and `684dd3f6`. Each still resolves on this Mac, because every
+  worktree shares one object store, and each names a real tree — which is exactly why they are listed: a stamp
+  that resolves and fails the ancestry check reads as checkable while describing a tree outside this branch.
+  **They are not translated onto their replacements**, because a rebase replays onto a moved base and a figure
+  beside such a SHA was never true of the new tree. **Two of them are kept in the prose above on purpose and mean
+  something other than a stamp**: `684dd3f6` and `2cc78462` appear inside the patch-id and tree-identity commands,
+  where they are the operands of a comparison rather than a citation, and **`cce9ac42` is where PR #215's review
+  was anchored** — repointing that would claim the review ran against a commit that did not exist when it ran.
+  The SHAs this entry cites that pass the ancestry check are `35519b50`, `70c5663d`, `ed66e98e`, `42391189`,
+  `dff767fa` and `baaf0275`.
+
 ### Branch: feature/readiness-tells-the-whole-truth
 Status: complete — SONNY-232 and SONNY-336 both done, in the coordinator's order smallest-first; one fix round after PR #216's cycle 1, three record corrections after its cycle 2, then the hop onto `main` at `4dcdd675`
 Date: 2026-09-06 (fix round 2026-09-06; record corrections and hop 2026-09-07)

@@ -1,5 +1,4 @@
 import { createPublicKey, generateKeyPairSync, verify as verifyBytes } from "node:crypto";
-import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { ACCOUNT_REQUESTS } from "../src/auth/ratelimit.js";
@@ -9,7 +8,6 @@ import {
   requireEntitlementSigningKey,
   requireSpendCapUnits,
 } from "../src/config.js";
-import type { WithConnection } from "../src/db/connection.js";
 import type { KeyStore, StoredResponse } from "../src/idempotency/store.js";
 import {
   ENTITLEMENT_GRACE_SECONDS,
@@ -44,6 +42,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore, testSigningKey } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { testDatabaseUrl } from "./support/database.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * Contract §5.3's entitlement claim and §7.2's `entitlement.*` and `limit.*` refusals, driven
@@ -84,17 +83,7 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's attribution query and refuses everything else, as the other suites' does. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query outside the entitlement store: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "outside the entitlement store" });
 
 const authorization = () => `Bearer ${accessTokenFor(SUPABASE_USER)}`;
 

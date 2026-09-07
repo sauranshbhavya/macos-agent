@@ -1,8 +1,6 @@
-import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
-import type { WithConnection } from "../src/db/connection.js";
 import { fingerprintOf } from "../src/idempotency/fingerprint.js";
 import {
   UNAUTHENTICATED_SCOPE,
@@ -14,6 +12,7 @@ import {
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * Contract §9.2, driven through the whole real app (SONNY-300).
@@ -54,18 +53,10 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's attribution query, mapping each Supabase user to its own account. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string, values: readonly unknown[]) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query: ${text}`);
-      }
-      const account = values[0] === OTHER_SUPABASE_USER ? OTHER_ACCOUNT : ACCOUNT;
-      return { rows: [{ account_id: account }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({
+  account: (supabaseUserId) => (supabaseUserId === OTHER_SUPABASE_USER ? OTHER_ACCOUNT : ACCOUNT),
+  where: "in an idempotency test",
+});
 
 /**
  * A `KeyStore` that answers whatever the test sets and records every call.

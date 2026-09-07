@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
@@ -12,7 +11,6 @@ import {
   type RetainedContent,
 } from "../src/content/record.js";
 import type { ContentStore } from "../src/content/store.js";
-import type { WithConnection } from "../src/db/connection.js";
 import type {
   ClaimOutcome,
   ClaimRequest,
@@ -28,6 +26,7 @@ import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * Contract §10's content store, driven through the whole real app (SONNY-134).
@@ -74,17 +73,7 @@ class UnusedAuthProvider implements AuthProvider {
 }
 
 /** Answers the gate's one attribution query. Anything else reaching it is a red test. */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from a content test" });
 
 /** A `KeyStore` with the real state machine, copied in shape from `metering.test.ts`. */
 class StatefulKeyStore implements KeyStore {

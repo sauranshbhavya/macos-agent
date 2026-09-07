@@ -1,10 +1,8 @@
 import { Writable } from "node:stream";
-import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { ConfigError, loadConfig, providers, type Config } from "../src/config.js";
-import type { WithConnection } from "../src/db/connection.js";
 import { describeRouting, modelProvidersFrom } from "../src/model/providers.js";
 import {
   DEFAULT_ROUTE_CHAINS,
@@ -17,6 +15,7 @@ import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "../src/
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * The provider-agnostic router: chains, failover, and per-provider data policy (SONNY-132).
@@ -54,17 +53,7 @@ class UnusedAuthProvider implements AuthProvider {
   async deleteUser() {}
 }
 
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query from a model route: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from a model route" });
 
 /** Both text providers credentialled, so a chain is only ever shortened by configuration. */
 function bothProviders(overrides: Partial<Config> = {}): Config {

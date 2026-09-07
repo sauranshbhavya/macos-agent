@@ -1,4 +1,3 @@
-import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import {
@@ -6,11 +5,11 @@ import {
   type AuthProvider,
   type VerifiedSession,
 } from "../src/auth/provider.js";
-import type { WithConnection } from "../src/db/connection.js";
 import { DEADLINE_MS } from "../src/model/limits.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
 import { accessTokenFor } from "./support/tokens.js";
+import { signedInConnectionTo } from "./support/connection.js";
 
 /**
  * §12's deadlines on the auth routes (SONNY-425), for the two of them that reach the provider with
@@ -91,17 +90,7 @@ class StallingProvider implements AuthProvider {
  * so anything past the gate's query reaching this is the route doing something it does not do.
  * Throwing rather than returning empty rows keeps that a red test rather than a silent one.
  */
-const signedInConnection: WithConnection = async (work) => {
-  const client = {
-    query: async (text: string) => {
-      if (!text.includes("FROM sonny.identity")) {
-        throw new Error(`unexpected query from an auth deadline test: ${text}`);
-      }
-      return { rows: [{ account_id: ACCOUNT }] };
-    },
-  };
-  return work(client as unknown as pg.Client);
-};
+const signedInConnection = signedInConnectionTo({ account: ACCOUNT, where: "from an auth deadline test" });
 
 const build = (provider: AuthProvider) =>
   buildApp(

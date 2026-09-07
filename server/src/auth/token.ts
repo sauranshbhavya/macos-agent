@@ -37,9 +37,17 @@ import { isExpiryAcceptable } from "./clock.js";
  * revokes the *refresh* family and leaves an already-issued access token cryptographically valid
  * until its own `exp` **plus the tolerance below** — `exp` alone understates it by
  * `EXPIRY_SKEW_TOLERANCE_SECONDS` (PR #104's adversarial review, F9, which named three statements of
- * this window; a sweep for the phrase found this one and `routes/auth.ts`'s as well). `gate.ts`
- * covers the part this gateway can see — a closed or deleted account is refused on every request —
- * and the residual is stated there and in `server/README.md` rather than papered over.
+ * this window; a sweep for the phrase found this one and `routes/auth.ts`'s as well).
+ *
+ * **What closes most of that is local after all, and it is not this file's** (SONNY-237). Asking the
+ * provider is not the only way to know a session is over: this gateway is *told*, by the sign-out
+ * request it serves. `auth/denylist.ts` records the `session_id` this file now extracts and
+ * `gate.ts` consults it on every authenticated request, so a signed-out token stops verifying inside
+ * the window above rather than at the end of it. This file's contribution is the claim and nothing
+ * more — it still asks the provider nothing, and a token whose session is denylisted is *valid* here
+ * and refused one layer out, which is the same division `gate.ts` already makes for a closed
+ * account. The residual left over is a token carrying no `session_id` at all, stated on
+ * `providerSessionId` below, in `gate.ts` and in `server/README.md`.
  */
 
 /** The three project-specific values a verification is judged against. */
@@ -64,6 +72,7 @@ export type TokenRefusal =
   | "issuer"
   | "audience"
   | "subject"
+  | "session"
   | "not_yet_valid"
   | "expired";
 
@@ -73,6 +82,27 @@ export interface VerifiedAccessToken {
   readonly expiresAt: Date;
   /** True when the token was past `exp` but inside `clock.ts`'s one-directional tolerance. */
   readonly withinSkewTolerance: boolean;
+  /**
+   * The `session_id` claim — Supabase's own id for the login session this token belongs to — or
+   * `undefined` when the token carries none (SONNY-237).
+   *
+   * **This is the only thing a local verifier can key a revocation on**, and `auth/denylist.ts` is
+   * what does. It survives a refresh: the same session mints a succession of access tokens under one
+   * id, which is what makes "this session is signed out" a durable statement rather than a statement
+   * about one string.
+   *
+   * **`undefined` is a real value and not a defensive branch.** GoTrue declares the claim
+   * `omitempty` and handles its absence itself — `internal/api/logout.go:52` logs
+   * `"user has an empty session_id claim"` and then signs the user out globally whatever scope was
+   * asked for. So a token without one is a shape the provider mints, and it is the shape the
+   * denylist cannot cover; migration 0022's header carries the evidence and `gate.ts` states the
+   * residual.
+   *
+   * **Not contract §5.2's task session**, which is a different thing with the same spelling and is
+   * carried by the metering and content tables. Nothing in this file or the denylist uses the bare
+   * word.
+   */
+  readonly providerSessionId: string | undefined;
 }
 
 export type TokenVerdict =
@@ -222,6 +252,23 @@ export function verifyAccessToken(
   const subject = payload["sub"];
   if (typeof subject !== "string" || !UUID.test(subject)) return { ok: false, refusal: "subject" };
 
+  // **A `session_id` that is present and unusable is a refusal, not an absence** (SONNY-237). The
+  // two readings are one line apart and opposite in effect: treating a malformed claim as absent
+  // would make the token silently undenylistable, which is the one property the denylist exists to
+  // provide, and it would do it quietly. Refusing costs nothing real — Supabase mints the claim as a
+  // uuid (`internal/api/token.go:311` reads it back with `uuid.FromString`) and omits it entirely
+  // when there is none, so no token this gateway is meant to accept lands here. The column it is
+  // bound to is `uuid`, which is the same reason `sub` is shape-checked above: a malformed value
+  // reaching the query raises Postgres' `22P02` out of a request path instead of a refusal.
+  const claimedSession = payload["session_id"];
+  let providerSessionId: string | undefined;
+  if (claimedSession !== undefined) {
+    if (typeof claimedSession !== "string" || !UUID.test(claimedSession)) {
+      return { ok: false, refusal: "session" };
+    }
+    providerSessionId = claimedSession;
+  }
+
   // **`nbf` gets no tolerance, and `iat` is not a gate at all.** `clock.ts` states the rule: tolerance
   // is granted to a token that looks *expired* and never to one that looks *not yet valid*, because a
   // token from the future is either this server's clock being wrong — which tolerance cannot fix — or
@@ -250,6 +297,7 @@ export function verifyAccessToken(
       supabaseUserId: subject,
       expiresAt,
       withinSkewTolerance: verdict.withinTolerance,
+      providerSessionId,
     },
   };
 }
