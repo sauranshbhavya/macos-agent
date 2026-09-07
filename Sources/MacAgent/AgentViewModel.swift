@@ -7478,6 +7478,12 @@ final class AgentViewModel: ObservableObject {
     /// The in-memory checkpoint is kept in step when it is the same record, for the reason
     /// `deleteResumableTask` gives: a failed run leaves `activeResumableTask` pointing at its record,
     /// and a later write from that handle would otherwise put an undeclined copy straight back.
+    ///
+    /// **Nothing is deleted here, so nothing is owed to any server** (SONNY-426). SONNY-426 was
+    /// filed reading this control as a fourth delete door; it is not a delete door at all, which is
+    /// the whole of the 2026-08-25 decision above. `decliningAnUnfinishedTaskReachesTheServerNotAtAll`
+    /// holds it, because "queues nothing" is only visible as an absence and an absence is what a
+    /// later change removes without noticing.
     func declineResumeOffer() {
         guard let offer = resumeOffer else {
             return
@@ -7501,6 +7507,32 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Forgets one unfinished task. The Memory sheet's per-entry delete.
+    ///
+    /// **It reaches no server, and that is a measurement rather than an omission** (SONNY-426,
+    /// decided 2026-09-06 from review-207's residual R7). The three doors SONNY-404 routed through
+    /// `PendingServerDeletionStore` each hold the key to what they remove — §5.1's `task_id`, which
+    /// is `CompletedTaskRecord.id`. This one holds nothing of the sort. A `ResumableTask` stores ten
+    /// fields and no backend key; the wire id is `currentTaskID`, which `beginNewTaskIdentity()`
+    /// mints afresh on **every continuation of one of these records** — `continueResumableTask`
+    /// dispatches through `performStart` with `preserveUsageForNextStart` unset — while the record
+    /// deliberately keeps *its own* id across those continuations. So one record spans as many wire
+    /// ids as the task had attempts, and there is no single one it could carry. (Not *every*
+    /// dispatch, which is what this said until PR #214's R1: `performStart` skips the re-mint when
+    /// that flag is set, which is the voice-command and clarification-answer path and is never a
+    /// continuation of an unfinished record.)
+    ///
+    /// The two cases, because they fail differently and neither ends in a queue entry. A run that
+    /// **failed** wrote a history row under its wire id and pointed it here through
+    /// `CompletedTaskRecord.resumableTaskID`; this press leaves that row standing, so the server's
+    /// copy stays reachable through *Delete task* and *Memory › Task history › Delete*, and queueing
+    /// here would delete the server's copy of a task the user can still open locally — the opposite
+    /// of `PendingServerDeletion.scope`'s rule that the queue carries what the delete reached on the
+    /// Mac. A run that was **interrupted** never wrote a row and never will, per `ResumableTask.id`,
+    /// so nothing on this Mac names its content and the press could not say what to delete.
+    ///
+    /// What this press does destroy is the checkpoint — the plan and how far it got — which is
+    /// local-only state the server never held. `theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll`
+    /// pins that, so a later session adding a queue call here fails rather than passing quietly.
     func deleteResumableTask(_ task: ResumableTask) {
         performMemoryEntryDelete(named: "unfinished task") {
             try resumableTaskStore.delete(id: task.id)

@@ -170,6 +170,160 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/declining-an-unfinished-task-reaches-the-server
+Status: complete — rebased onto `main` at `195013b8` (PR #213) on 2026-09-07, one hop at merge time per `WORKFLOW.md` step 3
+Date: 2026-09-06 (fix round 2026-09-06; rebased 2026-09-07)
+Tickets: **SONNY-426** (review-207's residual R7 — a fourth deletion control stops at this Mac). Answered as a decision first and code second: the decision, recorded on the ticket before any code changed, is that neither unfinished-task control owes a server anything, and the defect is that one of them said so in the other one's words. Spawned **SONNY-433**.
+Reviewed by: **fresh-session review of PR #214 at `b342e0af`, one cycle** — verdict: the decision holds, and the reviewer could not construct the case that would break it. Every premise was re-established in the code by enumeration rather than taken from this entry, the construction that would break it was shown not to exist, and every figure reproduced. **Two findings, both about the record and the guard rather than shipped behaviour**, plus two residuals; all four are answered in the round written up at the end of this entry. **F2 is the one that mattered and it was found by a mutant**: the reviewer wrote two the guard passed.
+
+Spec sections covered: none new. It reads the backend contract's §5.1 (`task_id` is `CompletedTaskRecord.id`) and §4.6 to establish what the deletion queue can and cannot name, and changes neither.
+
+Files changed (six paths, the whole branch diff — `git diff --name-only 195013b8 5282a576`):
+- `Sources/MacAgent/CommandCenterView.swift` — `MemoryDeletionCopy.entryMessage(for: .resumableTasks)`, one sentence and the comment saying why
+- `Sources/MacAgent/AgentViewModel.swift` — doc comments on `deleteResumableTask` and `declineResumeOffer` recording why neither reaches the queue. **No executable line changed**: `git diff 195013b8 5282a576 -- Sources/MacAgent/AgentViewModel.swift | grep -E '^\+' | grep -vE '^\+\+\+|^\+ *///'` exits **1** with no output, against **33** added lines from the same diff with the second stage dropped — the control saying the zero is a measurement rather than a filter that could not match
+- `Tests/MacAgentTests/TaskDeletionReachesTheServerTests.swift` — the two properties below and the fixture helpers they need
+- `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — the confirmation pinned by value
+- `docs/sonny-manual-test-checklist.md` — two rows, both needing only the app
+
+**Nothing under `server/`, which the ticket predicted and the diff proves**: `git diff --name-only 195013b8 5282a576 -- server | wc -l` → **0**, with `-- Sources Tests` → **4** as the control. No server commands and no Postgres are owed.
+
+Tests, **re-measured at `0040d465`, the rebased head, because `main`'s `Sources/` and `Tests/` both moved beneath this branch in PR #213** — nothing carried across the hop: the flagged command from `CLAUDE.md` exit 0, **2998 tests in 200 suites, 8 known issues** (three of them are this branch's own — `git diff 195013b8 5282a576 -- Tests | grep -E '^\+ *func ' | grep -c '^+ *func the\|^+ *func declining'` → **3**, against **7** for the same diff's added `func` lines with that second stage dropped, the four extra being fixture helpers rather than tests). `scripts/warnings` exit 0, **0 warnings** at `0040d465 (clean)`, every file compiled. `scripts/no-attribution all` exit 0 (0 of 1796 commit messages, 0 of 626 tracked files, 0 of 216 pull request bodies). `scripts/changelog-order` exit 0, **186 entries**. **The figures sit one commit beneath the head that carries them and still describe it**: this entry's own docs commit moves `docs/` alone. Read from that commit, `git diff --name-only 5282a576 HEAD -- Sources Tests Package.swift` prints nothing and exits 0, against the same command without the pathspec naming `docs/sonny-v1-implementation-changelog.md` and nothing else — the control saying the check can name a moved path. (`HEAD` rather than a SHA, because a commit cannot cite itself: the citation would have to be written before the hash it names exists, and amending to insert it changes the hash again.) **This line named `f682a560` until the fix round moved the code head, at which point it was false rather than merely stale** — the same pair of paths it claims are unmoved are exactly the two that round edited, so the check would have listed them. Caught by re-running it rather than by reading it, which is the third citation on this branch to go bad when the head moved and the reason F1's repair chose the base over a head. It was restamped a second time at the hop, for the same reason and with the same method.
+
+**Mutation battery: 8 mutants, 8 killed, 0 survived, 0 unattributed, re-run in full at `0040d465`, the rebased head** — six of this branch's own, one per property it claims to protect rather than one per changed file, plus the review's M7 and M8. Baseline `PASSED 2998 tests in 200 suites`. **Nothing has been carried at either move, and both times the reason was step 5's four conditions rather than caution.** At the fix round, that round edited `AgentViewModel.swift` — M2 through M6's target file — and `TaskDeletionReachesTheServerTests.swift`, which holds four of the killers. At the hop, PR #213's merge moved `AgentViewModel.swift` again and `MemoryCommandCenterTests.swift`, which holds M1's only killer, so **every mutant in the plan failed one of the four conditions**: `git rev-parse 35519b50:<p> 195013b8:<p>` prints two hashes for those two files and one hash twice for `CommandCenterView.swift`, `TaskDeletionReachesTheServerTests.swift` and `ResumableTaskRunTests.swift`. That is SONNY-391's shape twice over: the fix round's own subject was M3 and the hop's named scope was M3, M7 and M8, and either reading would have left verdicts describing a tree nobody measured. Killers by name:
+- **M1**, the confirmation restored to the cross's promise — killed by `theUnfinishedTaskDeletesConfirmationSaysTheWorkGoesRatherThanEchoingTheCross`. This is also the branch's *fails-on-the-tree-as-it-is* proof: M1 **is** the tree as it was.
+- **M2**, the per-entry delete queueing on the record's own id — killed by `theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll`.
+- **M3**, the per-entry delete queueing through the reverse join, which is the implementation R7 proposes — killed by the same test, and only because the fixture carries the link (below).
+- **M4**, the per-entry delete taking the linked task-history row with it — killed by the same test.
+- **M5**, the cross queueing an obligation — killed by `decliningAnUnfinishedTaskReachesTheServerNotAtAll`.
+- **M6**, the cross deleting the record instead of flagging it — killed by six tests, five of them SONNY-282's own.
+
+Behavior added:
+- Command Center › Memory › Unfinished tasks › **Delete** now says what it takes: *"This deletes the unfinished task, so Sonny can't carry on with it. Anything it already did is not undone."*
+
+Behavior preserved (required, no blanket claims):
+- **The widget's cross** still writes `declinedAt`, still keeps the record listed under Memory, still stops the offer across relaunches, and still queues nothing — `decliningAnUnfinishedTaskReachesTheServerNotAtAll` asserts the queue, the request log, the record on disk, its declined flag and the offer going away.
+- **Memory › Unfinished tasks › Delete** still removes exactly the one record, still clears the in-memory checkpoint when it is the same one, still reports a failed write through `errorMessage`, and still leaves the task's own history row standing.
+- **The three doors SONNY-404 routed** are untouched — no new scope, no new caller, and neither `PendingServerDeletionStore.swift` nor `SonnyTaskDeletionService.swift` is in the diff.
+- **The per-type Delete on the same row** is unchanged and still reaches no server, which is structural rather than newly asserted: `deleteMemory(in:)` enqueues under `if category == .taskHistory` and nothing else, and `deletingAnotherMemoryRowReachesTheServerNotAtAll` already pins a non-task-history category queueing nothing.
+- **The other eight per-entry confirmations** and the per-type sentence for Unfinished tasks are byte-identical.
+
+Architectural decisions / pitfalls discovered:
+- **A delete door is a door onto the server only if it holds the key, and this one never did.** The three controls SONNY-404 routed each remove something filed under §5.1's `task_id`. An unfinished-task record holds no such key: `ResumableTask` stores ten fields and none is a backend id (`awk '/^    private enum CodingKeys/{f=1;next} f&&/^    \}/{exit} f&&/^ +case /{c++} END{print c+0}' Sources/MacAgentCore/ResumableTaskStore.swift` → **10** at `0040d465`; the same command with the block terminator dropped answers **20**, the control showing the terminator is what bounds it), and `git grep -cE 'currentTaskID|backendTaskID|task_id' 0040d465 -- Sources/MacAgentCore/ResumableTaskStore.swift` exits **1** with no output while the same pattern over `Sources/MacAgent/AgentViewModel.swift` answers **16 at `35519b50`** — the control that makes the zero a measurement rather than a pattern that could not match. **The control is stamped at the base rather than at the code head, and that is the correction PR #214's F1 asked for.** It read 16 beside `f682a560`, where the same command answers **18**: the two extra matches are this branch's own new doc comment in the file being used as the control, which is `CLAUDE.md`'s ninth write-the-command defect — a citation greping a population its own file belongs to, inflated silently, and re-running it reproduces the inflation exactly. Of the two repairs the review offered, the base is the one that stays true: `35519b50` is an ancestor of every later head, so nothing this branch or the hop writes can move it, and PR #213's comment edits land in this very file. The zero it controls is unaffected either way and is read at the head of the day, `0040d465` now. **The hop proved the choice rather than merely vindicating it**: `35519b50` is still an ancestor after the rebase (`git merge-base --is-ancestor 35519b50 HEAD` exits 0) while `f682a560` is not (exit 1), so an 18 stamped at that code head would now be a figure beside a commit `main` does not contain.
+- **And it could not hold one id even if it wanted to.** `beginNewTaskIdentity()` mints `currentTaskID` afresh on **every continuation of one of these records** — `continueResumableTask` dispatches through `performStart` with `preserveUsageForNextStart` unset — while `beginResumableTask` writes `id: continuing?.id ?? UUID().uuidString` so the record keeps *its own* id across those continuations. (It is not *every dispatch*, which is what this bullet said until PR #214's R1: `performStart` skips the re-mint when that flag is set, and the one site setting it is the voice transcription's completion, never a continuation of an unfinished record.) One record therefore spans as many wire ids as the task had attempts, and anything closing this gap later needs a persisted **list** rather than a field — which is why SONNY-433 says so rather than leaving the shape to be re-derived.
+- **The two run shapes rule out queueing for two different reasons, and only one of them is about the door.** A run that **failed** wrote a history row under its wire id and pointed it at the record through `CompletedTaskRecord.resumableTaskID`; this press leaves that row standing, so the server's copy stays reachable through *Delete task* and *Memory › Task history › Delete*, and queueing here would delete the server's copy of a task the user can still open on the Tasks page — the opposite of `PendingServerDeletion.scope`'s own rule that the queue carries what the delete reached on the Mac. A run that was **interrupted** never wrote a row and never will (`ResumableTask.id`'s doc comment says exactly that), so nothing on this Mac names its content and the press has nothing to send. The second shape is a real gap; it is SONNY-433's rather than this door's, because it is there whether or not anyone presses Delete.
+- **The defect was a confirmation describing a different control's effect, and no completeness check could see it.** Two controls act on one unfinished task. The widget's × keeps the record — the founders' decision of 2026-08-25, taken so that no control in the widget can lose work irreversibly — and Memory's per-entry Delete is the one that loses it. That Delete's confirmation read *"Sonny stops offering to carry on with this task"*, the ×'s promise word for word, and `everyDestructiveConfirmationAndEmptyStateHasRealWords` passed on it for as long as it stood, asserting only that it was non-empty. That is `theWipesOwnSentenceNamesEveryStoreItDeletes`' lesson arriving somewhere else: a check that asks whether words are present sees a missing one and never a wrong one. The new sentence is pinned by value.
+- **The fix says nothing about servers, deliberately.** The standing rule against explanatory copy in the product is the one PR #207's own R5 was swept under, and "the servers keep their copy" in front of a press would be exactly that. What the user is told is what the press does to their work.
+- **A "queues nothing" test proves nothing unless the fixture can reach the thing being refused, and this branch shipped that mistake for one commit.** The first version of `theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll` wrote a task-history row and an unfinished record with nothing joining them. The only route by which that press could name server content is the reverse join, so M3 — walk the join back, queue a whole-task obligation — would have found nothing to queue and the test would have passed over it: refusing nothing while reading exactly like a test that refuses the thing the ticket is about. Same family as `CLAUDE.md`'s held-sample gotcha, reached from the other side — there the sample skips the mechanism, here the mechanism has no sample to find. The fixture carries the link now and M3 is what proves it.
+- **A fixture timestamp that is fine for one store is dropped by the one beside it.** `writeTaskRecord` dates its rows from a fixed instant, which task history keeps forever; `ResumableTaskStore.loadAll` drops a record nobody came back to, so the same instant wrote an unfinished task the view model then never published. The symptom is `resumableTasks` coming back empty, which reads as a publishing bug rather than as the store doing its job. The resumable helper dates from `Date()` and says why.
+
+Known limitations / deferred scope: **SONNY-433**, filed from this branch and untriaged. An *interrupted* run leaves retained content on the gateway under a `task_id` nothing on this Mac records — before the press and after it — so no per-task control can name it and only the whole wipe's account-wide obligation reaches it, otherwise it ages out on the content clock. Not deferred work of this ticket's: this door is neither the cause nor a possible fix, which is the third bullet above.
+
+Open questions: none.
+
+### The fix round, 2026-09-06 — PR #214's two findings and two residuals
+
+**F2 — the guard passed the faithful implementation, and two of the reviewer's mutants proved it.** The entry's own best
+pitfall, above, is that a "queues nothing" test proves nothing unless the fixture can reach the thing being refused. That
+was half the lesson. The fixture carried the join; nothing kept it there, and it was written in a shape this Mac never
+produces.
+
+- **Nothing pinned the link.** No assertion in `theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll` mentioned
+  `resumableTaskID`, so deleting the argument changed no assertion — the reviewer's **M7**, which SURVIVED at `b342e0af`.
+  The recurrence the pitfall warns about had a comment standing against it and nothing else.
+- **The linked row was `.completed`, and production never links one.** `writeTaskRecord` hardcoded that status, while the
+  row's `resumableTaskID: activeResumableTask?.id` is read *after* `settleResumableTask` has cleared that handle for
+  `.completed`, `.canceled`, `.prepared` and `.dryRun` — so only a failed run carries a link. The reviewer's **M8**, which
+  is M3's reverse-join queue with `&& $0.outcomeStatus == .failed` and nothing else changed, therefore found nothing to
+  queue and SURVIVED, while M3 — the same queue written loosely — was killed. **A guard that refuses the sloppy
+  implementation and passes the faithful one is not a guard.**
+
+The fix is what the review proposed: `writeTaskRecord` takes an `outcomeStatus:` parameter defaulting to `.completed` so no
+existing call site moves, this test passes `.failed`, and the join *and* the outcome are asserted before the press. **Both
+mutants now die by the same test M3 does**, proved with `--only M3,M7,M8` at `f66d40be`: 3 killed, 0 survived, 0
+unattributed, each reported `KILLED by 1 test(s)` naming
+`theUnfinishedTasksPerEntryDeleteReachesTheServerNotAtAll()`. **That head is orphaned by the hop** and the reading is kept
+as the record of when the fix was proved; the verdict that describes the merged tree is the eight-mutant run at
+`0040d465` above, where M7 and M8 are killed by that same test.
+
+**This is the same failure this branch already caught once, arriving through the door it had just closed.** The first round
+found the unlinked fixture by writing M3 and reasoning about what M3 could reach; it did not go on to ask whether the link
+it added was the link production writes, or whether anything would notice if that link went. `CLAUDE.md`'s held-sample
+gotcha says a sample entering downstream of the mechanism tests nothing; this is a third direction on it — the sample
+reaches the mechanism, in a form the mechanism never emits.
+
+**F1 — a control figure stamped at a head it was never measured at, and this branch's own prose is what moved it.** The
+correction is in the first architectural bullet above. It is `CLAUDE.md`'s ninth write-the-command defect, whose most
+dangerous property is that re-running the command reproduces the inflated number exactly — so that rule's own remedy
+confirms the defect instead of catching it. Repaired by stamping the control at the base rather than at a code head:
+`35519b50` is an ancestor of every later head, so nothing this branch or its hop can write will move it, and the hop meets
+PR #213's comment edits in that very file. **It landed exactly that way**: PR #213's merge did edit comments in
+`AgentViewModel.swift`, and `35519b50` survived the rebase as an ancestor while every branch head this entry had stamped
+did not.
+
+**R1 — the wire id is not re-minted at *every* dispatch.** `performStart` skips the mint when `preserveUsageForNextStart`
+is set, and the one site setting it true is the voice transcription's completion, for a spoken command and a spoken
+clarification answer alike. Neither is a continuation of an unfinished record: `continueResumableTask` dispatches with the
+flag unset, so the claim the argument actually needs — every continuation of one of these records mints a new wire id — is
+true, and it is what all three sites say now (this entry, `deleteResumableTask`'s doc comment, and the test's).
+**The sweep afterwards searched for the OLD wording and needed an emphasis-tolerant pattern to find it**, because the
+corrections themselves quote the retired claim as `*every* dispatch`: a plain `git grep 'at every dispatch'` over
+`Sources Tests docs CLAUDE.md` matches none of them, which is the markdown-emphasis trap `CLAUDE.md`'s quantified-claim
+rule names, met while obeying the rule that produced it.
+
+**R2 — SONNY-433's title is narrower than its body**, which already says "the attempts that left no history row" and so
+covers the earlier attempts of a task later continued and failed. Recorded as a dated note on that ticket rather than a
+title edit, so its filed identity does not move under anyone who has already read it.
+
+**What this round did not change is any behaviour.** The confirmation's words, `deleteResumableTask`, `declineResumeOffer`
+and every store are untouched in effect; the diff is one test-fixture parameter, two test assertions, three doc comments
+and this entry.
+
+### The hop, 2026-09-07 — rebased onto `main` at `195013b8` (PR #213)
+
+**One hop, at merge time, per `WORKFLOW.md` step 3.** Zero hops was not available: PR #213 edited comments in
+`Sources/MacAgent/AgentViewModel.swift` and `Tests/MacAgentTests/MemoryCommandCenterTests.swift`, which this branch also
+touches, and it added its own changelog entry at the top of `## Entries` where this one sits.
+
+**The patch survived the rebase byte-for-byte in effect, proved rather than asserted.** For each of `Sources` and `Tests`,
+the branch's whole diff has the same patch id before and after:
+
+```
+Sources  old  git diff 35519b50 4c6839c4 -- Sources | git patch-id --stable
+              c157394fbf69487eb2cbd62c1ba774cb7258f14d   (5094 bytes)
+         new  git diff 195013b8 0040d465 -- Sources | git patch-id --stable
+              c157394fbf69487eb2cbd62c1ba774cb7258f14d   (5094 bytes)
+Tests    old  c595995b06d287dffea96ab361ca2c97b87cb8bd   (13178 bytes)
+         new  c595995b06d287dffea96ab361ca2c97b87cb8bd   (13178 bytes)
+```
+
+Both sides are non-empty, which is the check being a measurement rather than two empty diffs agreeing; and the same
+comparison over `docs` answers **two different ids** (`13456fa0…` against `ef97d21a…`), which is the control showing the
+check can report a difference. So no comment-line merge moved a byte of this branch's own patch, and no per-file
+resolution diff is owed for either tree.
+
+**Both sides' comment edits are present, which the patch ids alone do not say.** Of the lines PR #213 added to the two
+shared files, all of them survive into this head: 11 of 11 in `AgentViewModel.swift` and 1 of 1 in
+`MemoryCommandCenterTests.swift`, and neither file's blob equals `main`'s or the old base's — it is the combination.
+
+**The one conflict was the changelog, and it was the shape the file's own placement rule predicts.** Both entries sit
+directly under `## Entries` and both end with a byte-identical `Next branch:` line, so git hoisted that shared line out of
+the conflict region as common context and offered one where two are needed. Resolved by keeping both entries whole, this
+one above PR #213's, which is merge order. Verified rather than eyeballed: the resolved file with this entry's heading
+range removed is **byte-identical** to `git show 195013b8:docs/sonny-v1-implementation-changelog.md`, and this entry's own
+range is **byte-identical** to what `b342e0af` wrote — with the control that the entry is not empty (11 326 bytes) and
+that PR #213's entry is still present. `scripts/changelog-order` exit 0, **186 entries**.
+
+**The pre-rebase SHAs are recorded as orphaned, not repointed.** `f682a560`, `f66d40be`, `b342e0af` and `4c6839c4` each
+still resolve in this clone — `git cat-file -t` prints `commit` for all four — and each fails
+`git merge-base --is-ancestor <sha> HEAD` with exit 1, against exit 0 for `35519b50`, `8fecd5e8`, `195013b8` and
+`0040d465`, and exit 1 for `064f387` as the control. That is the convention working: a rebase replays onto a moved base,
+so a figure taken at an old head is re-measured and never translated, and the old head is a timestamp on a branch. Every
+figure above has been re-measured at the rebased head; the two readings kept at orphaned heads are labelled as records of
+when something was found — the review's M7 and M8 surviving at `b342e0af`, and the fix round's `--only` run at
+`f66d40be` — and neither is offered as a description of this tree.
+
+Next branch: per the coordinator's wave order.
+
 ### Branch: docs/the-fourteenth-store-and-the-guidance-that-counts
 Status: complete — SONNY-423 done; one discovery filed and left for triage (SONNY-432)
 Date: 2026-09-06
