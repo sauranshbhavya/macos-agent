@@ -60,6 +60,9 @@ function claimOf(overrides: { readonly maxPerPeriod?: number; readonly periodSta
   };
 }
 
+/** Postgres' code for a statement issued on a transaction an earlier error has already aborted. */
+const IN_FAILED_SQL_TRANSACTION = "25P02";
+
 /**
  * Two claims that both number themselves the SAME `attempt_no`, with the contention **built rather
  * than hoped for** (SONNY-431).
@@ -107,8 +110,26 @@ async function twoClaimsForOneSlot(
 
     const held = await claimTopUpAttempt(holder, claimOf({ maxPerPeriod }));
     const contended = await claimTopUpAttempt(contender, claimOf({ maxPerPeriod }));
+
+    // **That the two contended at all, asserted rather than described.** `claimTopUpAttempt`
+    // answers `undefined` for two different reasons -- the unique violation it caught, and a
+    // `HAVING` that refused to produce a row -- and only the first is this construction working.
+    // Postgres tells them apart: a unique violation leaves the transaction aborted, so the next
+    // statement on it fails with `25P02`, while a `HAVING` refusal leaves it perfectly live.
+    // Without this the caller cannot tell the two apart at all, and the boundary caller below is
+    // where that bites: with the snapshot no longer pinned, its contender numbers itself past the
+    // last slot and the *bound* refuses it, which is `undefined` again and reads as a pass. The
+    // battery is the evidence rather than the argument -- R3, which unpins the snapshot, was
+    // killed by the open-period caller alone until this assertion existed.
+    const stillLive = await contender.query("SELECT 1").then(
+      () => true,
+      (error: { code?: unknown }) => {
+        if (error.code === IN_FAILED_SQL_TRANSACTION) return false;
+        throw error;
+      },
+    );
     await contender.query("COMMIT");
-    return { held, contended };
+    return { held, contended, refusedByTheIndex: !stillLive };
   } finally {
     await contender.end();
   }
@@ -174,9 +195,11 @@ describeDb("the bound on how many charges a period can carry", () => {
     // `(account_id, period_start, attempt_no)`, and `claimTopUpAttempt` reads that violation as a
     // full period rather than letting it escape as a 500. `twoClaimsForOneSlot` is where the two
     // are made to contend, and why the shape that used to stand here could not (SONNY-431).
-    const { held, contended } = await twoClaimsForOneSlot(client, 10, 0);
+    const { held, contended, refusedByTheIndex } = await twoClaimsForOneSlot(client, 10, 0);
 
     expect(held).toBeDefined();
+    // The unique index refused it, not the bound: at `maxPerPeriod: 10` the bound could not have.
+    expect(refusedByTheIndex).toBe(true);
     // `undefined`, not a throw: from the caller's side the loser of the race and a full period are
     // the same fact, and neither is a fault.
     expect(contended).toBeUndefined();
@@ -201,9 +224,17 @@ describeDb("the bound on how many charges a period can carry", () => {
       expect(await claimTopUpAttempt(client, claimOf({ maxPerPeriod }))).toBeDefined();
     }
 
-    const { held, contended } = await twoClaimsForOneSlot(client, maxPerPeriod, maxPerPeriod - 1);
+    const { held, contended, refusedByTheIndex } = await twoClaimsForOneSlot(
+      client,
+      maxPerPeriod,
+      maxPerPeriod - 1,
+    );
 
     expect(held).toBeDefined();
+    // **Which of the two refusals this was is the whole of this test.** The bound would have
+    // refused a contender that numbered itself past the last slot, and that refusal proves nothing
+    // about contention; this one is the index refusing a second claim on the slot the holder took.
+    expect(refusedByTheIndex).toBe(true);
     expect(contended).toBeUndefined();
     expect(await slotsHeld(client)).toEqual([1, 2, 3]);
   });
