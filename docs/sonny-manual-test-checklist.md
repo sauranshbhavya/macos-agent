@@ -4044,10 +4044,14 @@ formality.
       finding:** any of them failing with `current transaction is aborted`, or a spread of odd
       failures that clears up on its own — either would mean a connection went back to the pool in a
       state the next request inherited, which is the defect this ticket's mechanism exists to avoid.
-- [ ] **(SONNY-428)** **Ordinary deletion is untouched.** In the real packaged app against a working
-      gateway, use **Command Center › Memory › Task history › Delete** and, separately, **Delete what
-      Sonny did on screen** on a single task. Expected: both finish as they did before, with the same
-      confirmation and the same counts. **What would be a finding:** either press becoming slower,
+- [ ] **(SONNY-428)** **Ordinary deletion is untouched.** This is the one of the three you can run
+      today, because it needs no staging host: use the local gateway that *Setup for every section
+      behind the gateway* already documents — `./scripts/deploy.sh local`, then
+      `defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080` so the debug
+      build points at it (`SonnyBackendEnvironment.productionBaseURL` is `nil`, so only a debug build
+      can be pointed anywhere at all). Then, in the app, use **Command Center › Memory › Task history
+      › Delete** and, separately, **Delete what Sonny did on screen** on a single task. Expected:
+      both finish as they did before, with the same confirmation and the same counts. **What would be a finding:** either press becoming slower,
       failing, or reporting a different number than it used to.
 
 ## 8. How to report back
