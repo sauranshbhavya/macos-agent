@@ -11,6 +11,8 @@ import {
 import { deleteStoredResponsesForAccount } from "../idempotency/store.js";
 import type { WithConnection } from "../db/connection.js";
 import { errorBody } from "../errors.js";
+import { CONTENT_DELETION_DEADLINE_MS } from "../model/limits.js";
+import { sendUpstreamFailure, withDatabaseDeadline } from "../model/routing.js";
 
 /**
  * `DELETE /v1/tasks/{task_id}` — the user's own delete, reaching the server's copy (SONNY-134).
@@ -110,6 +112,35 @@ export interface TaskRoutesDeps {
  * `DELETE /v1/account/content` is the odd path in that set and is here for that reason rather than
  * beside `DELETE /v1/account` in `routes/auth.ts`: it deletes content and closes nothing, so filing
  * it with the account's own lifecycle is where a later reader would confuse the two promises.
+ *
+ * ## §12's deadline, on all four (SONNY-428)
+ *
+ * §12's last row — "auth, account, meta, health, delete" — names these four, and until this ticket
+ * nothing applied it to any of them: a deletion was bounded only by `app.ts`'s server-wide delivery
+ * bound, which SONNY-322 documents as bounding *receipt* of a request rather than a handler. **A
+ * deletion that reaches training-snapshot copies is the longest statement this gateway runs on a
+ * user's behalf**, which is the case the row exists for.
+ *
+ * **Every one of them is wrapped in `withDatabaseDeadline` and none of them in `withDeadlines`, and
+ * that is a rule rather than a preference** (PR #212's F1). All four do their work inside
+ * `deps.withConnection`, so the work holds the pooled client this handler leased; `withDeadlines` is
+ * a `Promise.race` and abandons what it gives up on, which would let the abandoned statements land
+ * inside the next request's transaction. `withDatabaseDeadline`'s own header carries the mechanism
+ * and why the cooperative poll `DELETE /v1/account` uses does not transfer to work with no loop in
+ * it.
+ *
+ * **A timeout is `504 provider.timeout` through `sendUpstreamFailure`, which is the same envelope
+ * the model routes send** — a shared answer rather than a fifth copy of it, so the status, the code
+ * and the retryable flag cannot drift. `retryable: true` is right here in the strongest sense §9.3
+ * has: §4.6 makes every one of these routes safe to repeat, and `DELETE /v1/account/content`'s own
+ * docstring already says a second call "finds nothing and answers 200 with zeroes".
+ *
+ * **No claim is released or completed by that timeout, because none is taken.** §9's
+ * `Idempotency-Key` hook returns before it claims anything when `request.method !== "POST"`
+ * (`idempotency/hook.ts`), and all four routes here are `DELETE` — so PR #208's F2, a timeout that
+ * completes a claim instead of releasing it, is unreachable on this file. Stated rather than left to
+ * be re-derived from an absence: if one of these ever became a `POST`, `provider.timeout` is already
+ * in that hook's `RELEASE_ON_CODES`, which is a second reason to answer with the shared envelope.
  */
 export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskRoutesDeps): void {
   /**
@@ -138,34 +169,43 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
     const taskId = parsed.data.task_id;
 
     return deps.withConnection(async (client) => {
-      const ownership = await taskOwnership(client, { accountId, taskId });
-      if (ownership === "other") {
-        return reply
-          .status(404)
-          .send(errorBody("resource.not_found", "No such task for this account.", request.id));
-      }
+      try {
+        return await withDatabaseDeadline(CONTENT_DELETION_DEADLINE_MS, client, async (db) => {
+          const ownership = await taskOwnership(db, { accountId, taskId });
+          if (ownership === "other") {
+            return reply
+              .status(404)
+              .send(errorBody("resource.not_found", "No such task for this account.", request.id));
+          }
 
-      const outcome = await deleteContentForTask(client, { accountId, taskId });
-      // Logged with the snapshots so that "which training sets did this deletion reach" is
-      // answerable from the operational record as well as from `sonny.content_deletion`. The task
-      // id is an opaque client-minted key and is not content; nothing here logs anything that was
-      // stored.
-      request.log.info(
-        {
-          taskId,
-          contentRows: outcome.contentRows,
-          snapshotRows: outcome.snapshotRows,
-          snapshots: outcome.snapshotsTouched,
-        },
-        "task content deleted",
-      );
-      return reply.status(200).send({
-        task_id: taskId,
-        deleted_at: new Date().toISOString(),
-        // §4.6's field. Content rows, one per request the task made that was kept — so an incognito
-        // task and a task that ran before sign-in both answer 0, successfully.
-        requests_deleted: outcome.contentRows,
-      });
+          const outcome = await deleteContentForTask(db, { accountId, taskId });
+          // Logged with the snapshots so that "which training sets did this deletion reach" is
+          // answerable from the operational record as well as from `sonny.content_deletion`. The task
+          // id is an opaque client-minted key and is not content; nothing here logs anything that was
+          // stored.
+          request.log.info(
+            {
+              taskId,
+              contentRows: outcome.contentRows,
+              snapshotRows: outcome.snapshotRows,
+              snapshots: outcome.snapshotsTouched,
+            },
+            "task content deleted",
+          );
+          return reply.status(200).send({
+            task_id: taskId,
+            deleted_at: new Date().toISOString(),
+            // §4.6's field. Content rows, one per request the task made that was kept — so an incognito
+            // task and a task that ran before sign-in both answer 0, successfully.
+            requests_deleted: outcome.contentRows,
+          });
+        });
+      } catch (error) {
+        // §7.2 case 5a, through the mapper the model routes already use. Anything it does not
+        // recognise is rethrown to the root error handler, so this gateway's own bugs keep
+        // arriving as a logged 500 rather than being dressed up as a timeout.
+        return sendUpstreamFailure(request, reply, error);
+      }
     });
   });
 
@@ -218,28 +258,37 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
     const taskIds = parsed.data.task_ids;
 
     return deps.withConnection(async (client) => {
-      const outcome = await deleteContentForTasks(client, { accountId, taskIds });
-      request.log.info(
-        {
-          submitted: taskIds.length,
-          tasksDeleted: outcome.tasksDeleted,
-          tasksNotFound: outcome.notMine,
-          contentRows: outcome.contentRows,
-          snapshotRows: outcome.snapshotRows,
-          snapshots: outcome.snapshotsTouched,
-        },
-        "task content deleted in bulk",
-      );
-      return reply.status(200).send({
-        deleted_at: new Date().toISOString(),
-        // Submitted ids this account owns or that this gateway has never heard of — §4.6's rule that
-        // a task with nothing stored is a success, applied per id.
-        tasks_deleted: outcome.tasksDeleted,
-        // Submitted ids this gateway knows under a *different* account. The batch's `404`.
-        tasks_not_found: outcome.notMine,
-        // §4.6's field, summed: content rows removed across every task in the batch.
-        requests_deleted: outcome.contentRows,
-      });
+      try {
+        return await withDatabaseDeadline(CONTENT_DELETION_DEADLINE_MS, client, async (db) => {
+          const outcome = await deleteContentForTasks(db, { accountId, taskIds });
+          request.log.info(
+            {
+              submitted: taskIds.length,
+              tasksDeleted: outcome.tasksDeleted,
+              tasksNotFound: outcome.notMine,
+              contentRows: outcome.contentRows,
+              snapshotRows: outcome.snapshotRows,
+              snapshots: outcome.snapshotsTouched,
+            },
+            "task content deleted in bulk",
+          );
+          return reply.status(200).send({
+            deleted_at: new Date().toISOString(),
+            // Submitted ids this account owns or that this gateway has never heard of — §4.6's rule that
+            // a task with nothing stored is a success, applied per id.
+            tasks_deleted: outcome.tasksDeleted,
+            // Submitted ids this gateway knows under a *different* account. The batch's `404`.
+            tasks_not_found: outcome.notMine,
+            // §4.6's field, summed: content rows removed across every task in the batch.
+            requests_deleted: outcome.contentRows,
+          });
+        });
+      } catch (error) {
+        // §7.2 case 5a, through the mapper the model routes already use. Anything it does not
+        // recognise is rethrown to the root error handler, so this gateway's own bugs keep
+        // arriving as a logged 500 rather than being dressed up as a timeout.
+        return sendUpstreamFailure(request, reply, error);
+      }
     });
   });
 
@@ -274,31 +323,40 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
     const taskId = parsed.data.task_id;
 
     return deps.withConnection(async (client) => {
-      const ownership = await taskOwnership(client, { accountId, taskId });
-      if (ownership === "other") {
-        return reply
-          .status(404)
-          .send(errorBody("resource.not_found", "No such task for this account.", request.id));
-      }
+      try {
+        return await withDatabaseDeadline(CONTENT_DELETION_DEADLINE_MS, client, async (db) => {
+          const ownership = await taskOwnership(db, { accountId, taskId });
+          if (ownership === "other") {
+            return reply
+              .status(404)
+              .send(errorBody("resource.not_found", "No such task for this account.", request.id));
+          }
 
-      const outcome = await clearScreenshotsForTask(client, { accountId, taskId });
-      request.log.info(
-        {
-          taskId,
-          screenshotsCleared: outcome.screenshotsCleared,
-          snapshotScreenshotsCleared: outcome.snapshotScreenshotsCleared,
-          snapshots: outcome.snapshotsTouched,
-        },
-        "task screenshots deleted",
-      );
-      return reply.status(200).send({
-        task_id: taskId,
-        deleted_at: new Date().toISOString(),
-        // Live rows whose screenshot went. The snapshot copies that went with them are in the
-        // gateway's own record rather than here: the client has nothing to do with the difference,
-        // and a second number on the wire would be a field no caller reads.
-        screenshots_deleted: outcome.screenshotsCleared,
-      });
+          const outcome = await clearScreenshotsForTask(db, { accountId, taskId });
+          request.log.info(
+            {
+              taskId,
+              screenshotsCleared: outcome.screenshotsCleared,
+              snapshotScreenshotsCleared: outcome.snapshotScreenshotsCleared,
+              snapshots: outcome.snapshotsTouched,
+            },
+            "task screenshots deleted",
+          );
+          return reply.status(200).send({
+            task_id: taskId,
+            deleted_at: new Date().toISOString(),
+            // Live rows whose screenshot went. The snapshot copies that went with them are in the
+            // gateway's own record rather than here: the client has nothing to do with the difference,
+            // and a second number on the wire would be a field no caller reads.
+            screenshots_deleted: outcome.screenshotsCleared,
+          });
+        });
+      } catch (error) {
+        // §7.2 case 5a, through the mapper the model routes already use. Anything it does not
+        // recognise is rethrown to the root error handler, so this gateway's own bugs keep
+        // arriving as a logged 500 rather than being dressed up as a timeout.
+        return sendUpstreamFailure(request, reply, error);
+      }
     });
   });
 
@@ -348,35 +406,44 @@ export function registerContentDeletionRoutes(app: FastifyInstance, deps?: TaskR
     const before = bounds.data.before;
 
     return deps.withConnection(async (client) => {
-      const storedResponses = await deleteStoredResponsesForAccount(client, accountId, before);
-      const outcome = await deleteContentForAccount(
-        client,
-        accountId,
-        storedResponses,
-        // Not `account`: that value means the account was closed and its content went with it, and
-        // nothing in the row would tell the two apart once the user does close it for real.
-        "account_content",
-        before,
-      );
-      request.log.info(
-        {
-          before: before?.toISOString(),
-          contentRows: outcome.contentRows,
-          snapshotRows: outcome.snapshotRows,
-          snapshots: outcome.snapshotsTouched,
-          storedResponses: outcome.storedResponses,
-        },
-        "account content deleted, account left open",
-      );
-      return reply.status(200).send({
-        deleted_at: new Date().toISOString(),
-        // §4.6's field, over the whole account: content rows removed, one per kept request.
-        requests_deleted: outcome.contentRows,
-        // The stored response bodies that went with them. Counted apart because it is a different
-        // table with a different clock, which is `sonny.content_deletion`'s own reason for keeping
-        // them in a column of their own.
-        stored_responses_deleted: outcome.storedResponses,
-      });
+      try {
+        return await withDatabaseDeadline(CONTENT_DELETION_DEADLINE_MS, client, async (db) => {
+          const storedResponses = await deleteStoredResponsesForAccount(db, accountId, before);
+          const outcome = await deleteContentForAccount(
+            db,
+            accountId,
+            storedResponses,
+            // Not `account`: that value means the account was closed and its content went with it, and
+            // nothing in the row would tell the two apart once the user does close it for real.
+            "account_content",
+            before,
+          );
+          request.log.info(
+            {
+              before: before?.toISOString(),
+              contentRows: outcome.contentRows,
+              snapshotRows: outcome.snapshotRows,
+              snapshots: outcome.snapshotsTouched,
+              storedResponses: outcome.storedResponses,
+            },
+            "account content deleted, account left open",
+          );
+          return reply.status(200).send({
+            deleted_at: new Date().toISOString(),
+            // §4.6's field, over the whole account: content rows removed, one per kept request.
+            requests_deleted: outcome.contentRows,
+            // The stored response bodies that went with them. Counted apart because it is a different
+            // table with a different clock, which is `sonny.content_deletion`'s own reason for keeping
+            // them in a column of their own.
+            stored_responses_deleted: outcome.storedResponses,
+          });
+        });
+      } catch (error) {
+        // §7.2 case 5a, through the mapper the model routes already use. Anything it does not
+        // recognise is rethrown to the root error handler, so this gateway's own bugs keep
+        // arriving as a logged 500 rather than being dressed up as a timeout.
+        return sendUpstreamFailure(request, reply, error);
+      }
     });
   });
 }

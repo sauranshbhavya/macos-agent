@@ -1967,18 +1967,42 @@ committed, the caller can no longer be attributed to it, and a `5xx` would descr
 not the one on disk while inviting a retry that cannot get through — the revocation stays owed and is
 reported by the operator command, which is what that route already does for a provider failure.
 
-**Three routes the row names are deliberately not wired, each for its own reason** (SONNY-425).
+**The four content-deletion routes are wired too, and not by that wrapper** (SONNY-428).
+`DELETE /v1/tasks/{task_id}`, `DELETE /v1/tasks`, `DELETE /v1/tasks/{task_id}/screenshots` and
+`DELETE /v1/account/content` now run under this row's **total** deadline. The upstream half does not
+apply to them: none calls a provider, so there is no socket to bound and a signal there would be a
+number nothing reads.
+
+**What bounds them is Postgres's own `statement_timeout`, and the reason it is not the wrapper is a
+rule this document's own history produced.** Every one of the four does its work on a pooled
+connection the handler leased, and the wrapper is a `Promise.race` — when the deadline wins it
+*abandons* the work, which then goes on issuing statements on a connection already released to the
+next request. That is the defect PR #212 found on `DELETE /v1/account` and the rule it left behind:
+**a deadline around work that holds a database connection is never a race that abandons.** The
+cooperative poll that route uses does not transfer either, because its work is a loop of provider
+calls with gaps to poll in and a deletion is a fixed sequence of set-based statements whose time is
+spent *inside* a statement. So the budget is handed to the backend, which is the one thing that can
+end a running statement: the remaining budget is set before each statement, an exhausted one is
+refused without a round trip, and a cancelled statement rejects with `57014`, rolls back, and leaves
+the connection healthy — the work is over before the caller is answered. Transaction control is
+exempt, because a `ROLLBACK` this bound refused would return a poisoned connection to the pool.
+A timeout is `504 provider.timeout`, retryable, which §4.6 makes honest: every one of these routes is
+safe to repeat.
+
+**Two routes the row names are still deliberately not wired, each for its own reason** (SONNY-425).
 `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider, no network — so
 a deadline around either is a timer that cannot fire, and the row's numbers are true of them only in
-the sense that any bound is. `DELETE /v1/tasks/{task_id}` and three of the four `/v1/account/*`
-routes wait on the database rather than on a provider, and this gateway sets no statement timeout
-anywhere — only a connection timeout — so bounding those is a change to how every authenticated route
-reaches Postgres rather than a wrapper at a few call sites. **The fourth is `POST
+the sense that any bound is. **Three of the four `/v1/account/*` routes remain owed**: they wait on
+the database rather than on a provider, and this gateway sets no statement timeout on the pool —
+only a connection timeout — so bounding *every* authenticated route is a change to how the gateway
+reaches Postgres rather than a wrapper at a few call sites, which is **SONNY-427**. What SONNY-428
+did is narrower and composes with it: a per-statement budget set by four routes for their own work,
+which a pool-wide default would sit underneath rather than replace. **The fourth is `POST
 /v1/account/credits/top-up` and it is nothing of the kind: it charges at the payment provider, with
 up to three sequential calls of twelve seconds each, so its upstream work can run for far longer than
 this row allows.** Whether it gets a row of its own derived from those attempts, or the attempts are
 bounded to fit this one, is **SONNY-430** (2026-09-06), filed so the route has an owner; nothing
-bounds it today. All three are owed and none is claimed here.
+bounds it today.
 
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying

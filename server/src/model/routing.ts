@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type pg from "pg";
 import { errorBody } from "../errors.js";
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "./upstream.js";
 
@@ -104,4 +105,125 @@ export function sendUpstreamFailure(
     );
   }
   throw error;
+}
+
+/**
+ * Postgres's own code for a statement the server cancelled — `query_canceled`, class 57.
+ *
+ * Read off the error rather than off its message, for `sendUpstreamFailure`'s own reason one screen
+ * up: a string is the provider's to reword and a code is not.
+ */
+const QUERY_CANCELED = "57014";
+
+/** The three statements below are transaction control and carry no user work. */
+const TRANSACTION_CONTROL: ReadonlySet<string> = new Set(["BEGIN", "COMMIT", "ROLLBACK"]);
+
+/**
+ * Run `work` under §12's total deadline on a connection it holds, and end it there — **never race
+ * it**.
+ *
+ * **`withDeadlines` is the wrong instrument for every caller of this one, and the rule is PR #212's
+ * F1 rather than a preference.** That wrapper is a `Promise.race`, so when the deadline wins it
+ * *abandons* the work. Harmless when the work is one HTTP call; a correctness defect when it holds
+ * the pooled client the handler leased, because `withConnection`'s `finally` then releases a
+ * connection the abandoned work is still issuing statements on — `pg` does not refuse a query on a
+ * released client, and the pool hands the same client object to the next `connect()`, so those
+ * statements land inside whatever transaction the next request has open. **A deadline around work
+ * that holds a database connection is never a race that abandons.**
+ *
+ * **Nor is it the cooperative poll `DELETE /v1/account` uses, and that is a measurement rather than
+ * a taste.** That route's work is a *loop* of provider calls, so a signal read between calls is a
+ * real bound. The four content-deletion routes' work is not shaped that way: every path they drive
+ * in `content/store.ts` — `taskOwnership`, `deleteContentForTask`, `deleteContentForTasks`,
+ * `clearScreenshotsForTask`, `deleteContentForAccount` and `deleteStoredResponsesForAccount` — is a
+ * fixed sequence of set-based statements with no loop anywhere, so the time is spent *inside* a
+ * statement and the gaps between them are where it is not. A poll between statements would be a
+ * bound that cannot fire on the one failure mode this work actually has.
+ *
+ * **So the bound is Postgres's own `statement_timeout`, which is the one instrument that ends a
+ * running statement.** A cancelled statement rejects with `57014`, the store's own `catch` rolls
+ * back, and the connection is left healthy and released normally — the work is over before the
+ * handler answers, which is exactly what the race could not promise.
+ *
+ * **The budget is a deadline and not a duration, which is what makes it §12's *total*.** A
+ * per-statement timeout of 15 s over a six-statement handler is a 90-second bound wearing §12's
+ * number, so the remaining budget is recomputed before every statement and an exhausted one is
+ * refused without a round trip. The cost is one extra round trip per statement; these are deletion
+ * routes rather than a hot path, and the alternative is a promise the table does not make.
+ *
+ * **Transaction control is exempt from both the bound and the refusal, and that is the whole of the
+ * connection-safety argument.** A `ROLLBACK` that this helper refused leaves the connection in an
+ * aborted-transaction state, and `withConnection` then returns it to the pool poisoned: the next
+ * request's first statement fails with `current transaction is aborted`. That is this ticket's own
+ * defect reached through its own fix, so `BEGIN`, `COMMIT` and `ROLLBACK` pass through unbounded.
+ * They carry no user work, and the statements that do are already bounded ahead of them.
+ *
+ * **The refusal is the whole of that reason, and a second reason this comment used to give is not
+ * real** (PR #221's review). It also said Postgres might *cancel* a `ROLLBACK` under a
+ * one-millisecond remainder; the reviewer could not reproduce that in 300 trials of `BEGIN; SET
+ * statement_timeout TO 1; <a statement that is cancelled>; ROLLBACK;` — 300 cancellations of the
+ * statement, which is the control, and **0** `current transaction is aborted`. Postgres disables the
+ * statement timer before it does the transaction-completion work, so these statements are not
+ * cancellable this way at all. The exemption is unchanged and right; only the sentence was stronger
+ * than the evidence.
+ */
+export async function withDatabaseDeadline<T>(
+  deadline: { readonly total: number },
+  client: pg.Client,
+  work: (bounded: pg.Client) => Promise<T>,
+): Promise<T> {
+  const expiresAt = Date.now() + deadline.total;
+  let applied = false;
+
+  const bounded = new Proxy(client, {
+    get(target, property, receiver) {
+      if (property !== "query") return Reflect.get(target, property, receiver);
+      return async (...args: unknown[]): Promise<unknown> => {
+        const text = typeof args[0] === "string" ? args[0].trim().toUpperCase() : "";
+        if (TRANSACTION_CONTROL.has(text)) {
+          return (target.query as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
+        }
+        const remaining = expiresAt - Date.now();
+        // **`<=` and not `<`, and that one character is the difference between this bound and no
+        // bound at all** (PR #221's review, F1). `SET statement_timeout TO 0` is Postgres for *no
+        // timeout*, so a remainder of exactly zero — reachable whenever `Date.now()` here equals
+        // `expiresAt` — would otherwise be handed to the backend as a licence to run forever, and
+        // the request would answer its ordinary 200 with §12's promise silently switched off. The
+        // shipped guard was already right and nothing held it: the loosened mutant survived the
+        // whole suite. `refuses a remainder of exactly zero…` in `content.test.ts` is what holds it
+        // now, on a frozen clock, and it asserts the empty statement list as well as the throw —
+        // the throw alone cannot tell a refusal apart from a `TO 0` that failed for some other
+        // reason.
+        if (remaining <= 0) {
+          throw new ProviderTimedOut("the route's total deadline elapsed");
+        }
+        // Interpolated because `SET` takes no bind parameter, and safe because the value is this
+        // arithmetic and never anything a caller supplied.
+        await target.query(`SET statement_timeout TO ${Math.ceil(remaining)}`);
+        applied = true;
+        return (target.query as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
+      };
+    },
+  });
+
+  try {
+    return await work(bounded);
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code === QUERY_CANCELED) {
+      throw new ProviderTimedOut("the route's total deadline elapsed");
+    }
+    throw error;
+  } finally {
+    // **Session-level, so it outlives this lease unless it is cleared.** The reset is best-effort
+    // and its own failure is never allowed to replace the outcome above: a connection too broken to
+    // accept `RESET` is one whose next user will fail on its own terms, and masking a completed
+    // deletion's answer with that would be the worse of the two.
+    if (applied) {
+      try {
+        await client.query("RESET statement_timeout");
+      } catch {
+        // Deliberately swallowed; see above.
+      }
+    }
+  }
 }

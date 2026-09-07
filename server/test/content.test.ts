@@ -27,6 +27,11 @@ import { fakeEntitlementStore } from "./support/entitlement.js";
 import { expectPopulationIsReal, registeredRoutes } from "./support/routes.js";
 import { accessTokenFor } from "./support/tokens.js";
 import { signedInConnectionTo } from "./support/connection.js";
+import type pg from "pg";
+import type { WithConnection } from "../src/db/connection.js";
+import { CONTENT_DELETION_DEADLINE_MS } from "../src/model/limits.js";
+import { withDatabaseDeadline } from "../src/model/routing.js";
+import { ProviderTimedOut } from "../src/model/upstream.js";
 
 /**
  * Contract §10's content store, driven through the whole real app (SONNY-134).
@@ -1001,5 +1006,273 @@ describe("the snapshot command", () => {
       kind: "error",
       message: '--since is not a date: "yesterday"',
     });
+  });
+});
+
+/**
+ * §12's deadline on the four content-deletion routes (SONNY-428).
+ *
+ * **The fake below is a Postgres that honours `statement_timeout`, and that is what makes these
+ * tests about the wiring rather than about the mapping.** `CLAUDE.md`'s held-sample gotcha is the
+ * shape to avoid: a test that hands the route a ready-made `57014` proves the error mapper and
+ * nothing else, and stays green against a route that never bounded anything. Here the cancellation
+ * is *caused* by the timeout the route itself set — with no `SET statement_timeout` in force the
+ * stalled statement never returns at all, so an unwired route fails by reaching the hang backstop
+ * rather than by passing.
+ */
+/** The milliseconds out of a `SET statement_timeout TO <n>`, refusing anything else. */
+function budgetOf(statement: string): number {
+  const value = statement.toUpperCase().split(" TO ")[1];
+  if (value === undefined) throw new Error(`not a statement_timeout: ${statement}`);
+  return Number(value);
+}
+
+function stallingConnection(record: string[]): WithConnection {
+  return async (work) => {
+    let timeoutMs: number | undefined;
+    const client = {
+      query: async (text: string, values: readonly unknown[] = []) => {
+        record.push(text.trim());
+        const statement = text.trim().toUpperCase();
+        if (statement.startsWith("SET STATEMENT_TIMEOUT")) {
+          timeoutMs = Number(statement.split(" TO ")[1]);
+          return { rows: [] };
+        }
+        if (statement === "RESET STATEMENT_TIMEOUT") {
+          timeoutMs = undefined;
+          return { rows: [] };
+        }
+        // Transaction control, which `withDatabaseDeadline` exempts. Answered rather than stalled:
+        // a `ROLLBACK` is what the store issues on the way out of a cancelled transaction.
+        if (statement === "BEGIN" || statement === "COMMIT" || statement === "ROLLBACK") {
+          return { rows: [] };
+        }
+        // The gate's own two reads, answered exactly as `support/connection.ts` answers them —
+        // this fake cannot delegate to it, because what it exists to control is the statements
+        // *after* the gate.
+        if (text.includes("INSERT INTO sonny.revoked_provider_session")) return { rows: [] };
+        if (text.includes("FROM sonny.revoked_provider_session")) return { rows: [] };
+        if (text.includes("FROM sonny.identity")) {
+          void values;
+          return { rows: [{ account_id: ACCOUNT }] };
+        }
+        // **The route's own work, and this is where the wiring is pinned.** A statement under a
+        // `statement_timeout` is the one a real backend cancels; a statement under none runs to
+        // completion however long it takes. So an unwired route reaches the second branch, answers
+        // its ordinary 200, and fails the assertion below on a status — loudly and attributably,
+        // rather than by hanging. That matters beyond tidiness: a test whose only failure signal is
+        // a backstop timeout can never be counted a mutation kill, because every wording that type
+        // emits is declared untrusted, so the mutant would come back UNATTRIBUTED on a run where
+        // the test failed for exactly the right reason (`CLAUDE.md`, SONNY-259).
+        if (timeoutMs === undefined) return { rows: [], rowCount: 0 };
+        throw Object.assign(new Error("canceling statement due to statement timeout"), {
+          code: "57014",
+        });
+      },
+    };
+    return work(client as unknown as pg.Client);
+  };
+}
+
+function buildWithStall(record: string[]) {
+  return buildApp(
+    testConfig({ credentials: CREDENTIALS }),
+    { provider: new UnusedAuthProvider(), withConnection: stallingConnection(record) },
+    {
+      idempotencyStore: keys,
+      meteringStore: metering,
+      contentStore: content,
+      entitlementStore: fakeEntitlementStore(),
+    },
+  );
+}
+
+describe("§12's deadline on the four content-deletion routes", () => {
+  /**
+   * Every route in `routes/tasks.ts`, by the request that reaches it. **The population is the
+   * point**: §12's row names these four together, and a fifth deletion route arriving without a
+   * deadline is what this list is here to fail on.
+   */
+  const ROUTES = [
+    { name: "DELETE /v1/tasks/:task_id", method: "DELETE" as const, url: "/v1/tasks/task-1" },
+    {
+      name: "DELETE /v1/tasks",
+      method: "DELETE" as const,
+      url: "/v1/tasks",
+      payload: { task_ids: ["task-1", "task-2"] },
+    },
+    {
+      name: "DELETE /v1/tasks/:task_id/screenshots",
+      method: "DELETE" as const,
+      url: "/v1/tasks/task-1/screenshots",
+    },
+    { name: "DELETE /v1/account/content", method: "DELETE" as const, url: "/v1/account/content" },
+  ];
+
+  for (const route of ROUTES) {
+    it(
+      `${route.name} answers §7.2's 504 when its store is cancelled inside §12's budget`,
+      async () => {
+        const record: string[] = [];
+        const app = buildWithStall(record);
+        const response = await app.inject({
+          method: route.method,
+          url: route.url,
+          headers: { authorization: authorization() },
+          ...(route.payload ? { payload: route.payload } : {}),
+        });
+
+        // §7.2 case 5a's envelope, and it is the shared one rather than a fifth copy: the same
+        // status, code and flag the model routes send for the same condition.
+        expect(response.statusCode).toBe(504);
+        expect(response.json().error.code).toBe("provider.timeout");
+        expect(response.json().error.retryable).toBe(true);
+
+        // **The budget it handed Postgres is §12's number**, which is the half a stalled fake can
+        // establish and the half a mutant moving the constant has to survive. It is the remaining
+        // budget rather than the constant, so it is at most the total and within a wide band of it
+        // — a band rather than an equality because the elapsed time is real, and wide enough that
+        // no ordinary machine load can reach it.
+        const [firstSet] = record.filter((statement) =>
+          statement.toUpperCase().startsWith("SET STATEMENT_TIMEOUT"),
+        );
+        // Thrown rather than expected, so an unwired route ends this test here instead of running
+        // on into an assertion about `undefined` — the reason `CLAUDE.md` asks for `try #require`
+        // after a count on the Swift side.
+        if (firstSet === undefined) throw new Error("the route set no statement_timeout at all");
+        const first = budgetOf(firstSet);
+        expect(first).toBeLessThanOrEqual(CONTENT_DELETION_DEADLINE_MS.total);
+        expect(first).toBeGreaterThan(CONTENT_DELETION_DEADLINE_MS.total - 5_000);
+
+        // **And it left the connection clean.** A session-level `statement_timeout` outlives the
+        // lease, so a pooled connection returned still carrying one bounds a route that never
+        // asked for a bound.
+        expect(record).toContain("RESET statement_timeout");
+      },
+    );
+  }
+});
+
+describe("withDatabaseDeadline, apart from the routes", () => {
+  /** A client that records what it was asked and answers everything. */
+  function recorder(record: string[]): { client: pg.Client; record: string[] } {
+    const client = {
+      query: async (text: string) => {
+        record.push(text.trim());
+        return { rows: [] };
+      },
+    };
+    return { client: client as unknown as pg.Client, record };
+  }
+
+  it("bounds the WHOLE handler, by shrinking the budget rather than repeating it", async () => {
+    // **A per-statement timeout of 15 s over a six-statement handler is a 90-second bound wearing
+    // §12's number.** What makes this §12's *total* is that each statement gets what is left, so
+    // the numbers must fall.
+    const record: string[] = [];
+    const { client } = recorder(record);
+    await withDatabaseDeadline({ total: 15_000 }, client, async (db) => {
+      await db.query("SELECT 1");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await db.query("SELECT 2");
+    });
+    const budgets = record
+      .filter((statement) => statement.toUpperCase().startsWith("SET STATEMENT_TIMEOUT"))
+      .map(budgetOf);
+    expect(budgets).toHaveLength(2);
+    const [firstBudget, secondBudget] = budgets;
+    if (firstBudget === undefined || secondBudget === undefined) {
+      throw new Error(`expected two budgets, got ${budgets.length}`);
+    }
+    expect(secondBudget).toBeLessThan(firstBudget);
+    expect(firstBudget).toBeLessThanOrEqual(15_000);
+  });
+
+  it("refuses a remainder of exactly zero, the one value that would set no bound at all", async () => {
+    // **PR #221's review, F1 — the one character between this deadline and no deadline.** The guard
+    // is `remaining <= 0`, and loosening it to `< 0` survived the entire suite: a remainder of
+    // exactly zero would then be handed to Postgres as `SET statement_timeout TO 0`, which is that
+    // server's spelling of *no timeout at all* (measured against Postgres 17: under `TO 0` a
+    // sixty-million-row scan completed, and the byte-identical control at `TO 1` was cancelled). The
+    // route would run its delete unbounded, answer its ordinary 200, and still emit the `RESET`, so
+    // none of the four route tests could see it either.
+    //
+    // **The clock is frozen rather than raced.** `{ total: 0 }` with `Date.now` held at one instant
+    // puts `remaining` on exactly zero at the guard, deterministically; a tiny `total` plus a sleep
+    // would be the wall-clock bet `CLAUDE.md` warns about, and it would race the very mutant this
+    // exists to catch instead of catching it. `Date.now` alone rather than vitest's fake timers,
+    // because that is the only clock this helper reads and replacing the timers would reach `pg` and
+    // the hang backstop, which `auth.db.test.ts` records as a run that hangs with no output at all.
+    const record: string[] = [];
+    const { client } = recorder(record);
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      await expect(
+        withDatabaseDeadline({ total: 0 }, client, async (db) => {
+          await db.query("DELETE FROM sonny.retained_content");
+        }),
+      ).rejects.toThrow(ProviderTimedOut);
+    } finally {
+      clock.mockRestore();
+    }
+    // **The empty list is the half that distinguishes a refusal from a `TO 0`**, and it is empty
+    // rather than merely free of the delete: nothing was set, so nothing needed resetting either.
+    expect(record).toEqual([]);
+  });
+
+  it("refuses a statement once the budget is gone, without a round trip", async () => {
+    // The sequence-level half of the bound: work that ran out of budget between statements is
+    // stopped here rather than handed to Postgres with a one-millisecond timeout.
+    const record: string[] = [];
+    const { client } = recorder(record);
+    await expect(
+      withDatabaseDeadline({ total: 20 }, client, async (db) => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        await db.query("SELECT 1");
+      }),
+    ).rejects.toThrow(ProviderTimedOut);
+    expect(record.filter((statement) => statement === "SELECT 1")).toEqual([]);
+  });
+
+  it("lets ROLLBACK through unbounded, so a cancelled transaction cannot poison the connection", async () => {
+    // **This ticket's own defect reached through its own fix.** A `ROLLBACK` refused for want of
+    // budget leaves the connection in an aborted-transaction state, and `withConnection` returns it
+    // to the pool that way: the next request's first statement fails with `current transaction is
+    // aborted`. So transaction control is exempt from the refusal above and from the bound.
+    const record: string[] = [];
+    const { client } = recorder(record);
+    await withDatabaseDeadline({ total: 20 }, client, async (db) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await db.query("ROLLBACK");
+    });
+    expect(record).toContain("ROLLBACK");
+    // And it was not preceded by a budget of its own.
+    expect(record.filter((s) => s.toUpperCase().startsWith("SET STATEMENT_TIMEOUT"))).toEqual([]);
+  });
+
+  it("maps Postgres's cancellation to the timeout the mapper already answers", async () => {
+    const { client } = recorder([]);
+    await expect(
+      withDatabaseDeadline({ total: 15_000 }, client, async (db) => {
+        await db.query("SELECT 1");
+        throw Object.assign(new Error("canceling statement due to statement timeout"), {
+          code: "57014",
+        });
+      }),
+    ).rejects.toThrow(ProviderTimedOut);
+  });
+
+  it("rethrows anything that is not a cancellation, so a real fault stays a real fault", async () => {
+    // A bug in a deletion must not be dressed up as a timeout the client is told to retry.
+    const { client } = recorder([]);
+    await expect(
+      withDatabaseDeadline({ total: 15_000 }, client, async (db) => {
+        await db.query("SELECT 1");
+        throw Object.assign(new Error("null value in column violates not-null constraint"), {
+          code: "23502",
+        });
+      }),
+    ).rejects.toThrow("null value in column");
   });
 });
