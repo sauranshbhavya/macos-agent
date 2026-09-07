@@ -2064,6 +2064,15 @@ indistinguishable from one that was never bounded. The two shapes are identical 
 only in production. The composition that follows is that the innermost `SET` governs, wider or
 narrower, and `RESET` returns to this bound rather than to none.
 
+**One deployment shape would switch this off without failing loudly, and it is named rather than
+left to be discovered.** A host that refuses the parameter at connection time — a transaction-mode
+connection pooler in front of Postgres is the shape that does — would leave the gateway with no
+statement bound, and the pool is lazy, so nothing fails at boot: `GET /v1/health` answers `200` and
+the first authenticated request is where it surfaces. This project's documented `DATABASE_URL` is a
+*session* pooler, which passes startup parameters through, so the shape is avoided rather than
+handled; the manual check that would catch it is the lock row in
+`docs/sonny-manual-test-checklist.md`, whose rollback-and-retry step is a real control.
+
 **One bound is the server's alone and is not in the table, because it is not a deadline** (SONNY-322).
 Nothing limited how long a caller could take to *deliver* a request — Fastify disables the underlying
 option by default, and this project had never turned it back on — so a caller that sent headers and

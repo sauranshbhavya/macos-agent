@@ -3962,13 +3962,17 @@ what they ask about. They are written now so whoever runs the first real deploym
       request sitting open for as long as you leave the lock held, which is what happened before this
       change and is the whole thing it exists to stop; or the gateway still answering slowly after
       the `ROLLBACK`, which would mean a connection came back from the pool damaged.
-- [ ] **(SONNY-427, waits on SONNY-192)** **A migration still gets as long as it needs.** The bound
-      above is deliberately *not* applied to the migration runner, and this is the row that says so.
-      With no lock held, run `npm run migrate -- status` and then apply a migration on staging the way
-      `server/README.md`'s four steps describe. Expected: it behaves exactly as it always has, however
-      long it takes. **What would be a finding:** a migration failing with a message about a statement
-      being cancelled — that would mean the bound reached the runner, which would make a large
-      backfill impossible to deploy.
+- [ ] **(SONNY-427, waits on SONNY-192)** **A migration still gets as long as it needs, checked with a
+      migration that actually takes long.** The bound above is deliberately *not* applied to the
+      migration runner, and this is the row that says so. **Applying the migrations already in the
+      tree proves nothing here** — every one of them finishes far inside ten seconds, so they would
+      pass whether the bound reached the runner or not, which is a check that cannot fail. So make one
+      that would trip it: add a scratch migration whose `up` is `SELECT pg_sleep(12);` and whose
+      `-- @rollback` section is `SELECT 1;`, run `npm run build` and then `npm run migrate -- up`
+      against staging, and afterwards `npm run migrate -- down` and delete the file. Expected: the
+      `up` takes about twelve seconds and **succeeds**. **What would be a finding:** it failing after
+      about ten seconds with a message about a statement being cancelled — that would mean the bound
+      reached the runner, and a real backfill would be impossible to deploy.
 
 ### Sonny refuses to drive a window showing a shell, even when the recognizer misreads it (new 2026-09-05, SONNY-277)
 

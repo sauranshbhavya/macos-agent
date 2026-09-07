@@ -596,6 +596,26 @@ export async function deleteContentForAccount(
 }
 
 /**
+ * Raised when one closed account's wipe could not be completed, naming the account (SONNY-427).
+ *
+ * **The id is the whole point.** Without it the sweep's caller knows only that *something* failed,
+ * and the one thing it needs in order to keep working is which account to leave until later — the
+ * select below is `ORDER BY a.deleted_at LIMIT 1`, so an account that cannot be deleted is
+ * permanently the oldest and every account closed after it queues behind it forever. PR #223's
+ * review measured that: four consecutive passes, the same 400 000 rows, and the light account behind
+ * it never touched.
+ */
+export class ClosedAccountSweepFailed extends Error {
+  constructor(
+    readonly accountId: string,
+    override readonly cause: unknown,
+  ) {
+    super(`the closed-account wipe for ${accountId} did not complete`);
+    this.name = "ClosedAccountSweepFailed";
+  }
+}
+
+/**
  * Content still stored for accounts that have been closed, taken account by account.
  *
  * **This is what makes `DELETE /v1/account`'s wipe survive failing.** That handler runs its wipe
@@ -617,7 +637,19 @@ export async function deleteContentForAccount(
 export async function sweepClosedAccountContent(
   client: pg.Client,
   clearStoredResponses: (client: pg.Client, accountId: string) => Promise<number>,
-): Promise<DeletionOutcome | undefined> {
+  /**
+   * Accounts to leave for a later pass, because an earlier one could not wipe them (SONNY-427).
+   *
+   * **Oldest-first is preserved for everything that is not failing**, which is the property the
+   * ordering exists for: a closed account's content is a privacy debt and the longest-standing one
+   * is taken first. What this changes is only that an account which cannot be taken stops being an
+   * obstruction to the ones behind it. Empty by default, so both existing callers and every test
+   * that drove this before are unchanged.
+   */
+  skipAccountIds: readonly string[] = [],
+  // The account's id travels with the outcome so the caller can report which account a pass took —
+  // an added field, so every existing caller reading `contentRows` is unchanged.
+): Promise<(DeletionOutcome & { readonly accountId: string }) | undefined> {
   const { rows } = await client.query<{ account_id: string }>(
     // **Either residue selects the account, and the second arm is PR #148's F4.** This asked only
     // about `sonny.retained_content`, which meant an account whose *only* leftover was a stored
@@ -631,13 +663,23 @@ export async function sweepClosedAccountContent(
         AND (EXISTS (SELECT 1 FROM sonny.retained_content rc WHERE rc.account_id = a.id)
              OR EXISTS (SELECT 1 FROM sonny.idempotency_key k
                          WHERE k.account_scope = a.id AND k.response_body IS NOT NULL))
+        AND a.id <> ALL($1::uuid[])
       ORDER BY a.deleted_at
       LIMIT 1`,
+    [[...skipAccountIds]],
   );
   const accountId = rows[0]?.account_id;
   if (accountId === undefined) return undefined;
-  const storedResponses = await clearStoredResponses(client, accountId);
-  return deleteContentForAccount(client, accountId, storedResponses, "account");
+  try {
+    const storedResponses = await clearStoredResponses(client, accountId);
+    const outcome = await deleteContentForAccount(client, accountId, storedResponses, "account");
+    return { ...outcome, accountId };
+  } catch (error) {
+    // **Named rather than propagated bare**, so the caller can defer this one account and keep
+    // sweeping the rest. `deleteContentForAccount` has already rolled its own transaction back, and
+    // `clearStoredResponses` runs its own; nothing is left half-done by the time this is thrown.
+    throw new ClosedAccountSweepFailed(accountId, error);
+  }
 }
 
 /**

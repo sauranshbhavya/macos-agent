@@ -51,8 +51,18 @@ const SESSION_USER = "11111111-1111-1111-1111-111111111111";
  * — Postgres raises, `pg` rejects, the error handler answers — on top of a bound the test sets to
  * a fraction of a second. The worst a database test in this suite has been measured at under
  * deliberate load is 2527 ms (`support/backstop.ts` carries that measurement and its conditions).
+ *
+ * **The precondition wait below has a budget of its own rather than sharing this one** (PR #223's
+ * O3). Both waits are sequential, so one number used twice makes the worst case 30 000 + 30 000 —
+ * exactly `HANG_BACKSTOP_MS`, which is the one arrangement under which the sentence above stops
+ * being true. Ten plus thirty leaves twenty seconds of margin, and the precondition is the wait that
+ * can afford the smaller number: it is satisfied in milliseconds on any tree where the request
+ * reaches Postgres at all.
  */
 const ANSWER_OR_ADMIT_HUNG_MS = 30_000;
+
+/** The precondition's own budget; see the note above on why it is not the same number. */
+const BLOCK_OBSERVED_MS = 10_000;
 
 /** Enough provider to sign someone in. Everything this file asserts happens after that. */
 class SigningInProvider implements AuthProvider {
@@ -230,7 +240,7 @@ describeDb("the pool's statement timeout", () => {
  * precondition never arrived must bail before asserting.
  */
 async function waitForABackendBlockedOnALock(client: pg.Client): Promise<boolean> {
-  const giveUpAt = Date.now() + ANSWER_OR_ADMIT_HUNG_MS;
+  const giveUpAt = Date.now() + BLOCK_OBSERVED_MS;
   for (;;) {
     const { rows } = await client.query<{ n: string }>(
       "SELECT count(*)::text AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND state = 'active'",
