@@ -357,7 +357,7 @@ describe("provider credentials — two live keys per provider", () => {
       ]) {
         expect(() => requireSupabaseJwtPolicy(
           loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
-        ), bad).toThrow(ConfigError);
+        ), bad).toThrow(/must be an ISO-8601 instant carrying an offset/);
         // The value IS reported, unlike a secret: a deadline is a date, and one nobody can see is
         // one nobody can fix.
         expect(() => requireSupabaseJwtPolicy(
@@ -382,15 +382,41 @@ describe("provider credentials — two live keys per provider", () => {
       }
     });
 
+    it("refuses a spelling that is shaped like an instant and names no moment", () => {
+      // **The gap the shape check opened, found by its own battery** (PR #218, round 1's R8). Before
+      // the shape check, everything unparseable reached the `NaN` branch and a test driving
+      // `"nonsense"` covered it. Afterwards the shape check refuses all of those first, so the `NaN`
+      // branch is reachable only by a spelling that is well-formed and still names no moment — a
+      // month of 13, an hour of 25 — and nothing drove one. The mutant neutralising that branch
+      // survived the whole suite. It is the branch that matters most if it ever goes: an Invalid
+      // Date compares false against everything, so an unchecked one reads as "not yet reached"
+      // forever, which is an overlap with no end.
+      for (const bad of ["2026-13-01T00:00:00Z", "2026-09-08T25:00:00Z", "2026-00-01T00:00:00Z"]) {
+        // Shape-valid, so this is the second message and not the first — asserted by wording,
+        // because a test that only checks `ConfigError` cannot tell the two refusals apart and a
+        // mutant that swaps one for the other would pass.
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
+        ), bad).toThrow(/is shaped like an instant but is not one/);
+      }
+      // The control: a spelling that is NOT shaped like an instant reaches the first message
+      // instead, so the two branches are distinguished rather than merely both throwing.
+      expect(() => requireSupabaseJwtPolicy(
+        loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: "nonsense" }), NOW,
+      )).toThrow(/must be an ISO-8601 instant carrying an offset/);
+    });
+
     it("refuses a day past the end of its month rather than rolling it forward", () => {
       // ECMAScript's own ISO parser absorbs a day-of-month overflow: `new Date("2026-02-30T00:00:00Z")`
       // is 2 March. The shape check cannot see it -- `30` is two digits -- so the written digits are
       // compared against the parsed fields. Same family as the zone-less case above: the operator
       // wrote one instant and the bound became another, with nothing saying so.
       for (const bad of ["2026-02-30T00:00:00Z", "2026-02-30T00:00:00+05:30", "2026-04-31T00:00:00Z"]) {
+        // By wording, not merely by type: these are shape-valid and parseable, so `ConfigError`
+        // alone cannot tell this refusal from the two above it.
         expect(() => requireSupabaseJwtPolicy(
           loadConfig({ ...rotating, SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: bad }), NOW,
-        ), bad).toThrow(ConfigError);
+        ), bad).toThrow(/names a date that does not exist/);
       }
       // The controls: the last real day of each of those months is accepted, so the check is about
       // the overflow and not about February or about a `30`.
