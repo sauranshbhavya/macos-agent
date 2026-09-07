@@ -551,6 +551,8 @@ rather than at request time:
 | Variable | What it is |
 |---|---|
 | `SUPABASE_JWT_SECRET` | The project's JWT Secret. **Gateway-only** — never in the app, never in this repo. Refused under 32 characters. |
+| `SUPABASE_JWT_SECRET_2` | The one overlap slot, set only during a rotation (SONNY-238). Same floor, same gateway-only rule. Any other numbered spelling — `_1`, `_3` — is a startup refusal rather than a silently ignored variable. |
+| `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` | When the slot above stops being accepted. ISO-8601, required whenever that slot is set, refused more than `MAX_JWT_SECRET_OVERLAP_DAYS` away. Not a secret. |
 | `SUPABASE_JWT_ISSUER` | The project's auth URL, compared exactly against each token's `iss`. |
 | `SUPABASE_JWT_AUDIENCE` | Defaults to Supabase's own `authenticated`. |
 
@@ -618,11 +620,11 @@ into SONNY-203 for the reason its own ticket gives: a table, a migration, and a 
 Supabase's `session_id` claim, which is one thing more than "verify the token and gate every
 protected route".
 
-**Rotating `SUPABASE_JWT_SECRET` signs everyone out.** One secret is accepted, not an ordered list
-like the provider credentials below, so tokens signed with the previous one stop verifying the moment
-the new value is deployed. That is a deliberate difference: an accepted-but-retired signing secret
-extends the life of a leaked one, and Supabase rotates this rarely. Filed as **SONNY-238** if an
-overlap is ever wanted.
+**Rotating `SUPABASE_JWT_SECRET` no longer signs everyone out** (**SONNY-238**). It did until then —
+one secret was accepted, not an ordered list like the provider credentials below, so every token
+signed with the previous value stopped verifying the instant the new one deployed. There is now one
+overlap slot with an end on it; "Rotating the Supabase JWT secret with no sign-out" below is the
+runbook and states what the end is for.
 
 ## The three environments
 
@@ -846,6 +848,8 @@ own section above is the reason anyone was reading this one.)
 **`SUPABASE_JWT_SECRET` is the one credential this gateway holds that is also a *signing* key** —
 anyone with it can mint a token for any user, so it is gateway-only and refused at startup under 32
 characters. "Authenticating a request" above has the three variables and what each is checked for.
+**`SUPABASE_JWT_SECRET_2` is a second one of those for as long as it is set**, which is why it is the
+only credential here that carries its own expiry: see the rotation section below.
 
 **Two credentials for *calling* Supabase, added by SONNY-307, and the distinction is worth keeping
 straight.** The three above verify a token this gateway was handed: local, symmetric, no network.
@@ -903,6 +907,71 @@ run (a pattern beginning with a hyphen that `grep` parsed as options, so it sile
 `example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
 exempted every PEM header in the tree, a real key included). It is not decoration. (This line said
 "two" while the changelog said three; the changelog was right — PR #85 cycle 1, R18.)
+
+### Rotating the Supabase JWT secret with no sign-out
+
+Every access token this gateway accepts is signed by Supabase with `SUPABASE_JWT_SECRET` and verified
+here locally. So replacing that one value used to invalidate every token already in a user's hand at
+the instant the new one deployed: **every signed-in user signed out**, with no overlap (SONNY-238).
+
+`SUPABASE_JWT_SECRET_2` is one overlap slot, and `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` is when it
+stops being accepted. Both are unset except during a rotation.
+
+**Read the direction before the table, because it is the mirror of the provider one below and that is
+the way to get this wrong.** A provider key is one this gateway **sends**, so that list is "what to
+try". This is one Supabase **signs** with and this gateway only **verifies**, so this list is "what to
+accept" — and the overlap has to straddle the moment *Supabase's* value changes, which is not a deploy
+of this gateway at all. The slot therefore holds the **incoming** secret at step 1 and the **retiring**
+one at step 3. It is not "the old secret".
+
+| step | where | environment here | accepted here |
+|---|---|---|---|
+| 1 | this gateway | `SUPABASE_JWT_SECRET=old`, `SUPABASE_JWT_SECRET_2=new` + its deadline | old, new |
+| 2 | **Supabase dashboard** | unchanged — no deploy | old, new |
+| 3 | this gateway | `SUPABASE_JWT_SECRET=new`, `SUPABASE_JWT_SECRET_2=old` + its deadline | new, old |
+| 4 | this gateway | `SUPABASE_JWT_SECRET=new` | new |
+
+Step 2 is the rotation itself and step 1 must be deployed and serving before it, or tokens signed with
+the new secret arrive at a gateway that has never heard of it. Step 3 is what keeps the tokens minted
+*before* step 2 working until they expire on their own; step 4 is cleanup, and the deadline means it
+is not load-bearing. `test/config.test.ts` walks the three gateway deploys and asserts a usable secret
+at every one.
+
+**The overlap has a maximum, and something checks it.** The founders decided on 2026-08-30 that a
+retired secret gets a stated maximum overlap, on the ground that "left in the environment and
+forgotten" is indistinguishable from never having rotated at all — and that a number nothing checks is
+better than nothing and worse than a check. So:
+
+- `SUPABASE_JWT_SECRET_2` **requires** a deadline. Startup refuses the slot without one.
+- The deadline may be at most `MAX_JWT_SECRET_OVERLAP_DAYS` (**7**) away. Startup refuses one further
+  out, naming the maximum. Seven because the overlap only has to outlive the longest-lived token
+  signed with the retiring secret — Supabase's default access-token lifetime is an hour, plus the
+  gate's skew tolerance — so the functional need is hours and the rest is slack for three deploys done
+  by people.
+- **The end is read on every request, not once at startup.** Past its instant the slot stops being
+  accepted with no deploy and nobody remembering, which is what makes the number a check rather than a
+  note. A deadline read at boot would end the overlap on the next restart, which on a gateway that
+  does not restart is no ending at all.
+- A deadline **already past is not a startup failure**. It means the overlap is over. Refusing to boot
+  on leftover bookkeeping would turn it into every user being signed out — the exact failure this slot
+  exists to prevent — and would buy nothing, because a secret past its instant authorises nothing here.
+
+**What that does not prevent, said rather than implied:** the bound is on the *remaining* overlap at
+each startup, because this gateway does not know when the rotation began. An operator redeploying
+every week with a fresh deadline extends the overlap indefinitely and nothing here sees it. What it
+catches is the realistic mistake — a deadline typed months out, or with the wrong year — at the moment
+somebody typed it.
+
+**There is no `_3`.** The provider list below stops at the first gap in silence, and a skipped provider
+key costs a credential to try. A skipped *verifying* secret means every token signed with it is
+refused, which is the sign-out this whole slot exists to prevent, reached through the fix for it and
+reached silently. So `SUPABASE_JWT_SECRET_1`, `_3` and anything else numbered are a startup refusal
+naming the variable. One slot is what a rotation needs; a second would only ever mean two rotations
+running at once.
+
+**`npm run check:secrets` carries `SUPABASE_JWT_SECRET_2`** — the bare name could not catch it, since
+after `SUPABASE_JWT_SECRET` the pattern wants `=` or `:` and finds `_`. The deadline beside it is a
+date and is deliberately **not** on that list; the selftest has an arm in each direction.
 
 ### Rotating a provider credential with no downtime
 
@@ -1085,7 +1154,8 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 
 **It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
-`docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
+`docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_SECRET_2`,
+`SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
 `SUPABASE_ANON_KEY`, `DATABASE_URL`, `RATE_LIMIT_SALT` and — added at the extension point
 SONNY-306 left, by SONNY-130 then SONNY-131 — `OPENAI_API_KEY`, `TAVILY_API_KEY` and
 `VISION_API_KEY`, the three credentials the five model routes need, and — by SONNY-135 —

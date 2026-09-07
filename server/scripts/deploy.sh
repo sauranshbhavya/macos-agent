@@ -165,6 +165,13 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # while looking healthy.
 PASSTHROUGH=(
   SUPABASE_JWT_SECRET
+  # SONNY-238's two, forwarded on this list's own rule -- what `src/config.ts` reads, not what is
+  # sensitive. Both are unset except while a rotation is in flight, and `add_env` below skips an
+  # unset name, so an ordinary container is unchanged. Without them here a rotation could not be
+  # exercised against `deploy.sh local` at all, which is the one place the three deploys can be
+  # walked before a host exists.
+  SUPABASE_JWT_SECRET_2
+  SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL
   SUPABASE_JWT_ISSUER
   SUPABASE_JWT_AUDIENCE
   SUPABASE_ANON_KEY
@@ -400,8 +407,14 @@ collect_passthrough() {
 # So the two branches now mean what they say: a 404 here is a container that was given none of the
 # three *trigger* names, and anything else is a container serving sign-in. **The 404 branch used to
 # say "the three SUPABASE_ names" while the `not set here` line above it listed four** (PR #137
-# review, N5): `PASSTHROUGH` carries four `SUPABASE_`-prefixed names and only three of them are the
-# switch, `SUPABASE_JWT_AUDIENCE` being defaulted and therefore no signal of intent. A founder
+# review, N5): `PASSTHROUGH` carried four `SUPABASE_`-prefixed names and only three of them were the
+# switch, `SUPABASE_JWT_AUDIENCE` being defaulted and therefore no signal of intent. **It carries six
+# since SONNY-238** (`grep -cE '^  SUPABASE_' scripts/deploy.sh` -> 6 at `FILLSHA`, this file's own
+# array being the only place that prefix sits at that indent), and the switch is still the same
+# three: `SUPABASE_JWT_SECRET_2` and its deadline are set only while a rotation is in flight, so a
+# deployment that has never rotated has neither and a deployment that intends sign-in may still have
+# neither. Reading the count as the switch is the mistake N5 found, and it gets easier to make as the
+# list grows. A founder
 # reading the two lines together had to derive that, so the branch now names the three. A container given SOME of
 # them never reaches this probe at all -- it exits 78 at startup and `verify` fails first.
 #

@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { z } from "zod";
-import type { SupabaseJwtPolicy } from "./auth/token.js";
+import type { AcceptedJwtSecret, SupabaseJwtPolicy } from "./auth/token.js";
 import { entitlementSigningKeyFrom, type EntitlementSigningKey } from "./entitlement/claim.js";
 import {
   ZERO_VERSION,
@@ -223,6 +223,57 @@ const schema = z.object({
    * `requireSupabaseJwtPolicy` is what refuses.
    */
   SUPABASE_JWT_SECRET: nonEmpty.optional(),
+  /**
+   * The **one** overlap slot, so that rotating the secret above does not sign every user out
+   * (SONNY-238).
+   *
+   * A Supabase access token is verified locally against `SUPABASE_JWT_SECRET`, so replacing that
+   * value invalidates every token signed with the old one at the instant the new one deploys. With
+   * this slot the rotation is three independent deploys, each valid on its own, the way a provider
+   * credential's is — `server/README.md`'s "Rotating the Supabase JWT secret with no sign-out" walks
+   * them.
+   *
+   * **The direction is the mirror of a provider credential's.** A provider key is one this gateway
+   * *sends*, so that list is "what to try". This is one Supabase *signs* with and this gateway only
+   * verifies, so this list is "what to accept" and the overlap has to straddle the moment Supabase's
+   * own value changes: this slot holds the **incoming** secret in one deploy and the **retiring** one
+   * in the next. A runbook written as "the retired secret" gets that backwards.
+   *
+   * **One slot and not an ordered list without end**, which is where this deliberately departs from
+   * `providerCredentials` below. That function stops at the first gap, and a skipped gap costs a
+   * provider key to try — harmless. A skipped *verifying* secret means every token signed with it is
+   * refused, which is the sign-out this variable exists to prevent, arriving through its own fix. So
+   * there is exactly one slot, and `SUPABASE_JWT_SECRET_1`, `_3` and anything else numbered is a
+   * startup refusal rather than a silent skip. A rotation needs one overlap slot; a second would only
+   * ever mean two rotations running at once, which is the state nobody should be able to reach by
+   * accident.
+   *
+   * Requires `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` beside it. Held to the same length floor as the
+   * secret above, for the same reason.
+   */
+  SUPABASE_JWT_SECRET_2: nonEmpty.optional(),
+  /**
+   * When the overlap ends — an ISO-8601 instant, after which `SUPABASE_JWT_SECRET_2` is no longer
+   * accepted.
+   *
+   * **Required whenever that slot is set** (founder decision of 2026-08-30, Sauransh with Bhavya: a
+   * retired secret gets a stated maximum overlap). Their own words on the half they left open were
+   * that a number nothing checks is "better than nothing and worse than a check", so the number does
+   * not live in the runbook alone — it lives here and `verifyAccessToken` reads it per request. The
+   * retired secret therefore stops being a forgery key against this gateway at the stated instant,
+   * with no deploy and nobody remembering, which is the realistic failure the ticket names.
+   *
+   * **Refused if it is more than `MAX_JWT_SECRET_OVERLAP_DAYS` away** at startup. That is the stated
+   * maximum, made mechanical. Refused, too, if it names no slot: a deadline with no
+   * `SUPABASE_JWT_SECRET_2` is a half-applied deploy, and the half that is missing is the secret.
+   *
+   * **An instant already past is not a startup failure.** It means the overlap is over, and the slot
+   * is simply not accepted — the ending working rather than a misconfiguration. Refusing to boot on
+   * it would turn a piece of leftover bookkeeping into every user being signed out, which is the
+   * failure this whole variable exists to avoid and is strictly worse than the leftover: a retired
+   * secret past its instant authorises nothing here.
+   */
+  SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL: nonEmpty.optional(),
   /**
    * The project's auth URL — `https://<project-ref>.supabase.co/auth/v1` — compared exactly against
    * each token's `iss`.
@@ -515,6 +566,8 @@ export interface Config {
   readonly spendCapUnits: number | undefined;
   readonly creditPlans: string | undefined;
   readonly supabaseJwtSecret: string | undefined;
+  readonly supabaseJwtSecret2: string | undefined;
+  readonly supabaseJwtSecret2AcceptedUntil: string | undefined;
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
   readonly openAIBaseUrl: string;
@@ -672,6 +725,54 @@ export function parseTrustedProxies(raw: string): boolean | string[] {
   return entries;
 }
 
+/**
+ * The one overlap slot this gateway reads, and every other numbered spelling of it.
+ *
+ * `SUPABASE_JWT_SECRET` and `SUPABASE_JWT_SECRET_2` are read; `SUPABASE_JWT_SECRET_1`, `_3` and
+ * anything else numbered are read by nothing.
+ */
+const JWT_SECRET_SLOT = /^SUPABASE_JWT_SECRET_(\d+)$/;
+const READ_JWT_SECRET_SLOT = 2;
+
+/**
+ * Refuse a numbered `SUPABASE_JWT_SECRET_<n>` this gateway does not read, rather than ignoring it
+ * (SONNY-238).
+ *
+ * **Why this is a refusal and `providerCredentials` below stops at a gap in silence.** The two look
+ * like the same list and fail in opposite directions. A provider key is one this gateway *sends*, so
+ * a skipped `<PROVIDER>_API_KEY_4` costs a credential to try and the deployment carries on. A
+ * *verifying* secret is one this gateway *accepts*, so a skipped `SUPABASE_JWT_SECRET_3` means every
+ * token signed with it is refused — which is the sign-out this ticket exists to prevent, reached
+ * through the fix for it, and reached silently: nothing in the logs, nothing in `/v1/health`, an
+ * operator who set the variable and watched every user be signed out anyway.
+ *
+ * **In `loadConfig` rather than in `requireSupabaseJwtPolicy`.** Zod validates a fixed set of names
+ * and ignores everything else, so a slot nobody reads is invisible to the schema and only the raw
+ * environment can show it — the same reason `providerCredentials` takes `env`. And it is invalid
+ * configuration whether or not this deployment mounts an authenticated route, unlike the *absence*
+ * of a secret, which is deliberately fine at load and refused at the point of use.
+ */
+function refuseUnreadJwtSecretSlots(env: NodeJS.ProcessEnv): void {
+  const unread = Object.keys(env)
+    .map((name) => [name, JWT_SECRET_SLOT.exec(name)] as const)
+    .filter(([name, match]) => {
+      if (!match) return false;
+      // An empty or whitespace-only value is nobody setting the slot, which is not a misconfiguration.
+      if (!env[name]?.trim()) return false;
+      return Number(match[1]) !== READ_JWT_SECRET_SLOT;
+    })
+    .map(([name]) => name)
+    .sort();
+  if (unread.length === 0) return;
+  throw new ConfigError(
+    `${unread.join(", ")} ${unread.length === 1 ? "is" : "are"} set and nothing reads ` +
+      `${unread.length === 1 ? "it" : "them"}. This gateway accepts SUPABASE_JWT_SECRET and one ` +
+      "overlap slot, SUPABASE_JWT_SECRET_2, and no others — a secret in a slot nothing reads would " +
+      "leave every token signed with it refused, which is the sign-out an overlap exists to " +
+      "prevent. Values are omitted deliberately; see server/.env.example for the expected shape.",
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
@@ -702,6 +803,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // mounted unconditionally and attributes its caller from a verified token. Removing the flag
   // rather than defaulting it off is the point: a flag left in place is a flag someone can set.
 
+  refuseUnreadJwtSecretSlots(env);
+
   return {
     environment: value.SONNY_ENV,
     port: value.PORT,
@@ -718,6 +821,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spendCapUnits: value.SPEND_CAP_UNITS,
     creditPlans: value.CREDIT_PLANS,
     supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
+    supabaseJwtSecret2: value.SUPABASE_JWT_SECRET_2,
+    supabaseJwtSecret2AcceptedUntil: value.SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL,
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
     openAIBaseUrl: value.OPENAI_BASE_URL,
@@ -1006,6 +1111,26 @@ export function requireCreditCatalogue(config: Config): CreditCatalogue {
 export const MIN_JWT_SECRET_LENGTH = 32;
 
 /**
+ * The stated maximum overlap between the retiring JWT secret and its replacement, in days
+ * (SONNY-238).
+ *
+ * **The founders decided on 2026-08-30 that there is a maximum and that it lives beside the rotation
+ * steps rather than in someone's memory**; the number and whether anything checks it were left to
+ * whoever built this, with their own note that a number nothing checks is "better than nothing and
+ * worse than a check". So it is a constant the configuration enforces rather than a sentence in the
+ * runbook, and `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` is what a deploy states against it.
+ *
+ * **Seven, and why that number.** The overlap only has to outlive the longest-lived access token
+ * signed with the retiring secret: Supabase's default access-token lifetime is one hour, and
+ * `auth/clock.ts` grants `EXPIRY_SKEW_TOLERANCE_SECONDS` past `exp` on top of it, so the functional
+ * requirement is hours. Everything above that is slack for the humans doing three deploys, possibly
+ * across a weekend. Seven days is two orders of magnitude of that slack and still short enough that a
+ * retired secret left behind is a forgery key for days rather than forever — which is the failure the
+ * ticket names as the realistic one.
+ */
+export const MAX_JWT_SECRET_OVERLAP_DAYS = 7;
+
+/**
  * The verification policy, or a startup failure naming what is missing.
  *
  * Separate from `loadConfig` for the reason `requireRateLimitSalt` is: a deployment that mounts no
@@ -1014,7 +1139,10 @@ export const MIN_JWT_SECRET_LENGTH = 32;
  * request-time one** — a gateway that boots and then refuses every request looks, from outside,
  * exactly like a gateway whose users have all been signed out.
  */
-export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
+export function requireSupabaseJwtPolicy(
+  config: Config,
+  now: Date = new Date(),
+): SupabaseJwtPolicy {
   const missing = [
     config.supabaseJwtSecret ? undefined : "SUPABASE_JWT_SECRET",
     config.supabaseJwtIssuer ? undefined : "SUPABASE_JWT_ISSUER",
@@ -1029,16 +1157,7 @@ export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
   }
   const secret = config.supabaseJwtSecret!;
   const issuer = config.supabaseJwtIssuer!;
-  if (secret.length < MIN_JWT_SECRET_LENGTH) {
-    // The LENGTH is reported and the value is not. A length is not a secret, and "too short" with no
-    // number is a message that cannot be acted on.
-    throw new ConfigError(
-      `SUPABASE_JWT_SECRET is ${secret.length} characters; at least ${MIN_JWT_SECRET_LENGTH} are ` +
-        "required. Anyone holding this secret can mint a token for any user, so a guessable one is " +
-        "a forgery key rather than a weak password. Supabase's own project secret is longer than " +
-        "this floor, so a value this short is a stand-in rather than the real thing.",
-    );
-  }
+  refuseAShortJwtSecret("SUPABASE_JWT_SECRET", secret);
   // The issuer is not a secret — it is a public URL naming the project — so unlike every other
   // variable here it is reported with its value. A `iss` mismatch is otherwise invisible: every
   // token verifies against the secret and is then refused, which reads as "all my users are signed
@@ -1059,7 +1178,130 @@ export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
       `SUPABASE_JWT_ISSUER must be an http or https URL — got ${JSON.stringify(parsed.protocol)}.`,
     );
   }
-  return { secret, issuer, audience: config.supabaseJwtAudience };
+  return {
+    secrets: [
+      // **Index 0 carries no end, and that is built here rather than configured.** An end on the
+      // current secret would be a date after which this gateway refuses every token, which is the
+      // outage an overlap exists to prevent. Only the overlap slot can carry one.
+      { value: secret, acceptedUntil: undefined },
+      ...overlapSecret(config, now),
+    ],
+    issuer,
+    audience: config.supabaseJwtAudience,
+  };
+}
+
+/**
+ * The overlap slot as the verifier takes it, or nothing when no rotation is in flight (SONNY-238).
+ *
+ * Returns an array so the caller spreads it: a rotation is the exception, and the ordinary shape is
+ * one secret with nothing after it.
+ */
+function overlapSecret(config: Config, now: Date): readonly AcceptedJwtSecret[] {
+  const value = config.supabaseJwtSecret2;
+  const until = config.supabaseJwtSecret2AcceptedUntil;
+
+  // **Both or neither, and each direction is its own message.** A half-applied rotation deploy is the
+  // realistic way one of these arrives alone, and which half is missing decides what an operator does
+  // next — so telling them "one of these two is wrong" would be a message they have to guess at.
+  if (value === undefined && until === undefined) return [];
+  if (value === undefined) {
+    throw new ConfigError(
+      "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL is set and SUPABASE_JWT_SECRET_2 is not, so the " +
+        "deadline names no secret. Either the overlap secret is missing from this deploy or the " +
+        "rotation is finished and the deadline is what is left over; set the secret or remove the " +
+        "deadline. Values are omitted deliberately; see server/.env.example for the expected shape.",
+    );
+  }
+  if (until === undefined) {
+    throw new ConfigError(
+      "SUPABASE_JWT_SECRET_2 is set without SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL. An accepted " +
+        "secret with no end is a second key that can mint a token for any user, for as long as " +
+        "nobody remembers to remove it — which is indistinguishable from never having rotated at " +
+        `all (founder decision of 2026-08-30). Give it an instant at most ${MAX_JWT_SECRET_OVERLAP_DAYS} ` +
+        "days away, ISO-8601, e.g. 2026-09-14T00:00:00Z.",
+    );
+  }
+
+  refuseAShortJwtSecret("SUPABASE_JWT_SECRET_2", value);
+
+  // **The same value in both slots is refused.** It reads as a live overlap in every log and every
+  // configuration dump, and it is not one: retiring "the previous secret" then retires the current
+  // one too, and the sign-out this variable exists to prevent happens on the deploy that was meant
+  // to be safe. A no-op that looks like a working mechanism is worse than an absent one.
+  if (value === secretOf(config)) {
+    throw new ConfigError(
+      "SUPABASE_JWT_SECRET_2 holds the same value as SUPABASE_JWT_SECRET, which is not an overlap: " +
+        "there is one secret, and retiring the second slot retires the only one in use. A rotation " +
+        "puts the incoming secret in one slot and the outgoing one in the other.",
+    );
+  }
+
+  // A bare `new Date(s)` accepts a great deal that is not an instant — `new Date("2026")` is a year,
+  // and anything unparseable is an Invalid Date whose every comparison is false, so an unchecked one
+  // would read as "not yet reached" forever. Both are refused here, with the value, because a date is
+  // not a secret and a deadline nobody can see is a deadline nobody can fix.
+  const acceptedUntil = new Date(until);
+  if (Number.isNaN(acceptedUntil.getTime())) {
+    throw new ConfigError(
+      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL must be an ISO-8601 instant, e.g. 2026-09-14T00:00:00Z ` +
+        `— got ${JSON.stringify(until)}, which is not a date. It decides when the previous secret ` +
+        "stops being accepted, so an unreadable one would leave the overlap with no end.",
+    );
+  }
+
+  // **The stated maximum, made mechanical** (founder decision of 2026-08-30; the founders left the
+  // number and whether anything checks it to whoever built this). The overlap only has to outlive the
+  // longest-lived access token signed with the retiring secret — Supabase's default access-token
+  // lifetime is an hour, and `auth/clock.ts` grants `EXPIRY_SKEW_TOLERANCE_SECONDS` past that — so
+  // the functional need is measured in hours. Seven days is enough slack for three deploys done by
+  // people across a weekend and short enough that a forgotten forgery key is measured in days.
+  //
+  // **What this does not prevent, said rather than implied:** it bounds the *remaining* overlap at
+  // each startup, because this gateway does not know when the rotation began. An operator
+  // redeploying every week with a fresh deadline extends the overlap indefinitely, and nothing here
+  // sees that. What it does catch is the realistic mistake — a deadline typed months out, or a year
+  // wrong — and it catches it at the moment somebody typed it.
+  const maximum = new Date(now.getTime() + MAX_JWT_SECRET_OVERLAP_DAYS * 24 * 60 * 60 * 1000);
+  if (acceptedUntil.getTime() > maximum.getTime()) {
+    throw new ConfigError(
+      `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL is ${acceptedUntil.toISOString()}, more than ` +
+        `${MAX_JWT_SECRET_OVERLAP_DAYS} days from now. That is the maximum overlap: the previous ` +
+        "secret can mint a token for any user for as long as it is accepted, and a rotation needs " +
+        "hours rather than months — one access-token lifetime plus the gate's skew tolerance. " +
+        `The latest instant this deploy accepts is ${maximum.toISOString()}.`,
+    );
+  }
+
+  // **An instant already past is not refused.** It means the overlap is over, and `verifyAccessToken`
+  // stops accepting the secret on its own — which is the ending working. Refusing to boot on it would
+  // turn leftover bookkeeping into every user being signed out, the exact failure this slot exists to
+  // avoid, and it would buy nothing: a secret past its instant authorises nothing here.
+  return [{ value, acceptedUntil }];
+}
+
+/** The current secret, read the one way `requireSupabaseJwtPolicy` has already proved is present. */
+function secretOf(config: Config): string {
+  return config.supabaseJwtSecret!;
+}
+
+/**
+ * The length floor, applied identically to every accepted secret.
+ *
+ * **One function rather than a check per slot** (SONNY-238). The ticket's own words are that a
+ * rotation which quietly relaxed a check for the second key would be worse than the sign-out it
+ * avoids, and a floor written twice is a floor that can come apart. The LENGTH is reported and the
+ * value is not: a length is not a secret, and "too short" with no number is a message that cannot be
+ * acted on.
+ */
+function refuseAShortJwtSecret(name: string, secret: string): void {
+  if (secret.length >= MIN_JWT_SECRET_LENGTH) return;
+  throw new ConfigError(
+    `${name} is ${secret.length} characters; at least ${MIN_JWT_SECRET_LENGTH} are ` +
+      "required. Anyone holding this secret can mint a token for any user, so a guessable one is " +
+      "a forgery key rather than a weak password. Supabase's own project secret is longer than " +
+      "this floor, so a value this short is a stand-in rather than the real thing.",
+  );
 }
 
 /**

@@ -114,7 +114,16 @@ PATTERNS_CI=(
   # and cancel button -- without touching this gateway. Opaque and vendor-prefixless like the two
   # above, so again only the name can catch it. `BILLING_API_BASE_URL` beside it is deliberately NOT
   # here, for the reason the checkout link is not: an API origin is a hostname, not a credential.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|BILLING_PROVIDER_ACCESS_TOKEN|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  # `SUPABASE_JWT_SECRET(_2)?` is SONNY-238's widening, and the suffix is written out rather than
+  # left to a general one for a measured reason. That ticket gives the JWT secret a single overlap
+  # slot -- `SUPABASE_JWT_SECRET_2` -- so a rotation is three deploys instead of every user being
+  # signed out; the slot holds a real project secret and the bare name anchored here could not catch
+  # it, because after `SUPABASE_JWT_SECRET` the pattern wants `[=:]` and finds `_`. **A blanket
+  # `_[0-9]+` or a trailing `.*` would break the `ENTITLEMENT_SIGNING_KEY_ID` case beside it**, which
+  # is deliberately not a secret and has a selftest arm asserting it passes -- and it would sweep in
+  # `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, a date, which is the one thing an operator needs to be
+  # able to write down. Both directions are in the selftest.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET(_2)?|ENTITLEMENT_SIGNING_KEY|BILLING_WEBHOOK_SECRET|BILLING_PROVIDER_ACCESS_TOKEN|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the
