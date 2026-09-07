@@ -7513,9 +7513,13 @@ final class AgentViewModel: ObservableObject {
     /// `PendingServerDeletionStore` each hold the key to what they remove — §5.1's `task_id`, which
     /// is `CompletedTaskRecord.id`. This one holds nothing of the sort. A `ResumableTask` stores ten
     /// fields and no backend key; the wire id is `currentTaskID`, which `beginNewTaskIdentity()`
-    /// re-mints at every dispatch while this record deliberately keeps *its own* id across
-    /// continuations, so one record spans as many wire ids as the task had attempts and there is no
-    /// single one it could carry.
+    /// mints afresh on **every continuation of one of these records** — `continueResumableTask`
+    /// dispatches through `performStart` with `preserveUsageForNextStart` unset — while the record
+    /// deliberately keeps *its own* id across those continuations. So one record spans as many wire
+    /// ids as the task had attempts, and there is no single one it could carry. (Not *every*
+    /// dispatch, which is what this said until PR #214's R1: `performStart` skips the re-mint when
+    /// that flag is set, which is the voice-command and clarification-answer path and is never a
+    /// continuation of an unfinished record.)
     ///
     /// The two cases, because they fail differently and neither ends in a queue entry. A run that
     /// **failed** wrote a history row under its wire id and pointed it here through

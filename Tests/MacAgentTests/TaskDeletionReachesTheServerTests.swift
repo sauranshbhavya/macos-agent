@@ -494,8 +494,9 @@ struct EveryDeleteReachesTheServerTests {
     /// (SONNY-426, from review-207's residual R7).
     ///
     /// The three doors SONNY-404 routed each hold §5.1's `task_id`. A `ResumableTask` holds no
-    /// backend key at all, and the run's wire id — `currentTaskID`, re-minted at every dispatch —
-    /// lives on the task-history row, which this press leaves standing. So the server's copy stays
+    /// backend key at all, and the run's wire id — `currentTaskID`, minted afresh on every
+    /// continuation of one of these records — lives on the task-history row, which this press
+    /// leaves standing. So the server's copy stays
     /// reachable through the doors that do name it, and queueing here would delete the server's copy
     /// of a task the user can still open on the Tasks page.
     ///
@@ -507,11 +508,20 @@ struct EveryDeleteReachesTheServerTests {
         let fixture = try TaskDeletionFixture()
         defer { fixture.tearDown() }
         let unfinished = try fixture.writeResumableTask(id: "unfinished-a")
-        // **Linked, because the unlinked case cannot refuse anything.** A run that failed leaves a
-        // history row pointing at its unfinished record, and that link is the only route by which
-        // this press could name server content at all. With no link a queueing implementation finds
-        // nothing to queue and this test passes over it.
-        _ = try fixture.writeTaskRecord(id: "task-a", resumableTaskID: unfinished.id)
+        // **Linked, and linked on a failed row, because neither half alone refuses anything**
+        // (PR #214's F2). The link is the only route by which this press could name server content
+        // at all, so without it a queueing implementation finds nothing to queue and this test
+        // passes over it. And `.failed` is the only outcome production ever attaches a link to —
+        // `settleResumableTask` clears the handle the row reads for every other terminal — so a
+        // `.completed` row with a link is a shape no Mac produces, and the implementation written
+        // the way this codebase's own join works walks past a fixture built that way. Both mutants
+        // survived here before this line said `.failed`.
+        _ = try fixture.writeTaskRecord(id: "task-a", outcomeStatus: .failed, resumableTaskID: unfinished.id)
+        // **The join is asserted rather than left to the argument above.** Deleting that argument
+        // changed no assertion in this test, so the recurrence its own comment warns about had
+        // nothing standing against it but the comment.
+        #expect(fixture.viewModel.taskHistoryRecords.first { $0.id == "task-a" }?.resumableTaskID == unfinished.id)
+        #expect(fixture.viewModel.taskHistoryRecords.first { $0.id == "task-a" }?.outcomeStatus == .failed)
 
         fixture.viewModel.deleteResumableTask(unfinished)
 
@@ -1157,8 +1167,16 @@ private struct TaskDeletionFixture {
     }
 
     /// Writes one finished task and hands back the record as the Tasks page would.
+    ///
+    /// **`outcomeStatus` is a parameter because the link below is only legal on one of its values**
+    /// (PR #214's F2). Production writes `resumableTaskID` from `activeResumableTask?.id` *after*
+    /// `settleResumableTask` has cleared that handle for `.completed`, `.canceled`, `.prepared` and
+    /// `.dryRun` — so a `.completed` row carrying a link is a shape this Mac never produces, and a
+    /// queueing implementation keyed on the rows that really carry one walks straight past a fixture
+    /// built that way. It defaults to `.completed` so no existing call site moves.
     func writeTaskRecord(
         id: String,
+        outcomeStatus: PriorTaskOutcomeStatus = .completed,
         visionSessionID: String? = nil,
         resumableTaskID: String? = nil
     ) throws -> CompletedTaskRecord {
@@ -1183,7 +1201,7 @@ private struct TaskDeletionFixture {
             command: "do the thing",
             startedAt: Date(timeIntervalSince1970: 1_772_000_000 + offset),
             completedAt: Date(timeIntervalSince1970: 1_772_000_060 + offset),
-            outcomeStatus: .completed,
+            outcomeStatus: outcomeStatus,
             visionSessionID: visionSessionID,
             // **The link a failed run leaves**, which is the join that makes the rejected
             // implementation of SONNY-426 look reachable: a per-entry delete could walk it back to
