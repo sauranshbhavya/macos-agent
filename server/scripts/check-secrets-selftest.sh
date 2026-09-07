@@ -103,6 +103,18 @@ check "the JWT secret's overlap slot is refused"  1 "SUPABASE_JWT_SECRET_2=${jwt
 # by counting.
 check "the overlap slot's YAML spelling is refused" 1 "  supabase_jwt_secret_2: \"${jwt_secret_2}\""
 check "the overlap deadline beside it is not a secret" 0 "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL=2026-09-14T00:00:00Z"
+# **The arm above passes under a WIDER pattern too, and this one does not** -- found by mutating the
+# scanner and running this file against it. Replacing `(_2)?` with `.*` leaves all the other arms
+# green, because an extended-format instant carries colons and its longest run of value-class
+# characters is `2026-09-14T00`, thirteen, under the sixteen the pattern needs. The BASIC ISO format
+# has no separators at all: `20260914T000000Z` is sixteen, so `.*` reaches past the name and reports
+# a date as a credential. That is the whole difference between the shipped pattern and the
+# over-general one, and without this line the selftest could not tell them apart -- exactly the
+# shared-marker shape `CLAUDE.md` warns about, arriving as a fixture that could not reach the
+# property. (Node reads this spelling as an Invalid Date, so `requireSupabaseJwtPolicy` refuses it
+# separately. That is a different mechanism and not this one's job: a scanner that flags a date
+# teaches people to baseline the scanner.)
+check "a basic-format deadline is not a secret either" 0 "SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL=20260914T000000Z"
 # SONNY-211: the webhook endpoint secret. The second name on that list whose leak is a WRITE --
 # whoever holds it can sign a `subscription.active` delivery for any account, against a route that
 # has to be reachable by anyone on the internet. An opaque provider-issued string with no vendor

@@ -190,14 +190,40 @@ Files changed — **12 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs
 
 **`server/test/support/config.ts` is the one file that looked owed and is not**, stated because the opening comment's file list did not name it and a reader checking the list against the diff will wonder: `testConfig()` spreads `TEST_SUPABASE_CONFIG`, so the two new `Config` fields arrive there by adding them to `tokens.ts`. The typecheck named it before that was done, which is the compiler doing what `CLAUDE.md`'s store-injection note describes on the Swift side. Nothing else was added to or dropped from that list.
 
-Tests (`cd server`), all at `25148d59` — **the head the figures were measured at, and every commit above it touches only this file** (`git diff --name-only 25148d59 HEAD` lists `docs/sonny-v1-implementation-changelog.md` and nothing else), which is why the operand is that commit rather than a head that moves each time this paragraph is edited:
+Tests (`cd server`), all at `25148d59` unless a line says otherwise — **the head the figures were measured at, and every commit above it touches only this file or `server/scripts/check-secrets-selftest.sh`** (the selftest gained one arm after the battery; `git diff --name-only 25148d59 HEAD` lists those two and nothing else). **The vitest figures cross that edit by the carry rule rather than by assertion**: no vitest test invokes the shell selftest, and the battery's ten mutants each fail none of step 5's four conditions against it — their targets are `server/src/auth/token.ts` and `server/src/config.ts`, their killers live in `test/token.test.ts`, `test/config.test.ts` and `test/gate.test.ts`, none scans a population that file belongs to, and none drives it as a helper or fixture. The selftest's own figure is re-measured rather than carried, because that is the file that moved (`git diff --name-only 25148d59 HEAD` lists `docs/sonny-v1-implementation-changelog.md` and nothing else), which is why the operand is that commit rather than a head that moves each time this paragraph is edited:
 - `npm run build` → exit 0
 - `npm run typecheck` → exit 0
 - `npm test` → exit 0, **862 passed / 445 skipped (1307)**, against the base's 843/445 (1288)
 - `npm run test:db` against `sonny-gw-db-lane-238` on a Docker-assigned port → exit 0, **1307 passed (1307)**, against the base's 1288
 - `npm run check:secrets` → exit 0, clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)
-- `./scripts/check-secrets-selftest.sh` → exit 0, **56 passed, 0 failed**, against the base's 53
+- `./scripts/check-secrets-selftest.sh` → exit 0, **57 passed, 0 failed**, against the base's 53
 - `scripts/changelog-order` → exit 0, **189 entries**, against the base's 188
+- `scripts/no-attribution all` → exit 0 — 0 of 1804 commit messages, 0 of 632 tracked files, 0 of 216 pull request bodies
+
+**Mutation battery — 10 mutants, 10 killed, 0 survived, 0 unattributed at `2a4c8a3a`**, baseline `PASSED  1307 passed (1307)`. Suite command: `cd server && DATABASE_URL=… npm run test:db`. One per property this ticket claims, not one per changed file:
+
+| | mutant | killers |
+|---|---|---|
+| R1 | the overlap is never tried — only the current secret verifies | 3 |
+| R2 | the overlap never ends — a retired secret is accepted forever | 2 |
+| R3 | the ending is off by one — the stated instant is still accepted | 1 |
+| R4 | the ending reaches the current secret too | 3 |
+| R5 | an unmatched signature is accepted rather than refused | 13 |
+| R6 | the overlap slot needs no deadline — an unbounded second key | 1 |
+| R7 | the stated maximum overlap is not enforced | 1 |
+| R8 | an unreadable deadline reads as never reached | 1 |
+| R9 | the length floor is relaxed for the second secret | 1 |
+| R10 | a numbered slot nothing reads is ignored rather than refused | 1 |
+
+R2's and R3's killer is `stops accepting the overlap secret at its instant, with no deploy and nobody remembering`, R6's through R10's are the config test named for each refusal, and R5's thirteen are the pre-existing signature battery joined by four of this branch's — which is the check that the loop did not quietly widen what a signature may be.
+
+**The two scanner mutants are measured with the selftest rather than through the battery, and the reason is the instrument.** This battery's suite command is vitest, and vitest never invokes the shell scanner — measured rather than assumed: `git grep -n 'check-secrets' -- server/test server/src` answers three lines at `25148d59`, all of them prose in comments, none executing it. So both mutants would have survived the battery while being fully covered, and folding the selftest into the suite command reports a scanner mutant as a red run naming no test, which is weaker evidence than the selftest's own arm-by-arm report. Each was applied to a copy of the scanner in a scratch directory with nothing else changed, and the shipped selftest run against it:
+
+| | scanner mutant | result |
+|---|---|---|
+| — | shipped | **57 passed, 0 failed**, exit 0 |
+| R11 | the suffix removed, so the scanner is blind to the slot again | **55 passed, 2 failed**, exit 1 — both refusal arms |
+| R12 | the suffix generalised to `.*` | **56 passed, 1 failed**, exit 1 — the basic-format deadline arm |
 - No Swift suite and no `scripts/warnings` are owed, measured rather than asserted: `git diff --name-only 061a2c36 HEAD -- Sources Tests` prints nothing, exit 0. `Package.swift`'s five targets all carry a `path:` naming `Sources/…` or `Tests/…`, so nothing under `server/` reaches a Swift target.
 
 Behavior added:
@@ -223,7 +249,7 @@ Architectural decisions / pitfalls discovered:
 - **What the maximum does not prevent, stated rather than implied.** It bounds the *remaining* overlap at each startup, because this gateway cannot know when the rotation began. An operator redeploying every week with a fresh seven-day deadline extends the overlap indefinitely and nothing here sees it. What the bound does catch is the realistic mistake — a deadline typed months out, or with the wrong year — at the moment somebody typed it.
 - **Seven days, and where the number comes from.** The overlap only has to outlive the longest-lived access token signed with the retiring secret: Supabase's default access-token lifetime is one hour and `auth/clock.ts` grants `EXPIRY_SKEW_TOLERANCE_SECONDS` past `exp` on top, so the functional requirement is hours. The rest is slack for three deploys done by people, possibly across a weekend.
 - **The scanner's suffix is written out rather than generalised, and the reason is a measurement.** `SUPABASE_JWT_SECRET(_2)?` rather than `_[0-9]+` or a trailing `.*`: the looser forms sweep in `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL`, which is a date an operator must be able to write down, and they break the `ENTITLEMENT_SIGNING_KEY_ID` arm sitting three lines above — a name deliberately not a secret with an arm asserting it passes. Both directions are in the selftest.
-- **The selftest's new arms were proved to fire rather than assumed to.** Running the selftest against a copy of the scanner with the suffix removed and nothing else changed: **54 passed, 2 failed, exit 1** — the two refusal arms failing and the deadline arm still passing — against **56 passed, 0 failed, exit 0** with the suffix in place. That comparison is what says the widening rather than the arms is doing the work; a new arm that passes both ways is a test of nothing.
+- **The selftest's new arms were proved to fire rather than assumed to, and the first attempt at that proof found a hole in them.** Removing the suffix and running the selftest against the copy killed the two refusal arms, as intended. **Generalising it to `.*` killed nothing: 56 passed, 0 failed, exit 0** — a mutant this branch's own arms could not see, in the file whose whole subject is that the widening must not take the deadline with it. The cause is arithmetic rather than judgment. An *extended*-format instant carries colons, and colons are outside the value class, so its longest run is `2026-09-14T00` — thirteen characters, under the sixteen the pattern needs — and `.*` therefore reaches past the name and finds nothing to match. The **basic** ISO format has no separators: `20260914T000000Z` is exactly sixteen, so `.*` reports a date as a credential and `(_2)?` does not. One arm carrying that spelling is the whole difference between the shipped pattern and the over-general one, and it was added rather than the survivor being recorded — `WORKFLOW.md`'s fix-in-branch rule, and the reason a battery is run at all. Same family as `CLAUDE.md`'s held-sample rule: the arms were specific, non-vacuous and on the right line, and the fixture could not reach the property.
 - **A test name that collides with three others makes a failure line unreadable.** The obvious name for the YAML-spelling arm was `its lowercase YAML spelling is refused`, which this file already uses three times for three different secrets; the control run above printed two failures under names indistinguishable from the passing ones. Renamed to name its own secret. Same family as `CLAUDE.md`'s shared-marker rule, arriving in a shell script's report rather than in a scan.
 - **Migration 0022's `revoked_at` comment was made true rather than left as a below-the-bar residual.** It said "when this gateway was asked", which PR #215's fix round falsified by refreshing the column on conflict, and review-215 recorded the condition on this ticket: a source-comment edit does not move the migration's content hash while adding SQL does, and 0022 is applied to no environment. That condition still holds — `./scripts/deploy.sh staging` and `production` are stubs that exit 3, no host exists, and the first real remote deploy is owed on SONNY-126 — so both were done. The comment now records why "the most recent ask" is the only meaning available: the prune destroys an expired row, so a re-revoked session may have no first ask left to report.
 
