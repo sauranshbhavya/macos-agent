@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import { creditBalance } from "../src/credit/balance.js";
@@ -22,6 +22,7 @@ import type {
   TopUpOrder,
 } from "../src/billing/provider.js";
 import { polarProvider, readPolarDelivery, TOPUP_CHARGE_TIMEOUT_MS } from "../src/billing/polar.js";
+import { DEADLINE_MS } from "../src/model/limits.js";
 import type { ClaimOutcome, KeyStore, StoredResponse } from "../src/idempotency/store.js";
 import { testConfig } from "./support/config.js";
 import { fakeEntitlementStore } from "./support/entitlement.js";
@@ -800,6 +801,8 @@ function buildTopUpApp(input: {
   readonly plans?: string;
   /** A `KeyStore` that really models §9.2, for the two tests that are about §9.2 (PR #196's F5). */
   readonly keys?: KeyStore;
+  /** §12's total deadline for the charge, shortened so a deadline test is not a 30-second test. */
+  readonly totalDeadlineMs?: number;
 }) {
   const provider = input.provider ?? scriptedProvider(charged("order-1"));
   return buildApp(
@@ -831,6 +834,7 @@ function buildTopUpApp(input: {
       // The fake provider reaches the route through the same door the real one does; `app.ts` builds
       // the provider from config, so this override is the credit route's own.
       topUpProvider: provider,
+      topUpTotalDeadlineMs: input.totalDeadlineMs,
     },
   );
 }
@@ -1260,14 +1264,36 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-function polar(call: typeof fetch): BillingProvider {
+function polar(
+  call: typeof fetch,
+  deadlineFactory?: (milliseconds: number) => AbortSignal,
+): BillingProvider {
   return polarProvider({
     webhookSecret: "secret",
     checkoutUrl: "https://checkout.invalid/x",
     accessToken: "polar-access-token",
     apiBaseUrl: "https://api.invalid",
     fetchImplementation: call,
+    deadlineFactory,
   });
+}
+
+/**
+ * A deadline factory that records every budget the adapter asks for and mints a real signal anyway.
+ *
+ * **What this exists for is the difference between the budget the adapter is supposed to spend and
+ * the one it does** (PR #220's F1). Every assertion about `TOPUP_CHARGE_TIMEOUT_MS` is about a
+ * constant, and a mutant tripling the number at its use site left all of them green.
+ */
+function recordingDeadlines() {
+  const spent: number[] = [];
+  return {
+    spent,
+    factory: (milliseconds: number) => {
+      spent.push(milliseconds);
+      return AbortSignal.timeout(milliseconds);
+    },
+  };
 }
 
 const CHARGE: TopUpChargeRequest = { customerId: CUSTOMER, productId: "prod_topup" };
@@ -1490,5 +1516,300 @@ describe("the provider adapter's off-session charge", () => {
     const event = (reading as { event: { accountId?: string; customerId?: string } }).event;
     expect(event.accountId).toBe(ACCOUNT);
     expect(event.customerId).toBe("cus_polar_9");
+  });
+});
+
+/**
+ * The route's own deadline, and the charge it must never abandon (SONNY-430).
+ *
+ * **Both halves of this ticket are here, and they are two different bounds.** §12's `upstream` is
+ * enforced at the adapter — the finalize and the read-back it may make share one budget, so a single
+ * top-up spends two twelve-second calls rather than three. §12's `total` is enforced at the route,
+ * and what it answers is `topup.unconfirmed` rather than `provider.timeout`, because at the instant
+ * it elapses a charge may be in flight and `provider.timeout` is the retryable code.
+ *
+ * **What every test below asserts is the state the money is left in, never the status alone.** A
+ * route that answered 502 and dropped the attempt row would pass a status assertion and reproduce PR
+ * #196's F1 exactly — a charge the provider accepted that nothing will ever find.
+ */
+describe("the top-up route keeps one deadline, and never abandons a charge to it", () => {
+  const drawn = { sessions: 0, iterations: 1000, pixels: 0 };
+
+  /** A provider whose finalize never answers — the stall the ticket asks for. */
+  function stallingProvider(): BillingProvider & {
+    readonly charges: TopUpChargeRequest[];
+    readonly finalized: string[];
+  } {
+    const charges: TopUpChargeRequest[] = [];
+    const finalized: string[] = [];
+    return {
+      charges,
+      finalized,
+      name: "test-provider",
+      webhookKey: Buffer.alloc(0),
+      read: () => ({ kind: "ignored", eventId: "x", eventType: "y" }),
+      checkoutUrlFor: () => "https://checkout.invalid",
+      portalUrlFor: async () => ({ kind: "noCustomer" }),
+      createTopUpOrder: async (request) => {
+        charges.push(request);
+        return { kind: "created", orderId: "order-stalled" };
+      },
+      // Never resolves. The route's total deadline is the only thing that can end this request.
+      finalizeTopUpOrder: async (orderId) => {
+        finalized.push(orderId);
+        return await new Promise<TopUpCharge>(() => {});
+      },
+    };
+  }
+
+  it("answers inside its promised time when the provider stalls, and answers unconfirmed", async () => {
+    const attempts = recordingAttempts();
+    const provider = stallingProvider();
+    const app = buildTopUpApp({
+      store: fakeCreditStore({
+        planKey: "test-plan-a",
+        draw: drawn,
+        autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
+      }),
+      provider,
+      attempts,
+      totalDeadlineMs: 120,
+    });
+
+    const started = Date.now();
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/account/credits/top-up",
+      headers: AUTH,
+    });
+    const elapsed = Date.now() - started;
+
+    // **Inside the promised time**: the bound is what ends this, not the test runner giving up.
+    // Asserted as an upper bound with room for scheduling rather than as a window, because a machine
+    // under a parallel suite is slow in one direction only.
+    expect(elapsed).toBeLessThan(5_000);
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error.code).toBe("topup.unconfirmed");
+    // **Not retryable, and this is the assertion the money rests on.** `provider.timeout` would be
+    // marked retryable, and a client that retried to recover from a charge it could not see is what
+    // bought two packs in PR #196's F1.
+    expect(response.json().error.retryable).toBe(false);
+    // The stall really was in the charge rather than somewhere earlier.
+    expect(provider.finalized).toEqual(["order-stalled"]);
+  });
+
+  it("leaves the stalled charge resolvable, with its order id on the row, rather than abandoning it", async () => {
+    const attempts = recordingAttempts();
+    const app = buildTopUpApp({
+      store: fakeCreditStore({
+        planKey: "test-plan-a",
+        draw: drawn,
+        autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
+      }),
+      provider: stallingProvider(),
+      attempts,
+      totalDeadlineMs: 120,
+    });
+
+    await app.inject({ method: "POST", url: "/v1/account/credits/top-up", headers: AUTH });
+
+    // **The order id was written before anything could charge**, which is what the next attempt's
+    // outstanding query finds. Without this the deadline would have produced exactly the state F1
+    // closed: money possibly taken, and no row naming the object that took it.
+    expect(attempts.recorded).toEqual([{ topUpId: "topup-1", providerOrderId: "order-stalled" }]);
+    // **And the row was not closed.** A settle here would end the row on a guess about a charge
+    // still in flight; leaving it open is what keeps it resolvable.
+    expect(attempts.settlements).toEqual([]);
+    // **A slot was claimed, which is what this asserts** — the attempt happened and is bounded by
+    // `maxPerPeriod` like any other. The no-grant property is the `settlements` assertion above, not
+    // this one; the comment here used to describe that assertion while sitting over this one
+    // (PR #220's O4).
+    expect(attempts.claims).toHaveLength(1);
+  });
+
+  it("resolves that same order on the account's next attempt instead of buying a second pack", async () => {
+    // The recovery the deadline hands off to, end to end: the row the timed-out attempt left behind
+    // is what the next attempt reads, and it finalizes *that* order rather than creating another.
+    const attempts = recordingAttempts({
+      outstanding: { topUpId: "topup-1", orderId: "order-stalled" },
+    });
+    const provider = scriptedProvider(charged("order-stalled"));
+    const app = buildTopUpApp({
+      store: fakeCreditStore({
+        planKey: "test-plan-a",
+        draw: drawn,
+        autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
+      }),
+      provider,
+      attempts,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/account/credits/top-up",
+      headers: AUTH,
+    });
+
+    expect(response.statusCode).toBe(200);
+    // **No second order and no second slot** — the two ways a recovery turns into a second purchase.
+    expect(provider.charges).toEqual([]);
+    expect(attempts.claims).toEqual([]);
+    expect(provider.finalized).toEqual(["order-stalled"]);
+    expect(attempts.settlements).toHaveLength(1);
+    expect(attempts.settlements[0]?.outcome).toBe("granted");
+    expect(attempts.settlements[0]?.providerOrderId).toBe("order-stalled");
+  });
+
+  it("runs on §12's own total when nothing overrides it, not on some other row's number", async () => {
+    // **PR #220's F2.** Every other test here passes an explicit `totalDeadlineMs`, so the route's
+    // own `?? DEADLINE_MS.topUp.total` was on no test's path and pointing it at the `auth` row's
+    // fifteen seconds passed the whole suite — shipping the deployed route on 15 s against a 24 s
+    // upstream budget, which cuts a healthy card authorisation off mid-charge. This drives the route
+    // with **no override** and reads the bound it actually used, under fake timers so the thirty
+    // seconds cost nothing. It is the route's own `setTimeout` being advanced, not a stub.
+    vi.useFakeTimers();
+    try {
+      const app = buildTopUpApp({
+        store: fakeCreditStore({
+          planKey: "test-plan-a",
+          draw: drawn,
+          autoTopUpOptedInAt: new Date("2026-08-01T00:00:00Z"),
+        }),
+        provider: stallingProvider(),
+        attempts: recordingAttempts(),
+      });
+      let answered = false;
+      const inflight = app
+        .inject({ method: "POST", url: "/v1/account/credits/top-up", headers: AUTH })
+        .then((response) => {
+          answered = true;
+          return response;
+        });
+
+      // Far enough for the handler to reach the stalled charge and arm its timer.
+      await vi.advanceTimersByTimeAsync(0);
+      // **The negative half, and the half that fails under the mutant.** At the `auth` row's total
+      // the route must still be waiting — if it answers here it is running on the wrong row.
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS.auth.total);
+      expect(answered).toBe(false);
+      // A millisecond short of its own total it is still waiting; the control that the timer being
+      // advanced is the one under test rather than some other one.
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS.topUp.total - DEADLINE_MS.auth.total - 1);
+      expect(answered).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const response = await inflight;
+      expect(response.statusCode).toBe(502);
+      expect(response.json().error.code).toBe("topup.unconfirmed");
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ships §12's own number, so the seam the tests shorten is not the deployed bound", async () => {
+    // The seam above takes a default rather than a required argument, so nothing in the tests above
+    // would fail if the shipped route lost its deadline entirely. This is what would.
+    expect(DEADLINE_MS.topUp.total).toBe(30_000);
+    expect(DEADLINE_MS.topUp.upstream).toBe(24_000);
+    // §12's governing rule, on this row: the client's 40 s is longer than the server's total.
+    expect(DEADLINE_MS.topUp.upstream).toBeLessThan(DEADLINE_MS.topUp.total);
+    expect(DEADLINE_MS.topUp.total).toBeLessThan(40_000);
+  });
+
+  it("holds the divisor the adapter's budget is derived through, which is two calls", () => {
+    // **This assertion's direction reversed in PR #220's fix round and its name did not** (that PR's
+    // delta review, N2). It was written when the adapter held its own `12_000` and the row was the
+    // derived half, so it read as two independently-written numbers agreeing. The arrow runs the other
+    // way now — `TOPUP_CHARGE_TIMEOUT_MS` *is* `DEADLINE_MS.topUp.upstream / 2` — so on the shipped
+    // tree this is `upstream === upstream`.
+    //
+    // **That does not make it vacuous, and what it guards is the divisor.** A derivation that stops
+    // halving leaves one call spending the whole row, and this is one of the three tests that fails
+    // when it does — mutant R3 in the branch's battery, killed here and in the two tests that measure
+    // what the adapter actually spends. Kept for that, renamed so the name describes it.
+    expect(DEADLINE_MS.topUp.upstream).toBe(TOPUP_CHARGE_TIMEOUT_MS * 2);
+  });
+
+  it("gives the finalize and its read-back one deadline between them, not one each", async () => {
+    // The adapter half of §12's upstream. The read-back on a 412 is the second half of the finalize,
+    // so it spends what is left of the finalize's budget — three calls at twelve seconds each is the
+    // thirty-six seconds no row in §12 has ever allowed.
+    const seen: (AbortSignal | undefined | null)[] = [];
+    const queue = [
+      json(412, { detail: "not a draft" }),
+      json(200, { id: "order-9", status: "paid", total_amount: 500, currency: "usd" }),
+    ];
+    const call: typeof fetch = async (_input, init) => {
+      seen.push(init?.signal);
+      const next = queue.shift();
+      if (next === undefined) throw new Error("no scripted response left");
+      return next;
+    };
+
+    const charge = await polar(call).finalizeTopUpOrder("order-9");
+
+    expect(charge).toEqual({ kind: "charged", orderId: "order-9", amount: 500, currency: "usd" });
+    expect(seen).toHaveLength(2);
+    // **The same object, which is what "one deadline" means.** Two signals that merely carried the
+    // same number would give the pair twenty-four seconds; one signal gives it twelve.
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  it("spends §12's whole upstream row across a top-up and no more, measured at the calls", async () => {
+    // **PR #220's F1.** Every assertion this branch first shipped was about `TOPUP_CHARGE_TIMEOUT_MS`
+    // — the constant the adapter is *supposed* to spend — and a mutant tripling the number at its use
+    // site passed all 1295 tests. What is read here is the figure each call actually hands its
+    // deadline, so the budget and the table are joined on the path rather than by a literal.
+    const created = recordingDeadlines();
+    const draft = scriptedFetch(json(201, { id: "order-b", status: "draft" }));
+    expect(await polar(draft.call, created.factory).createTopUpOrder(CHARGE)).toEqual({
+      kind: "created",
+      orderId: "order-b",
+    });
+
+    // The finalize takes the 412 and reads the order back — three HTTP calls in the top-up, and the
+    // second budget covers the last two of them.
+    const charging = recordingDeadlines();
+    const finalizing = scriptedFetch(
+      json(412, { detail: "not a draft" }),
+      json(200, { id: "order-b", status: "paid", total_amount: 500, currency: "usd" }),
+    );
+    expect((await polar(finalizing.call, charging.factory).finalizeTopUpOrder("order-b")).kind).toBe(
+      "charged",
+    );
+
+    // Two budgets across three calls, each one §12's row halved.
+    expect(finalizing.calls).toHaveLength(2);
+    expect(created.spent).toEqual([TOPUP_CHARGE_TIMEOUT_MS]);
+    expect(charging.spent).toEqual([TOPUP_CHARGE_TIMEOUT_MS]);
+    // **The assertion the tripling mutant dies against**: what a whole top-up may spend upstream is
+    // §12's number for this route, summed from what the calls asked for rather than from the table.
+    const wholeTopUp = [...created.spent, ...charging.spent].reduce((a, b) => a + b, 0);
+    expect(wholeTopUp).toBe(DEADLINE_MS.topUp.upstream);
+    // And it stays inside the route's own total, which is the ordering §12's rule rests on.
+    expect(wholeTopUp).toBeLessThan(DEADLINE_MS.topUp.total);
+  });
+
+  it("reads an exhausted budget on the read-back as unconfirmed, never as a closed order", async () => {
+    // The direction that decides whether sharing the deadline is safe. Running out of time while
+    // asking what an order became must leave the order resolvable — `unconfirmed` keeps the row's
+    // order id and the next attempt asks again. Anything terminal here would close a row on a charge
+    // whose fate nobody established.
+    const queue = [json(412, { detail: "not a draft" })];
+    const call: typeof fetch = async (_input, init) => {
+      const next = queue.shift();
+      if (next !== undefined) return next;
+      // What `fetch` does when the signal it was handed has already fired.
+      const aborted = new Error("The operation was aborted due to timeout");
+      aborted.name = "TimeoutError";
+      throw aborted;
+    };
+
+    const charge = await polar(call).finalizeTopUpOrder("order-10");
+
+    expect(charge.kind).toBe("unconfirmed");
+    expect((charge as { reason: string }).reason).toContain("TimeoutError");
   });
 });

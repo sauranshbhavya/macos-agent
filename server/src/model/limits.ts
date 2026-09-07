@@ -134,12 +134,11 @@ export const DEADLINE_MS = {
    *   `db/pool.ts` sets no statement timeout — so bounding those is a wider change than one route's
    *   wrapper and is filed rather than half-made here (SONNY-427).
    * - **`POST /v1/account/credits/top-up` is the fourth and is not database-bound at all**: it
-   *   charges at the payment provider, spending `TOPUP_CHARGE_TIMEOUT_MS` up to three times in
-   *   sequence, so its upstream work can outlast this row several times over. It is **SONNY-430**
-   *   (2026-09-06), and it is named separately because it was folded into the sentence above until
-   *   PR #212's F4 — the lane's own enumeration had the exception and every record after it dropped
-   *   the exception rather than the enumeration, which is `CLAUDE.md`'s enumerate-before-you-subtract
-   *   rule failing at its last step instead of its first.
+   *   charges at the payment provider, so this row was never its. It has **its own row now**, below
+   *   (SONNY-430). It was folded into the sentence above until PR #212's F4 — the lane's own
+   *   enumeration had the exception and every record after it dropped the exception rather than the
+   *   enumeration, which is `CLAUDE.md`'s enumerate-before-you-subtract rule failing at its last step
+   *   instead of its first.
    *
    * **`upstream` is enforced at the adapter as well as at the wrapper, and that is not a
    * duplication.** `auth/deps.ts` builds the Supabase adapter with `timeoutMs` read from this field,
@@ -150,6 +149,56 @@ export const DEADLINE_MS = {
    * adapter's bound.
    */
   auth: { upstream: 10_000, total: 15_000 },
+  /**
+   * §12's own row for `POST /v1/account/credits/top-up` (SONNY-430) — **the one route here that
+   * charges a card**, and the reason it is not in the `auth` row above.
+   *
+   * ## Where the 24 comes from, and why it is not 36
+   *
+   * The charge is a draft order and then a finalize, each bounded at `TOPUP_CHARGE_TIMEOUT_MS`
+   * (12 s) in `billing/polar.ts` — **so this is that constant doubled, and `topup.test.ts` holds the
+   * relation** rather than these being two literals that agree today. A third HTTP call exists, the
+   * read-back the finalize makes on a `412`, and SONNY-430 made it share the finalize's budget
+   * instead of taking a fresh one; before that a single top-up could spend 36 s.
+   *
+   * **36 was not available as a row, which is what settled the ticket's either/or.**
+   * `SonnyBackendTimeouts.topUp` on the Mac is 40 s and its own comment derives that from two calls
+   * at twelve seconds. A 36 s upstream wants a total near 42 s, which is longer than the client's 40
+   * and inverts this table's governing rule — and moving the client's number is a change on the app
+   * half. The other direction, folding the charge into `auth`'s 10 s, was rejected as the money-unsafe
+   * one: three calls inside 10 s is about 3.3 s each, and `TOPUP_CHARGE_TIMEOUT_MS` argues that even
+   * eight is not obviously above a healthy card authorisation, so every second cut turns a slow-but-
+   * working charge into an abort mid-flight — which is recorded `unconfirmed`, granting nothing for
+   * money that may have moved. A bound must not manufacture that state on healthy traffic.
+   *
+   * ## The six seconds of margin, and what enforces each column
+   *
+   * `total` covers `attemptTopUp` — the customer lookup, the outstanding query, the claim, the
+   * order-id write, the charge and the settle — and 30 s leaves the client's 40 s ten seconds of
+   * headroom for it. **Two database reads sit outside it and are named rather than implied**
+   * (PR #220's F4): `routes/credits.ts` awaits `position()` before the wrapper and again after it, so
+   * the route's worst-case answer is this number plus those two round trips. This gateway sets no
+   * statement timeout — the `auth` row above and SONNY-427 both say so — so that remainder is not
+   * bounded by anything here; in practice it is milliseconds, and the honest statement is that the
+   * bound is on the charge rather than on the handler. An earlier version of this sentence listed
+   * both reads among the seven things `total` covers, which is the enumerate-before-you-subtract
+   * shape in the file that defines the number.
+   *
+   * **`upstream` is enforced at the adapter and `total` at the route**, which is the same split the
+   * `auth` row's last paragraph describes — and it is that row's *mechanism* too, not just its shape:
+   * `billing/polar.ts` reads `TOPUP_CHARGE_TIMEOUT_MS` off this field (`upstream / 2`, two calls being
+   * what a top-up makes), exactly as `auth/deps.ts` passes `DEADLINE_MS.auth.upstream` into the
+   * Supabase adapter. **That arrow used to point the other way and the sentence was unbacked**
+   * (PR #220's F1): the adapter held a `12_000` of its own and this field had no production reader,
+   * so a mutant tripling the budget at its use site passed all 1295 tests — and 36 s of upstream under
+   * a 30 s total inverts the two, cutting every slow charge off mid-flight. What differs from the
+   * `auth` row is the answer when `total` elapses:
+   * `routes/credits.ts` sends `502 topup.unconfirmed` and **not** `504 provider.timeout`, because a
+   * charge may be in flight at that instant and `provider.timeout` is marked retryable — telling a
+   * client to retry is how PR #196's F1 bought a second pack. §12 records two auth routes that
+   * likewise do not answer `504` on their deadline; this is the third, and for the sharpest reason.
+   */
+  topUp: { upstream: 24_000, total: 30_000 },
 } as const;
 
 /**
