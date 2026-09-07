@@ -178,7 +178,7 @@ Reviewed by: pending — this entry is written before the PR opens, per `WORKFLO
 
 Spec sections covered: none of the wire contract. Nothing a caller can observe changes: a request that would have been answered is still answered, and the codes, headers and bodies are untouched. What changes is which secrets a signature may match, which is entirely inside `server/src/auth/token.ts` and `server/src/config.ts`.
 
-Files changed — **14 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 14 at `<FIXSHA>`, the bare form of the same command answering **15** as the control that says the stage is doing the excluding. **Twelve before round 1**, which added `server/src/auth/deps.ts` and `server/test/authdeps.test.ts` (writing this entry puts the changelog into the population its own citation counts — `CLAUDE.md`'s ninth write-the-command defect, and PR #215's F4 in the entry directly below):
+Files changed — **14 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs/sonny-v1-implementation-changelog.md' | wc -l` → 14 at `78945fe3`, the bare form of the same command answering **15** as the control that says the stage is doing the excluding. **Twelve before round 1**, which added `server/src/auth/deps.ts` and `server/test/authdeps.test.ts` (writing this entry puts the changelog into the population its own citation counts — `CLAUDE.md`'s ninth write-the-command defect, and PR #215's F4 in the entry directly below):
 - `server/src/auth/token.ts` — `SupabaseJwtPolicy` carries an ordered `secrets` list of `AcceptedJwtSecret` instead of one `secret`, and the single HMAC becomes a loop that stops at the first match and skips a secret past its `acceptedUntil`
 - `server/src/config.ts` — `SUPABASE_JWT_SECRET_2` and `SUPABASE_JWT_SECRET_2_ACCEPTED_UNTIL` in the schema, on `Config`, and read; `MAX_JWT_SECRET_OVERLAP_DAYS`; `requireSupabaseJwtPolicy` builds the list and enforces the deadline rules; `refuseUnreadJwtSecretSlots` in `loadConfig`; the length floor extracted so both secrets are held to one copy of it
 - `server/src/db/migrations/0022_a_signed_out_session_stops_verifying.sql` — `revoked_at`'s source comment made true, plus a `COMMENT ON COLUMN`
@@ -191,15 +191,41 @@ Files changed — **14 paths**, `git diff --name-only 061a2c36 HEAD -- . ':!docs
 
 **`server/test/support/config.ts` is the one file that looked owed and is not**, stated because the opening comment's file list did not name it and a reader checking the list against the diff will wonder: `testConfig()` spreads `TEST_SUPABASE_CONFIG`, so the two new `Config` fields arrive there by adding them to `tokens.ts`. The typecheck named it before that was done, which is the compiler doing what `CLAUDE.md`'s store-injection note describes on the Swift side. Nothing else was added to or dropped from that list.
 
-Tests (`cd server`), all at `<FIXSHA>`, the fix round's head. **Round 1's figures replace the round's own earlier ones rather than sitting beside them** — this entry previously stamped `25148d59` and `2a4c8a3a`, both still ancestors and both measured on a tree this round moved, so every figure below is a fresh measurement and none is carried:
+Tests (`cd server`), all at `78945fe3`, the fix round's head. **Round 1's figures replace the round's own earlier ones rather than sitting beside them** — this entry previously stamped `25148d59` and `2a4c8a3a`, both still ancestors and both measured on a tree this round moved, so every figure below is a fresh measurement and none is carried:
 - `npm run build` → exit 0; `npm run typecheck` → exit 0
-- `npm test` → exit 0, **868 passed / 445 skipped (1313)**, against the pre-round head's 862/445 (1307) and the base's 843/445 (1288)
-- `npm run test:db` against `sonny-gw-db-lane-238` on a Docker-assigned port → exit 0, **1313 passed (1313)**, against 1307 and 1288
+- `npm test` → exit 0, **869 passed / 445 skipped (1314)**, against the pre-round head's 862/445 (1307) and the base's 843/445 (1288)
+- `npm run test:db` against `sonny-gw-db-lane-238` on a Docker-assigned port → exit 0, **1314 passed (1314)**, against 1307 and 1288
 - `npm run check:secrets` → exit 0, clean (636 tracked files scanned, 12 patterns, 8 baselined fixtures)
 - `./scripts/check-secrets-selftest.sh` → exit 0, **60 passed, 0 failed**, against the pre-round head's 57 and the base's 53
-- `scripts/changelog-order` → <CHANGELOGORDER>
-- `scripts/no-attribution all` → <NOATTRIB>
+- `scripts/changelog-order` → exit 0, **189 entries**, both eras
+- `scripts/no-attribution all` → exit 0, and **each tally carries the command and what it counted, because two of the three are not tree figures and no SHA can stamp them** (PR #218's R6, which found this entry, the PR body and the ticket comment reporting three different sets): `history` → 0 of **1828** commit messages, which counts every commit reachable from `--all` in *this clone* and grows with every branch anyone fetches; `tree` → 0 of **632** tracked files (4 excluded by path), the only one of the three a SHA stamps and the only one stable across all five readings taken on this branch; `prs` → 0 of **223** pull request bodies, which asks GitHub. A reader comparing two runs should expect the first and third to differ and the second not to.
 - No Swift suite and no `scripts/warnings` are owed, measured rather than asserted: `git diff --name-only 061a2c36 HEAD -- Sources Tests` prints nothing, exit 0, with the same command over `server` printing paths as the control. `Package.swift`'s five targets all carry a `path:` naming `Sources/…` or `Tests/…`, so nothing under `server/` reaches a Swift target.
+
+**Mutation battery — 10 mutants, 10 killed, 0 survived, 0 unattributed at `78945fe3`**, baseline `PASSED  1314 passed (1314)`. Suite command: `cd server && npm run typecheck && DATABASE_URL=… npm run test:db`, the typecheck in front so a mutant that only breaks types cannot pass as covered. **Scoped per mutant against step 5's four conditions, never per round against the diff**: R4 and R6–R10 were re-run because their target (`server/src/config.ts`) and their killer file (`server/test/config.test.ts`) both moved this round; R1, R2, R3 and R5 are **carried** from the pre-round run at `2a4c8a3a`, because each targets `server/src/auth/token.ts`, each is killed only from `server/test/token.test.ts` and `server/test/gate.test.ts` driving `server/test/support/tokens.ts`, none scans a population, and `git diff --quiet 7a7414f0 HEAD -- <path>` exits 0 on all four of those files. N1 to N4 are new.
+
+| | mutant | killers |
+|---|---|---|
+| R1 | the overlap is never tried | 3 — *carried from `2a4c8a3a`* |
+| R2 | the overlap never ends | 2 — *carried* |
+| R3 | the ending is off by one | 1 — *carried* |
+| R4 | the ending reaches the current secret too | 3 |
+| R5 | an unmatched signature is accepted rather than refused | 13 — *carried* |
+| R6 | the overlap slot needs no deadline — an unbounded second key | 2 |
+| R7 | the stated maximum overlap is not enforced | 2 |
+| R8 | an unreadable deadline reads as never reached | 1 |
+| R9 | the length floor is relaxed for the second secret | 1 |
+| R10 | a numbered slot nothing reads is ignored rather than refused | 1 |
+| N1 | the unread-slot guard compares the suffix as a number again (F1) | 1 |
+| N2 | the deadline parse is the pre-round one — the date parser and a NaN check (F3) | 3 |
+| N3 | a day past the end of its month is rolled forward rather than refused (F3) | 1 |
+| N4 | a retired overlap slot is silent again (F2) | 3 |
+
+R6's and R7's second killer is `still refuses what it always refused, so the warning replaced no check`, which is F2's own test holding the refusals F2 did *not* replace — a startup warning arriving beside two startup failures is exactly the place one of them could quietly become the other. R8's killer is the test written for it this round; N2's three are the whole F3 group; N4's three are F2's, including the one asserting no secret value reaches that line.
+
+**The first run of this plan returned three survivors and all three were this round's own doing**, which is the part worth reading rather than the count. **One was a real coverage hole the round itself opened.** Putting the shape check in front of the deadline parse moved every unparseable spelling a test drove into the *first* refusal, leaving the `NaN` branch reachable only by something well-formed that still names no moment — a month of 13, an hour of 25 — and nothing drove one, so R8 went from killed to surviving with no test deleted and no assertion weakened. That branch is the one that matters most if it ever goes: an Invalid Date compares false against everything, so an unchecked one reads as "not yet reached" forever, which is an overlap with no end. Three such spellings are driven now with a control reaching the other message, and **every refusal on this path is asserted by its wording rather than by its type** — three of them are the same type, and a mutant swapping one for another would otherwise pass. **The other two survivors were badly built rather than uncovered, and both failed in the reassuring direction**: N3 neutered one disjunct of a three-way `||`, which JavaScript's precedence leaves the other two running, and N2 replaced a regex with a fake capture that made the *calendar* check fire in place of the shape check being tested, so it measured a different refusal rather than the absence of any. **N2 and N4 were then rebuilt a second time for a different reason**: as written they came back `KILLED by the compiler — the suite never ran`, which the harness itself labels as no test evidence, and a compiler kill on a mutant added specifically to measure a property measures nothing. The forms that landed compile and are killed by named tests. A survivor is a finding whichever of the two it turns out to be, and telling them apart cost one re-run each.
+
+**One baseline failure, discarded rather than reported as a result.** The scoped re-run of N2 and N4 aborted on a red baseline — `test/topup.db.test.ts`'s `lets exactly one of two racing claims win the same slot`, a racing test in the billing suite this branch does not touch (`git diff --name-only 061a2c36 HEAD | grep -c topup` → 0). It passed in the two full `test:db` runs and the two battery baselines either side of it. Re-run, the baseline passed and both mutants died. Recorded because `scripts/mutate` refusing to attribute anything to a mutant under a red baseline is the guard working, and because a session that quietly re-runs until green is doing something different from one that says which run it is reporting.
+
 
 **A sentence here carried one command with two different stated answers, the second of them false** (PR #218's R1). It read that every commit above the stamped head touches only the changelog and the selftest — right — and then, one clause later, cited `git diff --name-only 25148d59 HEAD` as listing "`docs/sonny-v1-implementation-changelog.md` and nothing else", which excluded the very file the clause around it was explaining. The sentence shape was copied from the entry directly below, where it is true of *that* branch: a parenthesis written while copying a parenthesis, which is `CLAUDE.md`'s write-the-command rule failing in the way that section already records twice. It is gone rather than corrected, because this round re-measures everything at one head and the carry it was justifying no longer exists.
 
@@ -549,7 +575,7 @@ first is the one worth reading twice.
 - **F5 — an option with no caller**, deleted for the reason this branch had already given one commit earlier for
   deleting a condition that could not change an answer.
 - **And this round shipped the defect the rule it was fixing exists to catch, which is recorded rather than
-  quietly corrected.** The F4 sentence went into the tree carrying `<FIXSHA>` where the fix round's commit belongs,
+  quietly corrected.** The F4 sentence went into the tree carrying `78945fe3` where the fix round's commit belongs,
   and was committed that way — SONNY-210's exact failure, a template left unfilled inside the very sentence
   demonstrating the rule. Filled in the docs commit above; it is written down because the count of times this has
   happened is the only thing that makes the next session check.
