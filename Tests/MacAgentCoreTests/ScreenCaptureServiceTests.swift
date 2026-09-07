@@ -290,7 +290,7 @@ struct PermissionReadinessScreenRowsTests {
             accessibilityTrusted: accessibility,
             screenRecordingGranted: screenRecording
         )
-        return service.currentStatus(modelAccess: .signedIn, hotKeyReady: true)
+        return service.currentStatus(modelAccess: .signedIn, planAccess: .confirmed, hotKeyReady: true)
     }
 
     private func row(_ items: [PermissionReadinessItem], id: String) throws -> PermissionReadinessItem {

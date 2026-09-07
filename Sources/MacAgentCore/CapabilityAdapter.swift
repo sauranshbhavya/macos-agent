@@ -202,6 +202,16 @@ public struct CapabilityExecutionContext {
     /// genuinely does not know, and `.signedIn` would be a default that reports readiness nobody
     /// checked.
     public var modelAccessReadiness: () -> ModelAccessReadiness
+    /// The other half of the account row (SONNY-336): whether this Mac holds an entitlement claim it
+    /// can verify offline right now.
+    ///
+    /// **A closure defaulted to `.undetermined`, for exactly the reasons one line up.** The answer
+    /// lives behind `EntitlementService`, an actor the UI layer owns, and it changes after launch —
+    /// a sign-in, a refresh, a claim lapsing — so a snapshot taken at construction misreports it.
+    /// The default is the never-asked value because a context built with no entitlement wiring
+    /// genuinely has not asked; `.confirmed` would be a default that reports an entitlement nobody
+    /// checked, which is the direction SONNY-136 refused to build in.
+    public var planReadiness: () -> PlanReadiness
     /// The browser this execution should prefer for every URL it opens *on the injected
     /// browser-opener seam*, or `nil` for the system default. `.playMedia` is on a different seam
     /// and does not consult this — **decided, not pending** (SONNY-51, founder 2026-08-20): a media
@@ -362,6 +372,7 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
+        planReadiness: @escaping () -> PlanReadiness = { .undetermined },
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
         // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
@@ -413,6 +424,7 @@ public struct CapabilityExecutionContext {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.modelAccessReadiness = modelAccessReadiness
+        self.planReadiness = planReadiness
         self.preferredBrowser = preferredBrowser
         self.claimedEarlierInThisRun = claimedEarlierInThisRun
         self.taskScope = taskScope

@@ -70,6 +70,7 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
     private func permissionItems(context: CapabilityExecutionContext) -> [PermissionReadinessItem] {
         context.permissionReadinessService.currentStatus(
             modelAccess: context.modelAccessReadiness(),
+            planAccess: context.planReadiness(),
             hotKeyReady: context.hotKeyReady()
         )
     }

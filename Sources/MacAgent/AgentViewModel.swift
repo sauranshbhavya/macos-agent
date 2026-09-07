@@ -33,6 +33,14 @@ final class AgentViewModel: ObservableObject {
     /// Starts `.undetermined` and is answered by `refreshModelAccessReadiness()`. It is not derived
     /// on demand because the read is an actor hop and every reader of it is synchronous.
     @Published private(set) var modelAccessReadiness: ModelAccessReadiness = .undetermined
+    /// Whether this Mac holds an entitlement claim it can verify offline, as the same row reads it
+    /// (SONNY-336).
+    ///
+    /// Starts `.undetermined` and is answered by `refreshPlanReadiness()`, for the reason the line
+    /// above gives: the read is an actor hop and every reader is synchronous. **A second published
+    /// value rather than a case on the enum above**, because the two are read from different actors
+    /// and can disagree — `PlanReadiness` carries that argument.
+    @Published private(set) var planReadiness: PlanReadiness = .undetermined
 
     // MARK: - Version (contract §8, SONNY-402)
 
@@ -3414,13 +3422,26 @@ final class AgentViewModel: ObservableObject {
         recomputePermissionItems()
         Task { [weak self] in
             await self?.refreshModelAccessReadiness()
+            // **Both halves before one recompute** (SONNY-336). Two awaits and one render rather
+            // than a render between them: recomputing after each would publish a row that says
+            // "Signed in. Sonny checks your plan when it needs it." for as long as the second hop
+            // takes, which is a sentence the user can read and which is about to be replaced. The
+            // two are sequential rather than concurrent because both are cheap local reads — no
+            // network call is reachable from either — and a `TaskGroup` here would buy microseconds
+            // for a second failure mode.
+            await self?.refreshPlanReadiness()
             self?.recomputePermissionItems()
         }
     }
 
-    private func recomputePermissionItems() {
+    /// **Internal rather than private so a test can drive the real recompute** (SONNY-336).
+    /// It is a synchronous, pure re-render of `permissionItems` from the two published readiness
+    /// values, so a test that calls it is exercising the same function `refreshPermissions()` does —
+    /// including the `planAccess:` argument, which is a seam a mutant can drop.
+    func recomputePermissionItems() {
         permissionItems = permissionReadinessService.currentStatus(
             modelAccess: modelAccessReadiness,
+            planAccess: planReadiness,
             hotKeyReady: voiceHotKeyReady
         )
     }
@@ -3445,6 +3466,67 @@ final class AgentViewModel: ObservableObject {
                 : .signedIn
         } catch {
             modelAccessReadiness = .undetermined
+        }
+    }
+
+    /// **The one source of the entitled answer on this Mac**, installed by `main.swift` (SONNY-336).
+    ///
+    /// Set from outside rather than built here, and that is the same wiring `screenControlGate` gets
+    /// and for the identical reason: the answer must come from the *shared* `EntitlementService`,
+    /// which `SonnyAccountModel` owns because that is where the one real Keychain request is allowed
+    /// to be made. A view model that built its own would be a second service — a second clock
+    /// high-water anchor and a second single-flight refresh guard — and would need a third file to
+    /// ask for the real Keychain.
+    ///
+    /// **A closure over `claimConfirmation()` rather than the service or a claim.** That method is
+    /// the narrowest door the service has: it answers whether this Mac holds a current, verifiable
+    /// claim about its own session and hands back no claim, no capability list and no plan. It also
+    /// cannot name a capability, which is exactly what keeps this row out of row 18's (SONNY-23)
+    /// territory — a readiness row that had to pass a capability key would have had to invent one,
+    /// and inventing one is the defect SONNY-136 stopped rather than build.
+    ///
+    /// **`nil` is the honest state and it reports `.undetermined`, never a refusal.** A build whose
+    /// wiring line was deleted, and every fixture that says nothing, has not asked anybody anything
+    /// — and `PlanReadiness.undetermined` is never reported ready, so saying nothing cannot acquire
+    /// a green row by omission. Mapping `nil` to a *refusal* instead would be the opposite error: it
+    /// would tell a user Sonny could not check their plan when nothing had tried to.
+    var entitlementConfirmation: (@Sendable () async -> EntitlementDecision)?
+
+    /// Ask the one source whether this Mac holds a claim it can verify, and publish the answer.
+    ///
+    /// **Separate from `refreshModelAccessReadiness()` rather than folded into it.** That function
+    /// reads the backend client's Keychain and answers whether a session is held; this reads the
+    /// entitlement actor and answers whether a claim confirms. Two questions, two actors, two
+    /// published values — a single function named for one of them that quietly did both is the drift
+    /// this repository keeps finding in doc comments, and here it would be in the name itself.
+    ///
+    /// **No `catch`, because there is nothing to throw.** `claimConfirmation()` returns a decision
+    /// for every path including the ones that are this build's own fault — an unreadable store, a
+    /// claim signed by a key this build does not hold — since `EntitlementService`'s rule is that a
+    /// check that could not be completed is a refusal rather than an error. So every outcome is
+    /// already one of the two cases below, and the refusal is carried whole rather than collapsed.
+    ///
+    /// **This call can start a gateway request, and that is new to the readiness page** (SONNY-336,
+    /// PR #216's review, F2). It does not *block* on one — the answer below is always the cached
+    /// claim's, which is what keeps this row a presence check and §16.3 satisfied — but
+    /// `EntitlementService.evaluate` starts a detached, single-flight `refreshNow()` on five paths,
+    /// and one of them is the confirmed one, fired once a third of the claim's life has elapsed
+    /// (`EntitlementJudgement.shouldRefresh`). So a normally signed-in Mac starts a request more
+    /// often than not whenever `refreshPermissions()` runs — a Command Center appearance, the
+    /// Refresh button, a session change — where before this ticket that function reached no network
+    /// at all. Written down here because it is a behaviour change nothing else in the call chain
+    /// announces, and because the first version of this branch's changelog entry asserted the
+    /// opposite from reading only what the call returns.
+    func refreshPlanReadiness() async {
+        guard let entitlementConfirmation else {
+            planReadiness = .undetermined
+            return
+        }
+        switch await entitlementConfirmation() {
+        case .entitled:
+            planReadiness = .confirmed
+        case .refused(let refusal):
+            planReadiness = .unconfirmed(refusal)
         }
     }
 
@@ -5947,6 +6029,10 @@ final class AgentViewModel: ObservableObject {
             // is synchronous and this is the same value the Settings page is showing, so the tool
             // and the page cannot disagree about the account.
             modelAccessReadiness: { [weak self] in self?.modelAccessReadiness ?? .undetermined },
+            // The entitled half, on the same terms and for the same reason: the tool and the
+            // Settings page read one published value, so they cannot disagree about the plan
+            // either (SONNY-336).
+            planReadiness: { [weak self] in self?.planReadiness ?? .undetermined },
             // **`nil` now means only "this caller asked for no vision"** (SONNY-131) — the dry-run
             // resolver above is the one that does, and a vision session dispatched into that
             // executor fails loudly with `visionUnavailable` rather than half-running. It used to
@@ -8090,15 +8176,24 @@ final class AgentViewModel: ObservableObject {
                 context: approvalContext(visionTarget: nil)
             )
             // The scheduled twin of the two foreground sites' bookkeeping-failure handover
-            // (SONNY-209). `recordLocalStorageWriteFailure`, never `errorMessage`: the routine ran
-            // and did what it was asked, and only the note about where its file landed could not be
-            // saved — CLAUDE.md's write-failure channel rule exactly.
+            // (SONNY-209 for output locations, SONNY-232 for recent artifacts).
+            // `recordLocalStorageWriteFailure`, never `errorMessage`: the routine ran and did what
+            // it was asked, and only the note about the file it wrote could not be saved —
+            // CLAUDE.md's write-failure channel rule exactly. `errorMessage` would say the run
+            // failed, and the widget picks `.failure` ahead of `.result`, so routing either of
+            // these there replaces the result of a scheduled run that actually succeeded.
             //
-            // **`lastRecentArtifactFailure` is *not* read here, and that is not an oversight of this
-            // ticket's** — it has never been read on this path, so a scheduled routine whose
-            // recent-artifacts write fails still reports nothing. That is the other store's defect
-            // and the other store is on this ticket's never-touch list; it is filed rather than
-            // fixed here.
+            // **Both properties are read here, in the order the other two sites read them**
+            // (`AgentViewModel.swift`'s foreground site and `AgentViewModel+VisionSession.swift`'s).
+            // `lastRecentArtifactFailure` was not read on this path until SONNY-232: the enumeration
+            // that gave the other bookkeeping writes a channel looked at the view model's own
+            // writes, and this one is set in `AgentRunner`, so a scheduled routine whose
+            // recent-artifacts write failed reported nothing at all — no notice, no error, nothing
+            // in any surface. Two `if let`s rather than one combined message, because the two name
+            // different stores and `AgentRunner` keeps them apart for exactly that reason.
+            if let artifactFailure = runner.lastRecentArtifactFailure {
+                recordLocalStorageWriteFailure(artifactFailure)
+            }
             if let outputLocationFailure = runner.lastOutputLocationFailure {
                 recordLocalStorageWriteFailure(outputLocationFailure)
             }

@@ -508,6 +508,53 @@ struct SignInSurfaceTests {
         #expect(MacAgentSource.count(of: "sessionDidChange", inText: source) == 1)
     }
 
+    /// **`main.swift` is also where the readiness row meets the one entitlement source** (SONNY-336),
+    /// and a scan is the only instrument for the same reason the test above gives: no test can
+    /// execute a file that runs `NSApplication.main`.
+    ///
+    /// **What breaks without this test, precisely.** `AgentViewModel.entitlementConfirmation` is an
+    /// Optional and `refreshPlanReadiness()` maps `nil` to `.undetermined` — which is the honest
+    /// answer for a build nobody wired, and is exactly why deleting the wiring line compiles and
+    /// leaves a green suite. The account row would then read *"Signed in. Sonny checks your plan
+    /// when it needs it."* forever on a Mac whose plan is confirmed. That is PR #153's F3 in its own
+    /// words, arriving at the half of the row this ticket added, so it gets F3's own instrument.
+    ///
+    /// **It reads the closure's body rather than tokens anywhere in the file**, for C2-F7's reason
+    /// on the test above: an empty closure beside a stray mention elsewhere would satisfy a
+    /// `contains` and wire nothing.
+    ///
+    /// **And it pins `claimConfirmation()` rather than merely "some entitlement call".** That is the
+    /// rule SONNY-336 turns on: `decision(for:)` takes an `EntitlementCapability`, so a row wired to
+    /// it would have had to mint a capability key — row 18's (SONNY-23) decision, taken in the wrong
+    /// row, and the second notion of entitlement SONNY-136 stopped rather than build. A scan is
+    /// where that stays true, because both calls compile.
+    @Test
+    func mainJoinsTheReadinessRowToTheOneEntitlementSource() throws {
+        let source = try MacAgentSource.read("main.swift")
+        let body = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "agentViewModel.entitlementConfirmation = {"
+        )
+        #expect(
+            body.contains("claimConfirmation()"),
+            "main.swift no longer asks the entitlement service to confirm; its body is: \(body)"
+        )
+        // The narrower door, and not the one that would need a capability key.
+        #expect(
+            !body.contains("decision(for:"),
+            "the readiness row must not name a capability; its body is: \(body)"
+        )
+        // It is the account model's shared service, not a second one built here — a second
+        // `EntitlementService` would be a second clock anchor and a second refresh guard.
+        #expect(
+            body.contains("entitlements"),
+            "main.swift no longer hands the row the shared service; its body is: \(body)"
+        )
+        #expect(!body.contains("EntitlementService("), "main.swift built a second entitlement service")
+        // One assignment rather than several, so the scan cannot pass on a leftover.
+        #expect(MacAgentSource.count(of: "entitlementConfirmation", inText: source) == 1)
+    }
+
     private final class Harness {
         let keychain = InMemoryKeychainSecretStore()
         let session: URLSession

@@ -1085,6 +1085,13 @@ struct ProductShellTests {
             // `backendClient` gives above. A wipe that reset it would make the readiness page say
             // "sign in" to a user who still is.
             "modelAccessReadiness",
+            // `planReadiness` sits beside it for the identical reason, one half further along
+            // (SONNY-336): it is the same row's other input, and the fact it reports — whether this
+            // Mac holds an entitlement claim it can verify — lives in the Keychain and on the
+            // gateway, not in any local store this wipe reaches. A wipe that reset it would make the
+            // readiness page stop reporting a confirmed plan for a user whose plan is fine, until
+            // the next refresh put the same answer back.
+            "planReadiness",
             // `screenControlAllowance` sits beside it for the same reason (SONNY-214): the fact it
             // carries — how many screen-control runs the account has left — lives on the gateway,
             // derived from the server's own metering, and no local store this wipe reaches has ever
@@ -1172,6 +1179,13 @@ struct ProductShellTests {
             // has nothing to find in it, and clearing it would leave the app refusing screen control
             // until relaunch for somebody who had erased their history.
             "screenControlGate",
+            // `entitlementConfirmation` sits with it and for the same reason (SONNY-336): it is the
+            // closure `main.swift` installs so the readiness row can ask the one shared
+            // `EntitlementService` whether a claim confirms. Infrastructure installed at launch, not
+            // task state and not user data — it holds a reference to an actor and no claim of its
+            // own — and clearing it would leave the account row unable to report the plan until
+            // relaunch for somebody who had erased their history.
+            "entitlementConfirmation",
 
             // 6. A test seam, not state — `nil` in the shipping app, and nothing in `Sources/`
             // assigns it. Same category as `visionSessionEnvironment` in group 5: it lets a test

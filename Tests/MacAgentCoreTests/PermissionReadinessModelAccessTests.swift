@@ -29,6 +29,47 @@ struct PermissionReadinessModelAccessTests {
     static let providerNames = ["OpenAI", "Cerebras", "Tavily", "OpenCode", "Anthropic", "GPT", "Whisper"]
     static let environmentVariableShape = try! NSRegularExpression(pattern: "[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{2,}")
 
+    /// Every value `PlanReadiness` can take, refusals enumerated one by one (SONNY-336).
+    ///
+    /// **Spelled out rather than sampled**, because the sweeps below are population checks — a row
+    /// naming a provider, or moving a row that is not its own, is only caught on the input that
+    /// produces it. `EntitlementRefusal` is not `CaseIterable`, so the list is hand-written and two
+    /// things hold it: **the exhaustive `switch` below, which stops this file compiling when the
+    /// enum grows a case**, and the count in `everyRefusalIsAnsweredByName`, which then has to be
+    /// bumped by hand rather than drifting. That is `EntitlementCopyTests.allRefusals`' idiom, for
+    /// the same enum, copied deliberately.
+    ///
+    /// **It said the test alone held this and that was wrong** (PR #216's review, F1). The test
+    /// asserted nothing about the array's length and built its own second hand-written five-case
+    /// literal besides, so an eighth case left out of both would have kept every assertion green:
+    /// `planSentence(for:)` would have stopped compiling, and the cheapest repair there is to add
+    /// the case to its shared arm — after which nothing anywhere mentions that the row was never
+    /// rendered in the new state at all. Five sweeps rest on `everyPlanReadiness`, which is derived
+    /// from this array, so a refusal missing here is a refusal none of them ever exercises.
+    static let everyRefusal: [EntitlementRefusal] = {
+        let cases: [EntitlementRefusal] = [
+            .notSignedIn,
+            .noClaim,
+            .unreadableClaim,
+            .claimIsForAnotherSession,
+            .clockUnusable,
+            .lapsed,
+            .notEntitled
+        ]
+        // The switch is the check: adding a case to the enum stops this compiling until it is added
+        // above as well. The value is not the point — the exhaustiveness is.
+        for refusal in cases {
+            switch refusal {
+            case .notSignedIn, .noClaim, .unreadableClaim, .claimIsForAnotherSession,
+                 .clockUnusable, .lapsed, .notEntitled:
+                continue
+            }
+        }
+        return cases
+    }()
+    static let everyPlanReadiness: [PlanReadiness] =
+        [.confirmed, .undetermined] + everyRefusal.map { PlanReadiness.unconfirmed($0) }
+
     /// **Not about readiness, and it is here rather than in a file of its own for one reason: this
     /// is where SONNY-136's "no user-facing string mentions an environment variable" sweep is
     /// held.** The row above was one of the two sites that criterion was written for. The other was
@@ -60,25 +101,28 @@ struct PermissionReadinessModelAccessTests {
         #expect(MockDocumentConverter(enabled: true).isAvailable)
     }
 
-    private func accountRow(_ readiness: ModelAccessReadiness) throws -> PermissionReadinessItem {
+    private func accountRow(
+        _ readiness: ModelAccessReadiness,
+        _ plan: PlanReadiness = .confirmed
+    ) throws -> PermissionReadinessItem {
         let items = PermissionReadinessService
             .deterministic()
-            .currentStatus(modelAccess: readiness, hotKeyReady: true)
+            .currentStatus(modelAccess: readiness, planAccess: plan, hotKeyReady: true)
         return try #require(items.first { $0.id == "sonny-account" })
     }
 
     @Test
     func eachModelAccessStateGetsItsOwnRowStateAndItsOwnSentence() throws {
-        let signedIn = try accountRow(.signedIn)
+        let signedIn = try accountRow(.signedIn, .confirmed)
         #expect(signedIn.title == "Sonny account")
         #expect(signedIn.state == .ready)
-        #expect(signedIn.detail == "Signed in.")
+        #expect(signedIn.detail == "Signed in, and your plan is confirmed.")
 
-        let signedOut = try accountRow(.signedOut)
+        let signedOut = try accountRow(.signedOut, .confirmed)
         #expect(signedOut.state == .needsAction)
         #expect(signedOut.detail == "Sign in to Sonny in Command Center.")
 
-        let undetermined = try accountRow(.undetermined)
+        let undetermined = try accountRow(.undetermined, .confirmed)
         #expect(undetermined.state == .unknown)
         #expect(undetermined.detail == "Sonny checks this when it needs it.")
 
@@ -96,9 +140,14 @@ struct PermissionReadinessModelAccessTests {
     @Test
     func nothingButAHeldSessionEverReportsReady() throws {
         for readiness: ModelAccessReadiness in [.signedOut, .undetermined] {
-            #expect(try accountRow(readiness).state != .ready, "\(readiness) reported ready")
+            for plan: PlanReadiness in Self.everyPlanReadiness {
+                #expect(
+                    try accountRow(readiness, plan).state != .ready,
+                    "\(readiness) with \(plan) reported ready"
+                )
+            }
         }
-        #expect(try accountRow(.signedIn).state == .ready)
+        #expect(try accountRow(.signedIn, .confirmed).state == .ready)
     }
 
     /// **The row is one row, and it is where the old one was.**
@@ -110,9 +159,10 @@ struct PermissionReadinessModelAccessTests {
     @Test
     func theAccountRowReplacedTheOpenAIRowRatherThanJoiningIt() throws {
         for readiness: ModelAccessReadiness in [.signedIn, .signedOut, .undetermined] {
+          for plan: PlanReadiness in Self.everyPlanReadiness {
             let items = PermissionReadinessService
                 .deterministic()
-                .currentStatus(modelAccess: readiness, hotKeyReady: true)
+                .currentStatus(modelAccess: readiness, planAccess: plan, hotKeyReady: true)
             #expect(items.count == 8)
             #expect(items.filter { $0.id == "sonny-account" }.count == 1)
             #expect(!items.contains { $0.id == "openai" })
@@ -144,6 +194,105 @@ struct PermissionReadinessModelAccessTests {
                 }
                 #expect(!item.detail.localizedCaseInsensitiveContains("export "))
             }
+          }
+        }
+    }
+
+    /// **The entitled half, and the rule it is held to: `.ready` needs both halves known-good**
+    /// (SONNY-336).
+    ///
+    /// `ModelAccessReadiness.undetermined`'s own doc states the rule for the session — a check that
+    /// could not be completed is not a check that passed — and this is that rule applied to the
+    /// second half. Signed in is no longer sufficient for a green row; signed in *with a confirmed
+    /// claim* is. That is a real behaviour change to a row that shipped, and it is the one the
+    /// ticket exists for: the row reported ready while saying nothing at all about entitlement.
+    @Test
+    func aHeldSessionAloneIsNoLongerEnoughToReportReady() throws {
+        #expect(try accountRow(.signedIn, .confirmed).state == .ready)
+
+        // Every other plan answer, including the never-asked one, is not ready.
+        for plan: PlanReadiness in Self.everyPlanReadiness where plan != .confirmed {
+            let row = try accountRow(.signedIn, plan)
+            #expect(row.state != .ready, "\(plan) reported ready")
+            // And not red either — nothing is gated, so an unconfirmed plan blocks nothing and the
+            // row must not demand action for it. This is the product call in assertion form: if a
+            // capability is ever gated, this line is what a session changing the rule has to argue
+            // with rather than discover.
+            #expect(row.state == .unknown, "\(plan) was not reported as check-when-used")
+        }
+    }
+
+    /// **The row still says the session is held even when the plan cannot be confirmed.**
+    ///
+    /// The failure this forbids is the row collapsing to one fact: a signed-in user whose claim has
+    /// lapsed being shown a sentence that reads as signed out, which would send them to a sign-in
+    /// that changes nothing — the same shape as `EntitlementCopy`'s `claimIsForAnotherSession`
+    /// defect, where the advice was the thing the user had just done.
+    @Test
+    func anUnconfirmedPlanStillReportsThatTheSessionIsHeld() throws {
+        for refusal in Self.everyRefusal {
+            let detail = try accountRow(.signedIn, .unconfirmed(refusal)).detail
+            #expect(detail.hasPrefix("Signed in."), "\(refusal): \(detail)")
+            #expect(!detail.localizedCaseInsensitiveContains("sign in to"), "\(refusal): \(detail)")
+        }
+        #expect(try accountRow(.signedIn, .undetermined).detail.hasPrefix("Signed in."))
+    }
+
+    /// **Every refusal is answered by name, and the switch has no `default`.**
+    ///
+    /// The point is not the sentences, it is that adding a case to `EntitlementRefusal` cannot
+    /// silently inherit another one's wording: `planSentence(for:)` lists all seven, so a new case
+    /// fails to compile there, and `Self.everyRefusal` lists all seven here, so a new case makes
+    /// this test's own population wrong in a way the assertion below catches.
+    ///
+    /// **Three sentences for seven refusals is the deliberate shape**, because what a user can do
+    /// collapses to three things — connect once, fix the clock, or nothing — and inventing four more
+    /// sentences that all mean "nothing you can do" would be words without information. So this
+    /// asserts the grouping by value rather than asserting seven distinct strings, which would pin
+    /// the opposite of what was decided.
+    @Test
+    func everyRefusalIsAnsweredByName() throws {
+        let sentences = try Self.everyRefusal.map { try accountRow(.signedIn, .unconfirmed($0)).detail }
+        // Nothing empty, nothing defaulted to the confirmed row's wording.
+        for (refusal, sentence) in zip(Self.everyRefusal, sentences) {
+            #expect(!sentence.isEmpty, "\(refusal)")
+            #expect(!sentence.contains("your plan is confirmed"), "\(refusal) read as confirmed")
+        }
+        // The two refusals with a specific action get their own sentence, and neither shares one.
+        let noClaim = try accountRow(.signedIn, .unconfirmed(.noClaim)).detail
+        let clock = try accountRow(.signedIn, .unconfirmed(.clockUnusable)).detail
+        #expect(noClaim == "Signed in. Connect once so Sonny can check your plan.")
+        #expect(clock == "Signed in. Your Mac's date and time are too far off to check your plan.")
+        #expect(noClaim != clock)
+        // Everything else shares one sentence, deliberately, and it is neither of the two above.
+        // **Derived from the population rather than written out again** (PR #216's review, F1): a
+        // second hand-written literal here was the other half of what made this test's staleness
+        // claim hollow, since an eighth case would have been absent from both lists at once.
+        let others = Self.everyRefusal.filter { $0 != .noClaim && $0 != .clockUnusable }
+        let shared = Set(try others.map { try accountRow(.signedIn, .unconfirmed($0)).detail })
+        #expect(shared == ["Signed in. Sonny couldn't check your plan."])
+        #expect(others.count == Self.everyRefusal.count - 2)
+        // Three groups, not one and not seven — the decision above, asserted as a count.
+        #expect(Set(sentences).count == 3)
+        // **The population's own size, which is what makes the doc on `everyRefusal` true.** The
+        // switch beside that array stops a stale list compiling; this is the half that makes a new
+        // case a deliberate decision rather than a silent join of the shared group. Same pair, same
+        // enum, as `EntitlementCopyTests.everyRefusalIsCovered`.
+        #expect(Self.everyRefusal.count == 7)
+    }
+
+    /// **The plan is not consulted while the session says signed out or undetermined.**
+    ///
+    /// A signed-out Mac's plan question has exactly one answer and it is the advice the session half
+    /// already gives, so consulting it could only produce a second sentence about the same problem.
+    /// Asserted as identity across every plan value rather than as a sentence, so it holds whatever
+    /// the wording becomes.
+    @Test
+    func thePlanIsNotConsultedUntilASessionIsHeld() throws {
+        for readiness: ModelAccessReadiness in [.signedOut, .undetermined] {
+            let rows = try Self.everyPlanReadiness.map { try accountRow(readiness, $0) }
+            #expect(Set(rows.map(\.detail)).count == 1, "\(readiness) varied with the plan")
+            #expect(Set(rows.map(\.state)).count == 1, "\(readiness) varied with the plan")
         }
     }
 
@@ -153,10 +302,17 @@ struct PermissionReadinessModelAccessTests {
     @Test
     func theOtherSevenRowsAreUnaffectedByTheAccountState() throws {
         let service = PermissionReadinessService.deterministic()
-        let signedIn = service.currentStatus(modelAccess: .signedIn, hotKeyReady: true)
-        let signedOut = service.currentStatus(modelAccess: .signedOut, hotKeyReady: true)
+        let signedIn = service.currentStatus(modelAccess: .signedIn, planAccess: .confirmed, hotKeyReady: true)
+        let signedOut = service.currentStatus(modelAccess: .signedOut, planAccess: .confirmed, hotKeyReady: true)
 
         #expect(signedIn.dropFirst().map(\.id) == signedOut.dropFirst().map(\.id))
         #expect(signedIn.dropFirst() == signedOut.dropFirst())
+
+        // And the plan half moves the account row without moving the other seven either
+        // (SONNY-336) — the same property, on the argument this row gained.
+        for plan: PlanReadiness in Self.everyPlanReadiness {
+            let items = service.currentStatus(modelAccess: .signedIn, planAccess: plan, hotKeyReady: true)
+            #expect(items.dropFirst() == signedIn.dropFirst(), "\(plan) moved a row that is not the account row")
+        }
     }
 }

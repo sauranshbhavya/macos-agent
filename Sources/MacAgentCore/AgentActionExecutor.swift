@@ -138,6 +138,9 @@ public final class AgentActionExecutor {
     /// See `CapabilityExecutionContext.modelAccessReadiness` for why this is a closure and why its
     /// default is `.undetermined`.
     private let modelAccessReadiness: () -> ModelAccessReadiness
+    /// The entitled half of the same row (SONNY-336). Closure and default for the reasons
+    /// `CapabilityExecutionContext.planReadiness` gives.
+    private let planReadiness: () -> PlanReadiness
     private let visionSession: VisionSessionEnvironment?
 
     public init(
@@ -186,6 +189,7 @@ public final class AgentActionExecutor {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         modelAccessReadiness: @escaping () -> ModelAccessReadiness = { .undetermined },
+        planReadiness: @escaping () -> PlanReadiness = { .undetermined },
         // `nil` means this executor has no screen-control wiring, which is the honest state for
         // `MacAgentCore` on its own and for every test that is not about vision. A vision session
         // reaching an executor built this way fails loudly with `visionUnavailable` rather than
@@ -229,6 +233,7 @@ public final class AgentActionExecutor {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.modelAccessReadiness = modelAccessReadiness
+        self.planReadiness = planReadiness
         self.visionSession = visionSession
     }
 
@@ -1988,6 +1993,7 @@ public final class AgentActionExecutor {
             now: now,
             hotKeyReady: hotKeyReady,
             modelAccessReadiness: modelAccessReadiness,
+            planReadiness: planReadiness,
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             taskScope: scope,
