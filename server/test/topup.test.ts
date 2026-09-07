@@ -1717,11 +1717,17 @@ describe("the top-up route keeps one deadline, and never abandons a charge to it
     expect(DEADLINE_MS.topUp.total).toBeLessThan(40_000);
   });
 
-  it("derives the row's upstream from the adapter's own per-call budget rather than repeating it", () => {
-    // **Two calls, one budget each** — the relation `polar.ts` and `SonnyBackendClient.swift` both
-    // state in prose. Held here so it is a derivation rather than two literals that happen to agree,
-    // which is `PORTAL_SESSION_TIMEOUT_MS`'s own precedent: a mutant raising one number survived the
-    // whole suite until a test held it.
+  it("holds the divisor the adapter's budget is derived through, which is two calls", () => {
+    // **This assertion's direction reversed in PR #220's fix round and its name did not** (that PR's
+    // delta review, N2). It was written when the adapter held its own `12_000` and the row was the
+    // derived half, so it read as two independently-written numbers agreeing. The arrow runs the other
+    // way now — `TOPUP_CHARGE_TIMEOUT_MS` *is* `DEADLINE_MS.topUp.upstream / 2` — so on the shipped
+    // tree this is `upstream === upstream`.
+    //
+    // **That does not make it vacuous, and what it guards is the divisor.** A derivation that stops
+    // halving leaves one call spending the whole row, and this is one of the three tests that fails
+    // when it does — mutant R3 in the branch's battery, killed here and in the two tests that measure
+    // what the adapter actually spends. Kept for that, renamed so the name describes it.
     expect(DEADLINE_MS.topUp.upstream).toBe(TOPUP_CHARGE_TIMEOUT_MS * 2);
   });
 

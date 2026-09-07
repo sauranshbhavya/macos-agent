@@ -533,8 +533,16 @@ export const TOPUP_CHARGE_TIMEOUT_MS = DEADLINE_MS.topUp.upstream / 2;
 /**
  * §12's budget for one top-up call, minted the way this adapter's config says to.
  *
- * **The wrapper rather than a bare `config.deadlineFactory ?? AbortSignal.timeout`**: that static is
- * called with `AbortSignal` as its receiver, and handing the bare reference around detaches it.
+ * **The arrow is shape, not necessity, and the reason first given for it was false** (PR #220's delta
+ * review, N1). It said the bare `config.deadlineFactory ?? AbortSignal.timeout` form fails because the
+ * static is called with `AbortSignal` as its receiver and handing the reference around detaches it. It
+ * does not: on node v22.23.1 `const bare = AbortSignal.timeout; bare(40)` returns a real signal that
+ * aborts after its delay with a `TimeoutError`, and `bare.call(undefined, 40)` behaves the same, static
+ * operations taking no receiver — measured here with `Map.prototype.get.call(undefined, "k")` as the
+ * control that the probe can see a genuine detachment at all. What the arrow buys is that both arms of
+ * the `??` read as the same thing, a `(ms: number) => AbortSignal`, so nobody has to stop and work out
+ * whether the right-hand one needs binding. That is worth a line; it is not a correctness fix, and
+ * saying it was is the class of claim F5 was about, one round after fixing F5.
  */
 function topUpDeadline(config: PolarProviderConfig): AbortSignal {
   const mint = config.deadlineFactory ?? ((ms: number) => AbortSignal.timeout(ms));
