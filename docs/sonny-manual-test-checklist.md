@@ -4026,6 +4026,30 @@ formality.
       fresh sign-in. Expected: that one succeeds. **What would be a finding:** the second sign-out
       failing, or the app getting stuck on a sign-out it can never complete.
 
+- [ ] **(SONNY-428, waits on SONNY-192)** **A deletion that cannot finish gives up in about fifteen
+      seconds and says so, instead of holding the request.** Against a deployed gateway, hold a lock
+      the delete needs and then ask for one: from a `psql` on the gateway's database run
+      `BEGIN; LOCK TABLE sonny.retained_content IN ACCESS EXCLUSIVE MODE;` and leave that session
+      open, then from a terminal time a delete —
+      `time curl -sS -i -X DELETE https://<host>/v1/tasks/<a task id you own>
+      -H 'authorization: Bearer <your access token>'`. Expected: an answer inside roughly **fifteen
+      seconds** carrying `504` and `code` **`provider.timeout`** with `retryable: true`. Release the
+      lock with `ROLLBACK` afterwards. **What would be a finding:** the request sitting for a minute
+      or more, which is the 120-second delivery bound answering instead of §12's deadline; or a
+      `500`, which would mean the cancellation never reached the timeout arm.
+- [ ] **(SONNY-428, waits on SONNY-192)** **The gateway is still healthy after that timeout — this
+      is the half worth checking, and the reason the deadline is not a race.** Immediately after the
+      row above, with the lock now released, run ten ordinary authenticated calls in a row (any
+      `GET /v1/account/entitlements` will do). Expected: all ten answer normally. **What would be a
+      finding:** any of them failing with `current transaction is aborted`, or a spread of odd
+      failures that clears up on its own — either would mean a connection went back to the pool in a
+      state the next request inherited, which is the defect this ticket's mechanism exists to avoid.
+- [ ] **(SONNY-428)** **Ordinary deletion is untouched.** In the real packaged app against a working
+      gateway, use **Command Center › Memory › Task history › Delete** and, separately, **Delete what
+      Sonny did on screen** on a single task. Expected: both finish as they did before, with the same
+      confirmation and the same counts. **What would be a finding:** either press becoming slower,
+      failing, or reporting a different number than it used to.
+
 ## 8. How to report back
 
 For each real finding, give me:
