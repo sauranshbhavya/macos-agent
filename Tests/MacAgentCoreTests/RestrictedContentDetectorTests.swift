@@ -262,7 +262,8 @@ struct RestrictedContentDetectorTests {
     /// asserted that until PR #210's F3 — the claim was checked against the Zillow fixture, which
     /// carries no wall-speech phrase and therefore cannot exercise the ordering at all.
     ///
-    /// `phrases` is `wallSpeechPhrases + subjectPhrases`, so a contentless page whose markup carries
+    /// `phrases` is `wallSpeechPhrases + readerQuotedPhrases + subjectPhrases`, so a contentless page
+    /// whose markup carries
     /// both a reCAPTCHA vendor script and a login wording is refused as a **login wall**, not as a
     /// CAPTCHA — the order changed that from SONNY-245, where `captcha` was first. Fail-closed is
     /// intact either way; what moved is the noun the user is shown, and that is worth pinning rather
@@ -375,11 +376,13 @@ struct RestrictedContentDetectorTests {
     /// asserts is a constant anyone may quietly change.
     @Test
     func aPhraseAReaderCanSeeCountsUpToTheInterstitialLimitAndNotBeyondIt() {
-        let atLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit - 1, saying: "please log in")
-        let pastLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit, saying: "please log in")
+        // A `wallSpeechPhrases` entry, because SONNY-429 moved the login and paywall wordings to
+        // markup-only and this test's subject is the limit rather than the phrase.
+        let atLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit - 1, saying: "confirm you are a human")
+        let pastLimit = page(visibleCharacters: RestrictedContentDetector.interstitialVisibleTextLimit, saying: "confirm you are a human")
 
         let refused = RestrictedContentDetector.finding(inHTML: atLimit)
-        #expect(refused?.reason == "login walls")
+        #expect(refused?.reason == "CAPTCHAs")
         #expect(refused?.evidence == .visibleText)
         #expect(refused?.visibleTextLength == 1_999)
 
@@ -419,8 +422,9 @@ struct RestrictedContentDetectorTests {
     @Test
     func aCommentAndAnAttributeAreNotWhatAPageSaysToAReader() {
         let filler = String(repeating: "a", count: 1_000)
-        let hidden = "<html><body><p title=\"please log in\">\(filler)</p><!-- please log in --></body></html>"
-        let spoken = "<html><body><p>please log in \(filler)</p></body></html>"
+        let hidden = "<html><body><p title=\"confirm you are a human\">\(filler)</p>"
+            + "<!-- confirm you are a human --></body></html>"
+        let spoken = "<html><body><p>confirm you are a human \(filler)</p></body></html>"
 
         #expect(RestrictedContentDetector.visibleText(inHTML: hidden).count == 1_000)
         #expect(RestrictedContentDetector.finding(inHTML: hidden) == nil)
@@ -554,7 +558,9 @@ struct RestrictedContentDetectorTests {
             ("confirm you are human", "CAPTCHAs"),
             ("confirm you are a human", "CAPTCHAs"),
             ("proves you are human", "CAPTCHAs"),
-            ("proves you are a human", "CAPTCHAs"),
+            ("proves you are a human", "CAPTCHAs")
+        ]
+        let expectedReaderQuoted = [
             ("please log in", "login walls"),
             ("sign in to continue", "login walls"),
             ("subscribe to continue", "paywalls")
@@ -567,24 +573,155 @@ struct RestrictedContentDetectorTests {
 
         #expect(RestrictedContentDetector.wallSpeechPhrases.map { [$0.phrase, $0.reason] }
             == expectedWallSpeech.map { [$0.0, $0.1] })
+        #expect(RestrictedContentDetector.readerQuotedPhrases.map { [$0.phrase, $0.reason] }
+            == expectedReaderQuoted.map { [$0.0, $0.1] })
         #expect(RestrictedContentDetector.subjectPhrases.map { [$0.phrase, $0.reason] }
             == expectedSubjects.map { [$0.0, $0.1] })
         #expect(RestrictedContentDetector.phrases.map { [$0.phrase, $0.reason] }
-            == (expectedWallSpeech + expectedSubjects).map { [$0.0, $0.1] })
+            == (expectedWallSpeech + expectedReaderQuoted + expectedSubjects).map { [$0.0, $0.1] })
 
-        for (phrase, reason) in expectedWallSpeech + expectedSubjects {
+        // Every phrase still names its own noun. A page carrying only the phrase is under
+        // `contentlessVisibleTextLimit`, so the three markup-only entries are reached here too.
+        for (phrase, reason) in expectedWallSpeech + expectedReaderQuoted + expectedSubjects {
             let html = "<html><body><p>\(phrase)</p></body></html>"
             #expect(RestrictedContentDetector.reason(inHTML: html) == reason, "phrase \(phrase)")
+        }
+    }
+
+    /// SONNY-429's property: the three login and paywall wordings SONNY-245 introduced are no longer
+    /// visible-text evidence, because a reader discussing a wall quotes it **verbatim**.
+    ///
+    /// This is a different failure from the one `wallSpeechPhrases` guards against. There the person
+    /// of the verb separates a wall from a reader — a wall says "verifying you are human", a reader
+    /// asks "how do you prove you are human?". Here there is no difference to find: the commenter is
+    /// pasting the gate's own sentence, so the wall's string and the reader's string are the same
+    /// string. Measured over 425 real pages sampled on these three wordings themselves, they refused
+    /// **56 innocent in-band pages** and **0 of 22 real gates in the band**.
+    ///
+    /// The served set below is four of those real comments — real text, lowercased, and two of them
+    /// abridged, which is what "verbatim" overstated before PR #222 recorded it — so this test fails
+    /// if any of the three comes back into `wallSpeechPhrases`. It is the control shape PR #210's F1
+    /// forced on `wallSpeechReachesRealGateWordingsAndNotReadersTalkingAboutThem`. The case fold they
+    /// therefore skip is covered by `matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace` and
+    /// `phraseMatchingIsLocaleIndependent`.
+    @Test
+    func aReaderQuotingALoginOrPaywallWallIsServedInTheInterstitialBand() {
+        let served = [
+            "\"please log in to continue.\" seriously? one might think they would prioritize "
+                + "raising awareness over increasing facebook userbase.",
+            "\"sign in to continue\" - as you are new to hn i can tell you that is a big stopper right there.",
+            "\"you are in private mode. subscribe to continue reading.\" ok, that's one more i will "
+                + "not open anymore; seems bloomberg started using similar \"privacy mode\" detection as nyt.",
+            "> we noticed you still have your ad blocker on, please log in to continue to the site. "
+                + "> login with forbes but they don't actually say how to signup."
+        ]
+        for comment in served {
+            let html = page(visibleCharacters: 600, saying: comment)
+            #expect(RestrictedContentDetector.finding(inHTML: html) == nil, "comment \(comment)")
+        }
+
+        // The control that says the band is reachable at all: a CAPTCHA-side wall speech phrase on a
+        // page of the identical size is still refused, so these four are served by the phrase table
+        // rather than by the page being out of range.
+        let stillRefused = page(visibleCharacters: 600, saying: "Please confirm you are a human.")
+        #expect(RestrictedContentDetector.finding(inHTML: stillRefused)?.reason == "CAPTCHAs")
+        #expect(RestrictedContentDetector.finding(inHTML: stillRefused)?.evidence == .visibleText)
+    }
+
+    /// The other half of the same change: the three keep every bit of their markup coverage, so
+    /// stage 2 is untouched and `phrases` stays a literal superset of SONNY-245's seven.
+    ///
+    /// **Every sample here used to sit in an HTML comment, which is a page shape the surviving route
+    /// always sees** (PR #222, F3). A phrase in a comment can never be split by an inline tag and
+    /// never carries an entity, so the test could not exercise the claim its own doc comment made —
+    /// which is about a page whose *visible text* is the gate's sentence. That is `CLAUDE.md`'s
+    /// held-sample gotcha in its milder form: nothing asserted was wrong, and what it did not touch
+    /// was upstream of it.
+    @Test
+    func theThreeQuotedWordingsAreStillMarkupEvidenceOnAContentlessPage() {
+        for (phrase, reason) in RestrictedContentDetector.readerQuotedPhrases {
+            let filler = String(repeating: "a", count: 100)
+            let html = "<html><body><p>\(filler)</p><!-- \(phrase) --></body></html>"
+            let refused = RestrictedContentDetector.finding(inHTML: html)
+            #expect(refused?.reason == reason, "phrase \(phrase)")
+            #expect(refused?.phrase == phrase, "phrase \(phrase)")
+            #expect(refused?.evidence == .markup, "phrase \(phrase)")
+            #expect(refused?.visibleTextLength == 100, "phrase \(phrase)")
+        }
+
+        // The control: the same comment on a page above the contentless limit is not evidence, so
+        // what refuses the pages above is the limit rather than the comment existing.
+        let filler = String(repeating: "a", count: 300)
+        let roomy = "<html><body><p>\(filler)</p><!-- please log in --></body></html>"
+        #expect(RestrictedContentDetector.finding(inHTML: roomy) == nil)
+    }
+
+    /// The shape the test above could not reach: a real login wall below `contentlessVisibleTextLimit`
+    /// whose **visible text** is the gate's sentence, written the three ways a gate is really written.
+    ///
+    /// This is PR #222's F2. Stage 1 reads rendered text and stage 2 read raw markup, so a phrase
+    /// that renders contiguously is not necessarily contiguous in the source: an inline `<a>` on the
+    /// words "log in", or a `&nbsp;` between them, survives in the markup and defeats the substring
+    /// match. Measured over 14 gate wordings, the pre-SONNY-429 rule refuses 8 and the first version
+    /// of SONNY-429's rule refused **0** of the anchored pages and **0** of the entity pages. Stage 2
+    /// reads the rendered text as well now, which restores all three constructions to the same
+    /// verdict.
+    ///
+    /// The plain row is the control: it passed before the fix too, so a green plain row alone never
+    /// distinguished the fixed rule from the broken one.
+    @Test
+    func aGateBelowTheContentlessLimitIsRefusedHoweverItsSentenceIsWrittenInTheMarkup() throws {
+        let constructions: [(label: String, body: String)] = [
+            ("plain", "Please log in to continue."),
+            ("inline anchor", "Please <a href=\"/account\">log in</a> to continue."),
+            ("entities", "Please&nbsp;log&nbsp;in&nbsp;to&nbsp;continue.")
+        ]
+        for (label, body) in constructions {
+            let html = "<html><head><title>Access</title></head><body><main><h1>\(body)</h1>"
+                + "<form action=\"/account\" method=\"post\"><input type=\"email\"></form></main></body></html>"
+            let visible = RestrictedContentDetector.visibleText(inHTML: html)
+            #expect(visible.count < RestrictedContentDetector.contentlessVisibleTextLimit, "\(label) is in range")
+
+            let refused = try #require(RestrictedContentDetector.finding(inHTML: html), "construction \(label)")
+            #expect(refused.reason == "login walls", "construction \(label)")
+            #expect(refused.phrase == "please log in", "construction \(label)")
+            #expect(refused.evidence == .markup, "construction \(label)")
+        }
+
+        // The control that says the fold is doing this rather than the page being short: a page of
+        // the same three shapes carrying no phrase at all is served.
+        for body in ["Welcome <a href=\"/x\">back</a>.", "Welcome&nbsp;back&nbsp;here."] {
+            let html = "<html><body><main><h1>\(body)</h1></main></body></html>"
+            #expect(RestrictedContentDetector.finding(inHTML: html) == nil, "control \(body)")
         }
     }
 
     /// Case and diacritics fold, and a phrase broken across markup whitespace still matches.
     @Test
     func matchingFoldsCaseAndDiacriticsAndCollapsesWhitespace() {
+        // Markup route: every page here is under `contentlessVisibleTextLimit`, and raw markup is
+        // folded before it is searched, so a phrase broken across indentation still matches.
         #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>CAPTCHA</p></body></html>") == "CAPTCHAs")
-        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Vérify you are human</p></body></html>") == "CAPTCHAs")
         #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Please\n   log\tin</p></body></html>") == "login walls")
-        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Please&nbsp;log&nbsp;in now</p></body></html>") == "login walls")
+
+        // Visible-text route. `&nbsp;` is an entity in the markup and U+00A0 only after SwiftSoup
+        // renders it, so this line can match through `visibleText` and through nothing else — which
+        // is why it needs a phrase visible text is still trusted for (SONNY-429).
+        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>Vérify you are human</p></body></html>") == "CAPTCHAs")
+        let entities = "<html><body><p>Confirm&nbsp;you&nbsp;are&nbsp;a&nbsp;human now \(String(repeating: "a", count: 400))</p></body></html>"
+        #expect(RestrictedContentDetector.reason(inHTML: entities) == "CAPTCHAs")
+        #expect(RestrictedContentDetector.finding(inHTML: entities)?.evidence == .visibleText)
+
+        // **The assertion this branch deleted, restored** (PR #222, F2). It was dropped when the
+        // login wordings stopped being visible-text evidence, and it is the one line in the suite
+        // that would have gone red on the raw-markup gap: below the contentless limit an entity
+        // inside the phrase survives in the source, so this page is reachable only once stage 2
+        // reads rendered text too. The inline-anchor twin beside it is the same property in the
+        // construction a real login wall actually uses.
+        #expect(RestrictedContentDetector.reason(
+            inHTML: "<html><body><p>Please&nbsp;log&nbsp;in now</p></body></html>") == "login walls")
+        #expect(RestrictedContentDetector.reason(
+            inHTML: "<html><body><p>Please <a href=\"/a\">log in</a> now</p></body></html>") == "login walls")
     }
 
     // MARK: - Helpers

@@ -97,6 +97,52 @@ import SwiftSoup
 ///   gets a different error, not a summarised wall. That is the same distinction this comment
 ///   already draws for Instagram and Tumblr below, and it is most of the answer to how bad the trade
 ///   is.
+/// - **Given up a second time, and by a narrowing rather than a re-routing** (SONNY-429). A login
+///   gate or paywall in the same band whose visible text says `please log in`, `sign in to continue`
+///   or `subscribe to continue` and none of `wallSpeechPhrases` is now served. Those three were
+///   visible-text evidence from SONNY-245 until 2026-09-07; `readerQuotedPhrases` carries the
+///   measurement that moved them and the reason no narrower wording could replace them.
+///
+///   **The page this costs is Google's account sign-in interstitial, and it is named here because
+///   the first version of this bullet said no such page existed** (PR #222, F1). That claim —
+///   "zero such pages among 68 real gates" — was a property of those 68, and one afternoon's
+///   fetching by a reviewer found the counterexample. Measured on all four of its hostnames:
+///   HTTP **200**, **843**–**853** visible characters, squarely in the band, visible text opening
+///   `sign in to continue to gmail email or phone forgot email? not your computer?`, carrying no
+///   `wallSpeechPhrases` entry. It was refused `login walls` before this change and is served now.
+///   **Two of the four reach this code at all** — `accounts.google.com/signin/...` and
+///   `drive.google.com/drive/...` answer `allows=true` through the shipped `RobotsTXTPolicy`, and
+///   correctly so rather than through SONNY-437's CRLF defect: that host's `robots.txt` disallows
+///   six specific paths and then says `Allow: /`. **What it costs is the refusal, not the wall.**
+///   The extractor throws `noReadableContent` on all four, so nothing is summarised from a sign-in
+///   form; the user gets "nothing readable on the page" where they used to get "Sonny will not
+///   bypass login walls." That is a worse message about a login wall rather than a bypass — and it
+///   is one of the most-encountered login walls on the web, which is the fact the founders make the
+///   accept-or-veto call on.
+///
+///   **No narrower wording recovers it, and that was measured rather than assumed.** Under the
+///   inclusion rule below, on a corpus sampled on the candidate itself, `sign in to continue to`
+///   matches **5** innocent in-band pages — one of them a commenter quoting Google's own sentence,
+///   *"the google oauth flow which would say 'sign in to continue to <app>'"* — so it fails the rule
+///   exactly as the three did. `sign in to continue to your` reaches **0** innocent pages and **0**
+///   real gates, Google's sentence being "sign in to continue to *Gmail*". Narrowing cannot escape
+///   quotation, because the quotation narrows with the wording.
+///
+///   **The mitigations are not the same two, and each had to be corrected once.** Below
+///   `contentlessVisibleTextLimit` nothing is lost — but that was true only of gate sentences that
+///   sit in the source as contiguous text, and stating it as an absolute was wrong (PR #222, F2).
+///   Stage 1 reads **rendered** text and stage 2 read **raw markup**, so an inline `<a>` on the words
+///   "log in", or a `&nbsp;` between them, survived in the source and defeated the substring match:
+///   measured over the same 14 wordings, the base refuses **8** and this rule refused **0** of the
+///   anchored pages and **0** of the entity pages. Stage 2 now reads the rendered text as well,
+///   which restores **8 of 8** in all three constructions — base against fix is identical on **39 of
+///   39** — at **0** changed verdicts across 327 innocent pages, only **3** of which are short enough
+///   for it to act on. The second mitigation is the one that does **not** hold: the extractor does
+///   not throw `noReadableContent` on every newly-served page the way it did for the CAPTCHA-side
+///   five. **8 of 15** constructed band-sized gate pages extract, so a real gate of this shape can
+///   yield a thin note rather than nothing. (Google's four throw, and PR #222's reviewer measured
+///   **0 of 7** extracting on its own chrome — the figure is a property of the filler, so **8 of 15**
+///   is kept as the pessimistic reading rather than revised down.)
 /// - **Accepted, knowingly:** a gate that renders its own form and chrome, where the only trace is
 ///   a vendor script. The measured instances are **LinkedIn's feed** (HTTP 200, 703 visible
 ///   characters, and the extractor gets 556 characters of "article" out of the sign-in chrome) and
@@ -231,6 +277,20 @@ public enum RestrictedContentDetector {
     /// are pre-existing behaviour rather than this split's. Removing it would narrow SONNY-245's
     /// coverage, which is the decision the warning above says has to be made on its own terms, and
     /// it is not SONNY-256's to make.
+    ///
+    /// **That decision has since been made, on its own terms, for the other three of SONNY-245's
+    /// wordings** (SONNY-429). `please log in`, `sign in to continue` and `subscribe to continue`
+    /// were here until 2026-09-07 and are now in `readerQuotedPhrases` — markup evidence only. This
+    /// **narrows SONNY-245's coverage** rather than merely re-routing evidence, and it is recorded
+    /// as a narrowing: a login gate or paywall in the 200-to-2 000 band whose visible text carries
+    /// one of the three and none of the entries above is now served. What the warning above asks
+    /// for is the measurement that supports it, and it is on `readerQuotedPhrases`.
+    ///
+    /// **The inclusion rule is unchanged and now cuts both ways.** It was written to stop an entry
+    /// being *added* on a corpus that could not falsify it. Applied to an entry already here, it is
+    /// what removes one: the three failed it by 56 innocent in-band pages against 0 real walls, on a
+    /// corpus sampled on those three wordings themselves. `verify you are human` has not been
+    /// re-measured under this round and stays exactly as it is.
     static let wallSpeechPhrases: [(phrase: String, reason: String)] = [
         ("verify you are human", "CAPTCHAs"),
         ("verifying you are human", "CAPTCHAs"),
@@ -238,7 +298,38 @@ public enum RestrictedContentDetector {
         ("confirm you are human", "CAPTCHAs"),
         ("confirm you are a human", "CAPTCHAs"),
         ("proves you are human", "CAPTCHAs"),
-        ("proves you are a human", "CAPTCHAs"),
+        ("proves you are a human", "CAPTCHAs")
+    ]
+
+    /// **Wall speech a reader quotes verbatim**: wording that only a wall issues, and that people
+    /// discussing walls reproduce word for word. It is real wall speech — which is why it is not in
+    /// `subjectPhrases` — and it is still useless as visible-text evidence, because the quoting
+    /// reader's page carries the identical string.
+    ///
+    /// **This is the category SONNY-256's separator could not reach, and the reason it exists is a
+    /// measurement rather than a taxonomy.** On the CAPTCHA side the person of the verb tells a wall
+    /// from a reader: a wall says "verifying you are human", a reader asks "how do you prove you are
+    /// human?". SONNY-245's three login and paywall wordings have no such difference available,
+    /// because the commenter is not paraphrasing the wall — they are pasting it: *"sign in to
+    /// continue" - as you are new to hn i can tell you that is a big stopper right there*.
+    ///
+    /// **Measured over 425 pages on 2026-09-07** (SONNY-429) — of which **159 were fetched** and the rest
+    /// constructed from real comment text or synthesised from real gate wordings, a split the two
+    /// carried-forward sentences used to omit — sampled on these three wordings
+    /// themselves — the frame SONNY-245's corpus was never drawn on, which is what let its claim of
+    /// zero innocent refusals stand. In the 200-to-2 000 band the three refuse **56 innocent pages**
+    /// — `please log in` 44, `sign in to continue` 7, `subscribe to continue` 5 — and **0 real
+    /// walls**: of **68 real gates fetched**, **22** sit in the band and **not one** says any of the
+    /// three to a reader, nor any of the fourteen other candidate wordings measured beside them. The
+    /// real ones say "sign in", "log in", "sign in to github", "log in or sign up for X".
+    ///
+    /// **No narrowing was available.** Every candidate that reaches a gate wording also reaches
+    /// innocent pages — `log in to continue` 15 innocent, `you must be logged in` 13, `members only`
+    /// 52 — and the only candidates scoring zero innocent pages are ones no real gate in the corpus
+    /// says and no commenter writes, so adding them would fit the list to pages the round invented.
+    /// Quotation marks were measured as a signal and rejected: they sit beside the phrase on only
+    /// **15 of the 56**.
+    static let readerQuotedPhrases: [(phrase: String, reason: String)] = [
         ("please log in", "login walls"),
         ("sign in to continue", "login walls"),
         ("subscribe to continue", "paywalls")
@@ -274,7 +365,8 @@ public enum RestrictedContentDetector {
     /// containment ran the other way even while it existed: `verify you are human` is the longer
     /// string, so it was the *pages* matching the shorter needle that were the superset, not the
     /// phrase.)
-    static let phrases: [(phrase: String, reason: String)] = wallSpeechPhrases + subjectPhrases
+    static let phrases: [(phrase: String, reason: String)] =
+        wallSpeechPhrases + readerQuotedPhrases + subjectPhrases
 
     /// The refusal reason for `html`, or `nil` if the page is not a wall.
     public static func reason(inHTML html: String) -> String? {
@@ -296,14 +388,29 @@ public enum RestrictedContentDetector {
             )
         }
 
-        if visibleLength < contentlessVisibleTextLimit,
-           let hit = firstPhrase(among: phrases, in: html) {
-            return Finding(
-                reason: hit.reason,
-                phrase: hit.phrase,
-                evidence: .markup,
-                visibleTextLength: visibleLength
-            )
+        // Stage 2 reads the raw markup **and** the rendered text. Searching raw markup alone is
+        // what makes this stage circumstantial — a `<script src>`, a config key, a class name —
+        // and it is also what an inline tag or an entity *inside* a phrase defeats, because those
+        // survive in the source and the substring match does not step over them. `visibleText` is
+        // already the tag-stripped, entity-resolved form, so reading it here is the fold rather
+        // than a second mechanism. See `readerQuotedPhrases` for the measurement (PR #222, F2).
+        if visibleLength < contentlessVisibleTextLimit {
+            if let hit = firstPhrase(among: phrases, in: html) {
+                return Finding(
+                    reason: hit.reason,
+                    phrase: hit.phrase,
+                    evidence: .markup,
+                    visibleTextLength: visibleLength
+                )
+            }
+            if let hit = firstPhrase(among: phrases, in: visible) {
+                return Finding(
+                    reason: hit.reason,
+                    phrase: hit.phrase,
+                    evidence: .markup,
+                    visibleTextLength: visibleLength
+                )
+            }
         }
 
         return nil

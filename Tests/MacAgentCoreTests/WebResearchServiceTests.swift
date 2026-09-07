@@ -71,6 +71,12 @@ struct WebResearchServiceTests {
         }
     }
 
+    /// **The name reads wider than what this proves, and that is recorded rather than renamed**
+    /// (PR #222's residuals, SONNY-429). Its page is 46 visible characters, so what refuses it is
+    /// stage 2 — the markup route — and not the login wording being visible-text evidence. It is
+    /// still the right test for the property it is here for: that the loader surfaces the detector's
+    /// refusal rather than returning a note. The visible-text route for login wordings is gone by
+    /// measurement, so a wider version of this test would assert behaviour the product no longer has.
     @Test
     func publicWebPageLoaderRejectsLoginCaptchaAndPaywallPages() async throws {
         let url = URL(string: "https://example.com/paywalled")!
