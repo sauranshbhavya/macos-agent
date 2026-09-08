@@ -356,15 +356,13 @@ struct FirstRunSequenceView: View {
             Button(FirstRunCopy.deferralLabel(for: step)) {
                 coordinator.skipCurrentStep()
             }
-            .buttonStyle(SonnyButtonStyle(tone: .secondary))
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary))
             .accessibilityLabel(FirstRunCopy.deferralLabel(for: step))
         }
-        .padding(.horizontal, 40)
-        .padding(.vertical, 14)
+        .padding(.horizontal, SonnySpacing.xxxl)
+        .padding(.vertical, SonnySpacing.lg)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+            SettingsDivider()
         }
     }
 

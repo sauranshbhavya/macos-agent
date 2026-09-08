@@ -536,33 +536,17 @@ struct SignInDialogView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close sign-in")
+            SonnyDialogHeader(
+                title: model.isSignedIn ? "Account" : SignInCopy.signInLabel,
+                closeLabel: "Close sign-in"
+            ) {
+                isPresented = false
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
+
+            SettingsDivider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(model.isSignedIn ? "Account" : SignInCopy.signInLabel)
-                        .font(SonnyType.settingsContentTitle)
-                        .foregroundStyle(SonnyTheme.text)
-                        .padding(.bottom, 16)
-
-                    SettingsDivider()
-
                     switch model.step {
                     case .address:
                         addressStep
@@ -574,22 +558,16 @@ struct SignInDialogView: View {
 
                     messages
                 }
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-                .padding(.bottom, 32)
+                .padding(.horizontal, SonnySpacing.xxxl)
+                .padding(.top, SonnySpacing.sm)
+                .padding(.bottom, SonnySpacing.xxxl)
             }
 
             #if DEBUG
             debugHostLine
             #endif
         }
-        .frame(width: 520, height: 400)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
         // **Read on appear and again when a sign-in completes**, and both are needed. The dialog is
         // a sheet, so a user who signs in inside it never re-appears it — without the second the row
         // would stay absent until the next time they opened Account, which is the same staleness
@@ -632,9 +610,9 @@ struct SignInDialogView: View {
     }
 
     private var addressStep: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(SignInCopy.emailFieldLabel)
-                .font(SonnyType.eyebrow)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
 
             SettingsAdaptiveControlRow {
@@ -646,21 +624,27 @@ struct SignInDialogView: View {
                     Task { await model.sendCode() }
                 }
             } trailing: {
-                Button(SignInCopy.sendCodeLabel) {
+                Button {
                     Task { await model.sendCode() }
+                } label: {
+                    if model.isBusy {
+                        ProgressView().controlSize(.small).tint(SonnyTheme.textOnAccent)
+                    } else {
+                        Text(SignInCopy.sendCodeLabel)
+                    }
                 }
                 .buttonStyle(SonnyButtonStyle(tone: .primary, width: 110))
                 .disabled(!model.canSendCode)
                 .accessibilityLabel(SignInCopy.sendCodeLabel)
             }
         }
-        .padding(.top, 20)
+        .padding(.top, SonnySpacing.xl)
     }
 
     private var codeStep: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(SignInCopy.codeFieldLabel)
-                .font(SonnyType.eyebrow)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
 
             SettingsAdaptiveControlRow {
@@ -672,8 +656,14 @@ struct SignInDialogView: View {
                     Task { await model.verify() }
                 }
             } trailing: {
-                Button(SignInCopy.verifyLabel) {
+                Button {
                     Task { await model.verify() }
+                } label: {
+                    if model.isBusy {
+                        ProgressView().controlSize(.small).tint(SonnyTheme.textOnAccent)
+                    } else {
+                        Text(SignInCopy.verifyLabel)
+                    }
                 }
                 .buttonStyle(SonnyButtonStyle(tone: .primary, width: 110))
                 .disabled(!model.canVerify)
@@ -684,11 +674,11 @@ struct SignInDialogView: View {
             // code arrived, so no request failed. It sits here from the moment this step appears,
             // beside the two controls that act on it.
             Text(SignInCopy.codeNotArriving)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
+            HStack(spacing: SonnySpacing.sm) {
                 Button(SignInCopy.resendCodeLabel) {
                     Task { await model.sendCode() }
                 }
@@ -704,23 +694,29 @@ struct SignInDialogView: View {
                 .accessibilityLabel(SignInCopy.useAnotherAddressLabel)
             }
         }
-        .padding(.top, 20)
+        .padding(.top, SonnySpacing.xl)
     }
 
     private var signedInStep: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
             SettingsAdaptiveControlRow {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: SonnySpacing.xs) {
                     Text(model.signedInAddress ?? "Signed in")
                         .font(SonnyType.bodyEmphasis)
                         .foregroundStyle(SonnyTheme.text)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } trailing: {
-                Button(SignInCopy.signOutLabel) {
+                Button {
                     Task { await model.signOut() }
+                } label: {
+                    if model.isBusy {
+                        ProgressView().controlSize(.small).tint(SonnyTheme.danger)
+                    } else {
+                        Text(SignInCopy.signOutLabel)
+                    }
                 }
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 110))
+                .buttonStyle(SonnyButtonStyle(tone: .danger, width: 110))
                 .disabled(model.isBusy)
                 .accessibilityLabel(SignInCopy.signOutLabel)
             }
@@ -730,7 +726,7 @@ struct SignInDialogView: View {
             screenControlAutoTopUpRow
             screenControlLastTopUpRow
         }
-        .padding(.top, 12)
+        .padding(.top, SonnySpacing.md)
     }
 
     /// Whether Sonny may buy more runs when these run out (SONNY-215).
@@ -890,11 +886,15 @@ struct SignInDialogView: View {
             let line = SubscriptionCopy.line(for: subscription, payment: payment)
             let control = SubscriptionCopy.controlLabel(for: payment)
             SettingsAdaptiveControlRow {
-                Text(line)
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(line)
+                HStack(spacing: SonnySpacing.sm) {
+                    SonnyBadge(text: subscription.plan.capitalized, tone: .accent)
+                    Text(line)
+                        .font(SonnyType.body)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(line)
             } trailing: {
                 Button(control) {
                     Task { await model.openBillingPortal() }
@@ -921,18 +921,18 @@ struct SignInDialogView: View {
     private var messages: some View {
         if let failure = model.failure {
             Text(SignInCopy.message(for: failure))
-                .font(SonnyType.body)
-                .foregroundStyle(SonnyTheme.warning)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.danger)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 12)
+                .padding(.top, SonnySpacing.md)
         } else if let notice = model.notice {
             Text(notice)
-                .font(SonnyType.body)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 12)
+                .padding(.top, SonnySpacing.md)
         }
     }
 
@@ -946,8 +946,8 @@ struct SignInDialogView: View {
                 .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 40)
-                .padding(.bottom, 12)
+                .padding(.horizontal, SonnySpacing.xxxl)
+                .padding(.bottom, SonnySpacing.md)
         }
     }
     #endif
@@ -959,17 +959,7 @@ struct SignInDialogView: View {
         onSubmit: @escaping () -> Void
     ) -> some View {
         TextField(prompt, text: text)
-            .textFieldStyle(.plain)
-            .font(SonnyType.caption)
-            .foregroundStyle(SonnyTheme.text)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(SonnyTheme.input)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .sonnyTextField()
             .onSubmit(onSubmit)
             .disabled(model.isBusy)
             .accessibilityLabel(accessibilityLabel)
