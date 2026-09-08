@@ -1347,22 +1347,13 @@ private struct InsightsView: View {
                 // No "Overview" (or other) section-group label — neither the wireframe nor
                 // founder-decisions doc calls for one, and it was previously applied to only
                 // one of these four sections rather than consistently to all of them.
-                VStack(alignment: .leading, spacing: 16) {
-                    InsightsOverviewBento(summary: summary)
-
-                    WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
-
-                    WorkspaceBreakdownPanel(entries: workspaceBreakdown)
-
-                    TaskHistoryListPanel(
-                        records: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3),
-                        title: "Recently Completed",
-                        emptyTitle: "No activity yet",
-                        emptyMessage: "Completed Sonny tasks will appear here."
-                    )
-                }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 24)
+                InsightsOverviewBento(
+                    summary: summary,
+                    workspaceBreakdown: workspaceBreakdown,
+                    recentRecords: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3)
+                )
+                .padding(.horizontal, SonnySpacing.xxxl)
+                .padding(.vertical, SonnySpacing.xxl)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1375,6 +1366,12 @@ private struct InsightsView: View {
     }
 }
 
+/// The asymmetric bento the founders asked for (recorded as an open item in
+/// `docs/sonny-founder-design-decisions.md`): a three-row `Grid` over a four-column frame. Row 1 is
+/// the three stats, the first spanning two columns as the hero tile; row 2 is the weekly chart
+/// spanning two columns beside the workspace breakdown; row 3 is recent activity at full width. Six
+/// tiles, no empty cells.
+///
 /// Literal wireframe layout (`14-MainAppInsights.svg`) originally had 4 equal-width stat cards;
 /// "Avg. cycle time" was dropped per direct instruction (2026-07-18) as not adding much value,
 /// leaving 3.
@@ -1389,21 +1386,44 @@ private struct InsightsView: View {
 /// visible trace was a single manual-checklist row.
 private struct InsightsOverviewBento: View {
     let summary: TaskHistoryInsightsSummary
+    let workspaceBreakdown: [WorkspaceTaskBreakdownEntry]
+    let recentRecords: [CompletedTaskRecord]
 
     var body: some View {
-        HStack(spacing: 12) {
-            InsightStatCard(stat: .completedThisWeek(summary))
-            InsightStatCard(stat: .completionRate(summary))
-            InsightStatCard(stat: .currentStreak(summary))
+        Grid(horizontalSpacing: SonnySpacing.md, verticalSpacing: SonnySpacing.md) {
+            GridRow {
+                InsightStatCard(stat: .completedThisWeek(summary), isWide: true)
+                    .gridCellColumns(2)
+                InsightStatCard(stat: .completionRate(summary))
+                InsightStatCard(stat: .currentStreak(summary))
+            }
+            GridRow {
+                WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+                    .gridCellColumns(2)
+                WorkspaceBreakdownPanel(entries: workspaceBreakdown)
+                    .gridCellColumns(2)
+            }
+            GridRow {
+                TaskHistoryListPanel(
+                    records: recentRecords,
+                    title: "Recently completed",
+                    emptyTitle: "No activity yet",
+                    emptyMessage: "Completed Sonny tasks will appear here."
+                )
+                .gridCellColumns(4)
+            }
         }
     }
 }
 
 private struct InsightStatCard: View {
     let stat: InsightStatPresentation
+    /// The hero tile (row 1's first, two-column span) reads its delta as a full sentence at
+    /// `caption` size, where the room is; the two single-column stats keep it at `micro`.
+    var isWide: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(stat.label)
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
@@ -1416,20 +1436,16 @@ private struct InsightStatCard: View {
                 .minimumScaleFactor(0.72)
 
             Text(stat.delta)
-                .font(SonnyType.micro)
-                .foregroundStyle(stat.isPositiveDelta ? SonnyTheme.success : SonnyTheme.muted)
+                .font(isWide ? SonnyType.caption : SonnyType.micro)
+                .foregroundStyle(stat.isPositiveDelta ? SonnyTheme.success : SonnyTheme.textTertiary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.74)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(stat.label): \(stat.value), \(stat.delta)")
     }
 }
 
@@ -1447,37 +1463,45 @@ private struct WeeklyCompletionChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Tasks Completed This Week")
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+            Text("Tasks completed this week")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
-            HStack(alignment: .bottom, spacing: 14) {
+            HStack(alignment: .bottom, spacing: SonnySpacing.md) {
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    VStack(spacing: 9) {
+                    VStack(spacing: SonnySpacing.sm) {
                         GeometryReader { proxy in
                             VStack {
                                 Spacer(minLength: 0)
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(index == peakIndex ? SonnyTheme.accent : SonnyTheme.chartBarMuted)
-                                    .frame(
-                                        width: 24,
-                                        height: barHeight(for: counts[safe: index] ?? 0, availableHeight: proxy.size.height)
-                                    )
-                                    .opacity((counts[safe: index] ?? 0) == 0 ? 0 : 1)
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: SonnyRadius.control,
+                                    bottomLeadingRadius: 0,
+                                    bottomTrailingRadius: 0,
+                                    topTrailingRadius: SonnyRadius.control
+                                )
+                                .fill(index == peakIndex ? SonnyTheme.accent : SonnyTheme.chartBarMuted)
+                                .frame(
+                                    width: 24,
+                                    height: barHeight(for: counts[safe: index] ?? 0, availableHeight: proxy.size.height)
+                                )
+                                .opacity((counts[safe: index] ?? 0) == 0 ? 0 : 1)
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        .frame(height: 112)
+                        .frame(height: 120)
+                        .help(dayTaskCountDescription(day: day, index: index))
 
                         // Swaps to the exact count on hover (2026-07-18) — a native `.help()`
                         // tooltip was tried first here and didn't render at all in the real app,
                         // so this replaces it with a plain state-driven label change: no floating
                         // overlay to mis-position, guaranteed to render exactly where the day
-                        // label already sits.
+                        // label already sits. The `.help()` above reaches the same words without
+                        // needing the swap, for a pointer that rests without triggering `onHover`'s
+                        // continuous tracking, or a screen reader reading the tooltip.
                         Text(hoveredDayIndex == index ? "\(counts[safe: index] ?? 0) task\((counts[safe: index] ?? 0) == 1 ? "" : "s")" : day)
                             .font(SonnyType.micro)
-                            .foregroundStyle(hoveredDayIndex == index ? SonnyTheme.text : SonnyTheme.muted)
+                            .foregroundStyle(hoveredDayIndex == index ? SonnyTheme.text : SonnyTheme.textTertiary)
                     }
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
@@ -1490,15 +1514,9 @@ private struct WeeklyCompletionChart: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
     }
 
     private func barHeight(for count: Int, availableHeight: CGFloat) -> CGFloat {
@@ -1526,24 +1544,20 @@ private struct WorkspaceBreakdownPanel: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Breakdown by Workspace")
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+            Text("Breakdown by workspace")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
             if entries.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("No workspace activity yet")
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                    Text("Tasks completed in a saved workspace over the last 30 days will appear here.")
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 6)
+                CollectionEmptyState(
+                    systemImage: "rectangle.3.group",
+                    title: "No workspace activity yet",
+                    message: "Tasks completed in a saved workspace over the last 30 days will appear here.",
+                    minHeight: 96
+                )
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: SonnySpacing.sm) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         WorkspaceBreakdownRow(
                             entry: entry,
@@ -1553,15 +1567,9 @@ private struct WorkspaceBreakdownPanel: View {
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
     }
 }
 
@@ -1570,22 +1578,22 @@ private struct WorkspaceBreakdownRow: View {
     let swatchColor: Color
 
     var body: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(spacing: SonnySpacing.sm) {
+            Circle()
                 .fill(swatchColor)
                 .frame(width: 8, height: 8)
 
             Text(entry.workspaceName)
-                .font(SonnyType.caption)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .frame(width: 120, alignment: .leading)
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(SonnyTheme.cardBorder)
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .fill(SonnyTheme.fillSelected)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
                         .fill(swatchColor)
                         .frame(width: proxy.size.width * entry.fractionOfTotal)
                 }
@@ -1593,10 +1601,11 @@ private struct WorkspaceBreakdownRow: View {
             .frame(height: 6)
 
             Text(percentageText)
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.caption.monospacedDigit())
+                .foregroundStyle(SonnyTheme.textTertiary)
                 .frame(width: 40, alignment: .trailing)
         }
+        .frame(height: 32)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.workspaceName): \(percentageText)")
     }
@@ -1613,22 +1622,18 @@ private struct TaskHistoryListPanel: View {
     let emptyMessage: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
             if records.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(emptyTitle)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                    Text(emptyMessage)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 6)
+                CollectionEmptyState(
+                    systemImage: "checkmark.circle",
+                    title: emptyTitle,
+                    message: emptyMessage,
+                    minHeight: 96
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(records.enumerated()), id: \.offset) { _, record in
@@ -1637,46 +1642,37 @@ private struct TaskHistoryListPanel: View {
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
     }
 }
 
-/// Insights' own "Recently completed" row (`14-MainAppInsights.svg`) — a plain solid-color
-/// status dot, no icon cutout, distinct from the Tasks page's richer ring/checkmark treatment
-/// in `TaskHistoryRow`. `RecentCompletedTasks.recent` already filters to `.completed` only, so
-/// this only ever needs the one, green, dot.
+/// Insights' own "Recently completed" row (`14-MainAppInsights.svg`). `RecentCompletedTasks.recent`
+/// already filters to `.completed` only, so every row here is the same outcome and the leading dot
+/// carried no state — it was one fixed color on every row, so it told the reader nothing a plain
+/// list didn't already say. Dropped rather than kept as decoration, per the same rule the Tasks
+/// page's rows follow (`CLAUDE.md`'s "drop any decorative dot that carries no state").
 private struct InsightsRecentActivityRow: View {
     let record: CompletedTaskRecord
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(SonnyTheme.success)
-                .frame(width: 14, height: 14)
-
+        HStack(spacing: SonnySpacing.sm) {
             Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
-                .font(SonnyType.caption)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.textTertiary)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, 8)
+        .frame(height: 32)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(record.command), " +
@@ -2427,7 +2423,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         let difference = summary.completedThisWeek - summary.previousWeekCompleted
         return Self(
             id: "completed-this-week",
-            label: "Completed This Week",
+            label: "Completed this week",
             value: "\(summary.completedThisWeek)",
             delta: deltaCountText(difference),
             isPositiveDelta: difference > 0
@@ -2440,7 +2436,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         let difference = currentPercent - previousPercent
         return Self(
             id: "completion-rate",
-            label: "Completion Rate",
+            label: "Completion rate",
             value: "\(currentPercent)%",
             delta: deltaPercentText(difference),
             isPositiveDelta: difference > 0
@@ -2459,7 +2455,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         }
         return Self(
             id: "current-streak",
-            label: "Current Streak",
+            label: "Current streak",
             value: "\(days) day\(days == 1 ? "" : "s")",
             delta: delta,
             // Always neutral, never green — unlike the other 2 cards, this delta isn't a
