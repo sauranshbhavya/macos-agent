@@ -270,7 +270,7 @@ struct WidgetSessionApprovalPanelTests {
         // And no fourth site anywhere hand-writing one of these two sentences, so a new session
         // control cannot arrive with a label of its own that drifts from the owner's. Matched on
         // "Stop Sonny"/"Pause Sonny" rather than on "Stop"/"Pause": Command Center carries an
-        // unrelated `.accessibilityLabel("Paused — needs your attention")` on a routine's badge,
+        // unrelated `.accessibilityLabel("Paused, needs your attention")` on a routine's badge,
         // which is not this sentence and must not be swept up by a check for this one.
         for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
             let source = try MacAgentSource.read(file)

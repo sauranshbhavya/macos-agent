@@ -3024,10 +3024,7 @@ private struct RoutinesView: View {
                     actionTitle: "New routine",
                     action: beginNewRoutine
                 )
-
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
                 if viewModel.savedRoutines.isEmpty {
                     // **The unreadable case reaches this page too** (PR #110 fix-round review).
@@ -3131,10 +3128,7 @@ private struct WatchingCollection: View {
             // pre-fills the widget rather than creating anything here. Offering a button that only
             // pre-fills a sentence would suggest this page can start one.
             CollectionHeader(title: "Watching")
-
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
             ForEach(Array(viewModel.standingWatchers.enumerated()), id: \.element.id) { index, watcher in
                 StandingWatcherRow(
@@ -3145,7 +3139,8 @@ private struct WatchingCollection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .commandCenterPanel()
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
+        .sonnyCard()
     }
 }
 
@@ -3155,48 +3150,41 @@ private struct StandingWatcherRow: View {
     let stop: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    // A glyph rather than the routine row's blank square, so the two rows on this
-                    // page are told apart at a glance without a second colour token.
-                    Image(systemName: "eye")
-                        .font(SonnyType.icon(13, weight: .medium))
-                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.subject)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                Button("Stop", action: stop)
-                    .buttonStyle(CommandCenterRowActionStyle())
-                    // **Named, not bare** — a list of identical "Stop" buttons is a list a screen
-                    // reader cannot tell apart, which is the property SONNY-378 records for the
-                    // Remove buttons on the approved-apps list.
-                    .accessibilityLabel("Stop watching \(presentation.subject)")
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                // A glyph rather than the routine row's blank square, so the two rows on this
+                // page are told apart at a glance without a second colour token.
+                Image(systemName: "eye")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
+            .frame(width: 30, height: 30)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.subject)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            Button("Stop", action: stop)
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
+                // **Named, not bare** — a list of identical "Stop" buttons is a list a screen
+                // reader cannot tell apart, which is the property SONNY-378 records for the
+                // Remove buttons on the approved-apps list.
+                .accessibilityLabel("Stop watching \(presentation.subject)")
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: 44)
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -3207,97 +3195,77 @@ private struct RoutineRow: View {
     let openDetail: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(CommandCenterPalette.routineIconForeground)
-                        .frame(width: 12, height: 12)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.name)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                // The wireframe's `streak` layer: a 10pt #F2BE00 dot and the count beside it.
-                // Wired to real per-occurrence run history, never to `steps.count` — a step count
-                // does not decay the way a streak does, which is the documented prior mistake here.
-                if let streak = presentation.streak {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(SonnyTheme.warning)
-                            .frame(width: 10, height: 10)
-                        Text("\(streak)")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.warning)
-                    }
-                    .accessibilityLabel("\(streak) run streak")
-                }
-
-                // One slot, two mutually exclusive occupants. `nextRunText` returns nil for a
-                // disabled schedule, and a paused schedule is disabled — so this fills a slot the
-                // wireframe leaves empty in exactly that state rather than adding a line to a row
-                // whose 56pt height has room for neither. Warning colour is the row's existing
-                // one, already carried by the streak badge; no new token.
-                if presentation.isPaused {
-                    Text("Paused")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.warning)
-                        .lineLimit(1)
-                        .accessibilityLabel("Paused — needs your attention")
-                } else if let nextRun = presentation.nextRunText {
-                    Text(nextRun)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                // Replaces the old Run button, which was an original addition never in the
-                // wireframe — this slot is the toggle's. Running a routine by hand now lives in
-                // the detail view, which the row opens on tap.
-                if presentation.isScheduleable {
-                    // `set:` takes the closure inline rather than passing `setEnabled` directly:
-                    // the bare function reference converts to a `@Sendable` parameter and trips
-                    // Swift 6's data-race check, since the closure captures the main-actor view
-                    // model. Both this view and the handler are already main-actor isolated.
-                    Toggle("", isOn: Binding(
-                        get: { presentation.isEnabled },
-                        set: { isOn in setEnabled(isOn) }
-                    ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .tint(SonnyTheme.accent)
-                        .accessibilityLabel("Run \(presentation.name) on schedule")
-                }
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                Image(systemName: "repeat")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: openDetail)
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight(cornerRadius: 0)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint("Opens routine details")
+            .frame(width: 30, height: 30)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.name)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            // The wireframe's `streak` layer, drawn with the shared badge component rather than a
+            // hand-rolled dot. Still wired to real per-occurrence run history, never to
+            // `steps.count` — a step count does not decay the way a streak does, which is the
+            // documented prior mistake here.
+            if let streak = presentation.streak {
+                SonnyBadge(text: "\(streak)", tone: .warning)
+                    .accessibilityLabel("\(streak) run streak")
+            }
+
+            // One slot, two mutually exclusive occupants. `nextRunText` returns nil for a
+            // disabled schedule, and a paused schedule is disabled — so this fills a slot the
+            // wireframe leaves empty in exactly that state rather than adding a line to a row
+            // whose 56pt height has room for neither.
+            if presentation.isPaused {
+                SonnyBadge(text: "Paused", tone: .warning)
+                    .accessibilityLabel("Paused, needs your attention")
+            } else if let nextRun = presentation.nextRunText {
+                SonnyBadge(text: nextRun, tone: .accent)
+            }
+
+            // Replaces the old Run button, which was an original addition never in the
+            // wireframe — this slot is the toggle's. Running a routine by hand now lives in
+            // the detail view, which the row opens on tap.
+            if presentation.isScheduleable {
+                // `set:` takes the closure inline rather than passing `setEnabled` directly:
+                // the bare function reference converts to a `@Sendable` parameter and trips
+                // Swift 6's data-race check, since the closure captures the main-actor view
+                // model. Both this view and the handler are already main-actor isolated.
+                Toggle("", isOn: Binding(
+                    get: { presentation.isEnabled },
+                    set: { isOn in setEnabled(isOn) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(SonnyTheme.accent)
+                    .accessibilityLabel("Run \(presentation.name) on schedule")
             }
         }
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: 56)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: openDetail)
+        .sonnyPointerCursor()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens routine details")
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
