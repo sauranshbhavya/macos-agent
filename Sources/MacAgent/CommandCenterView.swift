@@ -4377,11 +4377,9 @@ private struct MemoryView: View {
                 .accessibilityLabel("Memory")
                 .disabled(viewModel.memorySettings.isDisabledByPolicy)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, SonnySpacing.lg)
 
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+            SettingsDivider()
 
             // §6.10 lists user preferences as a memory type; the founder's answer is that they are
             // the existing Settings surfaced here rather than a new store, so this row opens the
@@ -4393,21 +4391,18 @@ private struct MemoryView: View {
                 )
             } trailing: {
                 Button("Open settings", action: openSettings)
-                    .buttonStyle(CommandCenterRowActionStyle())
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, SonnySpacing.lg)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .commandCenterPanel()
+        .sonnyCard()
     }
 
     private var collectionPanel: some View {
         VStack(spacing: 0) {
             CollectionHeader(title: "All memory")
-
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -4433,9 +4428,7 @@ private struct MemoryView: View {
             }
 
             if viewModel.memoryDeletionStatusMessage != nil {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+                SettingsDivider()
 
                 // **The control the founder's decision of 2026-08-23 asks for, beside the sentence
                 // rather than inside it.** "The file Sonny could not read is still on your Mac."
@@ -4446,7 +4439,7 @@ private struct MemoryView: View {
                 // Gated on the files rather than on the message's words: reading "is still on your
                 // Mac" out of the string would be a second place that has to agree with
                 // `MemoryDeletionCopy.outcome`.
-                HStack(spacing: 12) {
+                HStack(spacing: SonnySpacing.md) {
                     LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -4454,7 +4447,7 @@ private struct MemoryView: View {
                         Button("Reveal in Finder") {
                             viewModel.revealSetAsideFilesInFinder()
                         }
-                        .buttonStyle(CommandCenterRowActionStyle())
+                        .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                         .accessibilityLabel(
                             MemoryDeletionCopy.revealAccessibilityLabel(
                                 fileCount: viewModel.setAsideFilesFromLastDelete.count
@@ -4463,8 +4456,8 @@ private struct MemoryView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                .padding(.horizontal, SonnySpacing.lg)
+                .padding(.vertical, SonnySpacing.md)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -4552,75 +4545,62 @@ private struct MemoryRow: View {
     let setEnabled: (Bool) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    Image(systemName: presentation.systemImage)
-                        .font(SonnyType.icon(13, weight: .medium))
-                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.title)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                Button("View", action: view)
-                    .buttonStyle(CommandCenterRowActionStyle())
-                    .accessibilityLabel("View \(presentation.title)")
-
-                // Deliberately *not* disabled while memory is off, by policy or by the master
-                // switch. Deleting what is already stored is the next thing someone who turned
-                // recording off wants, and an administrator's disable-memory policy is furthered by
-                // a delete rather than contradicted by one. Only an empty row has nothing to do.
-                //
-                // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
-                // because the file would not open, not because there is nothing in it, so gating on
-                // the count alone disabled the one control that repairs it at exactly the moment it
-                // was needed. The founder's recovery was deleting the file by hand in the Finder.
-                Button("Delete", action: delete)
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .disabled(!presentation.canDelete)
-                    .accessibilityLabel("Delete \(presentation.title)")
-
-                // **`SonnySettingsToggle`, not the native `.switch` `RoutineRow` uses.** Two
-                // reasons, and the second is the one that settles it. First, this page shows a
-                // toggle in both of its panels, forty points apart; the master switch is a Settings
-                // row where `SonnySettingsToggle` is the established control, and a native
-                // system-rendered switch beside it reads as two design languages on one screen.
-                // Second, `SonnySettingsToggle` *is* System A's toggle —
-                // `docs/sonny-design-system-reference.md` §2.6 specifies it down to the knob shadow
-                // and calls that "the one shadow exception in System A, confined to this one
-                // control", which reusing the control honours and reimplementing it would not. A
-                // native switch is macOS chrome rather than a Sonny token, so the difference from
-                // `RoutineRow` is a difference from the deviation, not from the rule.
-                SonnySettingsToggle(isOn: Binding(
-                    get: { presentation.isRecording },
-                    set: { isOn in setEnabled(isOn) }
-                ))
-                    .disabled(!presentation.canChangeRecording)
-                    .accessibilityLabel("Remember \(presentation.title)")
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                Image(systemName: presentation.systemImage)
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
+            .frame(width: 28, height: 28)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.title)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            Button("View", action: view)
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+                .accessibilityLabel("View \(presentation.title)")
+
+            // Deliberately *not* disabled while memory is off, by policy or by the master
+            // switch. Deleting what is already stored is the next thing someone who turned
+            // recording off wants, and an administrator's disable-memory policy is furthered by
+            // a delete rather than contradicted by one. Only an empty row has nothing to do.
+            //
+            // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
+            // because the file would not open, not because there is nothing in it, so gating on
+            // the count alone disabled the one control that repairs it at exactly the moment it
+            // was needed. The founder's recovery was deleting the file by hand in the Finder.
+            Button("Delete", action: delete)
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
+                .disabled(!presentation.canDelete)
+                .accessibilityLabel("Delete \(presentation.title)")
+
+            // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
+            // `SettingsToggleRow` reaches for it everywhere else in Settings: one named type is
+            // where the row's toggle chrome lives, so a future change to it changes every row at
+            // once. Its body is System A's native `.switch` now — nothing here still hand-rolls
+            // a knob.
+            SonnySettingsToggle(isOn: Binding(
+                get: { presentation.isRecording },
+                set: { isOn in setEnabled(isOn) }
+            ))
+                .disabled(!presentation.canChangeRecording)
+                .accessibilityLabel("Remember \(presentation.title)")
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: SonnyMetrics.listRowHeight + SonnySpacing.sm)
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -5138,33 +5118,11 @@ private struct MemoryEntriesSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(category.title)
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-
-                Spacer()
-
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close \(category.title)")
+            SonnyDialogHeader(title: category.title, closeLabel: "Close \(category.title)") {
+                isPresented = false
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
 
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+            SettingsDivider()
 
             if entries.isEmpty {
                 // The unreadable case is not the empty case, and this sheet is exactly where the
@@ -5230,14 +5188,7 @@ private struct MemoryEntriesSheet: View {
         } message: {
             Text(MemoryDeletionCopy.entryMessage(for: category))
         }
-        .frame(width: 560, height: 460)
-        .background(SonnyTheme.ink)
-        .foregroundStyle(SonnyTheme.text)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
     }
 
     private var entries: [MemoryEntryPresentation] {
@@ -5264,45 +5215,38 @@ private struct MemoryEntryRow: View {
     let delete: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.title)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(entry.detail)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                // The unfinished-task row's Continue (SONNY-282): the same 23pt row-action style as
-                // the Delete beside it, in the neutral tone the workspace card's non-destructive
-                // actions use, and the word the widget's tick carries as its tooltip. It is the one
-                // way to pick up a task the widget has been told to stop offering.
-                if entry.canContinue {
-                    Button(ResumeOfferPresentation.continueLabel, action: continueTask)
-                        .buttonStyle(CommandCenterRowActionStyle(tone: .neutral))
-                        .disabled(!canContinueNow)
-                        .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
-                }
-
-                Button("Delete", action: delete)
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .accessibilityLabel("Delete \(entry.title)")
+        HStack(spacing: SonnySpacing.md) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(entry.title)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(entry.detail)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 20)
-            .frame(height: 52)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            Spacer(minLength: SonnySpacing.md)
+
+            // The unfinished-task row's Continue (SONNY-282): the same small row-action style as
+            // the Delete beside it, in the secondary tone the workspace card's non-destructive
+            // actions use, and the word the widget's tick carries as its tooltip. It is the one
+            // way to pick up a task the widget has been told to stop offering.
+            if entry.canContinue {
+                Button(ResumeOfferPresentation.continueLabel, action: continueTask)
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+                    .disabled(!canContinueNow)
+                    .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
             }
+
+            Button("Delete", action: delete)
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
+                .accessibilityLabel("Delete \(entry.title)")
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: SonnyMetrics.listRowHeight + SonnySpacing.lg)
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -5624,7 +5568,7 @@ private struct SettingsPreferencesPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Preferences", subtitle: "Manage your preferences")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
@@ -5643,8 +5587,8 @@ private struct SettingsPreferencesPage: View {
                     isOn: $viewModel.usePointerCursors
                 )
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5659,7 +5603,7 @@ private struct SettingsPreferencesPage: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
@@ -5678,7 +5622,7 @@ private struct SettingsSecurityAccessPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Security & Access", subtitle: "Review local readiness")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
@@ -5687,7 +5631,7 @@ private struct SettingsSecurityAccessPage: View {
             // line are this session's judgment under the page-by-page best-effort rule; the
             // control itself is the founder's wireframe, built in SonnyModeSegmentedControl.
             SettingsSectionBlock(title: "Mode") {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SonnyModeSegmentedControl(selection: $viewModel.interactionMode)
 
                     Text(viewModel.interactionMode.settingsDescription)
@@ -5695,10 +5639,10 @@ private struct SettingsSecurityAccessPage: View {
                         .foregroundStyle(SonnyTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5722,13 +5666,13 @@ private struct SettingsSecurityAccessPage: View {
                     )
                 )
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
             SettingsSectionBlock(title: "Permission Readiness") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     PermissionReadinessRows(items: viewModel.permissionItems)
 
                     Button {
@@ -5736,13 +5680,13 @@ private struct SettingsSecurityAccessPage: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(CommandCenterRowActionStyle())
+                    .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
                     .accessibilityLabel("Refresh permission readiness")
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5759,10 +5703,10 @@ private struct SettingsSecurityAccessPage: View {
                     .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 96))
                     .accessibilityLabel("Set up screen access")
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5779,7 +5723,7 @@ private struct SettingsSecurityAccessPage: View {
             // What has not changed is why the copy is shaped this way: it states the reach and the
             // one boundary, plainly, and neither is a toggle pretending to be a choice.
             SettingsSectionBlock(title: "Screen Control") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SettingsControlLabel(
                         title: "Which apps Sonny can control",
                         detail: "Sonny asks before controlling an app it has not been allowed to control, and remembers the ones you allow. Safe mode asks about every app; Power mode asks about none. It says which app it is controlling while it does, and you can stop it at any time."
@@ -5803,9 +5747,9 @@ private struct SettingsSecurityAccessPage: View {
                         detail: "To act in an app, Sonny takes a picture of that app's window and sends it to its vision model. Passwords, keys and codes it can recognise are blacked out first. In Safe mode you see each picture before it is sent."
                     )
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
@@ -5838,7 +5782,7 @@ private struct SettingsSecurityAccessPage: View {
 /// **The first `ForEach` over a stored list on any Settings page**, which is why it follows an
 /// existing pattern instead of establishing one. The row is `WorkspaceDetailView`'s scope-entry row
 /// in its layout — `SettingsAdaptiveControlRow` with a trailing
-/// `CommandCenterRowActionStyle(tone: .danger)` — and never a hand-rolled `HStack`, which is the
+/// `SonnyButtonStyle(tone: .danger, size: .small)` — and never a hand-rolled `HStack`, which is the
 /// shape that caused the narrow-width character-wrapping bug that pattern exists to fix. It is
 /// deliberately *not* that row in what a press costs: `entryRow`'s Remove dispatches a task through
 /// `prepare → assessRisk → approval`, which is why that one is `.disabled(isTaskInFlight)`; this one
@@ -5914,8 +5858,7 @@ private struct ApprovedAppRevocationList: View {
                     Button(ApprovedAppRevocationPresentation.removeAllLabel) {
                         showRemoveAllConfirmation = true
                     }
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .sonnyPointerCursor()
+                    .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                     .accessibilityLabel(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
                     .help(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
                 }
@@ -6006,7 +5949,7 @@ private struct ApprovedAppRevocationRow: View {
 
     var body: some View {
         SettingsAdaptiveControlRow {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
                 Text(row.title)
                     .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.text)
@@ -6025,8 +5968,7 @@ private struct ApprovedAppRevocationRow: View {
             Button(ApprovedAppRevocationPresentation.removeLabel) {
                 showRemoveConfirmation = true
             }
-            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-            .sonnyPointerCursor()
+            .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
             .accessibilityLabel(row.removeAccessibilityLabel)
             .help(row.removeAccessibilityLabel)
         }
@@ -6058,12 +6000,12 @@ private struct SettingsDataPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Data", subtitle: "Manage Sonny's local data")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
             SettingsSectionBlock(title: "Local Data") {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SettingsAdaptiveControlRow {
                         // Single trash icon now lives on the button itself — a second one here
                         // next to the label made the row read as too bold/heavy (2026-07-18).
@@ -6087,9 +6029,9 @@ private struct SettingsDataPage: View {
                         Button {
                             showDeleteLocalDataConfirmation = true
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label("Delete local data", systemImage: "trash")
                         }
-                        .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                        .buttonStyle(SonnyButtonStyle(tone: .danger))
                         // **`isDeletingLocalData` as well as `isRunning`** (SONNY-404, PR #207's
                         // cycle-3, F3). The press became asynchronous when the wipe started reaching
                         // the gateway, and it spans up to the client's whole multi-attempt budget on
@@ -6126,9 +6068,9 @@ private struct SettingsDataPage: View {
                             Button {
                                 showDeleteSetAsideFilesConfirmation = true
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label("Delete set-aside files", systemImage: "trash")
                             }
-                            .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                            .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                             // The wipe's condition, one row up, by founder decision (PR #117
                             // review, F3): a delete that can fail mid-run reports its failure on
                             // `errorMessage`, which outranks the task's result once the run ends.
@@ -6167,9 +6109,9 @@ private struct SettingsDataPage: View {
 
                     LocalDataDeletionStatusMessage(message: viewModel.localDataDeletionStatusMessage)
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
@@ -6188,11 +6130,11 @@ private struct SettingsNotificationsPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Notifications", subtitle: "Manage how Sonny notifies you")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 Text("Nothing to configure yet")
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
@@ -6201,7 +6143,7 @@ private struct SettingsNotificationsPage: View {
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, 20)
+            .padding(.top, SonnySpacing.xl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
@@ -6216,11 +6158,11 @@ private struct SettingsUsagePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Usage", subtitle: "See how much you've used Sonny")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 Text("Usage summary coming soon")
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
@@ -6229,7 +6171,7 @@ private struct SettingsUsagePage: View {
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, 20)
+            .padding(.top, SonnySpacing.xl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
@@ -6252,7 +6194,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 18) {
+            HStack(alignment: .center, spacing: SonnySpacing.lg) {
                 leading
                     .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
 
@@ -6261,7 +6203,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: SonnySpacing.md) {
                 leading
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -6269,7 +6211,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, SonnySpacing.md)
     }
 }
 
@@ -6278,14 +6220,14 @@ private struct SettingsControlLabel: View {
     let detail: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
             Text(detail)
-                .font(SonnyType.body)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -6297,15 +6239,15 @@ private struct SettingsPageTitle: View {
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(title)
                 .font(SonnyType.settingsContentTitle)
                 .foregroundStyle(SonnyTheme.text)
             Text(subtitle)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         }
-        .padding(.bottom, 2)
+        .padding(.bottom, SonnySpacing.xs)
     }
 }
 
@@ -6324,7 +6266,7 @@ private struct SettingsSectionBlock<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
             Text(title)
                 .font(SonnyType.settingsSectionLabel)
                 .foregroundStyle(SonnyTheme.text)
@@ -6360,70 +6302,35 @@ struct SonnySettingsToggle: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                RoundedRectangle(cornerRadius: SonnyRadius.pill)
-                    .fill(isOn ? SonnyTheme.accent : SonnyTheme.surfaceRaised)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: SonnyRadius.pill)
-                            .stroke(isOn ? SonnyTheme.accent : SonnyTheme.cardBorder, lineWidth: 1)
-                    )
-
-                Circle()
-                    .fill(SonnyTheme.text)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 0)
-                    .padding(3)
-            }
-            .frame(width: 30, height: 20)
-        }
-        .buttonStyle(.plain)
-        .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.pill)
-        .accessibilityValue(isOn ? "On" : "Off")
+        Toggle("", isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(SonnyTheme.accent)
     }
 }
 
 /// Wireframe's rendered state (`10-MainAppSettings.svg`) is a single closed dropdown — only
 /// "Dark" ever appears as visible text; "Light"/a third option live in the CSS export's hidden
-/// expand-list, not as permanently visible swatches. A native `Menu` matches that affordance
-/// (closed by default, opens on click) rather than three always-visible buttons.
+/// expand-list, not as permanently visible swatches. A native menu-style `Picker` matches that
+/// affordance (closed by default, opens on click, its own disclosure indicator) rather than a
+/// hand-styled swatch — and, being fully native chrome rather than a custom label, it has none of
+/// the composite-label rendering bug documented on `profileRow`.
 private struct SettingsThemeDropdown: View {
+    /// Fixed rather than a stored preference: "Light" and "System" are disabled below, so this
+    /// selection can never actually move, and there is nowhere in the product that reads it.
+    @State private var selection = "Dark"
+
     var body: some View {
-        Menu {
-            Button("Dark") {}
-            Button("Light (Soon)") {}
-                .disabled(true)
-            Button("System (Soon)") {}
-                .disabled(true)
-        } label: {
-            // No explicit trailing chevron here — `Menu` already renders its own native
-            // disclosure indicator, so an added one showed up as a second, redundant arrow
-            // (2026-07-18). "Aa" dropped too, per direct instruction — not needed.
-            HStack(spacing: 6) {
-                Text("Dark")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.text)
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 12)
-            .frame(width: 200, height: 37)
-            .background(
-                RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch)
-                    .fill(Color(red: 0x1D / 255, green: 0x1F / 255, blue: 0x24 / 255))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch)
-                    .stroke(Color(red: 0x2A / 255, green: 0x2C / 255, blue: 0x31 / 255), lineWidth: 1)
-            )
+        Picker("Interface theme", selection: $selection) {
+            Text("Dark").tag("Dark")
+            Text("Light").tag("Light").disabled(true)
+            Text("System").tag("System").disabled(true)
         }
-        .menuStyle(.borderlessButton)
-        // Applied after `.menuStyle`, not inside the label — wrapping the whole `Menu` rather
-        // than adding another view inside its label's HStack, to stay well clear of the
-        // composite-label rendering issue documented on `profileRow`.
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.themeSwatch)
-        .accessibilityLabel("Interface theme, Dark selected. Light and System coming soon.")
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .tint(SonnyTheme.accent)
+        .frame(width: 180)
+        .accessibilityLabel("Interface theme, Dark selected")
     }
 }
