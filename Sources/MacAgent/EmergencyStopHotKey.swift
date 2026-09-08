@@ -49,7 +49,7 @@ protocol EmergencyStopHotKeyRegistering: AnyObject {
 /// learning, and Control-Option-Escape is close enough to macOS's own force-quit shortcut to feel
 /// like the same category of action without colliding with it (that one is Command-Option-Escape).
 final class EmergencyStopHotKey: EmergencyStopHotKeyRegistering, @unchecked Sendable {
-    static let displayName = "Ctrl-Opt-Esc"
+    static let displayName = "\u{2303}\u{2325}\u{238B}"
 
     /// Distinct from `PushToTalkHotKey`'s identifier under the same signature, so the shared handler
     /// dispatch can tell the two apart.

@@ -25,7 +25,7 @@ final class AgentViewModel: ObservableObject {
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
-    @Published var voiceHotKeyStatus: String = "Hold Ctrl-Opt-Space"
+    @Published var voiceHotKeyStatus: String = "Hold " + PushToTalkHotKey.displayName
     @Published var voiceHotKeyReady: Bool = true
     @Published var permissionItems: [PermissionReadinessItem] = []
     /// Whether a Sonny session is held on this Mac, as the readiness row reads it (SONNY-136).

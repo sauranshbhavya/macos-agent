@@ -216,7 +216,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
 
     func postPermissionNotification(resource: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Approval needed"
         content.body = "Requesting access to \(resource)"
         content.categoryIdentifier = SonnyNotificationCategory.permission
         deliver(content)
@@ -224,7 +224,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
 
     func postErrorNotification(message: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Task failed"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.error
         deliver(content)
@@ -233,7 +233,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// A finished run's summary, for a user who was working somewhere else while it ran.
     func postOutcomeNotification(summary: String, taskID: String?) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Task finished"
         content.body = summary
         content.categoryIdentifier = SonnyNotificationCategory.outcome
         // The task travels with the notification rather than being looked up when the click
@@ -254,7 +254,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// notification category Sonny reserves for failures, wearing a Retry button.
     func postScheduledRunNotification(message: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Routine ran"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.scheduled
         deliver(content)
@@ -268,7 +268,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// a command that has nothing to do with it.
     func postStorageNoticeNotification(message: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Storage problem"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.storage
         deliver(content)
@@ -282,7 +282,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// decides which sentence; this only delivers it.
     func postWatcherNotification(message: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Watcher fired"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.watcher
         deliver(content)
