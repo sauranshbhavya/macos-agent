@@ -16,7 +16,7 @@ enum PushToTalkHotKeyError: Error, LocalizedError {
 }
 
 final class PushToTalkHotKey: @unchecked Sendable {
-    static let displayName = "Ctrl-Opt-Space"
+    static let displayName = "\u{2303}\u{2325}Space"
 
     private let signature = OSType(0x534F4E59) // SONY
     private let identifier = UInt32(1)

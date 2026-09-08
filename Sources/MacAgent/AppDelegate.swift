@@ -193,8 +193,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is shown, and it's now shown unconditionally on every launch, not on demand.
         windowCoordinator.showCommandCenter()
         widgetController.show()
-
-        print("Sonny is running. Click the Sonny item in the macOS menu bar to open it.")
     }
 
     /// Reads the Keychain, then decides first run on what it found. **One method because the two
