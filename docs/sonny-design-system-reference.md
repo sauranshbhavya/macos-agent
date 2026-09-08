@@ -2,6 +2,14 @@
 
 Source of truth for Sonny's visual design, extracted from the user's own Figma wireframes (file key `YdPaDQ7zCGc6e9BnpJIzcI`) on 2026-07-12. Extracted via SVG export + "Copy as CSS" on individually-selected layers (the Figma Dev Mode MCP connector hit its Starter-plan monthly quota — 6 calls/month — after limited use, so this document is built from manual exports, not live API queries). Cross-checked against raw SVG `<filter>` definitions and literal `<text>` nodes where CSS layer-name comments were ambiguous or stale.
 
+> **Superseded for System A's values on 2026-09-08 (branch `ui-ux-claude`).** The live tokens are in
+> `Sources/MacAgent/ContentView.swift` and the decisions behind them in
+> `docs/sonny-ui-modernization-2026-09-08.md`: the system font instead of Inter, one cool-neutral
+> surface ramp with opacity-based text and hairlines instead of §2.1's literals, and a control /
+> card / sheet radius rule instead of §2.3's per-component table. §2.4's accent `#5C84FE` is kept.
+> The routine detail sheet is System A now; System B (§3) is unchanged in its material and accents.
+> Everything below stays as the wireframe provenance.
+
 Treat this document as authoritative for implementation. Where something is genuinely unconfirmed, it's marked **UNCONFIRMED** — do not silently guess past those markers; ask instead.
 
 Source files live at `/Users/sauranshbhardwaj/Desktop/wireframes/`, named `<number>-<ScreenName>.svg` / `.md` (CSS). Reference table at the bottom of this doc maps every file.

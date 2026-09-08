@@ -188,7 +188,6 @@ enum SonnyTheme {
     static let textTertiary = Color.white.opacity(0.38)
     /// Text on the accent fill.
     static let textOnAccent = Color.white
-    static let sidebarNavText = text
 
     // Hairlines and fills.
     /// Panel borders and the dividers between sections.
@@ -209,10 +208,6 @@ enum SonnyTheme {
     /// Every non-peak bar in the Insights chart.
     static let chartBarMuted = accent.opacity(0.22)
 
-    // Aliases that keep older call sites on the same tokens.
-    static let input = surfaceRaised
-    static let taskDone = accent
-    static let taskCanceled = textTertiary
 }
 
 // MARK: - Radius, spacing, metrics
@@ -224,13 +219,6 @@ enum SonnyRadius {
     static let card: CGFloat = 10
     static let sheet: CGFloat = 12
     static let pill: CGFloat = 999
-
-    // Older names, kept so call sites read the same rule.
-    static let container = control
-    static let themeSwatch = control
-    static let routineIcon = control
-    static let panelCard = card
-    static let workspaceCard = card
 }
 
 /// A 4pt grid.

@@ -461,7 +461,7 @@ struct CommandCenterView: View {
                     .frame(width: 20)
                 Text(destination.title)
                     .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .foregroundStyle(SonnyTheme.text)
                 Spacer(minLength: SonnySpacing.sm)
                 if destination == .tasks, viewModel.activeTaskCount > 0 {
                     // The wireframe's "22" count is a Linear inbox placeholder; what is shown is the
@@ -1738,7 +1738,7 @@ private struct CommandCenterGroupHeader: View {
         HStack(spacing: SonnySpacing.sm) {
             Text(title)
                 .font(SonnyType.headline)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .foregroundStyle(SonnyTheme.text)
             SonnyBadge(text: "\(count)", tone: .neutral)
 
             if let disclosure {
@@ -5308,44 +5308,10 @@ private struct CollectionEmptyState: View {
     }
 }
 
-/// Retired onto `SonnyButtonStyle` (2026-09-08): a toolbar action is the shared secondary button at
-/// its regular size. The name stays for the call sites that have not been migrated yet, and it
-/// draws nothing of its own.
-private struct CommandCenterHeaderActionStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        SonnyButtonStyle(tone: .secondary).makeBody(configuration: configuration)
-    }
-}
-
-/// Retired onto `SonnyButtonStyle` (2026-09-08): a row action is the shared button at its small
-/// size, secondary or danger. The name and its `tone:` stay for the call sites that have not been
-/// migrated yet, and it draws nothing of its own.
-private struct CommandCenterRowActionStyle: ButtonStyle {
-    /// `.danger` carries the same treatment "Delete Local Data" and the routine panel's danger
-    /// buttons already use — danger-tinted label and border over the normal surface — at this
-    /// style's own row-action scale, rather than importing `SonnyButtonStyle`'s larger filled
-    /// block into a card footer built around 23pt controls.
-    enum Tone {
-        case neutral
-        case danger
-    }
-
-    var tone: Tone = .neutral
-
-    func makeBody(configuration: Configuration) -> some View {
-        SonnyButtonStyle(tone: tone == .danger ? .danger : .secondary, size: .small)
-            .makeBody(configuration: configuration)
-    }
-}
-
+/// What is left of the page-local palette after the 2026-09-08 modernization: every surface and
+/// button now reads `SonnyTheme` directly, and the one thing this file decides on its own is which
+/// of three accents a workspace avatar gets.
 private enum CommandCenterPalette {
-    static let collectionSurface = SonnyTheme.collectionSurface
-    static let cardSurface = SonnyTheme.surfaceRaised
-    static let buttonSurface = SonnyTheme.surfaceRaised
-    // Flat #242E52 per the wireframe (not a translucent accent tint) — SonnyTheme.chartBarMuted
-    // is already exactly this hex, just previously unused here.
-    static let routineIconBackground = SonnyTheme.chartBarMuted
-    static let routineIconForeground = SonnyTheme.accent
     // Wireframe assigns each workspace card a distinct avatar color (`13-MainAppWorkspaces.svg`:
     // Personal=accent, Build in Public=warning, Client Work=success) rather than one fixed color
     // for every card — cycled by grid position, same pattern as Insights' workspace-breakdown swatches.

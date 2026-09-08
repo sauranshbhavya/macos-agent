@@ -31,9 +31,9 @@ private struct WidgetVisualEffectBackground: NSViewRepresentable {
 
 // MARK: - System B tokens (floating widget only)
 //
-// Fully separate from System A (SonnyTheme/SonnyType/SonnyRadius in ContentView.swift) and also
-// separate from RoutineDetailView's own System B token set — per this project's explicit decision,
-// RoutineDetailView keeps its own hand-written copy rather than sharing this one. Per
+// Fully separate from System A (SonnyTheme/SonnyType/SonnyRadius in ContentView.swift). This is the
+// only System B token set since 2026-09-08: RoutineDetailView's private copy went with the routine
+// detail sheet's move onto System A (docs/sonny-ui-modernization-2026-09-08.md). Per
 // docs/sonny-design-system-reference.md §3, do not extend SonnyTheme/SonnyType to serve this file,
 // and do not reuse WidgetTheme/WidgetType outside the floating widget itself.
 
@@ -104,8 +104,7 @@ enum WidgetType {
 /// primitives allow. Two parts are approximations rather than literal ports: the blend-mode-layered
 /// gradient fill (approximated with `.blendMode` on stacked translucent layers) and the inset
 /// "inner glass highlight" shadows (CSS `inset` shadows have no SwiftUI counterpart; approximated
-/// with edge-fading gradient overlays). Same technique RoutineDetailView already uses successfully,
-/// kept as an independent copy per this project's decision not to share that implementation.
+/// with edge-fading gradient overlays).
 private struct WidgetGlassBackground<S: InsettableShape>: ViewModifier {
     let shape: S
     let highlightBandHeight: CGFloat
