@@ -43,14 +43,22 @@ struct WidgetControlNamingTests {
     /// wordless control with nothing else naming it — is exactly what shipped on the compact
     /// capsule. A control that wants a tooltip and no accessibility name has to break this test to
     /// get one, which is the point.
+    ///
+    /// **Seven now, not four** (2026-09-08 modernization pass, widget lane). The original four are
+    /// icon-only controls; the 2026-09-08 pass added three more on truncated text that clips under
+    /// `lineLimit` — `WidgetResultPanel`'s summary, `WidgetFailurePanel`'s message and
+    /// `WidgetStepRow`'s title — each carrying `.help()` with its own full text so a clipped line is
+    /// still reachable on hover, and each paired with an `.accessibilityLabel()` of the same text
+    /// immediately above it so the pairing convention this test enforces still holds for them too.
     @Test
     func everyTooltipInTheWidgetSitsBesideAVoiceOverName() throws {
         let lines = try widgetLines()
         let tooltipIndices = lines.indices.filter { lines[$0].hasPrefix(".help(") }
 
-        // The population, enumerated rather than counted: four icon-only controls, and the count is
-        // asserted so a fifth cannot arrive without this test being read.
-        #expect(tooltipIndices.count == 4)
+        // The population, enumerated rather than counted: seven tooltip sites (four icon-only
+        // controls plus three truncated-text rows), and the count is asserted so an eighth cannot
+        // arrive without this test being read.
+        #expect(tooltipIndices.count == 7)
 
         for index in tooltipIndices {
             #expect(index > 0, "a tooltip cannot be the file's first line")
