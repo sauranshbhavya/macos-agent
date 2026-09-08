@@ -463,7 +463,7 @@ struct RoutineDetailView: View {
             .help("Delete this routine")
             .accessibilityLabel("Delete \(live.name)")
             .confirmationDialog(
-                "Delete “\(live.name)”?",
+                "Delete \(live.name)?",
                 isPresented: $showDeleteRoutineConfirmation,
                 titleVisibility: .visible
             ) {
