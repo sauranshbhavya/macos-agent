@@ -97,7 +97,9 @@ enum TaskDeletePresentation {
         taskConfirmationMessage(hasScreenRecord: record.visionSessionID != nil)
     }
 
-    static let taskConfirmButtonLabel = "Delete Task"
+    // Sentence case (2026-09-08 UI modernization): every button and label that is not a proper noun
+    // reads in sentence case now, this pair included.
+    static let taskConfirmButtonLabel = "Delete task"
 
     static let screenRecordConfirmationTitle = "Delete what Sonny did on screen?"
 
@@ -113,7 +115,7 @@ enum TaskDeletePresentation {
     static let screenRecordConfirmationMessage =
         "This deletes the screenshots from this Mac and from Sonny's servers. The task stays in your history."
 
-    static let screenRecordConfirmButtonLabel = "Delete Screen Record"
+    static let screenRecordConfirmButtonLabel = "Delete screen record"
 
     // MARK: - Gating
 
