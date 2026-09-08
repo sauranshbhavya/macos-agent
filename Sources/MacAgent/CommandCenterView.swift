@@ -3317,7 +3317,7 @@ private struct WorkspacesView: View {
     }
 
     private let columns = [
-        GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 14, alignment: .top)
+        GridItem(.adaptive(minimum: 300), spacing: SonnySpacing.md, alignment: .top)
     ]
 
     var body: some View {
@@ -3347,7 +3347,7 @@ private struct WorkspacesView: View {
                     )
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: SonnySpacing.md) {
                             ForEach(Array(viewModel.savedWorkspaces.enumerated()), id: \.element.name) { index, workspace in
                                 WorkspaceCard(
                                     presentation: WorkspaceCardPresentation(
@@ -3368,7 +3368,9 @@ private struct WorkspacesView: View {
                                 )
                             }
                         }
-                        .padding(30)
+                        // No token in `SonnySpacing` sits at 30; `xxxl` (32) is the nearest and is
+                        // what this scroll inset now routes through.
+                        .padding(SonnySpacing.xxxl)
                     }
                 }
             }
@@ -3450,22 +3452,25 @@ private struct WorkspaceDetailUnavailableView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: SonnySpacing.md) {
+            Spacer(minLength: 0)
             Text(WorkspaceDetailPresentation.unavailableText(name: name))
-                .font(SonnyType.itemTitle)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .multilineTextAlignment(.center)
 
             Button("Close") {
                 dismiss()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .secondary))
             .keyboardShortcut(.cancelAction)
+            Spacer(minLength: 0)
         }
-        .padding(28)
-        .frame(width: 460, height: 200)
-        .background(SonnyTheme.ink)
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .padding(SonnySpacing.xxl)
+        // `sonnyDialogFrame` only offers three sizes (480×360 / 560×520 / 860×600); `.compact` is
+        // the nearest to this view's old hand-rolled 460×200 and is what it now routes through,
+        // rather than a fourth size for one rarely-reached fallback.
+        .sonnyDialogFrame(.compact)
     }
 }
 
@@ -3485,63 +3490,40 @@ private struct WorkspaceCard: View {
             WorkspaceAvatar(name: presentation.name, color: accent)
 
             Text(presentation.name)
-                .font(SonnyType.avatar)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
-                .padding(.top, 14)
+                // No token sits at 14; `md` (12) is the nearest and reads the same as the old gap.
+                .padding(.top, SonnySpacing.md)
 
             teamTypeRow
-                .padding(.top, 2)
+                .padding(.top, SonnySpacing.xs)
 
             Text(presentation.taskCountText)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
-                .padding(.top, 3)
+                .padding(.top, SonnySpacing.xs)
 
             if let urlsText = presentation.urlsText {
                 Label(urlsText, systemImage: "link")
-                    .font(SonnyType.micro)
+                    .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.muted)
                     .lineLimit(1)
-                    .padding(.top, 12)
+                    .padding(.top, SonnySpacing.md)
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             HStack {
                 WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
-                // Labeled like the card's other controls, not icon-only. Delete stays *here* rather
-                // than moving into the detail sheet SONNY-41 added: the original reasoning was that
-                // building a detail view purely to host a delete button would invent a surface to
-                // solve a placement problem, and that argument survives its own premise changing. A
-                // detail view now exists — but it exists because a workspace's *boundary* is
-                // materially more content than a card can show, which is a reason delete never had.
-                // Moving delete into it would be the same invention in reverse: hiding a
-                // one-click destructive action one level deeper for symmetry alone.
-                Button {
-                    showDeleteConfirmation = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
+
+                Button(action: open) {
+                    Text("Open")
                 }
-                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
                 .disabled(isTaskInFlight)
-                .accessibilityLabel("Delete \(presentation.name)")
-                .help("Delete \(presentation.name)")
-                .confirmationDialog(
-                    "Delete “\(presentation.name)”?",
-                    isPresented: $showDeleteConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete Workspace", role: .destructive) {
-                        delete()
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    // The title already names the workspace; pronouns keep this small dialog
-                    // readable (manual pass, 2026-07-30).
-                    Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
-                }
+                .accessibilityLabel("Open \(presentation.name)")
 
                 // The "started from its card" half of the founder binding decision. Sits beside
                 // Open rather than replacing or branching it — Open still runs the workspace in one
@@ -3551,41 +3533,61 @@ private struct WorkspaceCard: View {
                 Button(action: beginTaskHere) {
                     Text("New task")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(
                     AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
                 )
 
-                Button(action: open) {
-                    Text("Open")
+                // Labeled like the card's other controls, not icon-only. Delete stays *here* rather
+                // than moving into the detail sheet SONNY-41 added: the original reasoning was that
+                // building a detail view purely to host a delete button would invent a surface to
+                // solve a placement problem, and that argument survives its own premise changing. A
+                // detail view now exists — but it exists because a workspace's *boundary* is
+                // materially more content than a card can show, which is a reason delete never had.
+                // Moving delete into it would be the same invention in reverse: hiding a
+                // one-click destructive action one level deeper for symmetry alone. Text only —
+                // the shared danger button carries no icon slot of its own here.
+                Button {
+                    showDeleteConfirmation = true
+                } label: {
+                    Text("Delete")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                 .disabled(isTaskInFlight)
-                .accessibilityLabel("Open \(presentation.name)")
+                .accessibilityLabel("Delete \(presentation.name)")
+                .help("Delete \(presentation.name)")
+                .confirmationDialog(
+                    "Delete \(presentation.name)?",
+                    isPresented: $showDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete workspace", role: .destructive) {
+                        delete()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    // The title already names the workspace; pronouns keep this small dialog
+                    // readable (manual pass, 2026-07-30).
+                    Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
+                }
             }
         }
-        .padding(18)
-        // Wireframe's measured 190pt fits the no-saved-URL case; the 36pt avatar (replacing an
-        // 18pt icon stack in this slot) plus a populated `urlsText` row together exceed that
-        // budget, which `.clipShape` below would silently cut off the footer instead of growing
-        // the card. Worst case (empty icon-stack fallback + urlsText + full teamTypeRow) measures
-        // ~209pt via actual Inter line-height metrics — 216 leaves real margin, not a ~1pt one.
-        .frame(maxWidth: 356, minHeight: 190, maxHeight: 216, alignment: .topLeading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        .padding(SonnySpacing.lg)
+        // Wireframe's measured 190pt fits the no-saved-URL case; kept as the card's floor. The
+        // fixed 356pt width and 216pt height ceiling are gone — the grid's adaptive column now
+        // decides width, and content decides height rather than clipping against a hand-measured
+        // worst case.
+        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+        .sonnyCard()
         // Whole-card tap opens the detail sheet, matching the routine row's `openDetail` gesture.
-        // Applied *after* `.clipShape` so the hit area is the card's real rounded bounds, and it
-        // collides with none of the four controls above — a SwiftUI `Button` consumes its own tap
-        // before an ancestor gesture sees it, which is what keeps Delete, New task, Open and Mark
-        // as team working unchanged. Purely additive: no existing affordance moved or changed.
-        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        // The hit area is the card's own rounded bounds; a SwiftUI `Button` consumes its own tap
+        // before an ancestor gesture sees it, which is what keeps Delete, New task and Open
+        // working unchanged. Purely additive: no existing affordance moved or changed.
+        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
         .onTapGesture(perform: openDetail)
         .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.card)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens workspace details")
     }
@@ -3598,7 +3600,7 @@ private struct WorkspaceCard: View {
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         case .solo:
-            HStack(spacing: 4) {
+            HStack(spacing: SonnySpacing.xs) {
                 // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
                 // `.caption` applied uniformly across the row rather than leaving the "Mark as
                 // team" affordance (a real Sonny feature, no wireframe equivalent) at the old 11px.
@@ -3618,7 +3620,7 @@ private struct WorkspaceCard: View {
                     }
                     .buttonStyle(.plain)
                     .sonnyPointerCursor()
-                    .sonnyHoverHighlight(cornerRadius: 3)
+                    .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
                     .accessibilityLabel("Mark \(presentation.name) as a team workspace")
                 }
             }
@@ -3657,32 +3659,20 @@ private struct WorkspaceDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
+            SonnyDialogHeader(
+                title: presentation.name,
+                subtitle: "\(presentation.teamTypeText) · \(presentation.taskCountText)",
+                closeLabel: "Close workspace details"
+            ) {
+                dismiss()
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
 
-            header
-                .padding(.horizontal, 28)
-                .padding(.top, 4)
-                .padding(.bottom, 20)
+            identityRow
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
-                .padding(.horizontal, 28)
+                .padding(.horizontal, SonnySpacing.xxl)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -3700,20 +3690,14 @@ private struct WorkspaceDetailView: View {
                             .foregroundStyle(SonnyTheme.muted)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, SonnySpacing.lg)
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 20)
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.xl)
             }
         }
-        .frame(width: 460, height: 560, alignment: .top)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
         .sheet(item: $addingTo) { target in
             WorkspaceScopeAddView(
                 presentation: WorkspaceScopeAddPresentation(kind: target.kind, workspace: workspace),
@@ -3723,45 +3707,19 @@ private struct WorkspaceDetailView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+    /// The avatar and, for a solo workspace, the "Mark as team" affordance — split out of
+    /// `SonnyDialogHeader` because that shared header has no slot for either; the name and the
+    /// team-type/task-count line already moved into its title and subtitle above.
+    private var identityRow: some View {
+        HStack(alignment: .center, spacing: SonnySpacing.sm) {
             WorkspaceAvatar(name: presentation.name, color: accent)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(presentation.name)
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                    .lineLimit(2)
-
-                HStack(spacing: 4) {
-                    Text(presentation.teamTypeText)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Text("·")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Text(presentation.taskCountText)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    if presentation.isDefaultTeamType {
-                        Text("·")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.muted)
-
-                        Button(action: markAsTeam) {
-                            Text("Mark as team")
-                                .font(SonnyType.caption)
-                                .foregroundStyle(SonnyTheme.accent)
-                        }
-                        .buttonStyle(.plain)
-                        .sonnyPointerCursor()
-                        .sonnyHoverHighlight(cornerRadius: 3)
-                        .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
-                    }
+            if presentation.isDefaultTeamType {
+                Button(action: markAsTeam) {
+                    Text("Mark as team")
                 }
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
+                .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
             }
 
             Spacer(minLength: 0)
@@ -3769,7 +3727,7 @@ private struct WorkspaceDetailView: View {
     }
 
     private func sectionView(_ section: WorkspaceScopeSectionPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             // Label plus control, so it goes through the adaptive row rather than a fixed `HStack`
             // — a narrow, non-fullscreen Command Center is the case a hand-rolled row breaks in.
             SettingsAdaptiveControlRow {
@@ -3782,7 +3740,7 @@ private struct WorkspaceDetailView: View {
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(section.addAccessibilityLabel)
             }
@@ -3809,7 +3767,7 @@ private struct WorkspaceDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, SonnySpacing.xs)
     }
 
     /// One stored entry, its removal control, and anything true about it that the value alone does
@@ -3825,7 +3783,7 @@ private struct WorkspaceDetailView: View {
     /// `.claude/rules/macagent-ui-conventions.md`, matching the section header beside it.
     private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {
         SettingsAdaptiveControlRow {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
                 // Icon *beside* the name, never instead of it (SONNY-65, founder ask 2026-08-07).
                 // The verbatim string stays because this sheet's recorded rationale is that a user
                 // can check an entry against the one a consent prompt named, and an icon is not
@@ -3835,13 +3793,13 @@ private struct WorkspaceDetailView: View {
                 // unbounded vertically), and a centred icon beside a two-line entry floats in the
                 // middle of nowhere. The 1pt nudge is optical — a 16pt square reads high against
                 // 13pt text sitting on its own cap height.
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: SonnySpacing.sm) {
                     if let nsImage = entry.appIcon?.icon {
                         Image(nsImage: nsImage)
                             .resizable()
                             .scaledToFit()
                             .frame(width: 16, height: 16)
-                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                             .padding(.top, 1)
                             // The name is already the row's accessible content, and the icon adds
                             // nothing a screen reader can use — same call the card's tiles make.
@@ -3881,7 +3839,7 @@ private struct WorkspaceDetailView: View {
             } label: {
                 Label("Remove", systemImage: "minus")
             }
-            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
             .disabled(isTaskInFlight)
             .accessibilityLabel(entry.removeAccessibilityLabel)
             .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
@@ -3907,9 +3865,7 @@ private struct WorkspaceScopeAddTarget: Identifiable {
 /// computed by `WorkspaceScopeAddPresentation` rather than written inline, because inline copy is
 /// copy no test can read — including "Already added" and the free-entry button's accessibility
 /// label, both of which were literals here until PR #40's review pointed at this sentence and
-/// showed it was false of exactly the picker's most-read string. The one literal left is
-/// `accessibilityLabel("Close")` on the dismiss button, matching the precedent every other sheet in
-/// this file already sets for that control.
+/// showed it was false of exactly the picker's most-read string.
 private struct WorkspaceScopeAddView: View {
     let presentation: WorkspaceScopeAddPresentation
     let isTaskInFlight: Bool
@@ -3919,33 +3875,12 @@ private struct WorkspaceScopeAddView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(presentation.title)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.text)
-
-                Spacer()
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
+            SonnyDialogHeader(title: presentation.title, closeLabel: "Close") {
+                dismiss()
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
 
             SettingsDivider()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, SonnySpacing.xxl)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -3962,21 +3897,15 @@ private struct WorkspaceScopeAddView: View {
 
                     freeEntry
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 18)
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.xl)
             }
         }
-        .frame(width: 420, height: 520, alignment: .top)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
     }
 
     private func categoryView(_ category: WorkspaceScopeAddPresentation.Category) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(category.title)
                 .font(SonnyType.eyebrow)
                 .foregroundStyle(SonnyTheme.muted)
@@ -3989,7 +3918,7 @@ private struct WorkspaceScopeAddView: View {
                 }
             }
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, SonnySpacing.md)
     }
 
     private func entryRow(_ entry: WorkspaceScopeAddPresentation.Entry) -> some View {
@@ -4012,7 +3941,7 @@ private struct WorkspaceScopeAddView: View {
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(entry.accessibilityLabel)
             }
@@ -4020,31 +3949,21 @@ private struct WorkspaceScopeAddView: View {
     }
 
     private var freeEntry: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(presentation.freeEntryTitle)
                 .font(SonnyType.eyebrow)
                 .foregroundStyle(SonnyTheme.muted)
 
             SettingsAdaptiveControlRow {
                 TextField(presentation.freeEntryPlaceholder, text: $typedValue)
-                    .textFieldStyle(.plain)
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.text)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(SonnyTheme.input)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: SonnyRadius.container)
-                            .stroke(SonnyTheme.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                    .sonnyTextField()
                     .onSubmit(submitTypedValue)
                     .accessibilityLabel(presentation.freeEntryTitle)
             } trailing: {
                 Button(action: submitTypedValue) {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight || presentation.dispatch(forTypedValue: typedValue) == nil)
                 .accessibilityLabel(presentation.freeEntryAddAccessibilityLabel)
             }
@@ -4078,7 +3997,7 @@ private struct WorkspaceScopeAddView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, SonnySpacing.md)
     }
 
     private func submitTypedValue() {
@@ -4120,13 +4039,13 @@ private struct WorkspaceAvatar: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
                 .fill(color.opacity(0.18))
             Text(WorkspaceAvatarInitial.from(name: name))
                 .font(SonnyType.avatar)
                 .foregroundStyle(color)
         }
-        .frame(width: 36, height: 36)
+        .frame(width: 32, height: 32)
         .accessibilityHidden(true)
     }
 }
@@ -4135,19 +4054,19 @@ private struct WorkspaceAppIconStack: View {
     let icons: [WorkspaceAppIconPresentation]
     let accent: Color
 
-    private let iconSize: CGFloat = 18
-    private let overlap: CGFloat = 10
+    private let iconSize: CGFloat = 20
+    private let overlap: CGFloat = 6
     private let maxVisible = 2
 
     var body: some View {
         if icons.isEmpty {
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
                 .fill(accent.opacity(0.18))
                 .overlay(
                     Image(systemName: "rectangle.3.group")
                         .foregroundStyle(accent)
                 )
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 32)
         } else {
             let visible = Array(icons.prefix(maxVisible))
             ZStack(alignment: .leading) {
@@ -4169,24 +4088,30 @@ private struct WorkspaceAppIconStack: View {
 
     @ViewBuilder
     private func iconTile(for icon: WorkspaceAppIconPresentation) -> some View {
-        // Wireframe (`13-MainAppWorkspaces.svg:233,236`) renders real app icons bare, full-bleed,
-        // with no background chip or border behind them — only the no-icon-resolved fallback
-        // needs a visible tile to sit inside.
+        // Every tile now carries a hairline ring, real icon or fallback alike — the redesign's
+        // call for legibility against the card's own raised surface. (Superseding the previous
+        // wireframe-literal treatment, which drew a resolved icon bare with no chip behind it;
+        // `13-MainAppWorkspaces.svg:233,236` is the SVG this departs from, flagged for founder
+        // review per the branch's decisions doc.)
         if let nsImage = icon.icon {
             Image(nsImage: nsImage)
                 .resizable()
                 .scaledToFit()
                 .frame(width: iconSize, height: iconSize)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+                .overlay(
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+                )
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "app.dashed")
                 .foregroundStyle(SonnyTheme.muted)
                 .frame(width: iconSize, height: iconSize)
                 .background(SonnyTheme.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
                         .stroke(SonnyTheme.cardBorder, lineWidth: 1)
                 )
                 .accessibilityHidden(true)

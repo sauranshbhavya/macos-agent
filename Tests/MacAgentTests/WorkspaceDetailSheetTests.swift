@@ -1267,9 +1267,12 @@ struct WorkspaceDetailSheetTests {
         // byte and wraps it in `if entry.appIcon?.icon == nil { … }` passes both — a different
         // conditional, so the icon-branch check never sees it, and the count is unchanged. That is
         // the reviewer's mutant I, and this is the line that kills it.
+        // Opener updated from the literal `spacing: 8` to `SonnySpacing.sm` (the same 8pt value,
+        // routed through the token) by the ui-ux-claude workspaces lane's styling pass — the
+        // anchor's job is finding this HStack, not pinning a bare number in a view.
         let stack = try MacAgentSource.braceBlock(
             of: row,
-            openedBy: "HStack(alignment: .top, spacing: 8) {"
+            openedBy: "HStack(alignment: .top, spacing: SonnySpacing.sm) {"
         )
         #expect(MacAgentSource.topLevel(of: stack).contains("Text(entry.value)"))
         // And the icon really is gated on a resolved image rather than on the entry being an app,
