@@ -51,10 +51,29 @@ enum WidgetTheme {
 
     static let textFull = Color.white
     static let textMuted = Color.white.opacity(0.55)
+    /// The compact capsule's glyph and the file-preview chip's "Open" label — a step brighter than
+    /// `textMuted`, short of full `textFull` (2026-09-08 modernization pass).
+    static let textStrong = Color.white.opacity(0.85)
+    /// The composer's wand glyph while the field is disabled — dimmer than `textMuted`, the
+    /// composer withdrawing its invitation rather than merely muting it.
+    static let textFaint = Color.white.opacity(0.28)
 
     /// §3.1/§3.2's note: the authored Figma radius is genuinely 34, but on a fixed 40pt-tall bar
     /// that exceeds half the height, so callers use `Capsule()` there rather than this literal value.
     static let panelRadius: CGFloat = 34
+
+    /// The panel/pill's fixed width — one token so every frame that must match it (the panel, the
+    /// composer pill, the mic hover hint row, a notice strip) reads the same source rather than
+    /// repeating the literal (2026-09-08 modernization pass).
+    static let panelWidth: CGFloat = 472
+    /// The floor every circular/capsule control in the widget's panels grows to. Was a bare 23pt at
+    /// seventeen call sites; 28 matches System A's own `SonnyMetrics.controlRegular` floor without
+    /// importing that token, since System B may not reach into System A's set.
+    static let controlSize: CGFloat = 28
+    /// The corner radius on the Safe-mode capture-review thumbnail.
+    static let thumbnailRadius: CGFloat = 8
+    /// The corner radius on `WidgetNoticeStrip`.
+    static let noticeRadius: CGFloat = 16
 }
 
 enum WidgetType {
@@ -74,6 +93,11 @@ enum WidgetType {
     static let captionSmall = Font.system(size: 10, weight: mediumWeight, design: .default)
     static let headlineChip = Font.system(size: 10, weight: .bold, design: .default)
     static let icon = Font.system(size: 12, weight: .regular, design: .default)
+    /// The small glyph slot shared by the step-status and item-job icons — 10/11pt semibold literals
+    /// consolidated onto one size (2026-09-08 modernization pass).
+    static let iconSmall = Font.system(size: 10, weight: .semibold, design: .default)
+    /// The compact capsule's glyph.
+    static let iconLarge = Font.system(size: 14, weight: .medium, design: .default)
 }
 
 /// Reusable liquid-glass background matching §3.1/§3.2's recipe as closely as SwiftUI's drawing
