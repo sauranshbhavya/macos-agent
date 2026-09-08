@@ -333,6 +333,146 @@ extension View {
     }
 }
 
+// MARK: - Text fields
+
+/// One text-field chrome for every field in System A: the task search, a clarification answer,
+/// the workspace scope entry, sign-in. A raised fill, a hairline that turns accent while the field
+/// has focus, and the same two heights buttons use so a field and a button share a row cleanly.
+enum SonnyTextFieldSize {
+    case small
+    case regular
+
+    var height: CGFloat {
+        switch self {
+        case .small: return SonnyMetrics.controlSmall
+        case .regular: return SonnyMetrics.controlRegular
+        }
+    }
+}
+
+private struct SonnyTextFieldModifier: ViewModifier {
+    @FocusState private var isFocused: Bool
+    let size: SonnyTextFieldSize
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.plain)
+            .font(size == .small ? SonnyType.caption : SonnyType.body)
+            .foregroundStyle(SonnyTheme.text)
+            .focused($isFocused)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: size.height)
+            .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .strokeBorder(isFocused ? SonnyTheme.accent : SonnyTheme.cardBorder, lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+            .animation(SonnyMotion.quick, value: isFocused)
+    }
+}
+
+extension View {
+    func sonnyTextField(size: SonnyTextFieldSize = .regular) -> some View {
+        modifier(SonnyTextFieldModifier(size: size))
+    }
+}
+
+// MARK: - Dialogs
+
+/// Every sheet's close control: one glyph, one hit target, one hover shape. The label names the
+/// sheet ("Close Settings") so VoiceOver says which one is closing.
+struct SonnyDialogCloseButton: View {
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                .foregroundStyle(SonnyTheme.muted)
+                .frame(width: SonnyMetrics.controlRegular, height: SonnyMetrics.controlRegular)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.cancelAction)
+        .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+/// The title row a sheet opens with: the title at the leading edge, the close control at the
+/// trailing edge, and one inset shared with `sonnyDialogFrame`.
+struct SonnyDialogHeader: View {
+    let title: String
+    var subtitle: String? = nil
+    let closeLabel: String
+    let close: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: SonnySpacing.md) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(title)
+                    .font(SonnyType.settingsContentTitle)
+                    .foregroundStyle(SonnyTheme.text)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: SonnySpacing.md)
+            SonnyDialogCloseButton(accessibilityLabel: closeLabel, action: close)
+        }
+        .padding(.horizontal, SonnySpacing.xxl)
+        .padding(.top, SonnySpacing.xl)
+        .padding(.bottom, SonnySpacing.lg)
+    }
+}
+
+/// A sheet's size and chrome: the canvas colour, the sheet radius, a hairline. Three sizes cover
+/// every sheet the app has; a sheet that needs a fourth number is a sheet asking to be redesigned.
+enum SonnyDialogSize {
+    /// A confirmation, a short form, the profile placeholder.
+    case compact
+    /// Sign-in, routine detail, workspace detail, scope entry.
+    case regular
+    /// Settings.
+    case wide
+
+    var size: CGSize {
+        switch self {
+        case .compact: return CGSize(width: 480, height: 360)
+        case .regular: return CGSize(width: 560, height: 520)
+        case .wide: return CGSize(width: 860, height: 600)
+        }
+    }
+}
+
+private struct SonnyDialogFrameModifier: ViewModifier {
+    let size: SonnyDialogSize
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: size.size.width, height: size.size.height)
+            .background(SonnyTheme.ink)
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.sheet))
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.sheet)
+                    .strokeBorder(SonnyTheme.border, lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+extension View {
+    func sonnyDialogFrame(_ size: SonnyDialogSize) -> some View {
+        modifier(SonnyDialogFrameModifier(size: size))
+    }
+}
+
 // MARK: - Badge
 
 /// A count or a state word in a small tinted chip: the sidebar's active-task count, a routine's

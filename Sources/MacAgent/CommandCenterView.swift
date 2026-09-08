@@ -165,27 +165,27 @@ struct CommandCenterView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 11) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+            HStack(spacing: SonnySpacing.sm) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .fill(SonnyTheme.accent.opacity(0.16))
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .fill(SonnyTheme.accentSubtle)
                     Image(systemName: "wand.and.stars")
-                        .font(SonnyType.icon(10, weight: .medium))
+                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
                         .foregroundStyle(SonnyTheme.accent)
                 }
-                .frame(width: 20, height: 20)
+                .frame(width: 22, height: 22)
 
                 Text("Sonny")
                     .font(SonnyType.sidebarWordmark)
                     .foregroundStyle(SonnyTheme.text)
             }
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.controlLarge)
 
             VStack(spacing: 2) {
-                ForEach(CommandCenterDestination.allCases) { destination in
-                    sidebarButton(destination)
+                ForEach(Array(CommandCenterDestination.allCases.enumerated()), id: \.element) { index, destination in
+                    sidebarButton(destination, ordinal: index + 1)
                 }
             }
 
@@ -193,12 +193,11 @@ struct CommandCenterView: View {
 
             profileRow
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 18)
-        .padding(.bottom, 18)
-        .frame(width: 275)
+        .padding(.horizontal, SonnySpacing.md)
+        .padding(.vertical, SonnySpacing.lg)
+        .frame(width: SonnyMetrics.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .background(SonnyTheme.sidebar)
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
@@ -218,24 +217,24 @@ struct CommandCenterView: View {
         Button {
             isAccountMenuPresented = true
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: SonnySpacing.sm) {
                 profileAvatar
 
                 Text(profileName)
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
 
-                Image(systemName: "chevron.down")
+                Image(systemName: "chevron.up.chevron.down")
                     .font(SonnyType.icon(9, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.muted)
+                    .foregroundStyle(SonnyTheme.textTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 11)
-            .frame(height: 40)
-            .contentShape(Rectangle())
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.listRowHeight)
+            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
         .sonnyPointerCursor()
@@ -271,13 +270,13 @@ struct CommandCenterView: View {
 
     private var profileAvatar: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .fill(SonnyTheme.accent.opacity(0.18))
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                .fill(SonnyTheme.accentSubtle)
             Text(WorkspaceAvatarInitial.from(name: profileName))
                 .font(SonnyType.microEmphasis)
                 .foregroundStyle(SonnyTheme.accent)
         }
-        .frame(width: 24, height: 24)
+        .frame(width: 22, height: 22)
     }
 
     private var accountMenuContent: some View {
@@ -307,7 +306,7 @@ struct CommandCenterView: View {
             Rectangle()
                 .fill(SonnyTheme.border)
                 .frame(height: 1)
-                .padding(.vertical, 4)
+                .padding(.vertical, SonnySpacing.xs)
 
             // Disabled, not a no-op — signals "this exists, isn't wired up yet" the same way the
             // Settings theme dropdown's Light/System options already do, rather than a silent dead
@@ -330,9 +329,9 @@ struct CommandCenterView: View {
                     .onHover(perform: handleLearnMoreHoverChange)
             }
         }
-        .padding(6)
-        .frame(width: 210)
-        .background(SonnyTheme.surfaceRaised)
+        .padding(SonnySpacing.xs + 2)
+        .frame(width: 220)
+        .background(SonnyTheme.surfaceRaised2)
     }
 
     /// Shared by the "Learn more" trigger row and its flyout content — opens after a short
@@ -369,9 +368,9 @@ struct CommandCenterView: View {
             accountMenuRow(title: "Privacy policy", systemImage: "hand.raised", isEnabled: false) {}
             accountMenuRow(title: "Terms of service", systemImage: "doc.badge.gearshape", isEnabled: false) {}
         }
-        .padding(6)
+        .padding(SonnySpacing.xs + 2)
         .frame(width: 200)
-        .background(SonnyTheme.surfaceRaised)
+        .background(SonnyTheme.surfaceRaised2)
     }
 
     private func accountMenuRow(
@@ -382,22 +381,24 @@ struct CommandCenterView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: SonnySpacing.sm) {
                 Image(systemName: systemImage)
-                    .font(SonnyType.icon(12, weight: .medium))
-                    .frame(width: 16)
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(isEnabled ? SonnyTheme.muted : SonnyTheme.textTertiary)
+                    .frame(width: 18)
                 Text(title)
                     .font(SonnyType.body)
-                Spacer(minLength: 8)
+                Spacer(minLength: SonnySpacing.sm)
                 if showsDisclosure {
                     Image(systemName: "chevron.right")
                         .font(SonnyType.icon(9, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.textTertiary)
                 }
             }
-            .foregroundStyle(isEnabled ? SonnyTheme.sidebarNavText : SonnyTheme.muted)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .contentShape(Rectangle())
+            .foregroundStyle(isEnabled ? SonnyTheme.text : SonnyTheme.textTertiary)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.compactRowHeight)
+            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -423,48 +424,44 @@ struct CommandCenterView: View {
         selection = destination
     }
 
-    private func sidebarButton(_ destination: CommandCenterDestination) -> some View {
-        Button {
+    /// One sidebar row. Selection is a fill with no stroke, the way Finder and Notes draw theirs;
+    /// the icon and the label both step up from muted to text when selected so the state reads
+    /// without colour. `ordinal` is the row's ⌘-number, which is the same order the sidebar shows.
+    private func sidebarButton(_ destination: CommandCenterDestination, ordinal: Int) -> some View {
+        let selected = isSelected(destination)
+        return Button {
             select(destination)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: SonnySpacing.sm) {
                 Image(systemName: destination.systemImage)
-                    .font(SonnyType.icon(14, weight: .medium))
-                    .foregroundStyle(SonnyTheme.muted)
-                    .frame(width: 18)
+                    .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
+                    .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
+                    .frame(width: 20)
                 Text(destination.title)
-                    .font(SonnyType.bodyEmphasis)
+                    .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
                     .foregroundStyle(SonnyTheme.sidebarNavText)
-                Spacer(minLength: 8)
+                Spacer(minLength: SonnySpacing.sm)
                 if destination == .tasks, viewModel.activeTaskCount > 0 {
-                    // Shape/fill match the wireframe's rounded-rect badge (`rx=4`, `#151619`) —
-                    // its "22" count itself doesn't map to anything Sonny has (likely a Linear
-                    // inbox-unread placeholder), so the conditional active-task display stays.
-                    Text("\(viewModel.activeTaskCount)")
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.text)
-                        .frame(minWidth: 20, minHeight: 20)
-                        .background(SonnyTheme.surfaceRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                    // The wireframe's "22" count is a Linear inbox placeholder; what is shown is the
+                    // one number Sonny has, the active-task count, and only while it is non-zero.
+                    SonnyBadge(text: "\(viewModel.activeTaskCount)", tone: .accent)
                         .accessibilityLabel("One active task")
                 }
             }
-            .padding(.horizontal, 11)
-            .frame(height: 28)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.navRowHeight)
             .background(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .fill(isSelected(destination) ? SonnyTheme.surfaceRaised : Color.clear)
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(selected ? SonnyTheme.fillSelected : Color.clear)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(isSelected(destination) ? SonnyTheme.border : Color.clear, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(KeyEquivalent(Character("\(ordinal)")), modifiers: .command)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
         .accessibilityLabel(destination.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func isSelected(_ destination: CommandCenterDestination) -> Bool {
@@ -533,7 +530,7 @@ private struct TasksFoundationView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             CommandCenterPageHeader(title: greeting)
 
             ScrollView {
@@ -582,23 +579,14 @@ private struct TasksFoundationView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
 
             // Pinned below the scroll area rather than placed in the list flow like the storage
             // notice above: an approval the user has to act on must not be scrollable out of
             // sight. Self-gates on its own state, so an idle page renders nothing here.
             CommandCenterAttentionPanel(viewModel: viewModel)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .onAppear {
             viewModel.refreshTaskHistory()
             // Both entry points are needed and neither is redundant: `onAppear` catches a request
@@ -789,8 +777,8 @@ private struct CommandCenterRunningIndicator: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusText)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -810,23 +798,17 @@ private struct CommandCenterRunningIndicator: View {
                 }
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             if viewModel.canCancel {
                 Button("Cancel") {
                     viewModel.cancelCurrentRun()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(SonnySpacing.md)
+        .sonnyCard()
     }
 
     // `viewModel.command` is not what's shown here on purpose — it's cleared the instant `start()`
@@ -853,7 +835,7 @@ private struct CommandCenterStorageNotice: View {
     /// genuinely absent from its parent stack's layout when there is nothing to say.
     struct Insets {
         static let none = Insets(horizontal: 0, bottom: 0)
-        static let tasksPage = Insets(horizontal: 30, bottom: 12)
+        static let tasksPage = Insets(horizontal: SonnySpacing.xl, bottom: SonnySpacing.md)
 
         var horizontal: CGFloat
         var bottom: CGFloat
@@ -894,29 +876,28 @@ private struct CommandCenterStorageNotice: View {
         message: String,
         dismiss: @escaping () -> Void
     ) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: SonnySpacing.sm + 2) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(tint)
 
             Text(message)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             Button("Dismiss", action: dismiss)
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CommandCenterPalette.cardSurface)
+        .padding(SonnySpacing.md)
+        .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.card))
         .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(tint.opacity(0.4), lineWidth: 1)
+            RoundedRectangle(cornerRadius: SonnyRadius.card)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                .allowsHitTesting(false)
         )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
         .padding(.horizontal, insets.horizontal)
         .padding(.bottom, insets.bottom)
     }
@@ -945,15 +926,15 @@ private struct CommandCenterSessionContextRow: View {
             // Amber, matching the widget's own session glyph: Sonny doing something unusual, not
             // something going wrong.
             Image(systemName: "cursorarrow.rays")
-                .font(.system(size: 11))
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
                 .foregroundStyle(SonnyTheme.warning)
 
             (Text(ScreenControlSessionPresentation.controllingPrefix).font(SonnyType.micro)
                 + Text(progress.appDisplayName).font(SonnyType.microEmphasis))
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: SonnySpacing.sm)
 
             Text(ScreenControlSessionPresentation.stepLine(
                 iteration: progress.iteration,
@@ -1057,7 +1038,7 @@ private struct CommandCenterAttentionPanel: View {
 
     var body: some View {
         if let state {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm + 2) {
                 switch state {
                 case .permission(let request):
                     permissionContent(request)
@@ -1069,15 +1050,14 @@ private struct CommandCenterAttentionPanel: View {
                     versionContent(prompt)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(SonnySpacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(CommandCenterPalette.cardSurface)
+            .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.card))
             .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                    .stroke(accentColor.opacity(0.4), lineWidth: 1)
+                RoundedRectangle(cornerRadius: SonnyRadius.card)
+                    .strokeBorder(accentColor.opacity(0.35), lineWidth: 1)
+                    .allowsHitTesting(false)
             )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
         } else {
             EmptyView()
         }
@@ -1105,7 +1085,7 @@ private struct CommandCenterAttentionPanel: View {
         // time Sonny asks shouldn't decide whether they get the explanation.
         if !viewModel.hasCompletedFirstApproval {
             Text("Sonny always asks first for actions like this — you decide, every time.")
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         }
 
@@ -1119,8 +1099,8 @@ private struct CommandCenterAttentionPanel: View {
             safeMode: viewModel.interactionMode == .safe
         ).enumerated()), id: \.offset) { _, line in
             Text(line)
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -1130,7 +1110,7 @@ private struct CommandCenterAttentionPanel: View {
         let escalationReasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
         if !escalationReasons.isEmpty {
             Text(escalationReasons)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1143,7 +1123,7 @@ private struct CommandCenterAttentionPanel: View {
             CommandCenterSessionContextRow(progress: sessionProgress)
         }
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Spacer(minLength: 0)
 
             // Same entry points the widget's own permission panel uses — `start()` routes to the
@@ -1165,7 +1145,7 @@ private struct CommandCenterAttentionPanel: View {
                 Button(ScreenControlSessionPresentation.stopLabel) {
                     viewModel.emergencyStopVisionSession()
                 }
-                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                 .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(
                     appDisplayName: sessionProgress.appDisplayName
                 ))
@@ -1173,13 +1153,13 @@ private struct CommandCenterAttentionPanel: View {
                 Button("Deny") {
                     viewModel.cancelCurrentRun()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
 
             Button("Allow") {
                 viewModel.start()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
         }
     }
 
@@ -1188,27 +1168,17 @@ private struct CommandCenterAttentionPanel: View {
         header(icon: "questionmark.circle", title: "Clarification needed")
 
         Text(question)
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.text)
             .fixedSize(horizontal: false, vertical: true)
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             TextField(
                 "",
                 text: $viewModel.clarificationAnswer,
-                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.muted)
+                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.textTertiary)
             )
-            .textFieldStyle(.plain)
-            .font(SonnyType.caption)
-            .foregroundStyle(SonnyTheme.text)
-            .padding(.horizontal, 10)
-            .frame(height: 23)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .sonnyTextField(size: .small)
             .onSubmit { viewModel.submitClarification() }
 
             // The widget's Cancel, mirrored (SONNY-166). Declining-then-answering order matches the
@@ -1225,12 +1195,12 @@ private struct CommandCenterAttentionPanel: View {
             Button(ClarificationPresentation.cancelLabel) {
                 viewModel.cancelCurrentRun()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
 
             Button("Send") {
                 viewModel.submitClarification()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
             .disabled(!viewModel.canSendClarificationAnswer)
         }
     }
@@ -1251,42 +1221,42 @@ private struct CommandCenterAttentionPanel: View {
         header(icon: "arrow.down.circle", title: prompt.title)
 
         Text(prompt.message)
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.text)
             .fixedSize(horizontal: false, vertical: true)
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Spacer(minLength: 0)
 
             if let dismissLabel = prompt.dismissLabel {
                 Button(dismissLabel) {
                     viewModel.dismissUpdateAvailablePrompt()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
             }
 
             if let updateLabel = prompt.updateLabel {
                 Button(updateLabel) {
                     viewModel.openClientVersionLink()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
             }
         }
     }
 
     @ViewBuilder
     private func failureContent(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: SonnySpacing.sm + 2) {
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(SonnyTheme.danger)
 
             Text(message)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             // `errorMessage` also carries pre-flight errors (empty-command validation, voice
             // transcription failures) that never reached a real submission, and `retryLastCommand`
@@ -1296,13 +1266,13 @@ private struct CommandCenterAttentionPanel: View {
                 Button("Retry") {
                     viewModel.retryLastCommand(origin: .commandCenter)
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
 
             Button("Dismiss") {
                 viewModel.errorMessage = nil
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
         }
     }
 
@@ -1310,16 +1280,16 @@ private struct CommandCenterAttentionPanel: View {
     /// the message inline, so it deliberately does not use this.
     @ViewBuilder
     private func header(icon: String, title: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(SonnyTheme.warning)
 
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
         }
     }
 }
@@ -1336,7 +1306,7 @@ private struct InsightsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             CommandCenterPageHeader(title: "Insights")
 
             CommandCenterAttentionPanel(viewModel: viewModel)
@@ -1374,18 +1344,9 @@ private struct InsightsView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .onAppear {
             viewModel.refreshTaskHistory()
         }
@@ -3036,7 +2997,7 @@ private struct RoutinesView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             CommandCenterPageHeader(title: "Routines")
 
             VStack(spacing: 0) {
@@ -3089,12 +3050,7 @@ private struct RoutinesView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
 
             // **Watchers live here rather than in Memory** (founder decision, recorded on
             // SONNY-236 and SONNY-109): Memory is what Sonny remembers, a live watcher is what
@@ -3129,11 +3085,7 @@ private struct RoutinesView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .sheet(item: $selectedRoutine) { routine in
             RoutineDetailView(routine: routine, viewModel: viewModel)
         }
@@ -3175,12 +3127,7 @@ private struct WatchingCollection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .commandCenterPanel()
     }
 }
 
@@ -3356,7 +3303,7 @@ private struct WorkspacesView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             CommandCenterPageHeader(title: "Workspaces")
 
             VStack(spacing: 0) {
@@ -3408,12 +3355,7 @@ private struct WorkspacesView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
 
             CommandCenterAttentionPanel(viewModel: viewModel)
 
@@ -3427,11 +3369,7 @@ private struct WorkspacesView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .sheet(item: $selectedWorkspaceName) { selected in
             // Resolved from the live list, and dismissed rather than shown stale if the workspace
             // is gone — deleting from underneath an open sheet is reachable, since delete is on the
@@ -4473,7 +4411,7 @@ private struct MemoryView: View {
     @State private var deletionCategory: MemoryCategory?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             CommandCenterPageHeader(title: "Memory")
 
             masterPanel
@@ -4490,11 +4428,7 @@ private struct MemoryView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .onAppear {
             // The policy is re-read here rather than only at launch, so an administrator's change
             // lands without a relaunch once row 19 supplies a real provider.
@@ -4589,12 +4523,7 @@ private struct MemoryView: View {
             .padding(.horizontal, 18)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .commandCenterPanel()
     }
 
     private var collectionPanel: some View {
@@ -4664,12 +4593,7 @@ private struct MemoryView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .commandCenterPanel()
     }
 
     /// Where "View" goes, resolved through `MemoryRowDestination` so the answer is a value a test
@@ -5516,21 +5440,20 @@ private struct CollectionHeader: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SonnySpacing.md) {
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
             Spacer()
             if let actionTitle, let action {
                 Button(action: action) {
                     Label(actionTitle, systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterHeaderActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 24)
-        .frame(height: 36)
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: SonnyMetrics.toolbarHeight)
     }
 }
 
@@ -5546,45 +5469,38 @@ private struct CollectionEmptyState: View {
     var minHeight: CGFloat = 180
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: SonnySpacing.sm) {
             Image(systemName: systemImage)
-                .font(SonnyType.icon(20))
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.icon(SonnyMetrics.iconEmptyState, weight: .light))
+                .foregroundStyle(SonnyTheme.textTertiary)
+                .padding(.bottom, SonnySpacing.xs)
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
             Text(message)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
+                .frame(maxWidth: 320)
         }
         .frame(maxWidth: .infinity, minHeight: minHeight)
-        .padding(24)
+        .padding(SonnySpacing.xxl)
+        .accessibilityElement(children: .combine)
     }
 }
 
+/// Retired onto `SonnyButtonStyle` (2026-09-08): a toolbar action is the shared secondary button at
+/// its regular size. The name stays for the call sites that have not been migrated yet, and it
+/// draws nothing of its own.
 private struct CommandCenterHeaderActionStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(SonnyType.itemTitle)
-            .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.7 : 0.92))
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(CommandCenterPalette.buttonSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight()
-            .opacity(isEnabled ? 1 : 0.46)
+        SonnyButtonStyle(tone: .secondary).makeBody(configuration: configuration)
     }
 }
 
+/// Retired onto `SonnyButtonStyle` (2026-09-08): a row action is the shared button at its small
+/// size, secondary or danger. The name and its `tone:` stay for the call sites that have not been
+/// migrated yet, and it draws nothing of its own.
 private struct CommandCenterRowActionStyle: ButtonStyle {
     /// `.danger` carries the same treatment "Delete Local Data" and the routine panel's danger
     /// buttons already use — danger-tinted label and border over the normal surface — at this
@@ -5595,42 +5511,11 @@ private struct CommandCenterRowActionStyle: ButtonStyle {
         case danger
     }
 
-    @Environment(\.isEnabled) private var isEnabled
     var tone: Tone = .neutral
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(SonnyType.microEmphasis)
-            .foregroundStyle(foreground.opacity(configuration.isPressed ? 0.68 : 0.92))
-            .padding(.horizontal, 11)
-            .frame(height: 23)
-            .background(CommandCenterPalette.buttonSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight()
-            .opacity(isEnabled ? 1 : 0.46)
-    }
-
-    private var foreground: Color {
-        switch tone {
-        case .neutral:
-            return SonnyTheme.text
-        case .danger:
-            return SonnyTheme.danger
-        }
-    }
-
-    private var border: Color {
-        switch tone {
-        case .neutral:
-            return SonnyTheme.cardBorder
-        case .danger:
-            return SonnyTheme.danger.opacity(0.45)
-        }
+        SonnyButtonStyle(tone: tone == .danger ? .danger : .secondary, size: .small)
+            .makeBody(configuration: configuration)
     }
 }
 
@@ -5653,16 +5538,42 @@ private struct CommandCenterPageHeader: View {
     var subtitle: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.pageTitle)
                 .foregroundStyle(SonnyTheme.text)
             if let subtitle {
                 Text(subtitle)
-                    .font(SonnyType.body)
+                    .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.muted)
             }
         }
+        .frame(height: SonnyMetrics.controlLarge, alignment: .leading)
+    }
+}
+
+/// The frame every Command Center page hangs inside: one inset from the window edge on all four
+/// sides, one gap between the title row and the panel, the canvas colour behind. A page that draws
+/// its own numbers here is a page that no longer lines up with its neighbours.
+private struct CommandCenterPageFrame: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(SonnySpacing.pageInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SonnyTheme.ink)
+    }
+}
+
+extension View {
+    func commandCenterPageFrame() -> some View {
+        modifier(CommandCenterPageFrame())
+    }
+
+    /// The bordered panel a page's scrolling content sits in. Clip first so scrolled content
+    /// respects the corner, then the shared surface behind it.
+    func commandCenterPanel() -> some View {
+        clipShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
+            .sonnyPanel()
     }
 }
 
@@ -5706,32 +5617,23 @@ struct SettingsDialogView: View {
     @State private var selection: SettingsSection = .preferences
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
+        HStack(alignment: .top, spacing: 0) {
+            settingsSidebar
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    SonnyDialogCloseButton(accessibilityLabel: "Close Settings") {
+                        isPresented = false
+                    }
                 }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close Settings")
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-
-            HStack(alignment: .top, spacing: 0) {
-                settingsSidebar
-
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(width: 1)
-                    .frame(maxHeight: .infinity)
+                .padding(.horizontal, SonnySpacing.md)
+                .padding(.top, SonnySpacing.md)
 
                 ScrollView {
                     Group {
@@ -5751,76 +5653,75 @@ struct SettingsDialogView: View {
                             SettingsDataPage(viewModel: viewModel)
                         }
                     }
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 36)
+                    .padding(.horizontal, SonnySpacing.xxxl)
+                    .padding(.top, SonnySpacing.sm)
+                    .padding(.bottom, SonnySpacing.xxxl)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(SonnyTheme.collectionSurface)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SonnyTheme.ink)
         }
-        // Widened from an initial 760pt (2026-07-18 review): at 760pt, the content pane (dialog
-        // width minus the 226pt sidebar minus 80pt of padding) left "Use pointer cursors" too
-        // narrow to keep its description on one line, so it fell back to `SettingsAdaptiveControlRow`'s
-        // stacked layout while "Display full names" (a shorter description) stayed inline —
-        // an inconsistent, mismatched look across two rows in the same section.
-        .frame(width: 880, height: 620)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        // The wide dialog size: the content pane (dialog width minus the sidebar minus its padding)
+        // has to keep "Use pointer cursors" and its description on one line, or
+        // `SettingsAdaptiveControlRow` stacks that row while the shorter "Display full names" stays
+        // inline, which is the mismatched look the 2026-07-18 review caught at 760pt.
+        .sonnyDialogFrame(.wide)
     }
 
     private var settingsSidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: SonnySpacing.xs + 2) {
                 Image(systemName: "gearshape")
-                    .font(SonnyType.icon(12, weight: .medium))
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
                 Text("Settings")
-                    .font(SonnyType.itemTitle)
+                    .font(SonnyType.headline)
             }
-            .foregroundStyle(SonnyTheme.muted)
-            .padding(.horizontal, 11)
-            .padding(.bottom, 2)
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.controlLarge)
+            .padding(.bottom, SonnySpacing.sm)
 
             ForEach(SettingsSection.allCases) { section in
+                let selected = selection == section
                 Button {
                     selection = section
                 } label: {
                     Text(section.title)
-                        .font(SonnyType.body)
-                        .foregroundStyle(selection == section ? SonnyTheme.text : SonnyTheme.muted)
+                        .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
+                        .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 11)
-                        .frame(height: 32)
+                        .padding(.horizontal, SonnySpacing.sm)
+                        .frame(height: SonnyMetrics.navRowHeight)
                         .background(
-                            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                                .fill(selection == section ? SonnyTheme.surfaceRaised : Color.clear)
+                            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                                .fill(selected ? SonnyTheme.fillSelected : Color.clear)
                         )
-                        .contentShape(Rectangle())
+                        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                 }
                 .buttonStyle(.plain)
                 .sonnyPointerCursor()
                 .sonnyHoverHighlight()
                 .accessibilityLabel(section.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
 
             Spacer()
         }
-        .padding(14)
-        .frame(width: 226, alignment: .topLeading)
+        .padding(.horizontal, SonnySpacing.md)
+        .padding(.vertical, SonnySpacing.lg)
+        .frame(width: 200, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.sidebar)
     }
 }
 
 struct SettingsDivider: View {
     var body: some View {
         Rectangle()
-            .fill(SonnyTheme.border)
+            .fill(SonnyTheme.cardBorder)
             .frame(height: 1)
     }
 }
@@ -5833,42 +5734,12 @@ struct ProfileDialogView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close Profile")
+            SonnyDialogHeader(title: "Profile", subtitle: "Not designed yet. Check back soon.", closeLabel: "Close Profile") {
+                isPresented = false
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Profile")
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Not designed yet — check back soon.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(40)
+            Spacer(minLength: 0)
         }
-        .frame(width: 480, height: 360)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.compact)
     }
 }
 

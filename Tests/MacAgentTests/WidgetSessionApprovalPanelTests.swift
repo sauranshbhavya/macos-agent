@@ -186,7 +186,10 @@ struct WidgetSessionApprovalPanelTests {
 
         // System A's own destructive treatment, not the widget's red — the two surfaces have
         // separate token sets and `.claude/rules/macagent-ui-conventions.md` forbids mixing them.
-        #expect(MacAgentSource.count(of: "CommandCenterRowActionStyle(tone: .danger)", inText: panel) == 1)
+        // The literal is the shared button system's danger tone at its small size (2026-09-08's
+        // modernization retired `CommandCenterRowActionStyle` onto it); what is pinned is that the
+        // Stop is the one danger-toned control on this panel.
+        #expect(MacAgentSource.count(of: "SonnyButtonStyle(tone: .danger, size: .small)", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "WidgetTheme", inText: panel) == 0)
         #expect(MacAgentSource.count(of: "WidgetType", inText: panel) == 0)
 
