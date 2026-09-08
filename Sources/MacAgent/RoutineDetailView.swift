@@ -1,177 +1,18 @@
 import MacAgentCore
 import SwiftUI
 
-// MARK: - System B tokens (routine detail view only)
-//
-// This is a fully separate token set from System A (SonnyTheme/SonnyType/SonnyRadius in
-// ContentView.swift) — per docs/sonny-design-system-reference.md §3 and
-// docs/sonny-founder-design-decisions.md's Routines section, the routine detail view is styled
-// like the floating widget's liquid-glass material embedded inside the main app window, not a
-// variant of System A. Do not extend SonnyTheme/SonnyType/SonnyRadius to serve this view, and do
-// not reuse these System B tokens outside this deliberate System-B-inside-System-A case.
-
-enum RoutineDetailTheme {
-    static let basePanel = Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x1A / 255)
-    static let hairline = Color(red: 0xA6 / 255, green: 0xA6 / 255, blue: 0xA6 / 255)
-    static let text = Color.white
-    static let mutedText = Color.white.opacity(0.55)
-
-    /// §3's exact radius/shadow-offset recipe only covers two specific components — the floating
-    /// widget's own panels (34px radius, 18px shadow offset) and the system notification banner
-    /// (20px radius, 8px offset). Neither is literally "the routine detail view," which isn't in
-    /// that doc at all. `docs/sonny-founder-design-decisions.md`'s own language is "styled like the
-    /// floating widget" specifically, not the notification, so the floating widget's values are
-    /// used here as the more defensible default — an explicit, stated choice, not a silent
-    /// assumption. Worth a visual check alongside the actual floating widget once branch 11 exists.
-    static let panelRadius: CGFloat = 34
-    static let shadowOffset: CGFloat = 18
-}
-
-enum RoutineDetailType {
-    /// §3.1 calls out a recurring non-standard weight value, 510 — Apple's own "Medium" optical-
-    /// weight instance in SF Pro's variable-font axis, distinct from the generic CSS 500. SwiftUI's
-    /// `Font.Weight` has no matching custom numeric axis value to set directly, so `.medium`
-    /// (SwiftUI's own closest built-in token) is used wherever §3.1 specifies 510.
-    static let mediumWeight: Font.Weight = .medium
-
-    /// SF Pro / SF Pro Display come from `design: .default` — that's already San Francisco on
-    /// Apple platforms, so no custom font name needs registering (unlike System A's Inter, which
-    /// is a bundled, non-system font loaded via `Font.custom`).
-    static let title = Font.system(size: 20, weight: .semibold, design: .default)
-    static let sectionLabel = Font.system(size: 13, weight: mediumWeight, design: .default)
-    static let body = Font.system(size: 13, weight: .regular, design: .default)
-    static let micro = Font.system(size: 11, weight: .regular, design: .default)
-}
-
-/// Reusable liquid-glass panel background matching §3.1/§3.2's recipe as closely as SwiftUI's
-/// drawing primitives allow. Two parts are approximations rather than literal ports, since CSS and
-/// SwiftUI have no exact equivalents for them: the blend-mode-layered gradient fill (approximated
-/// with `.blendMode` on stacked translucent layers) and the inset "inner glass highlight" shadows
-/// (CSS `inset` shadows have no SwiftUI counterpart; approximated with edge-fading gradient
-/// overlays). Worth a visual check, not guaranteed pixel-identical to the CSS export.
-private struct LiquidGlassPanelBackground: ViewModifier {
-    let cornerRadius: CGFloat
-    let shadowOffset: CGFloat
-
-    func body(content: Content) -> some View {
-        content
-            .background(
-                // §3.1's exact recipe: the opaque base layer carries `lighten`; both translucent
-                // `rgba(26,26,26,.5)` layers carry `luminosity`. `.compositingGroup()` isolates
-                // this stack so the blend modes composite against each other, not whatever's
-                // drawn behind the sheet.
-                ZStack {
-                    RoutineDetailTheme.basePanel
-                        .blendMode(.lighten)
-                    RoutineDetailTheme.basePanel.opacity(0.5)
-                        .blendMode(.luminosity)
-                    RoutineDetailTheme.basePanel.opacity(0.5)
-                        .blendMode(.luminosity)
-                }
-                .compositingGroup()
-            )
-            .overlay(
-                // Approximates the inset "inner glass highlight" (`inset 0 40px 10px -40px #1A1A1A`
-                // on both top and bottom edges) via edge-fading gradients, since SwiftUI has no
-                // inset-shadow primitive.
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [Color.white.opacity(0.05), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 40)
-                    Spacer(minLength: 0)
-                    LinearGradient(colors: [.clear, Color.black.opacity(0.08)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 40)
-                }
-                .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(RoutineDetailTheme.hairline, lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            // The 3-pass hairline rim from §3.2 (±1.25px offset passes plus the 0.5px outline
-            // stroke already applied above as an overlay, the more precise translation for a
-            // zero-blur/zero-offset CSS shadow pass). §3.2's outline color is fully opaque —
-            // SwiftUI's blur-based `.shadow` still softens what CSS's spread-based passes render
-            // sharp, but the color itself shouldn't be additionally dimmed on top of that.
-            .shadow(color: RoutineDetailTheme.hairline, radius: 0.5, x: 1.25, y: 0)
-            .shadow(color: RoutineDetailTheme.hairline, radius: 0.5, x: -1.25, y: 0)
-            // The outer drop shadow: `0px <offset>px 48px rgba(0,0,0,.45)`.
-            .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: shadowOffset)
-    }
-}
-
-private extension View {
-    func liquidGlassPanel(cornerRadius: CGFloat, shadowOffset: CGFloat) -> some View {
-        modifier(LiquidGlassPanelBackground(cornerRadius: cornerRadius, shadowOffset: shadowOffset))
-    }
-}
-
-/// Button chrome for this panel's actions, in System B tokens.
-///
-/// Follows the treatment Settings → Privacy & Permissions already uses for "Delete Local Data" —
-/// real button chrome, a danger tone, a trash icon and a short verb — rather than inventing a third
-/// destructive pattern. It is a re-implementation rather than a reuse of `SonnyButtonStyle`
-/// deliberately: that style is System A (Inter, `SonnyTheme` colors) and this panel is the
-/// documented System-B-inside-System-A case, so importing it would mix the two systems that
-/// CLAUDE.md says not to mix. The *pattern* is the shared thing; the tokens are not.
-private struct RoutineDetailActionStyle: ButtonStyle {
-    enum Tone {
-        case primary
-        case danger
-    }
-
-    @Environment(\.isEnabled) private var isEnabled
-    let tone: Tone
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(RoutineDetailType.sectionLabel)
-            .foregroundStyle(foreground.opacity(configuration.isPressed ? 0.7 : 1))
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .background(background.opacity(configuration.isPressed ? 0.7 : 1))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(border, lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .opacity(isEnabled ? 1 : 0.4)
-            .sonnyPointerCursor()
-    }
-
-    private var foreground: Color {
-        switch tone {
-        case .primary:
-            return .white
-        case .danger:
-            return SonnyTheme.danger
-        }
-    }
-
-    private var background: Color {
-        switch tone {
-        case .primary:
-            return SonnyTheme.accent
-        case .danger:
-            return Color.white.opacity(0.06)
-        }
-    }
-
-    private var border: Color {
-        switch tone {
-        case .primary:
-            return .clear
-        case .danger:
-            return SonnyTheme.danger.opacity(0.45)
-        }
-    }
-}
-
 // MARK: - Routine detail view
 
 /// Per `docs/sonny-founder-design-decisions.md`'s Routines section: clicking into a routine opens
-/// a detail view styled like the floating widget (liquid glass), embedded inside the main app
-/// window rather than the literal floating widget window — presented here via `.sheet(item:)`.
+/// a detail view, presented here via `.sheet(item:)`. **This view used to carry its own System B
+/// (liquid-glass) token set as a deliberate exception to the two-system split** — recorded then as
+/// the founders' intent for "one consistent way to watch Sonny work, whichever surface the user is
+/// on." Branch `ui-ux-claude` reverses that: the same intent is now met by giving this sheet the
+/// widget's step-log *grammar* (an icon slot plus a label) rendered in System A's own tokens,
+/// rather than by importing System B's material into a flat window that has no vibrancy behind it
+/// to blend against. `docs/sonny-ui-modernization-2026-09-08.md` decision 7 records this as a
+/// reversal of a recorded founder decision and flags it for founder review. `SonnyDialogHeader` and
+/// `sonnyDialogFrame(.regular)` are the same chrome every other System A sheet uses.
 struct RoutineDetailView: View {
     let routine: StoredRoutine
     @ObservedObject var viewModel: AgentViewModel
@@ -222,33 +63,63 @@ struct RoutineDetailView: View {
         viewModel.savedRoutines.first { $0.name == routine.name } ?? routine
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            closeButtonRow
-            header
+    /// The header's subtitle: the same cadence label the Routines row shows
+    /// (`RoutineRowPresentation`), so the two surfaces describe one schedule the same way.
+    private var cadenceSentence: String {
+        guard let schedule = live.schedule else {
+            return "Runs only when you ask"
+        }
+        return RoutineScheduleDisplay.cadenceLabel(for: schedule)
+    }
 
-            Rectangle()
-                .fill(RoutineDetailTheme.hairline.opacity(0.2))
-                .frame(height: 1)
+    var body: some View {
+        let now = Date()
+        let calendar = Calendar.current
+
+        VStack(alignment: .leading, spacing: 0) {
+            SonnyDialogHeader(
+                title: routine.name,
+                subtitle: cadenceSentence,
+                closeLabel: "Close routine"
+            ) {
+                dismiss()
+            }
+
+            SettingsDivider()
+                .padding(.horizontal, SonnySpacing.xxl)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(routine.steps) { step in
-                        RoutineDetailStepRow(step: step)
-                    }
-
-                    scheduleControls
+                VStack(alignment: .leading, spacing: SonnySpacing.xl) {
+                    stepsSection
+                    scheduleSection(now: now, calendar: calendar)
                     unattendedTrustControl
-                    runControl
-                    deleteRoutineControl
-
-                    Spacer(minLength: 24)
+                    actionsRow(now: now, calendar: calendar)
                 }
-                .padding(20)
+                .padding(SonnySpacing.xxl)
             }
         }
-        .frame(width: 420, height: 480)
-        .liquidGlassPanel(cornerRadius: RoutineDetailTheme.panelRadius, shadowOffset: RoutineDetailTheme.shadowOffset)
+        .sonnyDialogFrame(.regular)
+    }
+
+    /// The widget's step-log grammar (icon slot plus label) in System A tokens, per
+    /// `docs/sonny-ui-modernization-2026-09-08.md` decision 7.
+    @ViewBuilder
+    private var stepsSection: some View {
+        if routine.steps.isEmpty {
+            HStack(spacing: 0) {
+                Text("No steps saved")
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                Spacer(minLength: 0)
+            }
+            .frame(height: SonnyMetrics.compactRowHeight)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(routine.steps) { step in
+                    RoutineDetailStepRow(step: step)
+                }
+            }
+        }
     }
 
     /// Schedule authoring — **designed rather than matched.**
@@ -260,36 +131,30 @@ struct RoutineDetailView: View {
     /// schedule *looks like*, never how one is made, and without a creation path nothing else on
     /// this branch can be reached at all.
     ///
-    /// It follows what this view already establishes — System B tokens from this file (which
-    /// deliberately keeps its own copy rather than sharing `SonnyWidgetTheme.swift`, per
-    /// `.claude/rules/macagent-ui-conventions.md`), label-plus-control rows matching the toggle
-    /// below, and native controls, which this view already uses for its switch and buttons.
-    ///
     /// Edits accumulate in a local draft and land only on an explicit confirm — checkpoint 5's
     /// write-through was reversed after manual testing found ambient mutation disorienting, with
-    /// no moment of having *set* the schedule. The confirm is gated on the draft differing from
-    /// what is saved, so an untouched panel offers nothing to confirm.
+    /// no moment of having *set* the schedule. The confirm (now "Save schedule" in the shared
+    /// actions row below, alongside Remove and Delete) is gated on the draft differing from what is
+    /// saved, so an untouched panel offers nothing to confirm.
     ///
     /// The controls are structurally unable to produce a schedule `validate()` would reject:
     /// weekday is offered only for weekly, day-of-month only for monthly, both bounded to the
     /// accepted ranges, and the draft carries a valid value for every cadence so switching can
     /// never leave a field unfilled. `validate()` stays the backstop; the UI should never reach it.
     ///
-    /// Two things stay outside the draft and act immediately, because neither is a field of a
-    /// schedule being composed: the unattended-trust toggle below (a distinct safety decision about
-    /// a schedule that already exists — keeping it immediate means its tier-3 advisory describes
-    /// real saved state rather than a hypothetical) and Remove (a discrete action, not an edit).
+    /// The unattended-trust toggle below and Remove (in the actions row) stay outside the draft and
+    /// act immediately, because neither is a field of a schedule being composed: the toggle is a
+    /// distinct safety decision about a schedule that already exists — keeping it immediate means
+    /// its tier-3 advisory describes real saved state rather than a hypothetical — and Remove is a
+    /// discrete action, not an edit.
     @ViewBuilder
-    private var scheduleControls: some View {
-        let calendar = Calendar.current
-        let now = Date()
-        let saved = live.schedule.map { ScheduleDraft(from: $0, now: now, calendar: calendar) }
-        let shown = draft ?? saved
+    private func scheduleSection(now: Date, calendar: Calendar) -> some View {
+        let (_, shown) = scheduleDraftPair(now: now, calendar: calendar)
 
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
             Text("Schedule")
-                .font(RoutineDetailType.sectionLabel)
-                .foregroundStyle(RoutineDetailTheme.text)
+                .font(SonnyType.settingsSectionLabel)
+                .foregroundStyle(SonnyTheme.text)
 
             // Why Sonny switched this schedule off, on the surface with room for a sentence — the
             // Routines row only has space to say that something needs attention. Reuses
@@ -301,20 +166,21 @@ struct RoutineDetailView: View {
             // cannot appear on a schedule that is still running.
             if case .pausedBySonny(let pausedReason)? = live.schedule?.activation {
                 Text("Sonny paused this schedule: \(pausedReason) Switch it back on once you have reviewed it.")
-                    .font(RoutineDetailType.micro)
+                    .font(SonnyType.micro)
                     .foregroundStyle(SonnyTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let shown {
                 scheduleRow("Repeats") {
-                    Picker("", selection: cadenceBinding(shown, now: now, calendar: calendar)) {
+                    Picker("", selection: cadenceBinding(shown)) {
                         ForEach(RoutineCadence.allCases, id: \.self) { cadence in
                             Text(cadence.displayName).tag(cadence)
                         }
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
+                    .tint(SonnyTheme.accent)
                     .frame(width: 208)
                 }
 
@@ -322,6 +188,7 @@ struct RoutineDetailView: View {
                     DatePicker("", selection: timeBinding(shown, calendar: calendar), displayedComponents: .hourAndMinute)
                         .labelsHidden()
                         .datePickerStyle(.field)
+                        .tint(SonnyTheme.accent)
                         .frame(width: 92)
                 }
 
@@ -338,6 +205,8 @@ struct RoutineDetailView: View {
                             }
                         }
                         .labelsHidden()
+                        .pickerStyle(.menu)
+                        .tint(SonnyTheme.accent)
                         .frame(width: 132)
                     }
                 case .monthly:
@@ -348,55 +217,23 @@ struct RoutineDetailView: View {
                             }
                         }
                         .labelsHidden()
+                        .pickerStyle(.menu)
+                        .tint(SonnyTheme.accent)
                         .frame(width: 132)
                     }
                 }
-
-                // Day 29-31 does not exist in every month. The data model accepts those days on
-                // purpose and the scheduler clamps to the last day — worth saying rather than
-                // leaving the user to discover it in February.
-                if shown.cadence == .monthly, shown.dayOfMonth > 28 {
-                    scheduleNote("Months without a \(shown.dayOfMonth)\(ordinalSuffix(shown.dayOfMonth)) run on their last day.")
-                }
-
-                HStack(spacing: 10) {
-                    // Gated on the draft actually differing from what is saved, so an untouched
-                    // panel offers nothing to confirm and a dirty one visibly does. That is what
-                    // makes discarding on dismiss safe without a confirmation dialog.
-                    Button(live.schedule == nil ? "Save schedule" : "Save changes") {
-                        commitDraft(shown)
-                    }
-                    .buttonStyle(RoutineDetailActionStyle(tone: .primary))
-                    .disabled(!isDirty(shown: shown, saved: saved))
-
-                    if live.schedule != nil {
-                        // Immediate rather than part of the draft: removing a schedule is a
-                        // discrete action, not a field edit. No confirmation dialog — unlike
-                        // Delete Local Data, which this borrows its danger treatment from, a
-                        // removed schedule is recoverable by making another one.
-                        Button {
-                            viewModel.setRoutineSchedule(live, to: nil)
-                            draft = nil
-                            unattendedAdvisory = nil
-                        } label: {
-                            Label("Remove", systemImage: "trash")
-                        }
-                        .buttonStyle(RoutineDetailActionStyle(tone: .danger))
-                        .help("Remove this routine's schedule")
-                    }
-
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, 2)
             } else {
                 scheduleNote("This routine only runs when you ask it to.")
-
-                Button("Add a schedule") {
-                    draft = ScheduleDraft(now: now, calendar: calendar)
-                }
-                .buttonStyle(RoutineDetailActionStyle(tone: .primary))
             }
         }
+    }
+
+    /// The saved schedule as a draft, and the draft actually shown (the uncommitted edit if there
+    /// is one, otherwise the saved value) — the one pair of values the schedule section and the
+    /// actions row both need, computed once so the two can never disagree about them.
+    private func scheduleDraftPair(now: Date, calendar: Calendar) -> (saved: ScheduleDraft?, shown: ScheduleDraft?) {
+        let saved = live.schedule.map { ScheduleDraft(from: $0, now: now, calendar: calendar) }
+        return (saved, draft ?? saved)
     }
 
     private func isDirty(shown: ScheduleDraft, saved: ScheduleDraft?) -> Bool {
@@ -424,10 +261,10 @@ struct RoutineDetailView: View {
         _ label: String,
         @ViewBuilder control: () -> Control
     ) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SonnySpacing.md) {
             Text(label)
-                .font(RoutineDetailType.body)
-                .foregroundStyle(RoutineDetailTheme.mutedText)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.muted)
                 // One shared column width across every row so the controls line up rather than
                 // stepping in and out with the label text. Sized for "On day", the longest.
                 .frame(width: 62, alignment: .leading)
@@ -439,16 +276,12 @@ struct RoutineDetailView: View {
 
     private func scheduleNote(_ text: String) -> some View {
         Text(text)
-            .font(RoutineDetailType.micro)
-            .foregroundStyle(RoutineDetailTheme.mutedText)
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.muted)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func cadenceBinding(
-        _ shown: ScheduleDraft,
-        now: Date,
-        calendar: Calendar
-    ) -> Binding<RoutineCadence> {
+    private func cadenceBinding(_ shown: ScheduleDraft) -> Binding<RoutineCadence> {
         Binding(
             get: { shown.cadence },
             set: { newCadence in
@@ -488,40 +321,34 @@ struct RoutineDetailView: View {
         )
     }
 
-    private func ordinalSuffix(_ value: Int) -> String {
-        switch value {
-        case 1, 21, 31: return "st"
-        case 2, 22: return "nd"
-        case 3, 23: return "rd"
-        default: return "th"
-        }
-    }
-
     /// The per-routine trust opt-in, deliberately here rather than on the Routines row.
     ///
     /// The row's trailing slot belongs to the schedule toggle per the wireframe, and there is no
     /// space for a second switch — but the real reason is that this is a consequential safety
     /// decision (it lets any run of this routine, scheduled or manual, bypass the tier-2 gate per
     /// SONNY-54), and it deserves the context of the step list it is granting that permission
-    /// over. Label copy is the founder-chosen wording, verbatim (2026-08-06, Q5).
+    /// over. Label copy is the founder-chosen wording (2026-08-06, Q5), restructured off an em dash
+    /// per this branch's copy rule — no test pins the old wording (`grep -rn "Trust this routine"
+    /// Tests/` finds nothing), so this is a styling-branch wording change rather than a founder
+    /// override.
     @ViewBuilder
     private var unattendedTrustControl: some View {
         if live.schedule != nil {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 Toggle(isOn: Binding(
                     get: { live.schedule?.unattendedTrusted == true },
                     set: { unattendedAdvisory = viewModel.setRoutineUnattendedTrust(live, to: $0) }
                 )) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Trust this routine — runs tier-2 steps without asking, scheduled or manual.")
-                            .font(RoutineDetailType.sectionLabel)
-                            .foregroundStyle(RoutineDetailTheme.text)
-                            // Founder-verbatim label (2026-08-06, Q5) is a full sentence: let it
+                        Text("Trust this routine: runs tier-2 steps without asking, scheduled or manual.")
+                            .font(SonnyType.bodyEmphasis)
+                            .foregroundStyle(SonnyTheme.text)
+                            // Founder-chosen wording (2026-08-06, Q5) is a full sentence: let it
                             // wrap rather than truncate in this fixed-width panel.
                             .fixedSize(horizontal: false, vertical: true)
                         Text("Applies both to scheduled runs and runs you start yourself. Steps that need your explicit approval still ask first.")
-                            .font(RoutineDetailType.micro)
-                            .foregroundStyle(RoutineDetailTheme.mutedText)
+                            .font(SonnyType.micro)
+                            .foregroundStyle(SonnyTheme.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -535,132 +362,124 @@ struct RoutineDetailView: View {
                 // Contained rather than loose: at four lines, unbroken yellow body copy read as an
                 // error state rather than a note. Icon-plus-text inside a tinted, stroked block is
                 // the shape `CommandCenterStorageNotice` and `CommandCenterAttentionPanel` already
-                // use for exactly this job on the System A side — the same pattern, in this
-                // panel's own tokens.
+                // use for exactly this job on the System A side.
                 if let unattendedAdvisory {
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: SonnySpacing.sm) {
                         Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                             .foregroundStyle(SonnyTheme.warning)
 
                         Text(unattendedAdvisory)
-                            .font(RoutineDetailType.micro)
-                            .foregroundStyle(RoutineDetailTheme.text.opacity(0.85))
+                            .font(SonnyType.micro)
+                            .foregroundStyle(SonnyTheme.text.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, SonnySpacing.sm)
+                    .padding(.vertical, SonnySpacing.sm)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(SonnyTheme.warning.opacity(0.08))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .stroke(SonnyTheme.warning.opacity(0.35), lineWidth: 0.5)
+                        RoundedRectangle(cornerRadius: SonnyRadius.control)
+                            .strokeBorder(SonnyTheme.warning.opacity(0.35), lineWidth: 1)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                 }
             }
-            .padding(.top, 4)
         }
     }
 
-    /// Running a routine by hand lives here now. The wireframe's own row has no Run button at all
-    /// and reserves that slot for the schedule time and toggle, so keeping one there would have
-    /// crowded out the thing the wireframe actually specifies.
-    private var runControl: some View {
-        Button {
-            viewModel.runRoutineWidget(live)
-            dismiss()
-        } label: {
-            Text("Run now")
-                .font(RoutineDetailType.sectionLabel)
-                .foregroundStyle(RoutineDetailTheme.text)
-                .frame(maxWidth: .infinity)
-                .frame(height: 32)
-                .background(Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        // The hoisted term, not a fourth hand-rolled copy: during a clarification pause the
-        // two-term version left this a live button that silently did nothing, and `dismiss()` below
-        // closed the sheet so the action read as accepted.
-        .disabled(viewModel.isTaskInFlight)
-        .sonnyPointerCursor()
-        .accessibilityLabel("Run \(live.name) now")
-    }
+    /// The shared actions row: Run now, the schedule's own Save/Add/Remove (their visibility
+    /// depending on whether a schedule exists or is being composed, unchanged from before this
+    /// pass), and Delete routine. Consolidating these onto one row (`docs/sonny-ui-modernization-
+    /// 2026-09-08.md`'s brief) is a layout change, not a behaviour one: every button still calls
+    /// exactly the view-model method it always called.
+    @ViewBuilder
+    private func actionsRow(now: Date, calendar: Calendar) -> some View {
+        let (saved, shown) = scheduleDraftPair(now: now, calendar: calendar)
 
-    /// Deleting the whole routine, distinct from "Remove" above, which only clears the schedule.
-    /// That one deliberately has no confirmation because a removed schedule is recoverable by
-    /// making another; this deletes the routine's steps and run history too, which nothing can
-    /// bring back, so it gets the same confirmation dialog "Delete Local Data" uses.
-    private var deleteRoutineControl: some View {
-        Button {
-            showDeleteRoutineConfirmation = true
-        } label: {
-            Label("Delete routine", systemImage: "trash")
-        }
-        .buttonStyle(RoutineDetailActionStyle(tone: .danger))
-        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
-        .help("Delete this routine")
-        .accessibilityLabel("Delete \(live.name)")
-        .confirmationDialog(
-            "Delete “\(live.name)”?",
-            isPresented: $showDeleteRoutineConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Routine", role: .destructive) {
-                viewModel.deleteRoutine(live)
-                // Nothing auto-closes this sheet when its routine disappears — `live` falls back
-                // to the stale presentation snapshot — so the dismiss has to be explicit.
-                dismiss()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            // The title already names the routine; repeating the quoted name here read as noisy
-            // in a dialog this small (manual pass, 2026-07-30).
-            Text("This deletes its saved steps, schedule, and run history. Past task history mentioning this routine is not deleted.")
-        }
-    }
-
-    /// This view is presented via `.sheet(item:)` with no other dismiss affordance anywhere in the
-    /// wireframe/founder-decisions source for it — without this, the sheet had no way to close at
-    /// all (found during manual QA, 2026-07-24). `.keyboardShortcut(.cancelAction)` matches
-    /// `TaskLogDetailDialog`'s own close button, an independent Escape-key path in case the click
-    /// itself is ever the thing not registering.
-    private var closeButtonRow: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: SonnySpacing.sm) {
+            // The hoisted term, not a fourth hand-rolled copy: during a clarification pause the
+            // two-term version left this a live button that silently did nothing, and `dismiss()`
+            // below closed the sheet so the action read as accepted.
             Button {
+                viewModel.runRoutineWidget(live)
                 dismiss()
             } label: {
-                Image(systemName: "xmark")
-                    .font(RoutineDetailType.sectionLabel)
-                    .foregroundStyle(RoutineDetailTheme.mutedText)
-                    .frame(width: 24, height: 24)
+                if viewModel.isTaskInFlight {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text("Run now")
+                }
             }
-            .buttonStyle(.plain)
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight(cornerRadius: 12)
-            .accessibilityLabel("Close")
-            .keyboardShortcut(.cancelAction)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 14)
-    }
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .regular))
+            .disabled(viewModel.isTaskInFlight)
+            .accessibilityLabel("Run \(live.name) now")
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(routine.name)
-                .font(RoutineDetailType.title)
-                .foregroundStyle(RoutineDetailTheme.text)
-                .lineLimit(1)
+            if let shown {
+                // Gated on the draft actually differing from what is saved, so an untouched panel
+                // offers nothing to confirm and a dirty one visibly does. That is what makes
+                // discarding on dismiss safe without a confirmation dialog.
+                Button("Save schedule") {
+                    commitDraft(shown)
+                }
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .regular))
+                .disabled(!isDirty(shown: shown, saved: saved))
 
-            Text("\(routine.steps.count) saved step\(routine.steps.count == 1 ? "" : "s")")
-                .font(RoutineDetailType.micro)
-                .foregroundStyle(RoutineDetailTheme.mutedText)
+                if live.schedule != nil {
+                    // Immediate rather than part of the draft: removing a schedule is a discrete
+                    // action, not a field edit. No confirmation dialog — unlike Delete routine
+                    // below, a removed schedule is recoverable by making another one.
+                    Button {
+                        viewModel.setRoutineSchedule(live, to: nil)
+                        draft = nil
+                        unattendedAdvisory = nil
+                    } label: {
+                        Label("Remove schedule", systemImage: "trash")
+                    }
+                    .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
+                    .help("Remove this routine's schedule")
+                }
+            } else {
+                Button("Add a schedule") {
+                    draft = ScheduleDraft(now: now, calendar: calendar)
+                }
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .regular))
+            }
+
+            Spacer(minLength: 0)
+
+            // Deleting the whole routine, distinct from Remove above, which only clears the
+            // schedule. That one deliberately has no confirmation because a removed schedule is
+            // recoverable by making another; this deletes the routine's steps and run history too,
+            // which nothing can bring back, so it gets a confirmation dialog.
+            Button {
+                showDeleteRoutineConfirmation = true
+            } label: {
+                Label("Delete routine", systemImage: "trash")
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .danger, size: .regular))
+            .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+            .help("Delete this routine")
+            .accessibilityLabel("Delete \(live.name)")
+            .confirmationDialog(
+                "Delete “\(live.name)”?",
+                isPresented: $showDeleteRoutineConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete routine", role: .destructive) {
+                    viewModel.deleteRoutine(live)
+                    // Nothing auto-closes this sheet when its routine disappears — `live` falls
+                    // back to the stale presentation snapshot — so the dismiss has to be explicit.
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                // The title already names the routine; repeating the quoted name here read as
+                // noisy in a dialog this small (manual pass, 2026-07-30).
+                Text("This deletes its saved steps, schedule, and run history. Past task history mentioning this routine is not deleted.")
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 20)
     }
 }
 
@@ -669,43 +488,44 @@ private struct RoutineDetailStepRow: View {
 
     /// Icon slot matching the floating widget's own row grammar (§3.3.2: "icon slot... + label
     /// text") — `docs/sonny-founder-design-decisions.md` asks for "one consistent... experience"
-    /// across both surfaces, not a plain numbered list wearing glass chrome. Resolves the step's
-    /// real app icon the same way `WorkspaceAppIconStack` already does; falls back to a step
-    /// glyph when the step has no app (or it isn't installed).
+    /// across both surfaces, not a plain numbered list. Resolves the step's real app icon the same
+    /// way `WorkspaceAppIconStack` already does; falls back to a plain glyph when the step has no
+    /// app (or it isn't installed).
     private var resolvedIcon: NSImage? {
         guard let appName = step.appName else { return nil }
         return WorkspaceAppIconResolver.shared.icon(forAppName: appName)
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: SonnySpacing.sm) {
             ZStack {
                 if let resolvedIcon {
                     Image(nsImage: resolvedIcon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                 } else {
-                    Image(systemName: AgentActivityPresentation.eventIcon(.act))
-                        .font(RoutineDetailType.sectionLabel)
-                        .foregroundStyle(RoutineDetailTheme.mutedText)
+                    Image(systemName: "checkmark.circle")
+                        .font(SonnyType.icon(SonnyMetrics.iconRow))
+                        .foregroundStyle(SonnyTheme.textTertiary)
                 }
             }
             .frame(width: 20, height: 20)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(AgentActivityPresentation.operationTitle(step))
-                    .font(RoutineDetailType.body)
-                    .foregroundStyle(RoutineDetailTheme.text)
+            Text(AgentActivityPresentation.operationTitle(step))
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
 
-                if !step.description.isEmpty {
-                    Text(step.description)
-                        .font(RoutineDetailType.micro)
-                        .foregroundStyle(RoutineDetailTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            Spacer(minLength: SonnySpacing.sm)
+
+            if !step.description.isEmpty {
+                Text(step.description)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-
-            Spacer(minLength: 0)
         }
+        .frame(height: SonnyMetrics.compactRowHeight)
     }
 }
