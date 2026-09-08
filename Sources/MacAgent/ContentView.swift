@@ -252,7 +252,8 @@ enum SonnyMetrics {
     static let listRowHeight: CGFloat = 36
     static let compactRowHeight: CGFloat = 28
     static let toolbarHeight: CGFloat = 36
-    static let controlSmall: CGFloat = 22
+    /// The floor a pointer can hit reliably; nothing interactive is shorter.
+    static let controlSmall: CGFloat = 24
     static let controlRegular: CGFloat = 28
     static let controlLarge: CGFloat = 32
     static let iconSidebar: CGFloat = 14

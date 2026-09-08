@@ -183,6 +183,28 @@ struct CommandCenterView: View {
             .padding(.horizontal, SonnySpacing.sm)
             .frame(height: SonnyMetrics.controlLarge)
 
+            // The one primary action in the window. It raises the same presentation request the
+            // menu-bar item and the push-to-talk hotkey raise, so the widget opens focused with
+            // whatever draft it already holds; nothing here submits anything.
+            Button {
+                viewModel.widgetPresentationRequest += 1
+            } label: {
+                HStack(spacing: SonnySpacing.sm) {
+                    Image(systemName: "plus")
+                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    Text("Ask Sonny")
+                    Spacer(minLength: 0)
+                    Text("⌘N")
+                        .font(SonnyType.mono)
+                        .foregroundStyle(SonnyTheme.textOnAccent.opacity(0.7))
+                        .accessibilityHidden(true)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .primary))
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("Ask Sonny")
+
             VStack(spacing: 2) {
                 ForEach(Array(CommandCenterDestination.allCases.enumerated()), id: \.element) { index, destination in
                     sidebarButton(destination, ordinal: index + 1)
