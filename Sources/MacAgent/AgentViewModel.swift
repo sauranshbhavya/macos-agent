@@ -1576,7 +1576,7 @@ final class AgentViewModel: ObservableObject {
     /// your command — or hold Ctrl-Opt-Space anywhere". The em dash goes, and no comma takes its
     /// place: two clauses this short do not need one. Copy is his, so this string is not a sentence
     /// to improve on session judgment.
-    static let micHoverShortcutReminder = "Click to speak or hold Ctrl-Opt-Space."
+    static let micHoverShortcutReminder = "Click to speak or hold \u{2303}\u{2325}Space."
 
     /// How long the shortcut reminder stays, and nothing else. The configuration message has no
     /// delay at all rather than a longer one, which is why this is not a general "hint duration".

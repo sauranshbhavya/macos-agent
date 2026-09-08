@@ -159,7 +159,7 @@ public struct PermissionReadinessService: Sendable {
                 id: "hotkey",
                 title: "Voice hotkey",
                 state: hotKeyReady ? .ready : .needsAction,
-                detail: hotKeyReady ? "Control-Option-Space is registered." : "Another app is using Control-Option-Space."
+                detail: hotKeyReady ? "\u{2303}\u{2325}Space is registered." : "Another app is using \u{2303}\u{2325}Space."
             ),
             PermissionReadinessItem(
                 id: "desktop-documents",

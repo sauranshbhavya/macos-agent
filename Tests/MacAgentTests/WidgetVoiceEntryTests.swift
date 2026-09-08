@@ -91,9 +91,12 @@ struct WidgetVoiceEntryTests {
     @Test
     func theHoverReminderIsTheFoundersOwnWordingAndCarriesNoEmDash() {
         // SONNY-179's wording, given verbatim by the founder; SONNY-177 shipped
-        // "Speak your command — or hold Ctrl-Opt-Space anywhere".
+        // "Speak your command — or hold Ctrl-Opt-Space anywhere". The chord itself is written
+        // as the platform's key glyphs since 2026-09-08 (ui-ux-claude), the one edit to that
+        // wording: the status line beside it reads `PushToTalkHotKey.displayName`, and two
+        // spellings of one shortcut on one surface is the inconsistency that branch removes.
         #expect(
-            AgentViewModel.micHoverShortcutReminder == "Click to speak or hold Ctrl-Opt-Space."
+            AgentViewModel.micHoverShortcutReminder == "Click to speak or hold \u{2303}\u{2325}Space."
         )
         // The em dash is the thing the founder asked to be rid of, so it is asserted as an absence
         // and not merely implied by the literal above — a later reword may not quietly bring one

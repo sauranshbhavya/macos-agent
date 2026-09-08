@@ -10,7 +10,7 @@ enum PushToTalkHotKeyError: Error, LocalizedError {
         case let .installHandlerFailed(status):
             return "Could not install the push-to-talk hotkey handler. macOS returned \(status)."
         case let .registerFailed(status):
-            return "Could not register Control-Option-Space for push-to-talk. macOS returned \(status)."
+            return "Could not register \u{2303}\u{2325}Space for push-to-talk. macOS returned \(status)."
         }
     }
 }
