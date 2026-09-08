@@ -47,10 +47,12 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    view picks a grey. The brand accent `#5C84FE` is preserved: a redesign keeps the brand colour.
 3. **One radius rule.** Controls, rows, badges and inputs 6; cards and panels 10; sheets 12; pills
    a capsule. The older names (`container`, `panelCard`, `workspaceCard`, `routineIcon`,
-   `themeSwatch`) are aliases onto those three so call sites read the same rule.
+   `themeSwatch`) survived as aliases while the page lanes migrated and were deleted once no call
+   site named them.
 4. **One button system.** `SonnyButtonStyle` has four tones (primary, secondary, tertiary, danger)
-   and three sizes (small 22, regular 28, large 32), with hover, pressed, keyboard focus and
-   disabled built in. Command Center's two private button styles are retired onto it.
+   and three sizes (small 24, regular 28, large 32), with hover, pressed, keyboard focus and
+   disabled built in. Command Center's two private button styles were retired onto it and then
+   deleted; the routine detail sheet's fourth went with its System B copy.
 5. **Native controls where a native one exists**: switch toggles, menu pickers.
 6. **Motion**: one curve family in `SonnyMotion`; every animated change reads Reduce Motion through
    `sonnyAnimation` rather than a bare `withAnimation`.
@@ -72,11 +74,14 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
 | `SonnyType` | `pageTitle` 22 semibold, `settingsContentTitle` 20 semibold, `settingsSectionLabel` 15 semibold, `heroStat` 26 semibold monospaced digits, `headline` 13 semibold, `bodyEmphasis` 13 medium, `body` 13, `itemTitle` 12 medium, `caption` 12, `microEmphasis` 11 medium, `micro` 11, `eyebrow` 11 medium, `avatar` 13 medium, `mono` 12, `sidebarWordmark` 13 semibold |
 | `SonnyRadius` | `control` 6, `card` 10, `sheet` 12, `pill` capsule |
 | `SonnySpacing` | 4 / 8 / 12 / 16 / 20 / 24 / 32, `pageInset` 24 |
-| `SonnyMetrics` | sidebar 220, nav row 30, list row 36, compact row 28, toolbar 36, controls 22 / 28 / 32, icons 14 / 13 / 11 / 24 |
+| `SonnyMetrics` | sidebar 220, nav row 30, list row 36, compact row 28, toolbar 36, controls 24 / 28 / 32, icons 14 / 13 / 11 / 24 |
 | `SonnyMotion` | `quick` .15s, `standard` .22s, `emphasized` .3s snappy |
 
-Shared components beside them: `SonnyBadge`, `sonnyPanel()`, `sonnyCard(isHovered:)`,
-`sonnyDivider()`, `sonnyHoverHighlight()`, `sonnyPointerCursor()`, `sonnyAnimation(_:value:)`.
+Shared components beside them: `SonnyBadge`, `SonnyDialogHeader`, `SonnyDialogCloseButton`,
+`sonnyDialogFrame(_:)` with three named sizes, `sonnyPanel()`, `sonnyCard(isHovered:)`,
+`sonnyDivider()`, `sonnyTextField(size:)`, `sonnyHoverHighlight()`, `sonnyPointerCursor()`,
+`sonnyAnimation(_:value:)`; and in Command Center, `commandCenterPageFrame()` and
+`commandCenterPanel()` for the five pages' shared shell.
 
 Removed as dead at the branch's start (no site in `Sources/` or `Tests/` named them, measured with
 `grep -rn -F` at `6d7bf058`): `SonnyType.brand`, `.hero`, `.panelTitle`, `.tagline`, `.command`,
@@ -85,4 +90,43 @@ shadow in a zero-shadow system, with one call site, removed with it).
 
 ## What the audit found
 
-Filled in from the survey once it completed; see the changelog entry for this branch.
+Seven surface surveys, one over the tests that pin UI source, one over the founders' decision log
+and one over the sibling `ui-ux` branch ran before any page was touched, and a cross-surface
+critique read all of them. The findings that shaped the work, each with where it was measured:
+
+- **Four button styles for one primitive.** `SonnyButtonStyle` (34pt fixed-width branch, ~28pt
+  otherwise, radius 8 hard-coded four times), `CommandCenterHeaderActionStyle` (28pt),
+  `CommandCenterRowActionStyle` (23pt, about thirty call sites) and `RoutineDetailActionStyle`
+  (26pt, System B). Only the two private ones dimmed when disabled. Now one style.
+- **Hit targets under the floor almost everywhere.** The 23pt row-action style, seventeen 23pt
+  circular controls in the widget, a 30x20 custom toggle, and every sheet's close control at
+  exactly 24pt. `SonnyMetrics.controlSmall` is 24, `controlRegular` 28, the widget's
+  `WidgetTheme.controlSize` 28, and the close control 28.
+- **No spacing or icon scale.** Ten distinct horizontal and thirteen distinct vertical padding
+  literals on the Tasks page alone; icon glyphs at 8, 9, 10, 11, 12, 13 and 14pt with no rule;
+  seven raw `.font(.system(size:))` sites in Command Center beside eighteen tokenised ones;
+  twenty-one of twenty-three in the widget. `SonnySpacing`, `SonnyMetrics` and two widget icon
+  tokens replace them.
+- **Radii below the token floor.** Chart bars and swatches at 2 and 3, a repeated 12 for close
+  buttons, a 6 used as a literal beside the token that equalled it. Three values and a capsule now.
+- **Three toggles, four text-field recipes, nine one-off sheet sizes.** Native switches, one
+  `sonnyTextField`, three named sheet sizes.
+- **The routine detail sheet straddled both systems**: its own copy of System B tokens whose type
+  ramp disagreed with the widget's, native pickers with no forced appearance on a hard-coded dark
+  panel, the three-shadow recipe the widget file's own comment said was tried and rejected, and
+  `SonnyTheme` reached into for every semantic colour. It is System A now.
+- **Copy drift**: sentence-case triggers paired with Title Case confirmations in three files, one
+  delete dialog quoting its subject in curly quotes, "(Soon)" suffixes on menu items, em dashes in
+  user-visible strings, every notification titled "Sonny".
+- **Accessibility gaps**: the widget's Allow and Deny (the highest-stakes controls in the app) with
+  no VoiceOver name, the mic with none, no keyboard path to any two-choice widget panel, sidebar
+  selection with no `isSelected` trait, stat tiles read as three separate elements.
+- **What was already right and was kept**: colour and type routed through tokens on nearly every
+  Command Center surface, the two-system split, `SettingsAdaptiveControlRow`, the shared-state and
+  approval rules, the founders' per-page decisions on which surface shows what.
+
+The sibling `ui-ux` branch (the other founder's pass with the same skills) converged on the same
+three big moves: system font, a graphite ramp, and folding routine detail into System A. What this
+branch deliberately did not take from it: taglines under every page title (explanatory copy),
+demoting the Tasks greeting to a subtitle, recolouring System B's accents toward System A, and
+restyling the founder-drawn mode segmented control.

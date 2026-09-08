@@ -4187,6 +4187,54 @@ formality.
       finding:** it starting and serving — because an ignored signing secret means every token signed
       with it is refused, which is the sign-out this work removes, arriving silently.
 
+### The modernized Command Center and widget (new 2026-09-08, branch `ui-ux-claude`)
+
+Every row here is visual or interaction fidelity on the packaged app; nothing behavioural changed
+on this branch, so a press that does something different from before is a defect, not a design
+choice. Compare against `main` at `6d7bf058` where a row says "as before".
+
+**Window and sidebar**
+- [ ] At the default size and at 900x620: the sidebar is 220pt on a darker level than the canvas, "Ask Sonny" sits under the wordmark as the one filled accent button, five nav rows read at 30pt with a flat fill (no border) on the selected one, and the account row sits at the bottom with an up/down chevron.
+- [ ] ⌘N opens the widget focused with any draft kept; ⌘1 to ⌘5 switch pages in sidebar order; the selected row's icon and label read brighter than the rest.
+- [ ] Hovering any nav row, the account row or a button shows a faint lift; pressing a button darkens it; a disabled button reads at 40% with no hover.
+- [ ] Tab through a page with full keyboard access on: the focus ring follows each button's rounded shape.
+
+**Tasks**
+- [ ] The greeting is still the page title; the search field is 220pt with a magnifying glass, ⌘F focuses it, typing does not shift the field, Escape clears a non-empty query, and the clear control vanishes without moving anything.
+- [ ] Group headers show the count in a chip and the chevron turns as sections fold (and does not animate with Reduce Motion on); rows are 36pt with a status glyph (green filled check for done, hollow cross for canceled, red filled cross for failed), a hairline between rows and none after the last, and a hover pill inset from the edges.
+- [ ] Right-click delete on a row still asks first (as before). The task detail sheet opens at the shared size with a close control that Escape also triggers; a very short receipt and a very long one both read well inside it (the long one scrolls). Its buttons: Run again and Follow up neutral, the two deletes red.
+- [ ] Empty history and a no-results search both show the icon, title and message state, not a bare line.
+
+**Insights**
+- [ ] The page is a bento: a wide first stat spanning two columns, two single stats, the chart and the workspace breakdown side by side, recent activity full width, no empty cell at 900x620. Numbers line up (monospaced digits). Hovering a chart column swaps its label to the count and resting shows a tooltip with the same words.
+- [ ] Titles read "Tasks completed this week", "Breakdown by workspace", "Recently completed".
+
+**Routines**
+- [ ] Rows carry a real glyph tile (repeat for a routine, eye for a watcher), the streak in a chip, the next-run time in an accent chip, "Paused" in an amber chip, and a native switch for the schedule that still flips the schedule (as before). The Watching card reads as a card inside the panel with Stop in red.
+- [ ] Routine detail: the sheet opens on the shared chrome with the routine name as title and its cadence as subtitle; steps read as a log (icon slot, title, trailing text); Run now is the one filled button and shows a spinner while a task is running; Save schedule, Remove schedule and Delete routine are neutral, quiet and red respectively; the confirmation reads "Delete routine"; native pickers for cadence, weekday, day of month and time are tinted blue and dark.
+
+**Workspaces**
+- [ ] Cards fill adaptive columns (no fixed 356pt width), lift on hover, show real app icons bare with the fallback tile the only one outlined, and carry Open (filled), New task (neutral), Delete (red, text only). The delete dialog title has no curly quotes and its button reads "Delete workspace".
+- [ ] The detail sheet and the scope-add sheet open on the shared chrome and size; a workspace with many scope entries scrolls rather than clips; Remove on an entry is quiet, Add is neutral.
+
+**Memory and Settings**
+- [ ] Memory: the master switch and Preferences row sit in one card with native switches; rows are 44pt with a tinted icon tile, count, View and Delete; a damaged store still says "Can't be read" with Delete live (as before).
+- [ ] Settings: the sheet is 860x600 with its own darker sidebar, Escape closes it, rows separate with hairlines, toggles are native switches, the theme control is a native menu offering Dark with Light and System disabled (no "(Soon)"), Refresh is quiet, Set up is neutral, "Delete local data" and "Delete set-aside files" are red and say what they delete, and Remove on an approved app stays live during a run (as before).
+
+**Widget**
+- [ ] Nothing about the material, colours or state order changed. Every circular control is larger (28pt) with the same glyph; Return accepts and Escape declines on the permission, capture review, delegation, paused, resume and update panels; Return sends a clarification answer.
+- [ ] With VoiceOver: Allow and Deny are named, the mic is named and reports whether it is recording, the send arrow says "Send answer", the retry says "Retry task". Long results, long errors and long step titles show the full text on hover.
+- [ ] The notice strip (a scheduled run or a storage problem) renders on the same glass as the panel beside it. With Reduce Motion on, panel transitions do not animate.
+
+**Sign-in and screen access**
+- [ ] Both sheets open on the shared chrome; fields have the raised fill with a blue hairline when focused; Send code, Verify and Sign out show a spinner while busy; Sign out is red; the plan name is an accent chip.
+- [ ] Screen access: each grant reads as a green "Granted" or amber "Not granted" chip beside its glyph; the relaunch guidance panel still appears after a Screen Recording request and "Couldn't restart Sonny." still appears only when the restart failed (as before).
+
+**Copy and system**
+- [ ] The push-to-talk chord reads ⌃⌥Space in the widget's mic hint, the voice status line, the readiness rows and the registration error, never spelled out; the emergency stop reads ⌃⌥⎋.
+- [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.
+- [ ] No button anywhere reads in Title Case except proper nouns ("Open System Settings"); no user-visible string carries an em dash.
+
 ## 8. How to report back
 
 For each real finding, give me:
