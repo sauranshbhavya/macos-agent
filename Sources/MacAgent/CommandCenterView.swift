@@ -4056,21 +4056,15 @@ private struct WorkspaceAppIconStack: View {
 
     @ViewBuilder
     private func iconTile(for icon: WorkspaceAppIconPresentation) -> some View {
-        // Every tile now carries a hairline ring, real icon or fallback alike — the redesign's
-        // call for legibility against the card's own raised surface. (Superseding the previous
-        // wireframe-literal treatment, which drew a resolved icon bare with no chip behind it;
-        // `13-MainAppWorkspaces.svg:233,236` is the SVG this departs from, flagged for founder
-        // review per the branch's decisions doc.)
+        // A resolved app icon renders bare: macOS icons carry their own shape and a ring drawn
+        // over one reads as a mistake, which is also what the wireframe draws
+        // (`13-MainAppWorkspaces.svg:233,236`). Only the fallback tile, which has no shape of its
+        // own, gets the chip and the hairline.
         if let nsImage = icon.icon {
             Image(nsImage: nsImage)
                 .resizable()
                 .scaledToFit()
                 .frame(width: iconSize, height: iconSize)
-                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
-                .overlay(
-                    RoundedRectangle(cornerRadius: SonnyRadius.control)
-                        .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-                )
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "app.dashed")
