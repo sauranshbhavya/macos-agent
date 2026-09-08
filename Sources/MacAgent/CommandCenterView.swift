@@ -177,7 +177,6 @@ struct CommandCenterView: View {
                         .foregroundStyle(SonnyTheme.accent)
                 }
                 .frame(width: 20, height: 20)
-                .sonnyLogoGlow()
 
                 Text("Sonny")
                     .font(SonnyType.sidebarWordmark)

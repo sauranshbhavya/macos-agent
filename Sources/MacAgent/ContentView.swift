@@ -2,6 +2,22 @@ import AppKit
 import MacAgentCore
 import SwiftUI
 
+// MARK: - System A: the Command Center design layer
+//
+// Everything Command Center and its dialogs draw with lives here: the palette (`SonnyTheme`), the
+// type scale (`SonnyType`), the radius rule (`SonnyRadius`), spacing and metrics (`SonnySpacing`,
+// `SonnyMetrics`), motion (`SonnyMotion`) and the shared controls (`SonnyButtonStyle`,
+// `SonnyBadge`, the surface modifiers). System A is flat and opaque with no shadows. The floating
+// widget is System B and keeps its own tokens in `SonnyWidgetTheme.swift`; neither file imports
+// the other's. `docs/sonny-ui-modernization-2026-09-08.md` records the decisions behind the values.
+//
+// Three rules the rest of the target follows:
+// 1. No literal colour, font size or radius in a view. Every one routes through a token here, so a
+//    change to the system is a change to one file.
+// 2. Every interactive control has hover, pressed, focus and disabled states, from the shared
+//    modifiers below rather than hand-rolled per view.
+// 3. Motion reads `accessibilityReduceMotion` through `sonnyAnimation`, never bare `withAnimation`.
+
 /// The one-line result under a delete control, shared by the Command Center surfaces that have
 /// one: Settings' Data page, where it reports the whole wipe and, since SONNY-266, the narrower
 /// control beside it on the same slot, and the Memory page, where it reports a per-row Delete off
@@ -16,7 +32,7 @@ struct LocalDataDeletionStatusMessage: View {
         if let message {
             Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
                 .font(SonnyType.micro)
-                .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.accent : SonnyTheme.warning)
+                .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.success : SonnyTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -60,13 +76,13 @@ struct PermissionReadinessRows: View {
     let items: [PermissionReadinessItem]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             ForEach(items) { item in
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: SonnySpacing.sm) {
                     Image(systemName: icon(for: item.state))
-                        .font(SonnyType.caption)
+                        .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
                         .foregroundStyle(color(for: item.state))
-                        .frame(width: 16)
+                        .frame(width: 16, height: 16)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title)
                             .font(SonnyType.caption)
@@ -97,106 +113,273 @@ struct PermissionReadinessRows: View {
     private func color(for state: PermissionReadinessState) -> Color {
         switch state {
         case .ready:
-            return SonnyTheme.accent
+            return SonnyTheme.success
         case .needsAction:
             return SonnyTheme.warning
         case .unknown:
-            return SonnyTheme.muted
+            return SonnyTheme.textTertiary
         }
     }
 }
 
+// MARK: - Type scale
+
+/// The system font (SF Pro) at a fixed scale. SF switches between its Text and Display optical
+/// sizes on its own at 20pt, so nothing here sets tracking by hand. Weight carries hierarchy;
+/// size steps are 11 / 12 / 13 / 15 / 20 / 22 / 26 and nothing in between.
 enum SonnyType {
-    static let brand = inter(42, weight: .semibold)
-    static let hero = inter(28, weight: .semibold)
-    static let panelTitle = inter(23, weight: .semibold)
-    /// Command Center page titles ("Tasks", "Insights", "Routines", "Workspaces") — 23px/500 per
-    /// the wireframes. Deliberately separate from `panelTitle` (23px/600, a different existing
-    /// consumer: the sidebar "Sonny" wordmark) so this fix doesn't silently change that unrelated
-    /// element's weight too. NOT used for Settings, which isn't a sidebar destination at all
-    /// (2026-07-18: Settings moved into its own dialog, see `SettingsDialogView`).
-    static let pageTitle = inter(23, weight: .medium)
-    /// Sidebar "Sonny" wordmark — 13px/600 per the wireframes, deliberately separate from
-    /// `panelTitle` (23px/600, the popover's own former `PanelHeader` title) so fixing the
-    /// wordmark's size doesn't silently change that unrelated surface too.
-    static let sidebarWordmark = inter(13, weight: .semibold)
-    /// Settings dialog's content-pane title ("Preferences", "Usage", ...) — 24px/500.
-    static let settingsContentTitle = inter(24, weight: .medium)
-    /// Settings subsection labels ("Display", "Theme") — 18px/500, one real step louder than the
-    /// 13px row titles beneath them. Collapsing these to the same size as row titles was a real,
-    /// verified hierarchy loss (`10-MainAppSettings.svg`'s own `font-size` attribute), not a
-    /// close-enough token reuse.
-    static let settingsSectionLabel = inter(18, weight: .medium)
-    static let heroStat = inter(22, weight: .medium)
-    static let tagline = inter(12)
-    static let eyebrow = inter(11, weight: .medium)
-    static let command = inter(15)
-    static let body = inter(13)
-    static let bodyEmphasis = inter(13, weight: .medium)
-    static let itemTitle = inter(12, weight: .medium)
-    static let caption = inter(12)
-    static let micro = inter(11)
-    static let microEmphasis = inter(11, weight: .medium)
-    static let avatar = inter(14, weight: .medium)
-    static let panelIcon = Font.system(size: 14)
+    /// Command Center page titles ("Tasks", "Insights", "Routines", "Workspaces", "Memory").
+    static let pageTitle = system(22, weight: .semibold)
+    /// Settings dialog's content-pane title ("Preferences", "Usage", ...).
+    static let settingsContentTitle = system(20, weight: .semibold)
+    /// Settings subsection labels ("Display", "Theme"): one real step louder than the 13pt rows
+    /// beneath them, which is the hierarchy the page reads by.
+    static let settingsSectionLabel = system(15, weight: .semibold)
+    /// Sidebar "Sonny" wordmark.
+    static let sidebarWordmark = system(13, weight: .semibold)
+    /// Insights hero numbers. Monospaced digits so a column of them lines up.
+    static let heroStat = system(26, weight: .semibold).monospacedDigit()
+    /// Card and row titles that carry hierarchy inside a panel.
+    static let headline = system(13, weight: .semibold)
+    static let bodyEmphasis = system(13, weight: .medium)
+    static let body = system(13)
+    static let itemTitle = system(12, weight: .medium)
+    static let caption = system(12)
+    static let microEmphasis = system(11, weight: .medium)
+    static let micro = system(11)
+    /// A small label above a block. Sentence case, no tracking, at most one per page.
+    static let eyebrow = system(11, weight: .medium)
+    static let avatar = system(13, weight: .medium)
+    /// Shortcuts, identifiers and anything else that must line up character for character.
+    static let mono = Font.system(size: 12, weight: .regular, design: .monospaced)
 
     static func icon(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
     }
 
-    private static func inter(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        Font.custom("Inter", size: size).weight(weight)
+    private static func system(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .default)
     }
 }
 
+// MARK: - Palette
+
+/// Dark only, one cool-neutral ramp. Surfaces are opaque and step up in luminance by level;
+/// text, hairlines and fills are white at an opacity so they compose the same on every level.
+/// The brand accent is the one saturated colour and it is the same on every surface.
 enum SonnyTheme {
-    static let ink = Color(red: 9 / 255, green: 9 / 255, blue: 9 / 255)
-    static let collectionSurface = Color(red: 15 / 255, green: 16 / 255, blue: 17 / 255)
-    static let surfaceRaised = Color(red: 22 / 255, green: 23 / 255, blue: 26 / 255)
-    static let border = Color(red: 37 / 255, green: 38 / 255, blue: 43 / 255)
-    static let cardBorder = Color(red: 26 / 255, green: 27 / 255, blue: 32 / 255)
-    static let text = Color(red: 1, green: 1, blue: 1)
-    static let muted = Color(red: 149 / 255, green: 150 / 255, blue: 153 / 255)
-    static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
-    /// Sidebar nav-item label color — slightly warmer than pure white, uniform across every
-    /// main-app screen's shared sidebar (the wireframes show no selected/unselected text-color
-    /// distinction on nav rows at all).
-    static let sidebarNavText = Color(red: 226 / 255, green: 227 / 255, blue: 229 / 255)
+    // Surfaces, level 0 to 4.
+    /// Sidebar and the Settings dialog's own sidebar.
+    static let sidebar = Color(red: 0x0F / 255, green: 0x10 / 255, blue: 0x12 / 255)
+    /// The window canvas.
+    static let ink = Color(red: 0x14 / 255, green: 0x15 / 255, blue: 0x18 / 255)
+    /// The bordered content panel inside each page.
+    static let collectionSurface = Color(red: 0x19 / 255, green: 0x1A / 255, blue: 0x1E / 255)
+    /// Cards, secondary buttons, inputs, popovers.
+    static let surfaceRaised = Color(red: 0x1F / 255, green: 0x21 / 255, blue: 0x26 / 255)
+    /// Menus and a hovered card.
+    static let surfaceRaised2 = Color(red: 0x26 / 255, green: 0x29 / 255, blue: 0x30 / 255)
 
-    // Compatibility alias keeps established surfaces on the same rebranded token.
-    static let cream = text
+    // Text.
+    static let text = Color.white.opacity(0.92)
+    /// Secondary text: subtitles, descriptions, metadata that still has to be read.
+    static let muted = Color.white.opacity(0.60)
+    /// Tertiary text: timestamps, placeholders, counts.
+    static let textTertiary = Color.white.opacity(0.38)
+    /// Text on the accent fill.
+    static let textOnAccent = Color.white
+    static let sidebarNavText = text
 
-    static let glassShade = ink.opacity(0.88)
-    static let panelTint = collectionSurface.opacity(0.88)
-    static let input = collectionSurface
-    static let warning = Color(red: 242 / 255, green: 190 / 255, blue: 0 / 255)
-    static let success = Color(red: 63 / 255, green: 185 / 255, blue: 80 / 255)
-    static let chartBarMuted = Color(red: 36 / 255, green: 46 / 255, blue: 82 / 255)
-    static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
-    /// Task-history status-dot colors. The wireframe's own "Done" dot is Linear's brand purple
-    /// (#5E6AD2), resolved in docs/sonny-design-system-reference.md §2.4 as un-cleaned template
-    /// residue — `accent` (#5C84FE) is canonical everywhere, so `taskDone` aliases it rather than
-    /// reproducing the wireframe's literal (wrong) value.
+    // Hairlines and fills.
+    /// Panel borders and the dividers between sections.
+    static let border = Color.white.opacity(0.09)
+    /// Card and button borders, and the dividers between rows.
+    static let cardBorder = Color.white.opacity(0.06)
+    static let fillHover = Color.white.opacity(0.05)
+    static let fillPressed = Color.white.opacity(0.09)
+    static let fillSelected = Color.white.opacity(0.10)
+
+    // Accent and semantics.
+    static let accent = Color(red: 0x5C / 255, green: 0x84 / 255, blue: 0xFE / 255)
+    static let accentSubtle = accent.opacity(0.14)
+    static let accentBorder = accent.opacity(0.40)
+    static let success = Color(red: 0x4C / 255, green: 0xC3 / 255, blue: 0x8A / 255)
+    static let warning = Color(red: 0xE8 / 255, green: 0xB8 / 255, blue: 0x4A / 255)
+    static let danger = Color(red: 0xE5 / 255, green: 0x48 / 255, blue: 0x4D / 255)
+    /// Every non-peak bar in the Insights chart.
+    static let chartBarMuted = accent.opacity(0.22)
+
+    // Aliases that keep older call sites on the same tokens.
+    static let input = surfaceRaised
     static let taskDone = accent
-    static let taskCanceled = Color(red: 0x95 / 255, green: 0xA2 / 255, blue: 0xB3 / 255)
-    static let info = text.opacity(0.92)
+    static let taskCanceled = textTertiary
 }
 
+// MARK: - Radius, spacing, metrics
+
+/// Three radii and a capsule. Controls, rows, badges and inputs share one; cards and panels share
+/// one; sheets share one. A view never writes a radius literal.
 enum SonnyRadius {
-    static let container: CGFloat = 4
-    static let themeSwatch: CGFloat = 5
-    static let routineIcon: CGFloat = 6
-    static let panelCard: CGFloat = 6
-    static let workspaceCard: CGFloat = 8
-    static let pill: CGFloat = 20
+    static let control: CGFloat = 6
+    static let card: CGFloat = 10
+    static let sheet: CGFloat = 12
+    static let pill: CGFloat = 999
+
+    // Older names, kept so call sites read the same rule.
+    static let container = control
+    static let themeSwatch = control
+    static let routineIcon = control
+    static let panelCard = card
+    static let workspaceCard = card
+}
+
+/// A 4pt grid.
+enum SonnySpacing {
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 12
+    static let lg: CGFloat = 16
+    static let xl: CGFloat = 20
+    static let xxl: CGFloat = 24
+    static let xxxl: CGFloat = 32
+    /// Inset from a page's edge to its title and its panel.
+    static let pageInset: CGFloat = 24
+}
+
+enum SonnyMetrics {
+    static let sidebarWidth: CGFloat = 220
+    static let navRowHeight: CGFloat = 30
+    static let listRowHeight: CGFloat = 36
+    static let compactRowHeight: CGFloat = 28
+    static let toolbarHeight: CGFloat = 36
+    static let controlSmall: CGFloat = 22
+    static let controlRegular: CGFloat = 28
+    static let controlLarge: CGFloat = 32
+    static let iconSidebar: CGFloat = 14
+    static let iconRow: CGFloat = 13
+    static let iconButton: CGFloat = 11
+    static let iconEmptyState: CGFloat = 24
+}
+
+// MARK: - Motion
+
+/// One curve family. `quick` is for a fill changing under the pointer, `standard` for a row or a
+/// section appearing, `emphasized` for a sheet or a panel. All of it is off under Reduce Motion
+/// through `sonnyAnimation`.
+enum SonnyMotion {
+    static let quick = Animation.smooth(duration: 0.15)
+    static let standard = Animation.smooth(duration: 0.22)
+    static let emphasized = Animation.snappy(duration: 0.3)
+}
+
+private struct SonnyAnimationModifier<Value: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let animation: Animation
+    let value: Value
+
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : animation, value: value)
+    }
 }
 
 extension View {
-    /// The sidebar logo's ambient glow. CSS: `drop-shadow(0px 0px 19.8px rgba(255,255,255,.11))`.
-    func sonnyLogoGlow() -> some View {
-        self.shadow(color: .white.opacity(0.11), radius: 9.9, x: 0, y: 0)
+    /// `.animation(_:value:)` that reads Reduce Motion, so a view never has to.
+    func sonnyAnimation<Value: Equatable>(_ animation: Animation = SonnyMotion.standard, value: Value) -> some View {
+        modifier(SonnyAnimationModifier(animation: animation, value: value))
     }
 }
+
+// MARK: - Surfaces
+
+private struct SonnySurfaceModifier: ViewModifier {
+    let fill: Color
+    let stroke: Color
+    let radius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .background(fill, in: RoundedRectangle(cornerRadius: radius))
+            .overlay(
+                RoundedRectangle(cornerRadius: radius)
+                    .strokeBorder(stroke, lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+extension View {
+    /// The bordered content panel each page draws its lists inside.
+    func sonnyPanel() -> some View {
+        modifier(SonnySurfaceModifier(fill: SonnyTheme.collectionSurface, stroke: SonnyTheme.border, radius: SonnyRadius.card))
+    }
+
+    /// A raised card inside a panel: a stat, a workspace, a memory row.
+    func sonnyCard(isHovered: Bool = false) -> some View {
+        modifier(SonnySurfaceModifier(
+            fill: isHovered ? SonnyTheme.surfaceRaised2 : SonnyTheme.surfaceRaised,
+            stroke: SonnyTheme.cardBorder,
+            radius: SonnyRadius.card
+        ))
+    }
+
+    /// A one-pixel rule under a row or between sections.
+    func sonnyDivider(_ color: Color = SonnyTheme.cardBorder) -> some View {
+        overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(color)
+                .frame(height: 1)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - Badge
+
+/// A count or a state word in a small tinted chip: the sidebar's active-task count, a routine's
+/// step count, a status on a row.
+struct SonnyBadge: View {
+    enum Tone {
+        case neutral
+        case accent
+        case success
+        case warning
+        case danger
+    }
+
+    let text: String
+    var tone: Tone = .neutral
+
+    var body: some View {
+        Text(text)
+            .font(SonnyType.microEmphasis.monospacedDigit())
+            .foregroundStyle(foreground)
+            .padding(.horizontal, SonnySpacing.sm - 2)
+            .frame(minWidth: 18, minHeight: 18)
+            .background(background, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .neutral: return SonnyTheme.muted
+        case .accent: return SonnyTheme.accent
+        case .success: return SonnyTheme.success
+        case .warning: return SonnyTheme.warning
+        case .danger: return SonnyTheme.danger
+        }
+    }
+
+    private var background: Color {
+        switch tone {
+        case .neutral: return SonnyTheme.fillSelected
+        case .accent: return SonnyTheme.accentSubtle
+        case .success: return SonnyTheme.success.opacity(0.14)
+        case .warning: return SonnyTheme.warning.opacity(0.14)
+        case .danger: return SonnyTheme.danger.opacity(0.14)
+        }
+    }
+}
+
+// MARK: - Pointer and hover
 
 private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {
     static let defaultValue = true
@@ -246,12 +429,10 @@ private struct SonnyPointerCursorModifier: ViewModifier {
     }
 }
 
-/// Universal hover feedback (2026-07-18): a subtle white tint overlaid on top of whatever the
-/// control already renders, so it works the same way whether the control has a solid background
-/// fill (buttons like `CommandCenterRowActionStyle`) or none (sidebar nav rows, which are only
-/// filled when selected) — one primitive instead of hand-tuning a different "brighter" color per
-/// component. Respects `isEnabled` the same way `sonnyPointerCursor()` does, so disabled controls
-/// (e.g. the account menu's "Get help") correctly show no hover feedback at all.
+/// Universal hover feedback: `SonnyTheme.fillHover` laid over whatever the control already draws,
+/// so a filled button and a bare row get the same lift from one primitive. Respects `isEnabled`
+/// the way `sonnyPointerCursor()` does, so a disabled control shows nothing on hover. The fade is
+/// a fill, not a movement, so it is not gated on Reduce Motion.
 private struct SonnyHoverHighlightModifier: ViewModifier {
     @Environment(\.isEnabled) private var isControlEnabled
     @State private var isHovering = false
@@ -261,9 +442,10 @@ private struct SonnyHoverHighlightModifier: ViewModifier {
         content
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.white.opacity(isHovering && isControlEnabled ? 0.06 : 0))
+                    .fill(isHovering && isControlEnabled ? SonnyTheme.fillHover : Color.clear)
                     .allowsHitTesting(false)
             )
+            .animation(SonnyMotion.quick, value: isHovering)
             .onHover { isHovering = $0 }
     }
 }
@@ -273,93 +455,121 @@ extension View {
         modifier(SonnyPointerCursorModifier())
     }
 
-    func sonnyHoverHighlight(cornerRadius: CGFloat = SonnyRadius.container) -> some View {
+    func sonnyHoverHighlight(cornerRadius: CGFloat = SonnyRadius.control) -> some View {
         modifier(SonnyHoverHighlightModifier(cornerRadius: cornerRadius))
     }
 }
 
-struct SonnyButtonStyle: ButtonStyle {
-    let tone: Tone
-    var width: CGFloat? = nil
+// MARK: - Buttons
 
+/// The one button system. Four tones say what a press means; three sizes say where the button
+/// sits. Hover, pressed, keyboard focus and disabled come with it, so a view never adds them.
+struct SonnyButtonStyle: ButtonStyle {
     enum Tone {
+        /// The one action a surface is for. Accent fill.
         case primary
+        /// Everything else that has a border: row actions, toolbar actions, sheet buttons.
         case secondary
+        /// A quiet action that only shows a fill under the pointer: "Clear", a header's "+".
+        case tertiary
+        /// Delete and its relatives.
         case danger
     }
 
-    init(tone: Tone, width: CGFloat? = nil) {
+    enum Size {
+        /// Row actions inside a list or a card.
+        case small
+        /// Toolbar and sheet actions.
+        case regular
+        /// The main action on an onboarding or sign-in step.
+        case large
+
+        var height: CGFloat {
+            switch self {
+            case .small: return SonnyMetrics.controlSmall
+            case .regular: return SonnyMetrics.controlRegular
+            case .large: return SonnyMetrics.controlLarge
+            }
+        }
+
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .small: return SonnySpacing.sm
+            case .regular: return SonnySpacing.md
+            case .large: return SonnySpacing.lg
+            }
+        }
+
+        var font: Font {
+            switch self {
+            case .small: return SonnyType.itemTitle
+            case .regular: return SonnyType.bodyEmphasis
+            case .large: return SonnyType.headline
+            }
+        }
+    }
+
+    @Environment(\.isEnabled) private var isEnabled
+    let tone: Tone
+    var size: Size = .regular
+    var width: CGFloat? = nil
+
+    init(tone: Tone, size: Size = .regular, width: CGFloat? = nil) {
         self.tone = tone
+        self.size = size
         self.width = width
     }
 
     func makeBody(configuration: Configuration) -> some View {
-        if let width {
-            label(configuration)
-                .frame(width: width, height: 34)
-                .background(background.opacity(configuration.isPressed ? 0.72 : 1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 8)
-        } else {
-            label(configuration)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(background.opacity(configuration.isPressed ? 0.72 : 1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 8)
-        }
-    }
-
-    private func label(_ configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: SonnyRadius.control)
         configuration.label
-            .font(SonnyType.caption)
+            .font(size.font)
             .foregroundStyle(foreground)
             .lineLimit(1)
-            .minimumScaleFactor(0.86)
-            .fixedSize(horizontal: false, vertical: true)
+            .minimumScaleFactor(width == nil ? 1 : 0.9)
+            .padding(.horizontal, size.horizontalPadding)
+            .frame(width: width, height: size.height)
+            .background(background, in: shape)
+            .overlay(shape.strokeBorder(border, lineWidth: 1).allowsHitTesting(false))
+            .overlay(shape.fill(configuration.isPressed ? pressedOverlay : Color.clear).allowsHitTesting(false))
+            .contentShape(shape)
+            .contentShape(.focusEffect, shape)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+            .opacity(isEnabled ? 1 : 0.4)
     }
 
     private var foreground: Color {
         switch tone {
-        case .primary:
-            return SonnyTheme.ink
-        case .secondary:
-            return SonnyTheme.text
-        case .danger:
-            return SonnyTheme.text
+        case .primary: return SonnyTheme.textOnAccent
+        case .secondary, .tertiary: return SonnyTheme.text
+        case .danger: return SonnyTheme.danger
         }
     }
 
     private var background: Color {
         switch tone {
-        case .primary:
-            return SonnyTheme.accent
-        case .secondary:
-            return SonnyTheme.surfaceRaised
-        case .danger:
-            return SonnyTheme.danger.opacity(0.58)
+        case .primary: return SonnyTheme.accent
+        case .secondary: return SonnyTheme.surfaceRaised
+        case .tertiary: return .clear
+        case .danger: return SonnyTheme.danger.opacity(0.12)
         }
     }
 
     private var border: Color {
         switch tone {
-        case .primary:
-            return SonnyTheme.accent.opacity(0.88)
-        case .secondary:
-            return SonnyTheme.border
-        case .danger:
-            return SonnyTheme.danger.opacity(0.7)
+        case .primary: return .clear
+        case .secondary: return SonnyTheme.cardBorder
+        case .tertiary: return .clear
+        case .danger: return SonnyTheme.danger.opacity(0.35)
+        }
+    }
+
+    private var pressedOverlay: Color {
+        switch tone {
+        case .primary: return Color.black.opacity(0.18)
+        case .secondary, .tertiary: return SonnyTheme.fillPressed
+        case .danger: return SonnyTheme.danger.opacity(0.12)
         }
     }
 }
-
