@@ -89,7 +89,7 @@ Two lanes, merged at `cf1af8a3`.
   `hasUsageDetails` is true for any usage at all.
 - `ScreenControlUsageSurfaceTests.insightsCarriesNoUsageMetricOfAnyKind` widened its count to
   admit the Usage page as the second legitimate reader of the allowance, Insights still at zero.
-- Verified: VERIFY3_PLACEHOLDER
+- Verified: the full flagged suite at `72083b3d`, 3017 tests in 202 suites passed with 8 known issues; `scripts/warnings` 0 at `72083b3d` (clean). Then `9e05cde3` hides the window's centred title, which the sidebar's wordmark already says.
 
 ## Plan for the phases ahead
 
