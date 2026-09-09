@@ -741,6 +741,8 @@ struct FloatingWidgetView: View {
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(
                         AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: name)
                     )
@@ -780,6 +782,8 @@ struct FloatingWidgetView: View {
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(TaskRecordingPresentation.clearAccessibilityLabel)
                 }
             }
@@ -820,6 +824,8 @@ struct FloatingWidgetView: View {
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(
                         FollowUpPresentation.clearAccessibilityLabel(command: context.previousCommand)
                     )
@@ -1043,7 +1049,9 @@ struct FloatingWidgetView: View {
         .frame(width: 36, height: 36)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
         .accessibilityLabel("Voice input")
-        .accessibilityValue(viewModel.isRecordingVoice ? "Recording" : "Not recording")
+        // The same four states the glyph reads, so a screen reader and a sighted user hear and see
+        // one answer while a recording starts or a transcription runs.
+        .accessibilityValue(viewModel.voiceButtonTitle)
         // **Transient reasons only** — the rule and its whole predicate live on
         // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
         // so every term folded in here is a press the user makes and never hears back about. The
@@ -1110,7 +1118,7 @@ struct FloatingWidgetView: View {
     /// **The frame is unchanged by SONNY-179, and that was measured rather than assumed.** Both
     /// sentences this row can carry were laid out at the row's real font (SF Pro Medium 10, via
     /// `WidgetType.captionSmall`) against the 444pt the 472pt frame leaves after its 14pt padding:
-    /// the shortcut reminder is 189.6pt and the configuration message 254.1pt, so each stays a
+    /// both the shortcut reminder and the configuration message fit with room, so each stays a
     /// single line with room to spare and nothing about the window controller's fitted-size
     /// positioning has to be revisited. (SONNY-177 measured the same two at 285.4pt and 254.1pt;
     /// the reminder is the one whose wording SONNY-179 replaced, and it got shorter.)
@@ -2002,6 +2010,7 @@ private struct WidgetClarificationPanel: View {
                             .foregroundStyle(WidgetTheme.textFull)
                     }
                     .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
                     .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .widgetCircularBackground()
                     .accessibilityLabel(ClarificationPresentation.cancelLabel)

@@ -420,7 +420,7 @@ struct RoutineDetailView: View {
                 // Gated on the draft actually differing from what is saved, so an untouched panel
                 // offers nothing to confirm and a dirty one visibly does. That is what makes
                 // discarding on dismiss safe without a confirmation dialog.
-                Button("Save schedule") {
+                Button(live.schedule == nil ? "Save schedule" : "Save changes") {
                     commitDraft(shown)
                 }
                 .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .regular))
@@ -515,6 +515,7 @@ private struct RoutineDetailStepRow: View {
                 .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
+                .help(AgentActivityPresentation.operationTitle(step))
 
             Spacer(minLength: SonnySpacing.sm)
 
@@ -524,6 +525,7 @@ private struct RoutineDetailStepRow: View {
                     .foregroundStyle(SonnyTheme.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .help(step.description)
             }
         }
         .frame(height: SonnyMetrics.compactRowHeight)

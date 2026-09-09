@@ -211,7 +211,7 @@ struct ScreenAccessOnboardingView: View {
                 title: "Screen access",
                 subtitle: model.allGranted
                     ? "Sonny is set up to see your screen."
-                    : "Sonny's screen-aware tools need two macOS grants. Both live in System Settings — Sonny can only take you there.",
+                    : "Sonny's screen-aware tools need two macOS grants, both in System Settings.",
                 closeLabel: "Close screen access"
             ) {
                 isPresented = false

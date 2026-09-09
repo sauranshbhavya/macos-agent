@@ -92,6 +92,9 @@ enum WidgetType {
     static let captionMedium = Font.system(size: 13, weight: mediumWeight, design: .default)
     static let captionSmall = Font.system(size: 10, weight: mediumWeight, design: .default)
     static let headlineChip = Font.system(size: 10, weight: .bold, design: .default)
+    /// Every standalone glyph in a row or a panel header, including the two warning triangles that
+    /// sat at 11pt until 2026-09-08 and now share this 12 (a one-point change, made so one token
+    /// covers the role).
     static let icon = Font.system(size: 12, weight: .regular, design: .default)
     /// The small glyph slot shared by the step-status and item-job icons — 10/11pt semibold literals
     /// consolidated onto one size (2026-09-08 modernization pass).

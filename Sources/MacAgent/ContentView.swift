@@ -456,9 +456,33 @@ private struct SonnyDialogFrameModifier: ViewModifier {
     }
 }
 
+private struct SonnyDialogChromeModifier: ViewModifier {
+    let width: CGFloat
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: width, height: height)
+            .background(SonnyTheme.ink)
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.sheet))
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.sheet)
+                    .strokeBorder(SonnyTheme.border, lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
 extension View {
     func sonnyDialogFrame(_ size: SonnyDialogSize) -> some View {
         modifier(SonnyDialogFrameModifier(size: size))
+    }
+
+    /// The same chrome at a size the caller computes from its content, for the one sheet whose
+    /// height is a measured function of what it shows (the task detail, `TaskDetailPresentation`).
+    /// Width still comes from a named size so it lines up with its siblings.
+    func sonnyDialogFrame(width: CGFloat, height: CGFloat) -> some View {
+        modifier(SonnyDialogChromeModifier(width: width, height: height))
     }
 }
 

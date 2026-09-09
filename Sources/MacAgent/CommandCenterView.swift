@@ -806,7 +806,7 @@ private struct CommandCenterRunningIndicator: View {
     @ObservedObject var viewModel: AgentViewModel
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SonnySpacing.sm + 2) {
             ProgressView()
                 .controlSize(.small)
                 .tint(SonnyTheme.accent)
@@ -958,7 +958,7 @@ private struct CommandCenterSessionContextRow: View {
     let progress: VisionSessionProgress
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             // Amber, matching the widget's own session glyph: Sonny doing something unusual, not
             // something going wrong.
             Image(systemName: "cursorarrow.rays")
@@ -1601,7 +1601,10 @@ private struct WorkspaceBreakdownRow: View {
                 .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
-                .frame(width: 120, alignment: .leading)
+                // Flexible rather than a fixed 120: in the bento this row shares half the panel
+                // width, and at the window's minimum a fixed name column left the bar no room.
+                .frame(minWidth: 64, maxWidth: 140, alignment: .leading)
+                .help(entry.workspaceName)
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
@@ -2112,7 +2115,15 @@ private struct TaskLogDetailDialog: View {
 
             deleteTaskFooter
         }
-        .sonnyDialogFrame(.regular)
+        // Content-sized, not one of the named sizes: `TaskDetailPresentation.sheetHeight` is the
+        // measured answer to "how tall does this receipt need to be", and a fixed 520 left most of
+        // the common no-result, no-screen-record case as blank canvas above the footer (the review
+        // of this branch, F1). The scroll view above absorbs an over-estimate and scrolls an
+        // under-estimate, which is the mild-either-way property that machinery was written for.
+        .sonnyDialogFrame(
+            width: SonnyDialogSize.regular.size.width,
+            height: TaskDetailPresentation.sheetHeight(for: record, screenRecord: screenRecord)
+        )
     }
 
     /// What this task produced (row E, SONNY-148) — the answer to "what did this actually do", which
@@ -3777,6 +3788,10 @@ private struct WorkspaceDetailView: View {
             } label: {
                 Label("Remove", systemImage: "minus")
             }
+            // Quiet rather than red: removing one entry from the scope is a reversible edit of a
+            // list, and this branch keeps the danger tone for what deletes (the workspace itself,
+            // from its card). Settings' approved-app Remove stays red because it revokes trust
+            // rather than editing a list.
             .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
             .disabled(isTaskInFlight)
             .accessibilityLabel(entry.removeAccessibilityLabel)
@@ -6104,7 +6119,7 @@ private struct SettingsNotificationsPage: View {
                 Text("Nothing to configure yet")
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
-                Text("Sonny uses native macOS notifications today — there are no in-app notification preferences yet.")
+                Text("Sonny uses native macOS notifications today. There are no in-app notification preferences yet.")
                     .font(SonnyType.body)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -6297,6 +6312,9 @@ private struct SettingsThemeDropdown: View {
         .pickerStyle(.menu)
         .tint(SonnyTheme.accent)
         .frame(width: 180)
+        // The closed control names the selection only; the native picker announces each option,
+        // disabled ones included, once it is open, so the old "Light and System coming soon" clause
+        // would have said twice what VoiceOver already says once.
         .accessibilityLabel("Interface theme, Dark selected")
     }
 }

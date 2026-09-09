@@ -108,13 +108,15 @@ enum TaskDetailPresentation {
     /// gap between the title and the text.
     static let resultSectionChrome: CGFloat = 54
 
-    /// One line of `SonnyType.body` (Inter 13) with its leading.
+    /// One line of `SonnyType.body` (the system font at 13) with its leading.
     static let resultLineHeight: CGFloat = 18
 
-    /// Characters that fit on one line of the result block: the sheet is 420 wide with 28 of
-    /// horizontal padding a side, so the text is laid out in 364 points, and Inter 13's average
-    /// advance is a little over 6.6 points. An estimate, deliberately — see `resultLineCount`.
-    static let resultCharactersPerLine = 54
+    /// Characters that fit on one line of the result block: the sheet is `SonnyDialogSize.regular`
+    /// wide (560) with `SonnySpacing.xxl` (24) of horizontal padding a side, so the text is laid
+    /// out in 512 points, and SF Pro Text 13's average advance is about 7 points. An estimate,
+    /// deliberately — see `resultLineCount`. (54 until 2026-09-08, for a 420-wide sheet set in
+    /// Inter; the branch that resized the sheet re-derived it.)
+    static let resultCharactersPerLine = 72
 
     /// The most lines of result the sheet grows for. Beyond this the block scrolls.
     ///
@@ -129,7 +131,7 @@ enum TaskDetailPresentation {
     /// **An estimate, and the block is built so that both ways of being wrong are mild.** Nothing
     /// outside a live layout pass can know where text wraps, so this counts explicit line breaks and
     /// divides each paragraph by `resultCharactersPerLine`. Under-count and the block scrolls;
-    /// over-count and the sheet's existing `Spacer(minLength: 20)` absorbs the slack above the
+    /// over-count and the scroll area that holds the sections absorbs the slack above the
     /// footer. The alternative — a fixed allowance for the section — is wrong in a way that is not
     /// mild: it clips every long result or leaves most of a hundred points of white under every
     /// short one, and this dialog's acceptance bar is explicitly "no clipped content and no large

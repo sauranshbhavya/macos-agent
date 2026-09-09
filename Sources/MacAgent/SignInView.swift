@@ -711,12 +711,14 @@ struct SignInDialogView: View {
                     Task { await model.signOut() }
                 } label: {
                     if model.isBusy {
-                        ProgressView().controlSize(.small).tint(SonnyTheme.danger)
+                        ProgressView().controlSize(.small).tint(SonnyTheme.text)
                     } else {
                         Text(SignInCopy.signOutLabel)
                     }
                 }
-                .buttonStyle(SonnyButtonStyle(tone: .danger, width: 110))
+                // Secondary, not danger: signing out is reversible, and this branch keeps the red
+                // tone for what deletes.
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 110))
                 .disabled(model.isBusy)
                 .accessibilityLabel(SignInCopy.signOutLabel)
             }
