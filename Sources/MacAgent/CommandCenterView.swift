@@ -104,6 +104,7 @@ struct CommandCenterView: View {
             SettingsDialogView(
                 viewModel: viewModel,
                 screenAccessModel: screenAccessModel,
+                accountModel: accountModel,
                 isPresented: $isSettingsPresented
             )
         }
@@ -5413,6 +5414,9 @@ struct SettingsDialogView: View {
     /// Forwarded to Security & Access, which no longer builds its own — see that page for why
     /// (SONNY-137).
     @ObservedObject var screenAccessModel: ScreenAccessOnboardingModel
+    /// Forwarded to the Usage page, which reads the plan and the screen-control figures off it and
+    /// changes nothing on it — the same instance `CommandCenterView`'s account row observes.
+    @ObservedObject var accountModel: SonnyAccountModel
     @Binding var isPresented: Bool
     @State private var selection: SettingsSection = .preferences
 
@@ -5443,7 +5447,7 @@ struct SettingsDialogView: View {
                         case .notifications:
                             SettingsNotificationsPage()
                         case .usage:
-                            SettingsUsagePage()
+                            SettingsUsagePage(viewModel: viewModel, accountModel: accountModel)
                         case .security:
                             SettingsSecurityAccessPage(
                                 viewModel: viewModel,
@@ -6104,10 +6108,14 @@ private struct SettingsDataPage: View {
     }
 }
 
-/// Placeholder content (2026-07-18) — real content for this tab is pending direction on what it
-/// should actually show; see docs/sonny-ui-backend-gaps.md. Deliberately honest about having
-/// nothing configurable yet rather than inventing controls with no real behavior behind them.
+/// Six per-kind toggles over `SonnyNotificationPreferences` (phase 3 of the UI modernization —
+/// the placeholder this replaced said "nothing to configure yet", and that stopped being true the
+/// moment the preference existed to bind to). Order follows `SonnyNotificationKind.allCases`, which
+/// is also the order `SonnyNotificationService`'s six `post…` methods declare, so a new kind lands
+/// in the same place on both.
 private struct SettingsNotificationsPage: View {
+    @EnvironmentObject private var preferences: SonnyNotificationPreferences
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Notifications", subtitle: "Manage how Sonny notifies you")
@@ -6115,46 +6123,184 @@ private struct SettingsNotificationsPage: View {
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
-                Text("Nothing to configure yet")
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Sonny uses native macOS notifications today. There are no in-app notification preferences yet.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            SettingsSectionBlock(title: "Notify me when") {
+                ForEach(Array(SonnyNotificationKind.allCases.enumerated()), id: \.offset) { index, kind in
+                    SettingsToggleRow(
+                        title: kind.title,
+                        detail: kind.settingsDetail,
+                        isOn: Binding(
+                            get: { preferences.isEnabled(kind) },
+                            set: { preferences.setEnabled($0, for: kind) }
+                        )
+                    )
+
+                    if index < SonnyNotificationKind.allCases.count - 1 {
+                        SettingsDivider()
+                    }
+                }
             }
-            .padding(.top, SonnySpacing.xl)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
 }
 
-/// Placeholder content (2026-07-18) — real content for this tab is pending direction on what it
-/// should actually show; see docs/sonny-ui-backend-gaps.md. Sonny already records approximate
-/// per-task usage (`TaskUsageRecorder`), but there's no aggregate summary view anywhere yet, and
-/// no credits/billing system to weigh it against — showing fabricated numbers here would be worse
-/// than showing nothing.
+/// The plan's own numbers, read-only, and this run's approximate usage while one is in flight.
+/// Nothing on this page changes a setting — unlike Preferences and Notifications beside it in the
+/// same sidebar — so every value here is a read off `accountModel` and `viewModel`, never a binding.
+///
+/// **The Plan section's three rows share their words with `SignInView`'s own account surface**
+/// (`ScreenControlUsagePresentation`) rather than inventing a second copy of them, and each row's
+/// guard mirrors that surface's: "Screen control" is absent, not zeroed, when there is no allowance
+/// to read (`SignInView.screenControlUsageRow`'s own reasoning — a failed read is a failure and
+/// never a number), and "Last top-up" is absent whenever there is no charge to format
+/// (`screenControlLastTopUpRow`'s guard). The auto-top-up switch itself stays off this page and on
+/// the Account dialog alone, by the same rule that keeps one control in one place.
 private struct SettingsUsagePage: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @ObservedObject var accountModel: SonnyAccountModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsPageTitle(title: "Usage", subtitle: "See how much you've used Sonny")
+            SettingsPageTitle(title: "Usage", subtitle: "What your plan includes and what a task uses")
                 .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
-                Text("Usage summary coming soon")
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Sonny tracks approximate usage per task today, but a full summary isn't built yet.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            SettingsSectionBlock(title: "Plan") {
+                planSectionContent
             }
-            .padding(.top, SonnySpacing.xl)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
+
+            SettingsDivider()
+
+            SettingsSectionBlock(title: "This task") {
+                taskUsageContent
+            }
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
+    }
+
+    /// **Every divider here is conditioned on the row that follows it, never bare** — "Screen
+    /// control" and "Last top-up" are each absent, not zeroed, when there is nothing to show
+    /// (mirroring `SignInView.screenControlUsageRow` and `screenControlLastTopUpRow`'s own guards),
+    /// so a divider that ran ahead of them unconditionally would end the section on a hairline with
+    /// nothing beneath it.
+    @ViewBuilder
+    private var planSectionContent: some View {
+        planRow
+
+        if let allowance = viewModel.screenControlAllowance {
+            SettingsDivider()
+            screenControlRow(allowance: allowance)
+
+            if let charge = allowance.lastTopUp,
+               let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+                SettingsDivider()
+                lastTopUpRow(line: line)
+            }
+        }
+    }
+
+    private var planRow: some View {
+        SettingsAdaptiveControlRow {
+            usageLabel("Plan")
+        } trailing: {
+            if let subscription = accountModel.subscription {
+                SonnyBadge(text: subscription.plan.capitalized, tone: .accent)
+            } else {
+                Text("Signed out")
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+            }
+        }
+    }
+
+    private func screenControlRow(allowance: ScreenControlAllowance) -> some View {
+        let line = ScreenControlUsagePresentation.usageLine(allowance)
+        return SettingsAdaptiveControlRow {
+            usageLabel(ScreenControlUsagePresentation.label)
+        } trailing: {
+            Text(line)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .accessibilityLabel("\(ScreenControlUsagePresentation.label), \(line)")
+        }
+    }
+
+    private func lastTopUpRow(line: String) -> some View {
+        SettingsAdaptiveControlRow {
+            usageLabel(ScreenControlUsagePresentation.lastTopUpLabel)
+        } trailing: {
+            Text(line)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
+        }
+    }
+
+    @ViewBuilder
+    private var taskUsageContent: some View {
+        let summary = viewModel.taskUsageSummary
+        if summary.requestCount == 0 {
+            CollectionEmptyState(
+                systemImage: "chart.bar",
+                title: "No task running",
+                message: "Usage for a running task appears here.",
+                minHeight: 96
+            )
+        } else {
+            VStack(spacing: 0) {
+                usageRow(title: "Model requests") {
+                    usageNumber("\(summary.requestCount)")
+                }
+
+                SettingsDivider()
+
+                usageRow(title: "Tokens") {
+                    if summary.hasUsageDetails {
+                        usageNumber("\(summary.reportedTotalTokens)")
+                    } else {
+                        HStack(spacing: SonnySpacing.xs) {
+                            usageNumber("\(summary.estimatedTotalTokens)")
+                            Text("estimated")
+                                .font(SonnyType.body)
+                                .foregroundStyle(SonnyTheme.textTertiary)
+                        }
+                    }
+                }
+
+                if summary.audioDurationSeconds > 0 {
+                    SettingsDivider()
+                    usageRow(title: "Voice") {
+                        usageNumber("\(Int(summary.audioDurationSeconds.rounded())) s")
+                    }
+                }
+            }
+        }
+    }
+
+    private func usageLabel(_ title: String) -> some View {
+        Text(title)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func usageRow<Trailing: View>(title: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        SettingsAdaptiveControlRow {
+            usageLabel(title)
+        } trailing: {
+            trailing()
+        }
+    }
+
+    private func usageNumber(_ text: String) -> some View {
+        Text(text)
+            .font(SonnyType.body.monospacedDigit())
+            .foregroundStyle(SonnyTheme.text)
     }
 }
 

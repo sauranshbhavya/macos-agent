@@ -13,12 +13,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The interface-theme preference, applied to `NSApp` at launch and on every change; Settings
     /// binds its picker to this one instance through the Command Center's environment.
     private let appearanceModel = SonnyAppearanceModel()
+    /// Per-kind on/off for native notifications, read by `notificationService`'s gate below and
+    /// bound to by Settings › Notifications through the Command Center's environment — the same
+    /// path `appearanceModel` takes.
+    private let notificationPreferences = SonnyNotificationPreferences()
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
         accountModel: accountModel,
         screenAccessModel: screenAccessModel,
         firstRunCoordinator: firstRunCoordinator,
-        appearanceModel: appearanceModel
+        appearanceModel: appearanceModel,
+        notificationPreferences: notificationPreferences
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -66,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // notices, which is the reason `onOpenStorageNotice` gives for not sharing the third.
         onOpenWatcherNotice: { [weak self] in
             self?.windowCoordinator.showCommandCenter()
-        }
+        },
+        isEnabled: { [notificationPreferences] kind in notificationPreferences.isEnabled(kind) }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
