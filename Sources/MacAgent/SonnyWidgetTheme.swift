@@ -48,6 +48,11 @@ enum WidgetTheme {
     static let errorGlyph = Color(red: 0xFF / 255, green: 0x74 / 255, blue: 0x74 / 255)
     static let taskFailureRetry = Color(red: 0xFF / 255, green: 0x38 / 255, blue: 0x3C / 255)
     static let neutralButtonFill = Color(red: 0x99 / 255, green: 0x99 / 255, blue: 0x99 / 255).opacity(0.17)
+    /// The voice-countdown's last-thirty-seconds colour (phase 11, the voice lane). Mirrors
+    /// `SonnyTheme.warning`'s dark reading (`0xE8B84A`) — System B has no warning accent of its own
+    /// and this is the one token this file adds for that reason, per the phase's own brief; every
+    /// other System B colour is untouched.
+    static let attention = Color(red: 0xE8 / 255, green: 0xB8 / 255, blue: 0x4A / 255)
 
     static let textFull = Color.white
     static let textMuted = Color.white.opacity(0.55)

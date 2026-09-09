@@ -25,6 +25,18 @@ final class AgentViewModel: ObservableObject {
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
+    /// When the recording that is currently `isRecordingVoice` began, `nil` otherwise — set beside
+    /// `isRecordingVoice = true` and cleared everywhere that becomes `false` again (a clean stop, or
+    /// `audioRecorder.stop()` throwing). The widget's countdown label reads it directly; nothing
+    /// else needs to.
+    @Published var voiceRecordingStartedAt: Date?
+    /// How long a recording runs before `scheduleVoiceRecordingAutoStop` stops it itself.
+    ///
+    /// An instance `var`, not a constant and not an `init` parameter: it is not a store and nothing
+    /// about it needs the injection discipline `LocalStoreInjectionScanTests` holds those to, so a
+    /// test sets it directly on a fixture the way `voiceConfigurationBlockerOverride` is set,
+    /// shrinking a three-minute wait to a fraction of a second.
+    var voiceRecordingListeningWindow: TimeInterval = VoiceRecordingCountdown.listeningSeconds
     @Published var voiceHotKeyStatus: String = "Hold " + PushToTalkHotKey.displayName
     @Published var voiceHotKeyReady: Bool = true
     @Published var permissionItems: [PermissionReadinessItem] = []
@@ -498,6 +510,12 @@ final class AgentViewModel: ObservableObject {
     /// outlived an iteration would defer that to the next launch.
     private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)?
     private let audioRecorder: AudioCommandRecorder
+    /// The scheduled auto-stop for the recording currently running, `nil` when none is scheduled.
+    ///
+    /// `private(set)` rather than fully private, for the reason `MicHoverHintModel.dismissCountdown`
+    /// is: a test awaits the real task instead of sleeping and hoping a wall-clock window has
+    /// elapsed (CLAUDE.md's own gotcha on exactly that pattern).
+    private(set) var voiceRecordingAutoStopTask: Task<Void, Never>?
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
     private let workspaceStore: WorkspaceStore
@@ -787,7 +805,11 @@ final class AgentViewModel: ObservableObject {
     /// synchronously right after capturing it, so the live property is empty by the time any caller
     /// returns — this is the only observable record of the text a run was started with.
     private(set) var lastCommand = ""
-    private var isPushToTalkHotKeyDown = false
+    /// Not `private`, for the reason `scheduleVoiceRecordingAutoStop` gives its own visibility: the
+    /// only real path that sets it (`beginPushToTalkVoice`) reaches `AVCaptureDevice.requestAccess`,
+    /// which a test cannot cross, so a test that needs the physical key still held while a
+    /// recording ends on its own (the auto-stop) sets this directly instead.
+    var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
     /// The unfinished-run record this task is checkpointing into, or `nil` when it has none —
@@ -6080,6 +6102,9 @@ final class AgentViewModel: ObservableObject {
 
                 isPreparingVoiceRecording = false
                 isRecordingVoice = true
+                let recordingStartedAt = Date()
+                voiceRecordingStartedAt = recordingStartedAt
+                scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
                 errorMessage = nil
                 switch voiceRecordingPurpose {
                 case .command:
@@ -6123,13 +6148,49 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Arms the recording's own end, so a hotkey nobody releases or a mic nobody presses again ends
+    /// on its own rather than running until `AudioCommandRecorder`'s file ceiling five seconds
+    /// later — the widget's own countdown promises Sonny stops listening then, and this is what
+    /// keeps that promise. Cancels whatever the previous recording had scheduled first, so two
+    /// recordings never have two auto-stops racing.
+    ///
+    /// `startedAt` is compared against `voiceRecordingStartedAt` rather than trusted blindly:
+    /// `voiceRecordingStartedAt` may belong to a *different* recording by the time this fires — a
+    /// stop and a fresh press can both land inside the sleep — and a task scheduled for the
+    /// recording that already ended must never stop the one that followed it.
+    ///
+    /// **Not `private`, for the same reason `deliverTranscript`/`deliverTranscriptionError` are
+    /// not**: the only path that would exercise it end-to-end goes through
+    /// `AVCaptureDevice.requestAccess`, which a `swift test` process cannot survive (see
+    /// `WidgetVoiceEntryTests`'s own suite-level note). Driven directly by tests instead.
+    func scheduleVoiceRecordingAutoStop(startedAt: Date) {
+        voiceRecordingAutoStopTask?.cancel()
+        let window = voiceRecordingListeningWindow
+        voiceRecordingAutoStopTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(window))
+            guard !Task.isCancelled else { return }
+            guard let self, self.voiceRecordingStartedAt == startedAt else { return }
+            self.stopVoiceRecordingAndTranscribe()
+        }
+    }
+
     private func stopVoiceRecordingAndTranscribe() {
+        // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
+        // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
+        // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
+        // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
+        // rather than of most of them.
+        voiceRecordingAutoStopTask?.cancel()
+        voiceRecordingAutoStopTask = nil
+
         let recording: FinishedRecording
         do {
             recording = try audioRecorder.stop()
             isRecordingVoice = false
+            voiceRecordingStartedAt = nil
         } catch {
             isRecordingVoice = false
+            voiceRecordingStartedAt = nil
             isPushToTalkHotKeyDown = false
             setError(error.localizedDescription)
             return
