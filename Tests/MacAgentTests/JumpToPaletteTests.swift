@@ -115,6 +115,25 @@ struct JumpToPaletteTests {
         #expect(!titles.contains("Command 1"))
         #expect(!titles.contains("Command 5"))
         #expect(titles.contains("Command 25"))
+        // And within the window the newest task leads: the sort is by `startedAt`, not array order.
+        #expect(titles.first == "Command 25")
+    }
+
+    /// A query of only whitespace is the empty query: the field is focused on appear, and a stray
+    /// space must not turn the pages list into "Nothing matches".
+    @Test
+    func aWhitespaceOnlyQueryReadsAsEmpty() {
+        let presentation = JumpToPalettePresentation.results(
+            query: "   ",
+            pages: CommandCenterDestination.allCases,
+            routines: [],
+            workspaces: [],
+            tasks: [],
+            now: Self.now
+        )
+
+        #expect(presentation.groups.map(\.label) == ["Pages"])
+        #expect(presentation.groups[0].rows.count == CommandCenterDestination.allCases.count)
     }
 
     @Test

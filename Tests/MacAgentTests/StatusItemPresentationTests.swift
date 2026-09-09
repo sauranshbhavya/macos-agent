@@ -46,4 +46,20 @@ struct StatusItemPresentationTests {
             #expect(presentation.systemImageName == "wand.and.stars")
         }
     }
+
+    /// The four presentations are told apart by tint and by name, not only by glyph: the tint is
+    /// what `AppDelegate` maps onto a colour, and the name is what VoiceOver reads, so a state that
+    /// borrowed another's would look or sound like something Sonny is not doing. Pinned by value
+    /// because `forState` returns the shared statics, so `== .failed` holds whatever `.failed` says.
+    @Test
+    func everyStateCarriesItsOwnTintAndName() {
+        #expect(StatusItemPresentation.idle.tint == .plain)
+        #expect(StatusItemPresentation.working.tint == .accent)
+        #expect(StatusItemPresentation.waiting.tint == .attention)
+        #expect(StatusItemPresentation.failed.tint == .failure)
+        #expect(StatusItemPresentation.idle.accessibilityLabel == "Sonny")
+        #expect(StatusItemPresentation.working.accessibilityLabel == "Sonny, working")
+        #expect(StatusItemPresentation.waiting.accessibilityLabel == "Sonny, waiting for you")
+        #expect(StatusItemPresentation.failed.accessibilityLabel == "Sonny, the last task failed")
+    }
 }
