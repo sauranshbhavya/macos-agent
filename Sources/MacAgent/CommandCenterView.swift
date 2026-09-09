@@ -535,7 +535,7 @@ struct CommandCenterView: View {
         case .tasks:
             TasksFoundationView(viewModel: viewModel)
         case .insights:
-            InsightsView(viewModel: viewModel)
+            InsightsView(viewModel: viewModel, select: select)
         case .routines:
             RoutinesView(viewModel: viewModel)
         case .workspaces:
@@ -1371,6 +1371,11 @@ private struct CommandCenterAttentionPanel: View {
 
 private struct InsightsView: View {
     @ObservedObject var viewModel: AgentViewModel
+    /// `CommandCenterView.select`, handed down as Memory's is: this page opens a workspace by
+    /// selecting the Workspaces page and leaving the name in `commands.workspaceToOpen`, the same
+    /// door the ⌘K palette uses, so there is one way a workspace detail opens from elsewhere.
+    let select: (CommandCenterDestination) -> Void
+    @EnvironmentObject private var commands: CommandCenterCommands
 
     private var summary: TaskHistoryInsightsSummary {
         TaskHistoryInsights.summarize(records: viewModel.taskHistoryRecords, now: Date())
@@ -1410,6 +1415,10 @@ private struct InsightsView: View {
                     openTask: { record in
                         guard let id = record.id else { return }
                         _ = viewModel.requestTaskDetail(taskID: id)
+                    },
+                    openWorkspace: { name in
+                        commands.workspaceToOpen = name
+                        select(.workspaces)
                     }
                 )
                 .padding(.horizontal, SonnySpacing.xxxl)
@@ -1449,6 +1458,7 @@ private struct InsightsOverviewBento: View {
     let workspaceBreakdown: [WorkspaceTaskBreakdownEntry]
     let recentRecords: [CompletedTaskRecord]
     let openTask: (CompletedTaskRecord) -> Void
+    let openWorkspace: (String) -> Void
 
     var body: some View {
         Grid(horizontalSpacing: SonnySpacing.md, verticalSpacing: SonnySpacing.md) {
@@ -1461,7 +1471,7 @@ private struct InsightsOverviewBento: View {
             GridRow {
                 WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
                     .gridCellColumns(2)
-                WorkspaceBreakdownPanel(entries: workspaceBreakdown)
+                WorkspaceBreakdownPanel(entries: workspaceBreakdown, openWorkspace: openWorkspace)
                     .gridCellColumns(2)
             }
             GridRow {
@@ -1596,6 +1606,7 @@ private struct WeeklyCompletionChart: View {
 
 private struct WorkspaceBreakdownPanel: View {
     let entries: [WorkspaceTaskBreakdownEntry]
+    let openWorkspace: (String) -> Void
 
     private static let swatchColors: [Color] = [
         SonnyTheme.accent,
@@ -1624,7 +1635,9 @@ private struct WorkspaceBreakdownPanel: View {
                         WorkspaceBreakdownRow(
                             entry: entry,
                             swatchColor: Self.swatchColors[index % Self.swatchColors.count]
-                        )
+                        ) {
+                            openWorkspace(entry.workspaceName)
+                        }
                     }
                 }
             }
@@ -1635,11 +1648,27 @@ private struct WorkspaceBreakdownPanel: View {
     }
 }
 
+/// One workspace's share of the period, and the way into that workspace: the row is a button
+/// that opens its detail the way the ⌘K palette does.
 private struct WorkspaceBreakdownRow: View {
     let entry: WorkspaceTaskBreakdownEntry
     let swatchColor: Color
+    let open: () -> Void
 
     var body: some View {
+        Button(action: open) {
+            rowContent
+                .padding(.horizontal, SonnySpacing.sm)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, -SonnySpacing.sm)
+        .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .accessibilityHint("Opens the workspace")
+    }
+
+    private var rowContent: some View {
         HStack(spacing: SonnySpacing.sm) {
             Circle()
                 .fill(swatchColor)
