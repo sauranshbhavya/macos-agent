@@ -27,7 +27,8 @@ struct KeyboardShortcutsSheet: View {
 
     private var commandCenterRows: [KeyboardShortcutRowContent] {
         var rows: [KeyboardShortcutRowContent] = [
-            KeyboardShortcutRowContent(action: "Ask Sonny", keys: ["⌘", "N"])
+            KeyboardShortcutRowContent(action: "Ask Sonny", keys: ["⌘", "N"]),
+            KeyboardShortcutRowContent(action: "Jump to", keys: ["⌘", "K"])
         ]
         // The pages in sidebar order, so this list can never drift from the sidebar's own ⌘-number
         // wiring (`sidebarButton(_:ordinal:)`).
@@ -39,6 +40,7 @@ struct KeyboardShortcutsSheet: View {
             KeyboardShortcutRowContent(action: "Clear the search", keys: ["Esc"]),
             KeyboardShortcutRowContent(action: "Settings", keys: ["⌘", ","]),
             KeyboardShortcutRowContent(action: "Keyboard shortcuts", keys: ["⌘", "/"]),
+            KeyboardShortcutRowContent(action: "Hide or show the sidebar", keys: ["⌘", "⌥", "S"]),
             KeyboardShortcutRowContent(action: "Close a sheet", keys: ["Esc"]),
             KeyboardShortcutRowContent(action: "Close the window", keys: ["⌘", "W"])
         ]

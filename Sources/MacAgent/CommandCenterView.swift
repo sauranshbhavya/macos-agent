@@ -59,10 +59,19 @@ struct CommandCenterView: View {
     // disabled "Get help"/"Learn more" rows are gone — the menu now opens only real surfaces).
     @State private var isShortcutsPresented = false
     @State private var isAboutPresented = false
+    // Drives the ⌘K jump-to palette (phase 5): a Mac app people live in has one key that goes
+    // anywhere. See `JumpToPaletteView.swift`.
+    @State private var isJumpToPresented = false
     // The main-menu "Settings…" item has no SwiftUI view of its own to set this directly — it
     // bumps `CommandCenterCommands.settingsRequests` instead, and the `onChange` below turns that
     // into the same presentation this menu's own "Settings" row drives.
     @EnvironmentObject private var commands: CommandCenterCommands
+    // Collapsed-sidebar preference (phase 5). A cosmetic, per-Mac preference like the appearance
+    // and notification models beside it, so a plain `UserDefaults` read is fine rather than routing
+    // it through the view model — seeded once here, at view-identity creation, and written back on
+    // every toggle by `toggleSidebarCollapsed()`.
+    private static let sidebarCollapsedDefaultsKey = "com.sonny.preferences.sidebarCollapsed"
+    @State private var isSidebarCollapsed: Bool
 
     init(
         viewModel: AgentViewModel,
@@ -76,6 +85,9 @@ struct CommandCenterView: View {
         self.screenAccessModel = screenAccessModel
         self.firstRunCoordinator = firstRunCoordinator
         _selection = State(initialValue: initialSelection)
+        _isSidebarCollapsed = State(
+            initialValue: UserDefaults.standard.object(forKey: Self.sidebarCollapsedDefaultsKey) as? Bool ?? false
+        )
     }
 
     var body: some View {
@@ -99,6 +111,13 @@ struct CommandCenterView: View {
                 .accessibilityHidden(true)
             Button(action: { isShortcutsPresented = true }) { EmptyView() }
                 .keyboardShortcut("/", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            // The jump-to palette's ⌘K, the same shape as the two shortcuts above: no on-screen
+            // control of its own outside the sidebar's collapsed "Ask Sonny" hint.
+            Button(action: { isJumpToPresented = true }) { EmptyView() }
+                .keyboardShortcut("k", modifiers: .command)
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
@@ -133,6 +152,9 @@ struct CommandCenterView: View {
         }
         .sheet(isPresented: $isAboutPresented) {
             AboutSonnySheet(isPresented: $isAboutPresented)
+        }
+        .sheet(isPresented: $isJumpToPresented) {
+            JumpToPaletteSheet(viewModel: viewModel, isPresented: $isJumpToPresented, select: select)
         }
         .sheet(isPresented: $isSignInPresented) {
             SignInDialogView(
@@ -189,27 +211,72 @@ struct CommandCenterView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
-            HStack(spacing: SonnySpacing.sm) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.control)
-                        .fill(SonnyTheme.accentSubtle)
-                    Image(systemName: "wand.and.stars")
-                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.accent)
-                }
-                .frame(width: 22, height: 22)
+        VStack(alignment: isSidebarCollapsed ? .center : .leading, spacing: SonnySpacing.lg) {
+            sidebarWordmark
 
+            askSonnyButton
+
+            VStack(spacing: 2) {
+                ForEach(Array(CommandCenterDestination.allCases.enumerated()), id: \.element) { index, destination in
+                    sidebarButton(destination, ordinal: index + 1)
+                }
+            }
+
+            Spacer()
+
+            sidebarToggleButton
+
+            profileRow
+        }
+        .padding(.horizontal, isSidebarCollapsed ? SonnySpacing.sm : SonnySpacing.md)
+        .padding(.vertical, SonnySpacing.lg)
+        .frame(width: isSidebarCollapsed ? 56 : SonnyMetrics.sidebarWidth)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.sidebar)
+        .sonnyAnimation(SonnyMotion.standard, value: isSidebarCollapsed)
+    }
+
+    /// The mark alone when collapsed; the mark plus "Sonny" expanded.
+    private var sidebarWordmark: some View {
+        HStack(spacing: SonnySpacing.sm) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                Image(systemName: "wand.and.stars")
+                    .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.accent)
+            }
+            .frame(width: 22, height: 22)
+
+            if !isSidebarCollapsed {
                 Text("Sonny")
                     .font(SonnyType.sidebarWordmark)
                     .foregroundStyle(SonnyTheme.text)
             }
-            .padding(.horizontal, SonnySpacing.sm)
-            .frame(height: SonnyMetrics.controlLarge)
+        }
+        .padding(.horizontal, isSidebarCollapsed ? 0 : SonnySpacing.sm)
+        .frame(height: SonnyMetrics.controlLarge)
+    }
 
-            // The one primary action in the window. It raises the same presentation request the
-            // menu-bar item and the push-to-talk hotkey raise, so the widget opens focused with
-            // whatever draft it already holds; nothing here submits anything.
+    /// The one primary action in the window. It raises the same presentation request the menu-bar
+    /// item and the push-to-talk hotkey raise, so the widget opens focused with whatever draft it
+    /// already holds; nothing here submits anything. Collapsed, the label and the ⌘N hint both go
+    /// (there is no room for either), replaced by a `.help()` tooltip carrying the same words.
+    @ViewBuilder
+    private var askSonnyButton: some View {
+        if isSidebarCollapsed {
+            Button {
+                viewModel.widgetPresentationRequest += 1
+            } label: {
+                Image(systemName: "plus")
+                    .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textOnAccent)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .primary, width: SonnyMetrics.controlRegular))
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("Ask Sonny")
+            .help("Ask Sonny (⌘N)")
+        } else {
             Button {
                 viewModel.widgetPresentationRequest += 1
             } label: {
@@ -228,22 +295,27 @@ struct CommandCenterView: View {
             .buttonStyle(SonnyButtonStyle(tone: .primary))
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("Ask Sonny")
-
-            VStack(spacing: 2) {
-                ForEach(Array(CommandCenterDestination.allCases.enumerated()), id: \.element) { index, destination in
-                    sidebarButton(destination, ordinal: index + 1)
-                }
-            }
-
-            Spacer()
-
-            profileRow
         }
-        .padding(.horizontal, SonnySpacing.md)
-        .padding(.vertical, SonnySpacing.lg)
-        .frame(width: SonnyMetrics.sidebarWidth)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.sidebar)
+    }
+
+    /// Flips the collapsed preference and writes it straight back, the same "seeded once, written
+    /// on change" shape every other cosmetic `UserDefaults` preference in this file follows.
+    private func toggleSidebarCollapsed() {
+        isSidebarCollapsed.toggle()
+        UserDefaults.standard.set(isSidebarCollapsed, forKey: Self.sidebarCollapsedDefaultsKey)
+    }
+
+    /// Sits above the account row in both sidebar states, since it is what gets you from one to
+    /// the other.
+    private var sidebarToggleButton: some View {
+        Button(action: toggleSidebarCollapsed) {
+            Image(systemName: "sidebar.left")
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+        }
+        .buttonStyle(SonnyButtonStyle(tone: .tertiary, width: SonnyMetrics.controlRegular))
+        .keyboardShortcut("s", modifiers: [.command, .option])
+        .accessibilityLabel(isSidebarCollapsed ? "Show sidebar" : "Hide sidebar")
+        .help(isSidebarCollapsed ? "Show sidebar (⌘⌥S)" : "Hide sidebar (⌘⌥S)")
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
@@ -265,29 +337,37 @@ struct CommandCenterView: View {
         Button {
             isAccountMenuPresented = true
         } label: {
-            HStack(spacing: SonnySpacing.sm) {
+            if isSidebarCollapsed {
                 profileAvatar
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(height: SonnyMetrics.listRowHeight)
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            } else {
+                HStack(spacing: SonnySpacing.sm) {
+                    profileAvatar
 
-                Text(profileName)
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.text)
-                    .lineLimit(1)
+                    Text(profileName)
+                        .font(SonnyType.body)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
 
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(SonnyType.icon(9, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.textTertiary)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(SonnyType.icon(9, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SonnySpacing.sm)
+                .frame(height: SonnyMetrics.listRowHeight)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, SonnySpacing.sm)
-            .frame(height: SonnyMetrics.listRowHeight)
-            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
         .accessibilityLabel("Account: \(profileName)")
+        .help(isSidebarCollapsed ? profileName : "")
         .popover(isPresented: $isAccountMenuPresented, arrowEdge: .top) {
             accountMenuContent
         }
@@ -392,34 +472,49 @@ struct CommandCenterView: View {
     /// One sidebar row. Selection is a fill with no stroke, the way Finder and Notes draw theirs;
     /// the icon and the label both step up from muted to text when selected so the state reads
     /// without colour. `ordinal` is the row's ⌘-number, which is the same order the sidebar shows.
+    /// Collapsed, the row is the icon alone, centred in a 36x30 selection fill, with a `.help()`
+    /// tooltip carrying the title the row no longer has room to print.
     private func sidebarButton(_ destination: CommandCenterDestination, ordinal: Int) -> some View {
         let selected = isSelected(destination)
         return Button {
             select(destination)
         } label: {
-            HStack(spacing: SonnySpacing.sm) {
+            if isSidebarCollapsed {
                 Image(systemName: destination.systemImage)
                     .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
                     .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
-                    .frame(width: 20)
-                Text(destination.title)
-                    .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
-                    .foregroundStyle(SonnyTheme.text)
-                Spacer(minLength: SonnySpacing.sm)
-                if destination == .tasks, viewModel.activeTaskCount > 0 {
-                    // The wireframe's "22" count is a Linear inbox placeholder; what is shown is the
-                    // one number Sonny has, the active-task count, and only while it is non-zero.
-                    SonnyBadge(text: "\(viewModel.activeTaskCount)", tone: .accent)
-                        .accessibilityLabel("One active task")
+                    .frame(width: 36, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: SonnyRadius.control)
+                            .fill(selected ? SonnyTheme.fillSelected : Color.clear)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            } else {
+                HStack(spacing: SonnySpacing.sm) {
+                    Image(systemName: destination.systemImage)
+                        .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
+                        .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
+                        .frame(width: 20)
+                    Text(destination.title)
+                        .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
+                        .foregroundStyle(SonnyTheme.text)
+                    Spacer(minLength: SonnySpacing.sm)
+                    if destination == .tasks, viewModel.activeTaskCount > 0 {
+                        // The wireframe's "22" count is a Linear inbox placeholder; what is shown is
+                        // the one number Sonny has, the active-task count, and only while it is
+                        // non-zero.
+                        SonnyBadge(text: "\(viewModel.activeTaskCount)", tone: .accent)
+                            .accessibilityLabel("One active task")
+                    }
                 }
+                .padding(.horizontal, SonnySpacing.sm)
+                .frame(height: SonnyMetrics.navRowHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .fill(selected ? SonnyTheme.fillSelected : Color.clear)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
-            .padding(.horizontal, SonnySpacing.sm)
-            .frame(height: SonnyMetrics.navRowHeight)
-            .background(
-                RoundedRectangle(cornerRadius: SonnyRadius.control)
-                    .fill(selected ? SonnyTheme.fillSelected : Color.clear)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
         .keyboardShortcut(KeyEquivalent(Character("\(ordinal)")), modifiers: .command)
@@ -427,6 +522,7 @@ struct CommandCenterView: View {
         .sonnyHoverHighlight()
         .accessibilityLabel(destination.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(destination.title)
     }
 
     private func isSelected(_ destination: CommandCenterDestination) -> Bool {
@@ -2933,6 +3029,9 @@ struct WorkspaceDetailPresentation: Equatable {
 private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var selectedRoutine: StoredRoutine?
+    // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
+    // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
+    @EnvironmentObject private var commands: CommandCenterCommands
 
     private var sections: [RoutineCadenceSection] {
         RoutineGrouping.groupedByCadence(routines: viewModel.savedRoutines)
@@ -3028,6 +3127,24 @@ private struct RoutinesView: View {
         .sheet(item: $selectedRoutine) { routine in
             RoutineDetailView(routine: routine, viewModel: viewModel)
         }
+        .onAppear {
+            // Catches a request that arrived while this page was not mounted, the same reason
+            // `TasksFoundationView`'s own `onAppear` calls its consumer.
+            consumeRoutineOpenRequest()
+        }
+        .onChange(of: commands.routineToOpen) { _, _ in
+            // Catches a request that arrives while this page already is mounted.
+            consumeRoutineOpenRequest()
+        }
+    }
+
+    /// Answers a pending jump-to request for a routine, if there is one. Cleared either way, for
+    /// `consumeTaskDetailRequest`'s reason: a request naming a routine that no longer exists has
+    /// still been answered, and leaving it set would strand a value nothing else clears.
+    private func consumeRoutineOpenRequest() {
+        guard let requestedID = commands.routineToOpen else { return }
+        selectedRoutine = viewModel.savedRoutines.first { $0.id == requestedID }
+        commands.routineToOpen = nil
     }
 
     // Command Center has no composer of its own — pre-fill the command and bring the widget
@@ -3200,6 +3317,9 @@ private struct WorkspacesView: View {
     /// sheet's whole job is showing a boundary the user is editing, so it has to re-render when the
     /// edit lands. Looking the name up in `savedWorkspaces` on every render is what keeps it live.
     @State private var selectedWorkspaceName: SelectedWorkspaceName?
+    // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
+    // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
+    @EnvironmentObject private var commands: CommandCenterCommands
 
     private var selectedWorkspace: StoredWorkspace? {
         guard let selectedWorkspaceName else {
@@ -3312,6 +3432,13 @@ private struct WorkspacesView: View {
         }
         .onAppear {
             viewModel.refreshTaskHistory()
+            // Catches a jump-to request that arrived while this page was not mounted, the same
+            // reason `TasksFoundationView`'s own `onAppear` calls its consumer.
+            consumeWorkspaceOpenRequest()
+        }
+        .onChange(of: commands.workspaceToOpen) { _, _ in
+            // Catches a jump-to request that arrives while this page already is mounted.
+            consumeWorkspaceOpenRequest()
         }
     }
 
@@ -3321,6 +3448,17 @@ private struct WorkspacesView: View {
     private func accentIndex(for name: String) -> Int {
         let position = viewModel.savedWorkspaces.firstIndex { $0.name == name } ?? 0
         return position % CommandCenterPalette.workspaceAvatarColors.count
+    }
+
+    /// Answers a pending jump-to request for a workspace, if there is one. Cleared either way, for
+    /// `consumeTaskDetailRequest`'s reason: a request naming a workspace that no longer exists has
+    /// still been answered, and leaving it set would strand a value nothing else clears.
+    private func consumeWorkspaceOpenRequest() {
+        guard let requestedName = commands.workspaceToOpen else { return }
+        if viewModel.savedWorkspaces.contains(where: { $0.name == requestedName }) {
+            selectedWorkspaceName = SelectedWorkspaceName(name: requestedName)
+        }
+        commands.workspaceToOpen = nil
     }
 
     // Command Center has no composer of its own — pre-fill the command and bring the widget
@@ -5234,7 +5372,11 @@ private struct CollectionHeader: View {
     }
 }
 
-private struct CollectionEmptyState: View {
+// Internal rather than `private` (phase 5, navigation lane): `JumpToPaletteView.swift` renders this
+// for its no-results state, the same reason `TaskHistoryDateFormatter` above lost its `private` —
+// a shared view the rest of the target cannot name is the problem `SettingsAdaptiveControlRow` was
+// made internal for (SONNY-144).
+struct CollectionEmptyState: View {
     let systemImage: String
     let title: String
     let message: String
