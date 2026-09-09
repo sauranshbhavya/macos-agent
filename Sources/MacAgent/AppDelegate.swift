@@ -506,18 +506,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 
     /// The real `NSApp.mainMenu`, distinct from `makeStatusMenu()`'s status-item dropdown. Two
-    /// menus only, deliberately: an Edit menu because that is what routes the standard editing
+    /// menus, deliberately: an Edit menu because that is what routes the standard editing
     /// key equivalents to the first responder (nil targets → responder chain), and an app menu
-    /// carrying just Quit — the first top-level item renders as the bold app menu whenever the
-    /// bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
+    /// carrying Settings and Quit — the first top-level item renders as the bold app menu whenever
+    /// the bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
     /// app-name slot, and ⌘Q was equally menu-routed and equally broken (the status menu's own
     /// "q" equivalent only dispatches while that dropdown is open). No File/View/Window/Help:
-    /// nothing in the app needs them.
+    /// nothing in the app needs them. "Settings…" is here too (phase 3) because a Mac app's own
+    /// app menu is where a user expects to find it, ⌘, included, beside the account menu's own row.
     private func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        ).target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit Sonny",
             action: #selector(quit),
@@ -613,6 +620,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// caught on this branch.
     @objc func openCommandCenter() {
         windowCoordinator.showCommandCenter()
+    }
+
+    /// The app menu's "Settings…" item. `internal` rather than `private`, matching
+    /// `openCommandCenter()`'s own reason: it targets `self` by selector, and a rewired selector is
+    /// exactly the class of bug a title-only assertion cannot catch.
+    @objc func openSettings() {
+        windowCoordinator.showSettings()
     }
 
     @objc func quit() {

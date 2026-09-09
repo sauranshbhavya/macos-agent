@@ -49,6 +49,9 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     let screenAccessModel: ScreenAccessOnboardingModel
     let firstRunCoordinator: FirstRunCoordinator
     let appearanceModel: SonnyAppearanceModel
+    // Created here rather than injected: it carries no state a fixture would need to control, only
+    // a counter the main menu's "Settings…" item bumps, so there is nothing for a caller to supply.
+    let commandCenterCommands = CommandCenterCommands()
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
@@ -90,6 +93,15 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         present(controller)
     }
 
+    /// The app menu's "Settings…" item. Brings Command Center forward first — Settings is a sheet
+    /// presented over it, and the item is enabled whether or not that window already exists — then
+    /// bumps the counter `CommandCenterView` is watching, which is the same effect its own
+    /// account-menu "Settings" row has.
+    func showSettings() {
+        showCommandCenter()
+        commandCenterCommands.settingsRequests += 1
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else {
             return
@@ -108,6 +120,9 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             // The Settings sheet reads the theme picker's model from here; a sheet inherits its
             // presenter's environment.
             .environmentObject(appearanceModel)
+            // Read by `CommandCenterView`'s `onChange` so the app menu's "Settings…" item can open
+            // the sheet without a direct reference to this view's `@State`.
+            .environmentObject(commandCenterCommands)
         )
         let window = makeWindow(
             title: "Sonny",

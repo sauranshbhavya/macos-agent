@@ -81,7 +81,7 @@ struct HoverTeardownAuditTests {
 
         let total = onHoverSites.values.reduce(0, +) + trackerSites.values.reduce(0, +)
         #expect(
-            total == 6,
+            total == 4,
             """
             The hover-tracking site count changed. Judge the new site against SONNY-178's rule \
             before updating this number, and judge both halves: is the flag declared on a view that \
@@ -93,7 +93,12 @@ struct HoverTeardownAuditTests {
             """
         )
         // Where they are, so a move shows up as a move rather than as a silent re-count.
-        #expect(onHoverSites == ["CommandCenterView.swift": 3, "ContentView.swift": 2])
+        // **Updated from 3 to 1 in `CommandCenterView.swift`** (phase 3, account-menu lane): the
+        // two Learn-more sites (the trigger row and its flyout content) are gone with the whole
+        // flyout mechanism — the account menu's "Get help" and "Learn more" rows had no real
+        // destination and this phase removed them rather than restyling permanently disabled rows.
+        // Only the weekly chart's `.onHover` remains in this file.
+        #expect(onHoverSites == ["CommandCenterView.swift": 1, "ContentView.swift": 2])
         #expect(trackerSites == ["FloatingWidgetView.swift": 1])
     }
 
@@ -178,8 +183,13 @@ struct HoverTeardownAuditTests {
         #expect(contentView.contains("@State private var isHovering"))
 
         let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
-        #expect(commandCenter.contains("@State private var isLearnMoreExpanded"))
-        #expect(commandCenter.contains("@State private var learnMoreHoverTask"))
+        // **Updated to `== 0` in phase 3 (account-menu lane): the site is gone, not merely renamed.**
+        // `isLearnMoreExpanded` and `learnMoreHoverTask` existed only for the "Learn more" flyout's
+        // dwell timer, which was removed with the row itself — a menu of permanently disabled rows
+        // pointing at destinations that do not exist. An assertion about a removed site becomes an
+        // assertion that the site stays gone, per this file's own header note on that shape.
+        #expect(MacAgentSource.count(of: "@State private var isLearnMoreExpanded", inText: commandCenter) == 0)
+        #expect(MacAgentSource.count(of: "@State private var learnMoreHoverTask", inText: commandCenter) == 0)
         #expect(commandCenter.contains("@State private var hoveredDayIndex"))
 
         // The sixth is the exception that proves the rule, and it is the one SONNY-179 rewrote: the
@@ -199,22 +209,22 @@ struct HoverTeardownAuditTests {
     /// cancels the pending task, and it sets the flag with no hover anywhere — so the *next* opening
     /// of the account menu shows the flyout already open.
     ///
-    /// The fix responds to the menu closing rather than to a view's teardown, which is SONNY-179's
+    /// The fix responded to the menu closing rather than to a view's teardown, which is SONNY-179's
     /// shape. Read rather than run: `isAccountMenuPresented` is `@State` inside a SwiftUI view and no
-    /// test process can drive it or press Escape. What is checkable is that the handler exists, is
-    /// keyed on the menu closing, and does both halves — cancelling the timer alone would leave a
-    /// flag already set by an earlier fire.
+    /// test process can drive it or press Escape.
+    ///
+    /// **The site this guarded is gone, and the test now asserts that (phase 3, account-menu
+    /// lane).** The "Learn more" row and its dwell-timed flyout were removed outright — the account
+    /// menu no longer has a row pointing at destinations that do not exist — so there is no teardown
+    /// left to guard: `isAccountMenuPresented` going false now drives no `onChange` at all. Per this
+    /// file's own header note ("an assertion about a removed site becomes an assertion that the site
+    /// is gone"), this checks the handler is not there rather than asserting on a block that no
+    /// longer exists.
     @Test
     func theLearnMoreDwellTimerCannotOutliveTheMenuThatOwnsIt() throws {
         let source = try MacAgentSource.read("CommandCenterView.swift")
-        let handler = try MacAgentSource.braceBlock(
-            of: source,
-            openedBy: ".onChange(of: isAccountMenuPresented) { _, isPresented in"
-        )
-        // Only on the way closed — opening the menu must not reset anything.
-        #expect(handler.contains("guard !isPresented else { return }"))
-        // Both halves: the pending dwell is cancelled, and any flag it already set is cleared.
-        #expect(handler.contains("learnMoreHoverTask?.cancel()"))
-        #expect(handler.contains("isLearnMoreExpanded = false"))
+        #expect(MacAgentSource.count(of: ".onChange(of: isAccountMenuPresented)", inText: source) == 0)
+        #expect(MacAgentSource.count(of: "learnMoreHoverTask", inText: source) == 0)
+        #expect(MacAgentSource.count(of: "isLearnMoreExpanded", inText: source) == 0)
     }
 }

@@ -50,19 +50,19 @@ struct CommandCenterView: View {
     // opens Settings as its own dialog) — this drives that dialog's presentation instead of
     // `selection`.
     @State private var isSettingsPresented = false
-    // Profile is a real, separate dialog from Settings (2026-07-18) — its actual content is
-    // deliberately undecided ("I will need to plan what it does later"), so it ships as an honest
-    // placeholder rather than guessed-at content.
-    @State private var isProfilePresented = false
     // Drives the bottom account row's own popover (see `profileRow`'s doc comment for why this
     // is a custom `Button`/`.popover()` pair instead of a native `Menu`).
     @State private var isAccountMenuPresented = false
-    // Drives "Learn more"'s side flyout within the account menu popover.
-    @State private var isLearnMoreExpanded = false
-    // Debounces the open/close of that flyout — see `handleLearnMoreHoverChange`.
-    @State private var learnMoreHoverTask: Task<Void, Never>?
     // Drives the sign-in dialog, opened from the account menu's first row (SONNY-128).
     @State private var isSignInPresented = false
+    // Drive the account menu's two reference sheets (phase 3: the "Profile" placeholder and the
+    // disabled "Get help"/"Learn more" rows are gone — the menu now opens only real surfaces).
+    @State private var isShortcutsPresented = false
+    @State private var isAboutPresented = false
+    // The main-menu "Settings…" item has no SwiftUI view of its own to set this directly — it
+    // bumps `CommandCenterCommands.settingsRequests` instead, and the `onChange` below turns that
+    // into the same presentation this menu's own "Settings" row drives.
+    @EnvironmentObject private var commands: CommandCenterCommands
 
     init(
         viewModel: AgentViewModel,
@@ -88,6 +88,20 @@ struct CommandCenterView: View {
 
             destinationContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Invisible: give Settings and Keyboard shortcuts a window-wide shortcut the same way
+            // `TasksToolbarRow` gives ⌘F one, since neither has a visible on-screen control of its
+            // own outside the account menu.
+            Button(action: { isSettingsPresented = true }) { EmptyView() }
+                .keyboardShortcut(",", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            Button(action: { isShortcutsPresented = true }) { EmptyView() }
+                .keyboardShortcut("/", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(SonnyTheme.ink)
@@ -100,6 +114,12 @@ struct CommandCenterView: View {
             viewModel.refreshTaskHistory()
             viewModel.refreshClipboardHistoryNotice()
         }
+        // The main menu's "Settings…" item has no view reference to set `isSettingsPresented`
+        // directly, so it bumps this counter instead; this is the one place that turns the bump
+        // into the same presentation the account menu's own "Settings" row drives.
+        .onChange(of: commands.settingsRequests) { _, _ in
+            isSettingsPresented = true
+        }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsDialogView(
                 viewModel: viewModel,
@@ -107,8 +127,11 @@ struct CommandCenterView: View {
                 isPresented: $isSettingsPresented
             )
         }
-        .sheet(isPresented: $isProfilePresented) {
-            ProfileDialogView(isPresented: $isProfilePresented)
+        .sheet(isPresented: $isShortcutsPresented) {
+            KeyboardShortcutsSheet(isPresented: $isShortcutsPresented)
+        }
+        .sheet(isPresented: $isAboutPresented) {
+            AboutSonnySheet(isPresented: $isAboutPresented)
         }
         .sheet(isPresented: $isSignInPresented) {
             SignInDialogView(
@@ -223,10 +246,12 @@ struct CommandCenterView: View {
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
-    /// whose only real item today is "Settings"; everything else Claude's own menu shows (Language,
-    /// Get help, Upgrade plan, Log out, ...) has no backend behind it in Sonny yet. No real accounts
-    /// system exists either — this shows the same macOS account name as the Tasks-page greeting,
-    /// not a real signed-in identity.
+    /// with the account surface, Settings, and the two reference sheets below. Phase 3 removed the
+    /// "Profile" placeholder (the Account row above it is the real account surface), the disabled
+    /// "Get help" row and the "Learn more" flyout — a menu of permanently disabled rows pointing at
+    /// destinations that do not exist yet, per the founders' free hand over this surface this phase.
+    /// No real accounts system exists either — this shows the same macOS account name as the
+    /// Tasks-page greeting, not a real signed-in identity.
     ///
     /// Built with a plain `Button` + `.popover()`, not `Menu` — a native macOS `Menu` whose custom
     /// label's first element is a composite icon-like view (a `ZStack` combining a filled shape and
@@ -265,29 +290,6 @@ struct CommandCenterView: View {
         .popover(isPresented: $isAccountMenuPresented, arrowEdge: .top) {
             accountMenuContent
         }
-        // **The Learn-more dwell timer does not outlive the menu that owns it (PR #84 review, F2).**
-        //
-        // `isLearnMoreExpanded` and `learnMoreHoverTask` are `@State` on `CommandCenterView` — the
-        // window root — while the views their hover tracks live inside the popover above, which is
-        // torn down independently of this view. That is structurally the case SONNY-179 fixed on the
-        // mic, and it was reachable: rest the pointer on the Learn-more row, and inside the 100ms
-        // dwell dismiss the menu with Escape. The row goes without AppKit delivering an exit, so
-        // nothing cancels the task, and it then sets the flag with no hover anywhere. Nothing
-        // presents at the time — the row that carries the flyout's `.popover` is gone — but the flag
-        // survives on the root, so the *next* time the user opens the account menu the flyout
-        // springs open unbidden.
-        //
-        // **Keyed on the menu closing, not on a teardown callback.** `isAccountMenuPresented` going
-        // false is the event that means "the row and the flyout are gone"; responding to it is
-        // SONNY-179's shape rather than teaching a flag to notice its own destruction. The flyout
-        // state is not a copy of where the pointer is — it is real UI state — so what is wrong here
-        // is a pending timer writing it after its trigger died, and cancelling that timer is the fix.
-        .onChange(of: isAccountMenuPresented) { _, isPresented in
-            guard !isPresented else { return }
-            learnMoreHoverTask?.cancel()
-            learnMoreHoverTask = nil
-            isLearnMoreExpanded = false
-        }
     }
 
     private var profileAvatar: some View {
@@ -301,23 +303,18 @@ struct CommandCenterView: View {
         .frame(width: 22, height: 22)
     }
 
+    /// Top to bottom: the account surface (Sign in when signed out), Settings, a divider, then the
+    /// two reference sheets. Phase 3's whole menu — no placeholder, no permanently disabled row.
     private var accountMenuContent: some View {
         VStack(alignment: .leading, spacing: 2) {
             // The sign-in entry point (SONNY-128). One row whichever way round it is: signed out it
-            // opens the address step, signed in it opens the account step with Sign out on it. The
-            // row above Profile because signing in is the thing a first-run user needs from this
-            // menu and Profile is still a placeholder.
+            // opens the address step, signed in it opens the account step with Sign out on it.
             accountMenuRow(
                 title: accountModel.isSignedIn ? "Account" : SignInCopy.signInLabel,
                 systemImage: accountModel.isSignedIn ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.plus"
             ) {
                 isAccountMenuPresented = false
                 isSignInPresented = true
-            }
-
-            accountMenuRow(title: "Profile", systemImage: "person.crop.circle") {
-                isAccountMenuPresented = false
-                isProfilePresented = true
             }
 
             accountMenuRow(title: "Settings", systemImage: "gearshape") {
@@ -330,25 +327,14 @@ struct CommandCenterView: View {
                 .frame(height: 1)
                 .padding(.vertical, SonnySpacing.xs)
 
-            // Disabled, not a no-op — signals "this exists, isn't wired up yet" the same way the
-            // Settings theme dropdown's Light/System options already do, rather than a silent dead
-            // click. Real destination (docs/sonny-ui-backend-gaps.md): Sonny's own website help
-            // page, once one exists.
-            accountMenuRow(title: "Get help", systemImage: "questionmark.circle", isEnabled: false) {}
-
-            // "Learn more" itself is enabled — hovering it opens the flyout, matching native
-            // NSMenu submenu behavior and the Claude reference, but only after a short dwell delay
-            // (2026-07-18: a bare cursor flick across the row was opening it instantly, which read
-            // as accidental/twitchy — Claude's own menu waits for a deliberate pause first, so this
-            // does too). A click still works too as a harmless, accessibility-friendly fallback.
-            // The 4 sub-items inside stay disabled since none has a real URL yet.
-            accountMenuRow(title: "Learn more", systemImage: "info.circle", showsDisclosure: true) {
-                isLearnMoreExpanded = true
+            accountMenuRow(title: "Keyboard shortcuts", systemImage: "keyboard") {
+                isAccountMenuPresented = false
+                isShortcutsPresented = true
             }
-            .onHover(perform: handleLearnMoreHoverChange)
-            .popover(isPresented: $isLearnMoreExpanded, arrowEdge: .trailing) {
-                learnMoreFlyoutContent
-                    .onHover(perform: handleLearnMoreHoverChange)
+
+            accountMenuRow(title: "About Sonny", systemImage: "info.circle") {
+                isAccountMenuPresented = false
+                isAboutPresented = true
             }
         }
         .padding(SonnySpacing.xs + 2)
@@ -356,74 +342,30 @@ struct CommandCenterView: View {
         .background(SonnyTheme.surfaceRaised2)
     }
 
-    /// Shared by the "Learn more" trigger row and its flyout content — opens after a short
-    /// deliberate-pause delay (not instantly, so a mouse just passing over the row doesn't pop it
-    /// open) and closes after a short grace delay once hover leaves both, canceled if hover
-    /// resumes on either one before the grace period elapses (so crossing the small gap between
-    /// the row and the flyout doesn't slam it shut mid-move).
-    private func handleLearnMoreHoverChange(isHovering: Bool) {
-        learnMoreHoverTask?.cancel()
-        if isHovering {
-            guard !isLearnMoreExpanded else { return }
-            learnMoreHoverTask = Task {
-                try? await Task.sleep(for: .milliseconds(100))
-                if !Task.isCancelled {
-                    isLearnMoreExpanded = true
-                }
-            }
-        } else {
-            learnMoreHoverTask = Task {
-                try? await Task.sleep(for: .milliseconds(100))
-                if !Task.isCancelled {
-                    isLearnMoreExpanded = false
-                }
-            }
-        }
-    }
-
-    private var learnMoreFlyoutContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // All 4 named per direct instruction ("docs, usage policy, privacy policy, etc.") —
-            // each disabled since none has a real URL yet; see docs/sonny-ui-backend-gaps.md.
-            accountMenuRow(title: "Documentation", systemImage: "doc.text", isEnabled: false) {}
-            accountMenuRow(title: "Usage policy", systemImage: "doc.plaintext", isEnabled: false) {}
-            accountMenuRow(title: "Privacy policy", systemImage: "hand.raised", isEnabled: false) {}
-            accountMenuRow(title: "Terms of service", systemImage: "doc.badge.gearshape", isEnabled: false) {}
-        }
-        .padding(SonnySpacing.xs + 2)
-        .frame(width: 200)
-        .background(SonnyTheme.surfaceRaised2)
-    }
-
+    // `isEnabled`/`showsDisclosure` parameters were dropped with the "Get help" and "Learn more"
+    // rows they existed for (phase 3): every row this menu shows now is a real, enabled destination,
+    // and a parameter no call site exercises is dead code the next reader has to rule out by hand.
     private func accountMenuRow(
         title: String,
         systemImage: String,
-        isEnabled: Bool = true,
-        showsDisclosure: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: SonnySpacing.sm) {
                 Image(systemName: systemImage)
                     .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
-                    .foregroundStyle(isEnabled ? SonnyTheme.muted : SonnyTheme.textTertiary)
+                    .foregroundStyle(SonnyTheme.muted)
                     .frame(width: 18)
                 Text(title)
                     .font(SonnyType.body)
                 Spacer(minLength: SonnySpacing.sm)
-                if showsDisclosure {
-                    Image(systemName: "chevron.right")
-                        .font(SonnyType.icon(9, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.textTertiary)
-                }
             }
-            .foregroundStyle(isEnabled ? SonnyTheme.text : SonnyTheme.textTertiary)
+            .foregroundStyle(SonnyTheme.text)
             .padding(.horizontal, SonnySpacing.sm)
             .frame(height: SonnyMetrics.compactRowHeight)
             .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
-        .disabled(!isEnabled)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
     }
@@ -5523,23 +5465,6 @@ struct SettingsDivider: View {
         Rectangle()
             .fill(SonnyTheme.cardBorder)
             .frame(height: 1)
-    }
-}
-
-/// Placeholder (2026-07-18) — a real, separate dialog from `SettingsDialogView`, but its content
-/// is deliberately undecided ("I will need to plan what it does later"). Reuses the same close-X
-/// chrome as the Settings dialog for visual consistency between the account row's two menu items.
-struct ProfileDialogView: View {
-    @Binding var isPresented: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SonnyDialogHeader(title: "Profile", subtitle: "Not designed yet. Check back soon.", closeLabel: "Close Profile") {
-                isPresented = false
-            }
-            Spacer(minLength: 0)
-        }
-        .sonnyDialogFrame(.compact)
     }
 }
 
