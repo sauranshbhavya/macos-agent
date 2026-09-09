@@ -1129,6 +1129,13 @@ struct ProductShellTests {
             // `taskUsageRecorder` through their own APIs; the properties themselves are the
             // collaborators, not the state.) A new dependency belongs here.
             "logStore", "currentTask", "audioRecorder", "permissionReadinessService",
+            // `voiceRecordingAutoStopTask` is a task handle beside `currentTask` above and for the
+            // same reason (phase 11, the voice lane): it holds no local data, and the wipe guards on
+            // `!isRunning` with nothing about a recording able to outlive one (SONNY-283's reasoning
+            // for `voiceRecordingPurpose`, applied to this handle). `voiceRecordingListeningWindow`
+            // sits with it as the same kind of thing `whitelist` below is: a configuration constant
+            // a test shrinks, not data any wipe could find.
+            "voiceRecordingAutoStopTask", "voiceRecordingListeningWindow",
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
@@ -1268,6 +1275,11 @@ struct ProductShellTests {
             // the wipe guards on `!isRunning` with no recording able to outlive a task (SONNY-283).
             "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "voiceRecordingPurpose", "clarificationOrigin",
             "scheduledRunDisplayCommand",
+            // `voiceRecordingStartedAt` travels with `isRecordingVoice` for the same reason those
+            // sit in this group (phase 11, the voice lane): it is the timestamp of the same
+            // in-flight recording, cleared everywhere `isRecordingVoice` becomes `false` again, so
+            // nothing about it can outlive the run.
+            "voiceRecordingStartedAt",
 
             // 5. Row I's vision-session state, all four slots of it. Same reasoning as the
             // in-flight voice flags above, and it holds harder here: `deleteLocalData` guards on

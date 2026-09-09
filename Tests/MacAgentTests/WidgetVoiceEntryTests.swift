@@ -318,6 +318,124 @@ struct WidgetVoiceEntryTests {
         #expect(viewModel.isVoiceControlDisabled == false)
     }
 
+    /// Phase 11, the voice lane: the countdown's own auto-stop, firing on its own once the window
+    /// elapses.
+    ///
+    /// **Cannot go through `startVoiceRecording`/`toggleVoiceRecording`**, for the reason this
+    /// suite's own header gives — the real path reaches `AVCaptureDevice.requestAccess`, which a
+    /// `swift test` process has no bundle identity to survive. So the state `startVoiceRecording`
+    /// would have set is arranged directly (the same technique
+    /// `aTransientStateArrivingMidRecordingLeavesStopPressable` uses for `isRecordingVoice`), and
+    /// `scheduleVoiceRecordingAutoStop` — driven directly, like `deliverTranscript` and
+    /// `deliverTranscriptionError` beside it — is called to arm the real `Task`.
+    ///
+    /// **What this can and cannot prove.** `audioRecorder` is a concrete, un-fakeable
+    /// `AudioCommandRecorder` (`AudioCommandRecorder.start()` opens a real `AVAudioRecorder`, which
+    /// is exactly the boundary this suite never crosses), and no recording was ever really started
+    /// here — so when the auto-stop fires, `stopVoiceRecordingAndTranscribe`'s
+    /// `audioRecorder.stop()` throws `VoiceRecordingError.noActiveRecording` and the function takes
+    /// its failure arm rather than the success one. That arm still runs first and still clears both
+    /// published properties, which is the property this test can honestly hold: the auto-stop found
+    /// a live recording (by `voiceRecordingStartedAt` matching) and ended it. What it cannot prove
+    /// is that a *real* recording's transcription follows — no test in this suite can, per its own
+    /// header.
+    @Test
+    func theAutoStopEndsTheRecordingOnceTheWindowElapses() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { nil }
+        viewModel.voiceRecordingListeningWindow = 0.05
+
+        let startedAt = Date()
+        viewModel.isRecordingVoice = true
+        viewModel.voiceRecordingStartedAt = startedAt
+        viewModel.scheduleVoiceRecordingAutoStop(startedAt: startedAt)
+
+        // Awaits the real `Task` rather than sleeping a fixed interval and hoping it has finished
+        // by then (CLAUDE.md's own gotcha on exactly that pattern) — the window above is short only
+        // so this test does not sit for three minutes, not so a sleep-then-assert can guess at it.
+        await viewModel.voiceRecordingAutoStopTask?.value
+
+        #expect(viewModel.isRecordingVoice == false, "the stop path must have run")
+        #expect(viewModel.voiceRecordingStartedAt == nil)
+    }
+
+    /// The other half: a stop that beats the deadline cancels the scheduled auto-stop, so a
+    /// recording the user ended themselves is never stopped a second time.
+    ///
+    /// `toggleVoiceRecording` with `isRecordingVoice` already `true` reaches
+    /// `stopVoiceRecordingAndTranscribe` directly — the same "the mic's Stop" path the doc comment
+    /// on `scheduleVoiceRecordingAutoStop` names — without ever touching the microphone-permission
+    /// branch `startVoiceRecording` guards.
+    @Test
+    func aStopBeforeTheDeadlineCancelsTheScheduledAutoStop() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { nil }
+        // Long enough that it could not fire on its own before this test's own manual stop does.
+        viewModel.voiceRecordingListeningWindow = 60
+
+        let startedAt = Date()
+        viewModel.isRecordingVoice = true
+        viewModel.voiceRecordingStartedAt = startedAt
+        viewModel.scheduleVoiceRecordingAutoStop(startedAt: startedAt)
+        let scheduledTask = try #require(viewModel.voiceRecordingAutoStopTask)
+
+        viewModel.toggleVoiceRecording(origin: .widget)
+
+        #expect(viewModel.isRecordingVoice == false, "the manual stop must have run")
+        #expect(viewModel.voiceRecordingStartedAt == nil)
+
+        // Cancellation interrupts the sleep almost immediately, so this awaits a real signal rather
+        // than a wall-clock window — it would otherwise sit for the full sixty seconds above.
+        await scheduledTask.value
+        #expect(scheduledTask.isCancelled, "the manual stop must cancel the task it is racing")
+    }
+
+    /// **A hotkey release that arrives after the auto-stop has already ended the recording must do
+    /// nothing a second time.** `endPushToTalkVoice`'s `guard isRecordingVoice else { return }` is
+    /// what this pins: without it, a release landing after the countdown's own stop would call
+    /// `stopVoiceRecordingAndTranscribe` again.
+    ///
+    /// Observed through `errorMessage` rather than through a call count, since nothing here exposes
+    /// one: the failure arm of `stopVoiceRecordingAndTranscribe` (see
+    /// `theAutoStopEndsTheRecordingOnceTheWindowElapses`'s note on why that is the arm this fixture
+    /// always takes) calls `setError`, so a second, un-guarded call would leave a fresh message
+    /// where this test clears one to nothing.
+    @Test
+    func hotkeyReleaseAfterAnAutoStopRemainsHarmless() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { nil }
+        viewModel.voiceRecordingListeningWindow = 0.05
+
+        let startedAt = Date()
+        viewModel.isPushToTalkHotKeyDown = true
+        viewModel.isRecordingVoice = true
+        viewModel.voiceRecordingStartedAt = startedAt
+        viewModel.scheduleVoiceRecordingAutoStop(startedAt: startedAt)
+        await viewModel.voiceRecordingAutoStopTask?.value
+        try #require(viewModel.isRecordingVoice == false)
+
+        // The auto-stop's own failure arm already cleared `isPushToTalkHotKeyDown` and left an
+        // error behind; simulate the hotkey's physical key still being down when its release now
+        // arrives, with the trace cleared so a second stop is visible.
+        viewModel.isPushToTalkHotKeyDown = true
+        viewModel.errorMessage = nil
+
+        viewModel.endPushToTalkVoice()
+
+        #expect(viewModel.isPushToTalkHotKeyDown == false)
+        #expect(viewModel.isRecordingVoice == false)
+        #expect(
+            viewModel.errorMessage == nil,
+            "a release after the recording already ended must not stop it a second time"
+        )
+    }
+
     /// The class guard, half one. `.disabled` is where this bug lives: a term folded into one is a
     /// press the user makes and never hears back about, so no `.disabled` predicate anywhere in the
     /// app may mention the actionable half of voice readiness.

@@ -229,6 +229,7 @@ struct FloatingWidgetView: View {
                     composerPill
                     HStack(spacing: 12) {
                         dontSaveButton
+                        voiceRecordingCountdownLabel
                         micButton
                     }
                     .frame(height: 40)
@@ -1037,6 +1038,51 @@ struct FloatingWidgetView: View {
         }
     }
 
+    /// How long Sonny will keep listening — the founders' ask on 2026-09-09: "so user knows how
+    /// long Sonny will listen to you." Leads `micButton` in the composer row, and only while a
+    /// recording is actually running; nothing renders (nor reserves space) otherwise.
+    ///
+    /// `TimelineView` rather than a stored `@State` something has to poll or update, for the same
+    /// reason `MicHoverHintModel`'s countdown is a `Task` and not a `Timer` written into a view: the
+    /// tick belongs to a mechanism a test can reason about, and here `VoiceRecordingCountdown`'s
+    /// pure functions are that mechanism — this view only asks them what to draw.
+    ///
+    /// No `.help()`: the founders' rule against explanatory copy rules out "max 3:00" as a tooltip
+    /// as much as it rules out a sentence, and the digits already say everything there is to say.
+    /// `.accessibilityHidden(true)` for the same reason — the words a screen reader needs are on
+    /// `micButton`'s own `.accessibilityValue`, so VoiceOver is not asked to read this digit-only
+    /// label as if it were prose.
+    @ViewBuilder
+    private var voiceRecordingCountdownLabel: some View {
+        if viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: context.date)
+                Text(VoiceRecordingCountdown.label(remaining: remaining))
+                    .font(WidgetType.captionMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(
+                        VoiceRecordingCountdown.isWarning(remaining: remaining)
+                            ? WidgetTheme.attention
+                            : WidgetTheme.textFaint
+                    )
+                    // "9:59" is the widest this ever renders; reserved so the field beside it never
+                    // shifts width as the digits themselves change width.
+                    .frame(minWidth: VoiceRecordingCountdown.labelReservedWidth, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    /// `voiceButtonTitle` alone once a recording ends; while one runs, the countdown's own words
+    /// ride along so VoiceOver hears the same thing `voiceRecordingCountdownLabel` shows.
+    private var micButtonAccessibilityValue: String {
+        guard viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt else {
+            return viewModel.voiceButtonTitle
+        }
+        let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: Date())
+        return "\(viewModel.voiceButtonTitle), \(VoiceRecordingCountdown.accessibilityValue(remaining: remaining))"
+    }
+
     private var micButton: some View {
         Button {
             viewModel.toggleVoiceRecording(origin: .widget)
@@ -1050,8 +1096,10 @@ struct FloatingWidgetView: View {
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
         .accessibilityLabel("Voice input")
         // The same four states the glyph reads, so a screen reader and a sighted user hear and see
-        // one answer while a recording starts or a transcription runs.
-        .accessibilityValue(viewModel.voiceButtonTitle)
+        // one answer while a recording starts or a transcription runs. While one is actually
+        // running, the countdown's own words ride along ("Stop, 2 minutes 59 seconds left") so
+        // VoiceOver hears what the composer row's label shows.
+        .accessibilityValue(micButtonAccessibilityValue)
         // **Transient reasons only** — the rule and its whole predicate live on
         // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
         // so every term folded in here is a press the user makes and never hears back about. The
