@@ -53,6 +53,14 @@ struct TasksPaneSourceScanTests {
         let receipt = try MacAgentSource.read("TaskReceiptView.swift")
         #expect(receipt.contains("let onClose: () -> Void"))
         #expect(receipt.contains("\"Close task\""))
+
+        // The branch with no selection holds the list alone: no split, no receipt (phase 12
+        // review, F8), scoped to the first `else` after the gate rather than any `else` in the page.
+        let gate = try #require(page.range(of: "if selectedTaskID != nil {"))
+        let withoutSelection = try MacAgentSource.braceBlock(of: String(page[gate.upperBound...]), openedBy: "} else {")
+        #expect(withoutSelection.contains("listPane"))
+        #expect(!withoutSelection.contains("HSplitView"))
+        #expect(!withoutSelection.contains("TaskReceiptView"))
     }
 
     /// The page-size cap (the founders' ask of 2026-09-09, Gmail's "first 50 / 100" idiom) applies
@@ -80,5 +88,13 @@ struct TasksPaneSourceScanTests {
 
         let onDisappear = try MacAgentSource.braceBlock(of: page, openedBy: ".onDisappear {")
         #expect(onDisappear.contains("showsAllForRequest = false"))
+
+        // The guard's polarity and the ternary's direction, pinned by their text (phase 12 review,
+        // F5, F6 and F7): the override fires only for a task the current size does not show.
+        #expect(consumeRequest.contains("if !shownAtCurrentSize.contains"))
+        #expect(page.contains("showsAllForRequest ? .all : pageSize"))
+        // A size that shrinks below the selection clears it through the refresh rule (F1).
+        let onPageSize = try MacAgentSource.braceBlock(of: page, openedBy: ".onChange(of: pageSize) { _, newValue in")
+        #expect(onPageSize.contains("TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: displayedRecords)"))
     }
 }

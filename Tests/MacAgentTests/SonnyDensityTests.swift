@@ -56,6 +56,9 @@ struct SonnyDensityTests {
         // 52 * 1.2 = 62.4, rounds down; 32 * 1.2 = 38.4, rounds down too — picking one base whose
         // scaled comfortable value would round *up* under naive truncation is the point here.
         #expect(SonnyDensity.comfortable.scaled(32) == 38)
+        // 52.8: rounding answers 53 where truncation would answer 52, so a `.rounded(.down)` mutant
+        // dies here now that the compact case that used to hold this is gone.
+        #expect(SonnyDensity.comfortable.scaled(44) == 53)
     }
 
     @Test

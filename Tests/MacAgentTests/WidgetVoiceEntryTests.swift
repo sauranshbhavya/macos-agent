@@ -374,8 +374,12 @@ struct WidgetVoiceEntryTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let viewModel = try makeViewModel(root: root)
         viewModel.voiceConfigurationBlockerOverride = { nil }
-        // Long enough that it could not fire on its own before this test's own manual stop does.
-        viewModel.voiceRecordingListeningWindow = 60
+        // A day, not a minute: a window the test must not reach is a wall-clock bet, and a loaded
+        // machine collects. With sixty seconds, a run beside three other lanes' builds took 87
+        // seconds inside this test, the task fired, and two assertions failed on a clean tree
+        // (phase 12, the insights lane's first run). Bounded far past any delay the machine can
+        // produce, as CLAUDE.md's wall-clock gotcha asks.
+        viewModel.voiceRecordingListeningWindow = 86_400
 
         let startedAt = Date()
         viewModel.isRecordingVoice = true
@@ -402,7 +406,7 @@ struct WidgetVoiceEntryTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let viewModel = try makeViewModel(root: root)
         viewModel.voiceConfigurationBlockerOverride = { nil }
-        viewModel.voiceRecordingListeningWindow = 60
+        viewModel.voiceRecordingListeningWindow = 86_400
 
         let first = Date()
         viewModel.isRecordingVoice = true

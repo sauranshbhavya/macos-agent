@@ -80,6 +80,16 @@ struct OverflowMenuSourceScanTests {
         #expect(menu.contains("Button(action: open) {"))
         // The tap gesture that opens the detail sheet is untouched by this move.
         #expect(card.contains(".onTapGesture(perform: openDetail)"))
+
+        // The primary tone sits on New task's own button and Open's disabled predicate on Open's,
+        // each as the adjacent pair, so neither can be satisfied by the same text on another
+        // control (phase 12 review, F1 and F2 of the menus reviewer).
+        #expect(card.contains(
+            "Button(action: beginTaskHere) {\n                    Text(\"New task\")\n                }\n                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))"
+        ))
+        #expect(card.contains(
+            "Button(action: open) {\n                        Text(\"Open\")\n                    }\n                    .disabled(isTaskInFlight)"
+        ))
     }
 
     /// `teamTypeRow`'s solo branch used to carry its own "Mark as team" button; it now keeps only

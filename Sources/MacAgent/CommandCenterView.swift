@@ -735,6 +735,10 @@ private struct TasksFoundationView: View {
         .onChange(of: pageSize) { _, newValue in
             pageSizeStore.save(newValue)
             showsAllForRequest = false
+            // A selection the new window no longer shows is cleared, the rule a deleted record
+            // already follows: a pane open on a row the list does not draw is an orphan, and the
+            // next arrow press would jump from nowhere (phase 12 review, F1).
+            selectTask(id: TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: displayedRecords))
         }
         .onKeyPress(.upArrow) {
             guard !isSearchFocused else { return .ignored }
@@ -1024,7 +1028,9 @@ private struct TasksToolbarRow: View {
                 .padding(.trailing, SonnySpacing.lg)
                 .sonnyTextField(size: .regular)
                 .focused(isFocused)
-                .frame(width: 220)
+                // Flexible down to 140 so the row fits the list's 300pt floor beside the Show
+                // picker: 40 of padding, the picker, and this field must share 300 (phase 12 review, F3).
+                .frame(minWidth: 140, idealWidth: 220, maxWidth: 220)
                 .overlay(alignment: .leading) {
                     Image(systemName: "magnifyingglass")
                         .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
@@ -1795,6 +1801,15 @@ private struct WeeklyCompletionChart: View {
         return counts.firstIndex(of: maxCount)
     }
 
+    /// The pill is centred on its column, except at the two ends of the week, where a centred
+    /// pill on a column about 28pt wide at the window minimum would spill past the card's edge;
+    /// those lean inward instead (phase 12 review, F4).
+    private func pillAlignment(for index: Int) -> Alignment {
+        if index == 0 { return .topLeading }
+        if index == days.count - 1 { return .topTrailing }
+        return .top
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: SonnySpacing.lg) {
             Text("Tasks completed this week")
@@ -1831,7 +1846,7 @@ private struct WeeklyCompletionChart: View {
                         // the bar instead, sized to its own text with `.fixedSize()` so it can never
                         // wrap, and positioned entirely above this 120pt column (not just above
                         // today's bar) so it can never cover any bar regardless of that day's height.
-                        .overlay(alignment: .top) {
+                        .overlay(alignment: pillAlignment(for: index)) {
                             if hoveredDayIndex == index {
                                 Text(WeeklyCompletionChartPresentation.countLabel(for: counts[safe: index] ?? 0))
                                     .font(SonnyType.caption)
@@ -1865,9 +1880,17 @@ private struct WeeklyCompletionChart: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            // Headroom for the hover pill: it sits above this row by its own height plus a
+            // 4pt gap, about 27pt, and the title is 16pt above the row. Reserved here rather than
+            // hoped for, so the pill never lands on the title (phase 12 review, F1, F2, F9).
+            .padding(.top, SonnyMetrics.controlRegular)
         }
         .padding(SonnySpacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // `maxHeight: .infinity` on this card as well as on the breakdown panel beside it: the
+        // `HStack` they share sizes to the taller of the two and both fill it, whichever that is.
+        // With only the panel flexible, a panel with more workspaces than the chart is tall left
+        // the chart short and the gap back under it (phase 12 review, F2).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sonnyCard()
     }
 
@@ -1925,9 +1948,9 @@ private struct WorkspaceBreakdownPanel: View {
             }
         }
         .padding(SonnySpacing.lg)
-        // `maxHeight: .infinity` is what lets this card grow to match the chart's height when the
-        // two sit side by side in the `HStack` above: the chart stays its own natural height, and
-        // this is the one that stretches to it (see the comment on that `HStack`).
+        // `maxHeight: .infinity` on both cards in the row: the `HStack` above sizes to the taller
+        // and each fills it, so the two share a height whichever one has more to show (see the
+        // comment on that `HStack`, and the chart's own frame).
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sonnyCard()
     }
@@ -6701,7 +6724,11 @@ private struct SettingsDensityPicker: View {
         .labelsHidden()
         .pickerStyle(.segmented)
         .tint(SonnyTheme.accent)
-        .frame(width: SonnyMetrics.settingsControlWidth)
+        // Its own width first, never narrower than the column: two segments reading "Default" and
+        // "Comfortable" need about the column's width already, and a fixed frame would clip the
+        // longer label rather than let the control grow (phase 12 review, F4).
+        .fixedSize()
+        .frame(minWidth: SonnyMetrics.settingsControlWidth, alignment: .leading)
         // On the picker itself, never on a collapsed element around it: collapsing the subtree
         // would discard the control's own adjustable trait (phase 11 review, F1, which this
         // control keeps following even though a segmented `Picker` already exposes each segment
