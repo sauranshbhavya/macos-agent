@@ -887,15 +887,14 @@ struct SignInDialogView: View {
             let line = SubscriptionCopy.line(for: subscription, payment: payment)
             let control = SubscriptionCopy.controlLabel(for: payment)
             SettingsAdaptiveControlRow {
-                HStack(spacing: SonnySpacing.sm) {
-                    SonnyBadge(text: subscription.plan.capitalized, tone: .accent)
-                    Text(line)
-                        .font(SonnyType.body)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(line)
+                // The line already opens with the plan's name (`SubscriptionCopy.line`), so a badge
+                // beside it said the same word twice; Settings › Usage is where the plan reads as
+                // a badge on its own.
+                Text(line)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(line)
             } trailing: {
                 Button(control) {
                     Task { await model.openBillingPortal() }

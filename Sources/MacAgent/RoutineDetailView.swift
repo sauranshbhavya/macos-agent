@@ -106,13 +106,12 @@ struct RoutineDetailView: View {
     @ViewBuilder
     private var stepsSection: some View {
         if routine.steps.isEmpty {
-            HStack(spacing: 0) {
-                Text("No steps saved")
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.textTertiary)
-                Spacer(minLength: 0)
-            }
-            .frame(height: SonnyMetrics.compactRowHeight)
+            CollectionEmptyState(
+                systemImage: "list.bullet",
+                title: "No steps saved",
+                message: "This routine has nothing to run yet.",
+                minHeight: 72
+            )
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(routine.steps) { step in
@@ -280,7 +279,7 @@ struct RoutineDetailView: View {
             control()
             Spacer(minLength: 0)
         }
-        .frame(height: 24)
+        .frame(height: SonnyMetrics.controlSmall)
     }
 
     private func ordinalSuffix(_ value: Int) -> String {

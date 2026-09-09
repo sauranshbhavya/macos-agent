@@ -303,6 +303,7 @@ private struct JumpToPaletteRow: View {
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
         .accessibilityLabel(row.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var systemImage: String {

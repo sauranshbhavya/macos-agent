@@ -76,8 +76,8 @@ struct SonnyModeSegmentedControl: View {
         .frame(width: Self.controlWidth, height: Self.controlHeight)
         .background(
             ZStack {
-                Capsule().fill(SonnyTheme.onSurface(dark: 0.02, light: 0.03))
-                Rectangle().fill(SonnyTheme.onSurface(dark: 0.07, light: 0.06))
+                Capsule().fill(SonnyTheme.onSurface(dark: 0.02, light: 0.02))
+                Rectangle().fill(SonnyTheme.onSurface(dark: 0.07, light: 0.07))
             }
         )
         .clipShape(Capsule())

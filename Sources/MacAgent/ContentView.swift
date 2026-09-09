@@ -286,6 +286,12 @@ enum SonnyMetrics {
     static let iconRow: CGFloat = 13
     static let iconButton: CGFloat = 11
     static let iconEmptyState: CGFloat = 24
+    /// The disclosure chevron beside a row or in a menu row: smaller than a button glyph on purpose.
+    static let iconChevron: CGFloat = 9
+    /// The sidebar with its labels hidden: the mark, the icons and the avatar, each with a tooltip.
+    static let sidebarWidthCollapsed: CGFloat = 56
+    /// A collapsed sidebar row's selection fill, centred on its icon.
+    static let sidebarCollapsedRowWidth: CGFloat = 36
 }
 
 // MARK: - Motion

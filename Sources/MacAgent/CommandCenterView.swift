@@ -230,7 +230,7 @@ struct CommandCenterView: View {
         }
         .padding(.horizontal, isSidebarCollapsed ? SonnySpacing.sm : SonnySpacing.md)
         .padding(.vertical, SonnySpacing.lg)
-        .frame(width: isSidebarCollapsed ? 56 : SonnyMetrics.sidebarWidth)
+        .frame(width: isSidebarCollapsed ? SonnyMetrics.sidebarWidthCollapsed : SonnyMetrics.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.sidebar)
         .sonnyAnimation(SonnyMotion.standard, value: isSidebarCollapsed)
@@ -354,7 +354,7 @@ struct CommandCenterView: View {
                     Spacer(minLength: 0)
 
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(SonnyType.icon(9, weight: .semibold))
+                        .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
                         .foregroundStyle(SonnyTheme.textTertiary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -483,7 +483,7 @@ struct CommandCenterView: View {
                 Image(systemName: destination.systemImage)
                     .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
                     .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
-                    .frame(width: 36, height: 30)
+                    .frame(width: SonnyMetrics.sidebarCollapsedRowWidth, height: SonnyMetrics.navRowHeight)
                     .background(
                         RoundedRectangle(cornerRadius: SonnyRadius.control)
                             .fill(selected ? SonnyTheme.fillSelected : Color.clear)
@@ -1416,6 +1416,9 @@ private struct InsightsView: View {
                         guard let id = record.id else { return }
                         _ = viewModel.requestTaskDetail(taskID: id)
                     },
+                    // A breakdown entry comes from history and may name a workspace that has since
+                    // been deleted; only a name that still exists gets a row that opens.
+                    openableWorkspaceNames: Set(viewModel.savedWorkspaces.map(\.name)),
                     openWorkspace: { name in
                         commands.workspaceToOpen = name
                         select(.workspaces)
@@ -1458,6 +1461,7 @@ private struct InsightsOverviewBento: View {
     let workspaceBreakdown: [WorkspaceTaskBreakdownEntry]
     let recentRecords: [CompletedTaskRecord]
     let openTask: (CompletedTaskRecord) -> Void
+    let openableWorkspaceNames: Set<String>
     let openWorkspace: (String) -> Void
 
     var body: some View {
@@ -1471,7 +1475,11 @@ private struct InsightsOverviewBento: View {
             GridRow {
                 WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
                     .gridCellColumns(2)
-                WorkspaceBreakdownPanel(entries: workspaceBreakdown, openWorkspace: openWorkspace)
+                WorkspaceBreakdownPanel(
+                    entries: workspaceBreakdown,
+                    openableWorkspaceNames: openableWorkspaceNames,
+                    openWorkspace: openWorkspace
+                )
                     .gridCellColumns(2)
             }
             GridRow {
@@ -1606,6 +1614,7 @@ private struct WeeklyCompletionChart: View {
 
 private struct WorkspaceBreakdownPanel: View {
     let entries: [WorkspaceTaskBreakdownEntry]
+    let openableWorkspaceNames: Set<String>
     let openWorkspace: (String) -> Void
 
     private static let swatchColors: [Color] = [
@@ -1634,7 +1643,8 @@ private struct WorkspaceBreakdownPanel: View {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         WorkspaceBreakdownRow(
                             entry: entry,
-                            swatchColor: Self.swatchColors[index % Self.swatchColors.count]
+                            swatchColor: Self.swatchColors[index % Self.swatchColors.count],
+                            isOpenable: openableWorkspaceNames.contains(entry.workspaceName)
                         ) {
                             openWorkspace(entry.workspaceName)
                         }
@@ -1653,19 +1663,27 @@ private struct WorkspaceBreakdownPanel: View {
 private struct WorkspaceBreakdownRow: View {
     let entry: WorkspaceTaskBreakdownEntry
     let swatchColor: Color
+    /// False for a workspace that only history remembers: the row then reads as a figure, with
+    /// no chevron, no hover and no hint, rather than a door that opens onto nothing.
+    let isOpenable: Bool
     let open: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        Button(action: open) {
+        if isOpenable {
+            Button(action: open) {
+                rowContent
+                    .padding(.horizontal, SonnySpacing.sm)
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -SonnySpacing.sm)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+            .accessibilityHint("Opens the workspace")
+        } else {
             rowContent
-                .padding(.horizontal, SonnySpacing.sm)
-                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, -SonnySpacing.sm)
-        .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
-        .accessibilityHint("Opens the workspace")
     }
 
     private var rowContent: some View {
@@ -1698,6 +1716,12 @@ private struct WorkspaceBreakdownRow: View {
                 .font(SonnyType.caption.monospacedDigit())
                 .foregroundStyle(SonnyTheme.textTertiary)
                 .frame(width: 40, alignment: .trailing)
+
+            if isOpenable {
+                Image(systemName: "chevron.right")
+                    .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textTertiary)
+            }
         }
         .frame(height: 32)
         .accessibilityElement(children: .combine)
@@ -1732,7 +1756,7 @@ private struct TaskHistoryListPanel: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(records.enumerated()), id: \.offset) { _, record in
-                        InsightsRecentActivityRow(record: record) {
+                        InsightsRecentActivityRow(record: record, isOpenable: record.id != nil) {
                             openTask(record)
                         }
                     }
@@ -1754,10 +1778,41 @@ private struct TaskHistoryListPanel: View {
 /// same task-detail request a notification click raises, so Insights and Tasks share one door.
 private struct InsightsRecentActivityRow: View {
     let record: CompletedTaskRecord
+    /// False for a record with no id (one that predates the id backfill): there is no receipt to
+    /// open, so the row is a line rather than a button that does nothing.
+    let isOpenable: Bool
     let open: () -> Void
 
+    @ViewBuilder
     var body: some View {
-        Button(action: open) {
+        if isOpenable {
+            Button(action: open) {
+                rowContent
+                    .padding(.horizontal, SonnySpacing.sm)
+                    .frame(height: 32)
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -SonnySpacing.sm)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityText)
+            .accessibilityHint("Opens the task")
+        } else {
+            rowContent
+                .frame(height: 32)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityText)
+        }
+    }
+
+    private var accessibilityText: String {
+        "\(record.command), " +
+        "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
+    }
+
+    private var rowContent: some View {
             HStack(spacing: SonnySpacing.sm) {
                 Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
                     .font(SonnyType.body)
@@ -1773,24 +1828,12 @@ private struct InsightsRecentActivityRow: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
 
-                Image(systemName: "chevron.right")
-                    .font(SonnyType.icon(9, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.textTertiary)
+                if isOpenable {
+                    Image(systemName: "chevron.right")
+                        .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
             }
-            .padding(.horizontal, SonnySpacing.sm)
-            .frame(height: 32)
-            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, -SonnySpacing.sm)
-        .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(record.command), " +
-            "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
-        )
-        .accessibilityHint("Opens the task")
     }
 }
 
@@ -6234,9 +6277,8 @@ private struct SettingsDataPage: View {
 
 /// Six per-kind toggles over `SonnyNotificationPreferences` (phase 3 of the UI modernization —
 /// the placeholder this replaced said "nothing to configure yet", and that stopped being true the
-/// moment the preference existed to bind to). Order follows `SonnyNotificationKind.allCases`, which
-/// is also the order `SonnyNotificationService`'s six `post…` methods declare, so a new kind lands
-/// in the same place on both.
+/// moment the preference existed to bind to). The rows follow `SonnyNotificationKind.allCases`; a
+/// new kind lands here by joining that enum.
 private struct SettingsNotificationsPage: View {
     @EnvironmentObject private var preferences: SonnyNotificationPreferences
 
@@ -6299,12 +6341,19 @@ private struct SettingsUsagePage: View {
 
             SettingsDivider()
 
-            SettingsSectionBlock(title: "This task") {
+            SettingsSectionBlock(title: "Task usage") {
                 taskUsageContent
             }
             .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
+        // The page reads the subscription and the allowance, and nothing else fetches them until
+        // the Account dialog opens; the same two refreshes that dialog runs on appear run here, so
+        // the page is right whichever the user opened first (this branch's second review, F1).
+        .task {
+            await accountModel.refreshSubscription()
+            await viewModel.refreshScreenControlAllowance()
+        }
     }
 
     /// **Every divider here is conditioned on the row that follows it, never bare** — "Screen
@@ -6368,11 +6417,13 @@ private struct SettingsUsagePage: View {
     @ViewBuilder
     private var taskUsageContent: some View {
         let summary = viewModel.taskUsageSummary
+        // The summary lives for one task and stays until the next one starts, so this section
+        // reads as the last task's usage once a run has finished, and the words say so.
         if summary.requestCount == 0 {
             CollectionEmptyState(
                 systemImage: "chart.bar",
-                title: "No task running",
-                message: "Usage for a running task appears here.",
+                title: "No task yet",
+                message: "Usage appears here once a task runs.",
                 minHeight: 96
             )
         } else {
@@ -6396,6 +6447,8 @@ private struct SettingsUsagePage: View {
                                 .font(SonnyType.body)
                                 .foregroundStyle(SonnyTheme.textTertiary)
                         }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(summary.estimatedTotalTokens) estimated")
                     }
                 }
 
