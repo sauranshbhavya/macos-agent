@@ -488,8 +488,7 @@ final class SonnyAccountModel: ObservableObject {
 
 /// The sign-in surface. **Functional, not designed** — SONNY-109's whole-product UI/UX pass owns
 /// how this looks; this ticket owns that it works. System A throughout (Inter, flat opaque fills,
-/// zero shadows, accent #5C84FE), on the same close-X chrome as `SettingsDialogView` and
-/// `ProfileDialogView`.
+/// zero shadows, accent #5C84FE), on the same close-X chrome as `SettingsDialogView`.
 ///
 /// **Google and Apple buttons are next branch's and this must not have to be rebuilt for them**
 /// (founder, 2026-08-17 — Google lands early, Apple near launch, so the requirement has to hold

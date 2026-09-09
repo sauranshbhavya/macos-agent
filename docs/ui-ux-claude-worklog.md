@@ -64,13 +64,37 @@ Landed in PR #224 (draft). Head `aca5804c` at the end of the phase.
   of the notification channel it looks for by the first `viewModel.$errorMessage` in the file; the
   observer moved below those channels with a comment saying why (`6309bcd9`).
 
+## Phase 3, 2026-09-08: the settings that said "soon", and an account menu with real destinations
+
+Two lanes, merged at `cf1af8a3`.
+
+- **Account menu**: Account (or Sign in), Settings (⌘,), a divider, Keyboard shortcuts (⌘/),
+  About Sonny. Gone: the Profile placeholder dialog, the disabled Get help row, and the Learn more
+  flyout with its four disabled items and its hover-dwell timer (`HoverTeardownAuditTests`'
+  three assertions about that mechanism now assert its absence). The app menu gains
+  "Settings…" ⌘, through `CommandCenterCommands`, an environment object the coordinator owns and
+  the menu bumps.
+- `Sources/MacAgent/KeyboardShortcutsView.swift` (new): three groups (Command Center, Widget,
+  Anywhere), rows with key caps, the ⌘-number rows built from `CommandCenterDestination.allCases`
+  and the chords read from the hotkey types.
+- `Sources/MacAgent/AboutSonnyView.swift` (new): the mark, the name, "Version 1.0 (1)" from the
+  bundle with a development-build fallback, the copyright line.
+- **Notifications page**: six switches, one per notification kind, backed by
+  `SonnyNotificationPreferences` (plain `UserDefaults`, default on) and honoured by a guard at the
+  top of each `SonnyNotificationService.post…` method through a defaulted `isEnabled` closure.
+- **Usage page**: a Plan section (plan badge, screen-control runs, last top-up, read from the
+  account model and the allowance) and a This-task section from `taskUsageSummary` (requests,
+  tokens reported or estimated, voice seconds), with an empty state when nothing is running. The
+  integrator corrected the tokens row's discriminator after the lane reported that
+  `hasUsageDetails` is true for any usage at all.
+- `ScreenControlUsageSurfaceTests.insightsCarriesNoUsageMetricOfAnyKind` widened its count to
+  admit the Usage page as the second legitimate reader of the allowance, Insights still at zero.
+- Verified: VERIFY3_PLACEHOLDER
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
 
-3. **Settings completeness**: a real Notifications page, a real Usage page, Profile as the
-   account surface, and a keyboard-shortcuts panel and About window in place of items that lead
-   nowhere.
 5. **Command Center**: a jump-to palette on ⌘K over pages, routines, workspaces and tasks;
    sidebar collapse; empty states with composed glyphs; loading states.
 6. **Widget**: a polish pass on every state within System B.

@@ -6184,8 +6184,11 @@ private struct SettingsUsagePage: View {
 
                 SettingsDivider()
 
+                // The reported figure when the model reported one; otherwise the estimate, said to
+                // be one. `hasUsageDetails` is true for any usage at all, audio included, so it is
+                // not the discriminator here (the settings-pages lane's own finding).
                 usageRow(title: "Tokens") {
-                    if summary.hasUsageDetails {
+                    if summary.reportedTotalTokens > 0 {
                         usageNumber("\(summary.reportedTotalTokens)")
                     } else {
                         HStack(spacing: SonnySpacing.xs) {
