@@ -127,6 +127,27 @@ Removed as dead at the branch's start (no site in `Sources/` or `Tests/` named t
 `.panelIcon`; `SonnyTheme.cream`, `.glassShade`, `.panelTint`, `.info`; `sonnyLogoGlow()` (a
 shadow in a zero-shadow system, with one call site, removed with it).
 
+## The component vocabulary, and when each is the right one
+
+| component | use it for | never for |
+|---|---|---|
+| `SonnyButtonStyle(tone:size:)` | every button. `primary` is the one action a surface is for; `secondary` everything with a border; `tertiary` a quiet action (Dismiss, Clear, Remove from a list); `danger` what deletes or revokes. `small` inside rows and cards, `regular` in toolbars and sheets, `large` on onboarding steps | a hand-rolled `.plain` button with its own fill; two primaries on one surface |
+| `SonnyBadge(text:tone:)` | a count or a state word in a row or a sidebar (streak, next run, Paused, Granted, a plan name) | a button, a status that carries no state |
+| `sonnyPanel()` | the one bordered panel each page's list sits in (`commandCenterPanel()` on a page) | anything inside a panel |
+| `sonnyCard(isHovered:)` | a raised block inside a panel: a stat tile, a workspace card, the Memory master switch, an attention panel | wrapping a whole page |
+| `sonnyDivider()` | the rule under a row (never above and below) | between two cards; cards keep their gap |
+| `sonnyTextField(size:)` | every text field: search, clarification, scope entry, sign-in | a field with its own border recipe |
+| `SonnyDialogHeader` + `sonnyDialogFrame(_:)` | every sheet: title, optional subtitle, Escape-bound close, one of three sizes | a sheet whose height is a measurement (`sonnyDialogFrame(width:height:)` is for that one) |
+| `CollectionEmptyState` | any list or panel with nothing in it, and a search with no result | a placeholder for a feature that does not exist yet |
+| `SettingsSectionBlock`, `SettingsToggleRow`, `SettingsAdaptiveControlRow`, `SettingsControlLabel` | Settings pages and any label-plus-control row that has to survive a narrow window | rows in a list panel |
+| `sonnyHoverHighlight()` + `sonnyPointerCursor()` | any row or control that is clickable and is not already a `SonnyButtonStyle` button | a static row |
+| `sonnyAnimation(_:value:)` | any implicit animation | a bare `.animation` or `withAnimation` that ignores Reduce Motion |
+| `SonnyTheme.onSurface(dark:light:)` | a foreground step the named tokens lack | a surface colour |
+
+The rule that outranks the table: a view names a token or a component; it never writes a colour,
+a font size, a radius or a spacing number. When the vocabulary lacks something, the layer grows in
+`ContentView.swift` and every page gets it, which is the only way the app stays one app.
+
 ## What the audit found
 
 Seven surface surveys, one over the tests that pin UI source, one over the founders' decision log
