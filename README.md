@@ -4,11 +4,11 @@ Sonny is an AI-native macOS agent platform for power users. It turns typed or sp
 
 See `docs/sonny-major-release-spec.md` for the full product spec and `docs/sonny-v1-implementation-changelog.md` for branch-by-branch implementation history — both are the source of truth for product direction; this file just orients a new contributor to the running app.
 
-## Cool Prototype Demo
+## Cool Prototype Demo (Old)
 
 https://drive.google.com/file/d/1_tAHM9kTIWMuatAsIjqXQUAeqKZqXCNv/view?usp=sharing
 
-## Uncool Prototype Demo
+## Uncool Prototype Demo (Old)
 
 https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=sharing
 
