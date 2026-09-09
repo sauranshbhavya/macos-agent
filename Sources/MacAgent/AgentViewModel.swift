@@ -3040,6 +3040,44 @@ final class AgentViewModel: ObservableObject {
         return true
     }
 
+    /// Reopens a past task into the widget with its exact command ready to change, rather than
+    /// re-running it verbatim (row 11, the founders' ask of 2026-09-09: "a new 'Edit and run' opens
+    /// the widget with the command filled in"). A sibling of `runTaskAgain` at the compose end
+    /// rather than the dispatch end — this never reaches `dispatch`, `start` or the planner; it
+    /// only fills the composer, exactly as `composeCommand` does for the "Create a workspace
+    /// called " and "Create a routine called " prefills.
+    ///
+    /// **Refused while a clarification is open, checked first so the refusal is `composeCommand`'s
+    /// own** rather than a second copy of the same message: calling it here lets the one guard that
+    /// already exists answer for both callers. **Refused while any other task is in flight**, the
+    /// same `isTaskInFlight` superset `followUpOnTask` refuses on — running, awaiting approval, or
+    /// (again) an open clarification, which the first guard has already ruled out by the time this
+    /// one runs.
+    ///
+    /// **The workspace binding travels with the edit**, the same as `runTaskAgain`'s: the user is
+    /// changing the words, not the boundary the task ran inside. Unlike `runTaskAgain`, nothing is
+    /// armed and no prior-task context is recorded — this is a new command about to be typed, not a
+    /// continuation of the old one.
+    ///
+    /// - Returns: whether the composer was filled, so the caller can tell a real edit-and-run from
+    ///   a refusal that changed nothing.
+    @discardableResult
+    func editTaskAndRunAgain(_ record: CompletedTaskRecord) -> Bool {
+        guard clarificationQuestion == nil else {
+            // `composeCommand`'s own guard refuses and logs this case; reached here so the message
+            // is written in the one place rather than copied.
+            composeCommand(record.command)
+            return false
+        }
+        guard !isTaskInFlight else {
+            logStore.append(.observe, "Edit and run ignored while a task is in flight.")
+            return false
+        }
+        pendingWorkspaceBinding = record.workspaceName
+        composeCommand(record.command)
+        return true
+    }
+
     /// Reopens a past task into the widget so the user can say the next thing about it (row E,
     /// SONNY-150) — "use the other folder instead", "do that again but for March" — without
     /// restating the whole command.
@@ -3135,7 +3173,10 @@ final class AgentViewModel: ObservableObject {
     /// side store would not decode would trade a degraded feature for no feature, and the founder's
     /// objection to a shorter-lived detail store was precisely that follow-ups must not quietly get
     /// weaker — a visible banner is the opposite of quietly.
-    private func storedPlanDetail(for record: CompletedTaskRecord) -> StoredTaskPlanDetail? {
+    ///
+    /// **Not `private` since row 11** (the founders' ask of 2026-09-09): the Tasks pane's receipt
+    /// reads this too, to show what Sonny planned, read only — it never writes through this door.
+    func storedPlanDetail(for record: CompletedTaskRecord) -> StoredTaskPlanDetail? {
         guard let id = record.id else {
             return nil
         }

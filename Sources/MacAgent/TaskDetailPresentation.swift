@@ -53,9 +53,24 @@ enum TaskDetailPresentation {
         resultText(for: record) != nil
     }
 
-    // MARK: - The two things you can do with a task
+    // MARK: - The plan this task ran
+
+    /// The label for the receipt's plan-summary block (row 11, the founders' ask of 2026-09-09:
+    /// "the receipt is redesigned"). Deliberately **summary only, no steps** — the stored steps
+    /// stay context for the planner and are not rendered here, per the founder's 2026-07-18
+    /// direction ("logs + summary + activity should just be a flow") that
+    /// `docs/sonny-v1-implementation-changelog.md`'s "row E" entry records as the reason
+    /// `StoredTaskPlanDetail`'s steps have never been shown to anyone.
+    static let plannedSectionTitle = "What Sonny planned"
+
+    // MARK: - The three things you can do with a task
 
     static let runAgainActionLabel = "Run again"
+
+    /// Reopens the task into the widget with its command ready to change, rather than re-running
+    /// it verbatim (row 11, the founders' ask of 2026-09-09). See
+    /// `AgentViewModel.editTaskAndRunAgain(_:)`.
+    static let editAndRunActionLabel = "Edit and run"
 
     /// Whether "Run again" and "Follow up" are offered — one predicate, because they are the same
     /// question: is there a command to act on.
@@ -93,6 +108,13 @@ enum TaskDetailPresentation {
     }
 
     // MARK: - Height
+    //
+    // **Orphaned by row 11's pane (the founders' ask of 2026-09-09).** The fixed-height sheet this
+    // maths sized is gone — the receipt now lives in a pane that scrolls as a whole, with no fixed
+    // section heights — so nothing in `Sources/MacAgent/` calls anything below this point any more.
+    // Kept, and every test on it kept green, because deleting a tested behaviour on a styling-and-
+    // layout ticket is a bigger step than this one is scoped to take; whether to delete this whole
+    // section is recorded under `founder_questions` rather than decided here.
 
     /// The sheet with no optional section at all — header, the four detail rows, and the footer.
     /// Unchanged from the number this dialog has always used for that case, so a task with neither
