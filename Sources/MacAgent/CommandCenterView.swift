@@ -615,13 +615,31 @@ private struct TasksFoundationView: View {
     /// user, not a ticket-level one.
     @State private var collapseState: TaskSectionCollapseState
     private let collapseStore: TaskSectionCollapseStore
+    /// How many rows the list shows at once (the founders' ask of 2026-09-09, Gmail's "first 50 /
+    /// 100 / 500" idiom) — seeded once from the store, the same shape `collapseState` uses, and
+    /// written back on every change by `.onChange(of: pageSize)` below.
+    @State private var pageSize: TaskListPageSize
+    private let pageSizeStore: TaskListPageSizeStore
+    /// Set when a task requested from elsewhere (`consumeTaskDetailRequest`) falls outside the
+    /// current page-size window — so that visit shows every record rather than stranding a
+    /// selection the list would not otherwise draw. Cleared the moment the user changes the picker
+    /// (a size they chose should not be silently overridden by a stale request) or leaves the page,
+    /// never persisted. Read only through `effectivePageSize` below; pinned by
+    /// `TasksPaneSourceScanTests` since a view has no unit test to drive it.
+    @State private var showsAllForRequest = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sonnyDensity) private var density
 
-    init(viewModel: AgentViewModel, collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore()) {
+    init(
+        viewModel: AgentViewModel,
+        collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore(),
+        pageSizeStore: TaskListPageSizeStore = TaskListPageSizeStore()
+    ) {
         self.viewModel = viewModel
         self.collapseStore = collapseStore
+        self.pageSizeStore = pageSizeStore
         _collapseState = State(initialValue: collapseStore.load())
+        _pageSize = State(initialValue: pageSizeStore.load())
     }
 
     var body: some View {
@@ -633,39 +651,54 @@ private struct TasksFoundationView: View {
             // one scrolled away with the list underneath it.
             CommandCenterStorageNotice(viewModel: viewModel, insets: .tasksPage)
 
-            HSplitView {
-                listPane
-                    .frame(minWidth: 300, maxHeight: .infinity)
+            // The pane exists only once a task is chosen (the founders' ask of 2026-09-09: "when
+            // no task is selected, the side panel should not be shown"). With nothing selected the
+            // list alone fills the width — no pane, and no "No task selected" placeholder, which
+            // `TaskReceiptView` used to show in its place.
+            Group {
+                if selectedTaskID != nil {
+                    HSplitView {
+                        listPane
+                            .frame(minWidth: 300, maxHeight: .infinity)
 
-                TaskReceiptView(
-                    viewModel: viewModel,
-                    record: selectedRecord,
-                    screenRecord: selectedScreenRecord,
-                    showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
-                    onDeleteTask: {
-                        guard let selectedRecord else { return }
-                        // The selection is not cleared here. `deleteTask` refreshes the history
-                        // only when it removed the record, and the `onChange` on
-                        // `taskHistoryRecords` then clears a selection whose record is gone; a
-                        // refused delete, which says why in the attention panel, keeps the task
-                        // selected and its receipt on screen rather than dropping to "No task
-                        // selected" over a row that is still in the list (phase 11 review, F1).
-                        viewModel.deleteTask(selectedRecord)
-                    },
-                    onDeleteScreenRecord: {
-                        guard let selectedRecord else { return }
-                        viewModel.deleteScreenRecord(for: selectedRecord)
-                        // Re-resolve rather than clear: the task itself is still here, and the
-                        // whole point of this action is that its receipt survives. Re-resolving
-                        // moves the pane to the state a task with no screen record has always had,
-                        // which is also the state a task that never ran one has — the equality
-                        // this ticket owes, carried over from the sheet the pane replaced.
-                        refreshSelectedScreenRecord()
+                        TaskReceiptView(
+                            viewModel: viewModel,
+                            record: selectedRecord,
+                            screenRecord: selectedScreenRecord,
+                            showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
+                            onClose: { selectedTaskID = nil },
+                            onDeleteTask: {
+                                guard let selectedRecord else { return }
+                                // The selection is not cleared here. `deleteTask` refreshes the
+                                // history only when it removed the record, and the `onChange` on
+                                // `taskHistoryRecords` then clears a selection whose record is
+                                // gone; a refused delete, which says why in the attention panel,
+                                // keeps the task selected and its receipt on screen rather than
+                                // dropping to "No task selected" over a row that is still in the
+                                // list (phase 11 review, F1).
+                                viewModel.deleteTask(selectedRecord)
+                            },
+                            onDeleteScreenRecord: {
+                                guard let selectedRecord else { return }
+                                viewModel.deleteScreenRecord(for: selectedRecord)
+                                // Re-resolve rather than clear: the task itself is still here, and
+                                // the whole point of this action is that its receipt survives.
+                                // Re-resolving moves the pane to the state a task with no screen
+                                // record has always had, which is also the state a task that never
+                                // ran one has — the equality this ticket owes, carried over from
+                                // the sheet the pane replaced.
+                                refreshSelectedScreenRecord()
+                            }
+                        )
+                        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
                     }
-                )
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    listPane
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .sonnyAnimation(SonnyMotion.standard, value: selectedTaskID != nil)
             .commandCenterPanel()
 
             // Pinned below the split rather than placed in the list flow like the storage notice
@@ -680,10 +713,14 @@ private struct TasksFoundationView: View {
             // that arrived while this page was not mounted (the notification click from another
             // page, which selects Tasks and mounts this view *after* the request was set), and
             // `onChange` below catches one that arrives while it already is.
+            //
+            // Nothing selects a task on appearance any more (the founders' ask of 2026-09-09): the
+            // page opens on the plain list, and the pane exists only once the user chooses a row or
+            // a request from elsewhere names one.
             consumeTaskDetailRequest()
-            if selectedTaskID == nil {
-                selectTask(id: TasksSelectionPresentation.next(after: nil, in: sections))
-            }
+        }
+        .onDisappear {
+            showsAllForRequest = false
         }
         // A finished-run notification selects that task here rather than expanding the widget
         // (PR #67 review, F4 — the founder's decision of 2026-08-17, carried over from the sheet
@@ -694,6 +731,10 @@ private struct TasksFoundationView: View {
         }
         .onChange(of: viewModel.taskHistoryRecords) { _, records in
             selectTask(id: TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: records))
+        }
+        .onChange(of: pageSize) { _, newValue in
+            pageSizeStore.save(newValue)
+            showsAllForRequest = false
         }
         .onKeyPress(.upArrow) {
             guard !isSearchFocused else { return .ignored }
@@ -729,7 +770,7 @@ private struct TasksFoundationView: View {
             // persistent-active-workspace affordance (see the task-to-workspace
             // association decision in the changelog), so only the trailing
             // filter/search icons are built here.
-            TasksToolbarRow(viewModel: viewModel, isFocused: $isSearchFocused)
+            TasksToolbarRow(viewModel: viewModel, isFocused: $isSearchFocused, pageSize: $pageSize)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -773,12 +814,44 @@ private struct TasksFoundationView: View {
                             ? CollectionEmptyState.Action(title: "Ask Sonny") { viewModel.widgetPresentationRequest += 1 }
                             : nil
                     )
-                    .padding(.bottom, SonnySpacing.xxl)
+
+                    // Under the last section rather than inside `TaskHistoryGroupedPanel` — the
+                    // panel does not know the page-size cap exists, and this footer names it
+                    // (the founders' ask of 2026-09-09, Gmail's "first 50 / 100" idiom). `nil`
+                    // when the size is already showing everything the search turned up.
+                    if let footerText = TaskListPageSize.footer(
+                        shown: displayedRecords.count,
+                        total: searchFilteredRecords.count
+                    ) {
+                        pageSizeFooter(text: footerText)
+                    }
                 }
+                .padding(.bottom, SonnySpacing.xxl)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    /// "25 of 69 shown", with a one-press way past the cap — Gmail's own idiom for this rather than
+    /// a real sort or filter, which the founders' ask names explicitly ("no sort control", per the
+    /// build note this page's brief carries).
+    private func pageSizeFooter(text: String) -> some View {
+        HStack(spacing: SonnySpacing.sm) {
+            Text(text)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
+
+            Spacer(minLength: SonnySpacing.md)
+
+            Button("Show all") {
+                pageSize = .all
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
+            .sonnyPointerCursor()
+        }
+        .padding(.horizontal, SonnySpacing.xl)
+        .padding(.top, SonnySpacing.sm)
     }
 
     private var selectedRecord: CompletedTaskRecord? {
@@ -827,6 +900,14 @@ private struct TasksFoundationView: View {
     private func consumeTaskDetailRequest() {
         guard let request = viewModel.taskDetailRequest else { return }
         if let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID }) {
+            // A request naming a task outside the current page-size window still has to open it —
+            // treat the size as "All" for this one visit rather than leaving the pane pointed at a
+            // row the list would not otherwise draw. `showsAllForRequest` carries that, and clears
+            // on the next picker change or when the user leaves the page.
+            let shownAtCurrentSize = TaskListPageSize.visible(searchFilteredRecords, size: pageSize)
+            if !shownAtCurrentSize.contains(where: { $0.taskRowIdentity == record.taskRowIdentity }) {
+                showsAllForRequest = true
+            }
             selectTask(id: record.taskRowIdentity)
             expandSectionIfNeeded(containing: record.taskRowIdentity)
         }
@@ -872,12 +953,25 @@ private struct TasksFoundationView: View {
     /// That was false and predates row D: `TaskHistoryStore` evicts oldest-first at its cap, so the
     /// whole *store* is not the whole history. The true statement is the one above — every other
     /// consumer sees the store rather than this slice. (SONNY-118.)
-    private var displayedRecords: [CompletedTaskRecord] {
+    private var searchFilteredRecords: [CompletedTaskRecord] {
         TaskHistorySearch.visibleRecords(
             viewModel.taskHistoryRecords,
             query: viewModel.taskHistoryQuery,
             now: Date()
         )
+    }
+
+    /// `pageSize`, unless a request from elsewhere named a task outside it — see
+    /// `showsAllForRequest`'s doc comment.
+    private var effectivePageSize: TaskListPageSize {
+        showsAllForRequest ? .all : pageSize
+    }
+
+    /// What the list actually draws: the search/window rule above, then the page-size cap (the
+    /// founders' ask of 2026-09-09) — applied here, before grouping into sections, so the sections,
+    /// their counts and the ↑/↓ walk all agree with what is on screen.
+    private var displayedRecords: [CompletedTaskRecord] {
+        TaskListPageSize.visible(searchFilteredRecords, size: effectivePageSize)
     }
 
     private var taskHistoryReadability: MemoryRowReadability {
@@ -901,10 +995,26 @@ private struct TasksToolbarRow: View {
     @ObservedObject var viewModel: AgentViewModel
     /// Owned by `TasksFoundationView`, which reads it to keep its own key handlers off the field.
     var isFocused: FocusState<Bool>.Binding
+    /// How many rows the list shows at once (the founders' ask of 2026-09-09) — owned by
+    /// `TasksFoundationView`, written here.
+    @Binding var pageSize: TaskListPageSize
     @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack {
+            // Leads the search field rather than trailing it — Gmail's own placement for the same
+            // idiom. No "sort" beside it: the list is newest first, and the founders asked for a
+            // count, not an order.
+            Picker("Show", selection: $pageSize) {
+                ForEach(TaskListPageSize.allCases) { size in
+                    Text(size.title).tag(size)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(SonnyTheme.accent)
+            .fixedSize()
+            .accessibilityLabel("Show, \(pageSize.title) selected")
+
             Spacer()
             // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no
             // matching behind it. The filter icon beside it stays deliberately dropped (2026-07-18

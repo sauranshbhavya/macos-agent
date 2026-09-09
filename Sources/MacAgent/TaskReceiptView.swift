@@ -20,6 +20,12 @@ struct TaskReceiptView: View {
     /// Driven by both this pane's own overflow menu and the page's ⌫ shortcut, so the two share one
     /// dialog rather than each owning a copy that could show different words for the same task.
     @Binding var showDeleteConfirmation: Bool
+    /// Clears the page's selection (the founders' ask of 2026-09-09: "there is no way to close that
+    /// view when a task is chosen"). No `.keyboardShortcut(.cancelAction)` on the control this
+    /// drives — the page already clears the selection on Escape through its own `.onExitCommand`,
+    /// and a second Escape-bound control here would leave SwiftUI's key routing to decide which one
+    /// fires, which this pane has no way to test.
+    let onClose: () -> Void
     let onDeleteTask: () -> Void
     let onDeleteScreenRecord: () -> Void
 
@@ -59,31 +65,54 @@ struct TaskReceiptView: View {
     // MARK: - Header
 
     private func header(for record: CompletedTaskRecord) -> some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
-            Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized)
-                .font(SonnyType.settingsContentTitle)
-                .foregroundStyle(SonnyTheme.text)
-                .lineLimit(3)
-                .help(record.command)
+        HStack(alignment: .top, spacing: SonnySpacing.md) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+                Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized)
+                    .font(SonnyType.settingsContentTitle)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(3)
+                    .help(record.command)
 
-            HStack(spacing: SonnySpacing.xs) {
-                SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
-                Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
-                Text("·")
-                Text(taskStatusText(for: record))
-                if let workspaceName = record.workspaceName {
+                HStack(spacing: SonnySpacing.xs) {
+                    SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
+                    Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
                     Text("·")
-                    Text(workspaceName)
+                    Text(taskStatusText(for: record))
+                    if let workspaceName = record.workspaceName {
+                        Text("·")
+                        Text(workspaceName)
+                    }
+                    if record.effectiveTrigger == .scheduled {
+                        Text("·")
+                        Text("Scheduled")
+                    }
                 }
-                if record.effectiveTrigger == .scheduled {
-                    Text("·")
-                    Text("Scheduled")
-                }
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
             }
-            .font(SonnyType.caption)
-            .foregroundStyle(SonnyTheme.muted)
+
+            Spacer(minLength: SonnySpacing.md)
+
+            closeButton
         }
         .padding(.bottom, SonnySpacing.lg)
+    }
+
+    /// The `SonnyDialogCloseButton` shape (`ContentView.swift`), rebuilt rather than reused: that
+    /// control's own `.keyboardShortcut(.cancelAction)` would compete with the page's
+    /// `.onExitCommand`, which already clears the selection on Escape (`onClose`'s own doc comment).
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                .foregroundStyle(SonnyTheme.muted)
+                .frame(width: SonnyMetrics.controlRegular, height: SonnyMetrics.controlRegular)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+        }
+        .buttonStyle(.plain)
+        .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .accessibilityLabel("Close task")
     }
 
     private func statusBadgeTone(for record: CompletedTaskRecord) -> SonnyBadge.Tone {
