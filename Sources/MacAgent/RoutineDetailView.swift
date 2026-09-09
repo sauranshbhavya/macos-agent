@@ -221,6 +221,15 @@ struct RoutineDetailView: View {
                         .tint(SonnyTheme.accent)
                         .frame(width: 132)
                     }
+
+                    // Day 29 to 31 does not exist in every month; the data model accepts those days
+                    // and the scheduler clamps to the last day. One line saying what the user's own
+                    // choice will do, restored by founder decision on 2026-09-08 after the
+                    // modernization pass had removed it as explanatory copy: it is a consequence of
+                    // a choice, which is not the kind of sentence that rule bans.
+                    if shown.dayOfMonth > 28 {
+                        scheduleNote("Months without a \(shown.dayOfMonth)\(ordinalSuffix(shown.dayOfMonth)) run on their last day.")
+                    }
                 }
             } else {
                 scheduleNote("This routine only runs when you ask it to.")
@@ -272,6 +281,15 @@ struct RoutineDetailView: View {
             Spacer(minLength: 0)
         }
         .frame(height: 24)
+    }
+
+    private func ordinalSuffix(_ value: Int) -> String {
+        switch value {
+        case 1, 21, 31: return "st"
+        case 2, 22: return "nd"
+        case 3, 23: return "rd"
+        default: return "th"
+        }
     }
 
     private func scheduleNote(_ text: String) -> some View {

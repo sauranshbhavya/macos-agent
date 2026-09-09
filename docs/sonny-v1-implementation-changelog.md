@@ -230,14 +230,7 @@ Known limitations / deferred scope:
 - Task-row delete is still right-click only; the founders recorded that as their SONNY-109 call.
 - The Insights bento is the first cut of a layout the founders asked for and have not seen; the tile spans are a design judgment.
 
-Open questions (required, write "none" if true), all for the founders at SONNY-109's sitting:
-1. Inter → the system font, and the ramp replacing §2.1's wireframe literals: ratify or revert.
-2. Routine detail on System A instead of glass inside the window: ratify or revert (the sibling `ui-ux` branch made the same move).
-3. The chord as glyphs inside the SONNY-179 mic hint, and the colon in the unattended-trust label.
-4. The three relaunch-mechanism sentences removed from screen access; the four capability sentences kept.
-5. "Delete local data" / "Delete set-aside files" as visible button text on the Data page (they read "Delete" before).
-6. The task detail sheet at one fixed size; the two Workspaces sheets at one size.
-7. Whether the widget's 28pt controls read right at its 472pt width, and whether the Ask Sonny button belongs in the sidebar or the toolbar.
+Open questions (required, write "none" if true): **none left open; the founder answered every one on 2026-09-08, in this session, before the PR opened.** Ratified as they stand: the system font and the ramp replacing §2.1's literals; routine detail on System A; Ask Sonny on ⌘N in the sidebar; the chord as glyphs inside the SONNY-179 mic hint and the colon in the unattended-trust label; the three relaunch-mechanism sentences staying removed; "Delete local data" / "Delete set-aside files" as visible button text; the bundled fonts staying registered. Reversed: the routine detail's monthly clamping note ("Months without a 29th run on their last day") is restored as a consequence of the user's own choice rather than an explanation, with its `ordinalSuffix` helper, in the commit after this entry's. Deferred by the founder's own choice: porting the sibling `ui-ux` branch's ideas waits until the two branches have been compared whole. The two sheet sizes and the widget's 28pt controls are on the manual checklist rather than open here.
 
 Next branch: none named. This branch waits on the founders' manual pass from its checklist section and their answers above; the sibling `ui-ux` branch is the other founder's take on the same brief and the two should be compared rather than merged blindly.
 

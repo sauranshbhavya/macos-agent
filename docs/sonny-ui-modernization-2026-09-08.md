@@ -61,8 +61,8 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    surface the user is on. That is met by giving the routine detail the same row grammar as the
    widget's step log. It is not met by the blend-mode imitation of glass the view carried, which
    had no vibrancy behind it inside a flat window and was the single most visible inconsistency in
-   the app. **This reverses a recorded founder decision and is flagged for founder review**; the
-   view's old token set is gone rather than left as a second copy nobody draws with.
+   the app. This reversed a recorded founder decision; **the founder ratified it on 2026-09-08**,
+   and the view's old token set is gone rather than left as a second copy nobody draws with.
 8. **Copy**: sentence case for every button and label that is not a proper noun; no em dashes in a
    string a user can see; unavailable menu items are disabled rather than suffixed "(Soon)". The
    one em dash kept is the founders' own first-approval explainer ("Sonny always asks first for
@@ -72,20 +72,25 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    expected to carry its primary action where the eye lands and to answer ⌘N; the button raises the
    same `widgetPresentationRequest` the menu-bar item and the push-to-talk hotkey raise, so it opens
    the widget focused on whatever draft it holds and submits nothing. It is a new door to an
-   existing room rather than a new room, and it is **flagged for founder review** because the
-   branch's own contract says entry points do not change; removing it is one block in the sidebar.
+   existing room rather than a new room. It was flagged because the branch's own contract says
+   entry points do not change; **the founder ratified it on 2026-09-08.**
 10. **Tones by consequence, not by verb.** Red (`danger`) is for what deletes: a task, a routine, a
    workspace, local data, set-aside files, and Settings' approved-app Remove because it revokes
    trust. Removing one entry from a workspace's scope and removing a schedule are reversible edits
    of a list and are quiet (`tertiary`); Sign out is reversible and is `secondary`. The review of
    this branch caught Sign out in red and it was put back.
-11. **Two sentences of scheduler mechanics were removed and one clamping note went with them, and
-   that last one is a founder question rather than a decision.** The screen-access rows lost "Takes
-   effect after Sonny relaunches" and "Takes effect immediately, no relaunch" (how-it-works copy;
-   the relaunch guidance panel still appears when a Screen Recording grant needs one), and the
-   routine detail's monthly note ("Months without a 29th run on their last day") went under the
-   same rule. That note is closer to a state disclosure than an explanation, and the founders may
-   want it back; it is one conditional `Text` in `RoutineDetailView`'s monthly schedule row.
+11. **Two sentences of scheduler mechanics stay removed and one clamping note came back, by
+   founder decision on 2026-09-08.** The screen-access rows lost "Takes effect after Sonny
+   relaunches" and "Takes effect immediately, no relaunch" (how-it-works copy; the relaunch guidance
+   panel still appears when a Screen Recording grant needs one). The routine detail's monthly note
+   ("Months without a 29th run on their last day", shown only for day 29 to 31) is restored: it
+   says what the user's own choice will do, which is a consequence rather than an explanation, and
+   the founder drew the line there.
+
+**Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
+System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
+removed screen-access sentences, the descriptive Data-page button labels, and the bundled fonts
+staying registered were each ratified as they stand; the monthly note was restored.
 
 ## The tokens
 
