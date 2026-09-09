@@ -637,7 +637,12 @@ private struct TasksFoundationView: View {
                         ),
                         emptyStateIcon: taskHistoryReadability == .readable
                             ? "checklist"
-                            : MemoryDeletionCopy.emptyStateSystemImage(for: taskHistoryReadability)
+                            : MemoryDeletionCopy.emptyStateSystemImage(for: taskHistoryReadability),
+                        // The sidebar's own primary, offered again where the first task's row
+                        // will be: the same presentation request, nothing submitted.
+                        emptyStateAction: taskHistoryReadability == .readable && viewModel.taskHistoryQuery.isEmpty
+                            ? CollectionEmptyState.Action(title: "Ask Sonny") { viewModel.widgetPresentationRequest += 1 }
+                            : nil
                     )
                     .padding(.bottom, SonnySpacing.xxl)
                 }
@@ -1976,6 +1981,9 @@ private struct TaskHistoryGroupedPanel: View {
     /// Same reasoning as `emptyState`: the readability check that picks this lives with the caller,
     /// which already computes it to choose between `emptyState`'s two copies.
     let emptyStateIcon: String
+    /// Offered only when nothing has ever run: a search with no result or an unreadable store
+    /// keeps the plain sentence.
+    let emptyStateAction: CollectionEmptyState.Action?
 
     private var sections: [TaskSectionPresentation] {
         TaskSectionPresentation.sections(
@@ -1989,7 +1997,8 @@ private struct TaskHistoryGroupedPanel: View {
             CollectionEmptyState(
                 systemImage: emptyStateIcon,
                 title: emptyState.title,
-                message: emptyState.detail
+                message: emptyState.detail,
+                action: emptyStateAction
             )
         } else {
             VStack(alignment: .leading, spacing: 0) {
@@ -3164,7 +3173,10 @@ private struct RoutinesView: View {
                             ? "repeat"
                             : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
                         title: MemoryDeletionCopy.emptyStateTitle(for: .routines, readability: readability),
-                        message: MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: readability)
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: readability),
+                        action: readability == .readable
+                            ? CollectionEmptyState.Action(title: "New routine", run: beginNewRoutine)
+                            : nil
                     )
                 } else {
                     ScrollView {
@@ -3455,7 +3467,10 @@ private struct WorkspacesView: View {
                             ? "rectangle.3.group"
                             : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
                         title: MemoryDeletionCopy.emptyStateTitle(for: .workspaces, readability: readability),
-                        message: MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: readability)
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: readability),
+                        action: readability == .readable
+                            ? CollectionEmptyState.Action(title: "Create workspace", run: beginNewWorkspace)
+                            : nil
                     )
                 } else {
                     ScrollView {
@@ -5486,6 +5501,17 @@ struct CollectionEmptyState: View {
     /// icon and the tokens are identical, so what varies is the frame and nothing else — a second
     /// view would have been the same three lines with a different number in them, free to drift.
     var minHeight: CGFloat = 180
+    /// The page's own first action, offered where the list would be: "Ask Sonny" on an empty
+    /// Tasks page, "New routine" on Routines, "Create workspace" on Workspaces. A state that says
+    /// what to do reads as a beginning; one that only says what is missing reads as a dead end.
+    /// Nil for a search with no result or a store that cannot be read, where the sentence is the
+    /// whole answer.
+    var action: Action? = nil
+
+    struct Action {
+        let title: String
+        let run: () -> Void
+    }
 
     var body: some View {
         VStack(spacing: SonnySpacing.sm) {
@@ -5501,10 +5527,15 @@ struct CollectionEmptyState: View {
                 .foregroundStyle(SonnyTheme.muted)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
+            if let action {
+                Button(action.title, action: action.run)
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary))
+                    .padding(.top, SonnySpacing.sm)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: minHeight)
         .padding(SonnySpacing.xxl)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 

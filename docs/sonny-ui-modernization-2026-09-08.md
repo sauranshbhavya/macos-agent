@@ -138,7 +138,7 @@ shadow in a zero-shadow system, with one call site, removed with it).
 | `sonnyDivider()` | the rule under a row (never above and below) | between two cards; cards keep their gap |
 | `sonnyTextField(size:)` | every text field: search, clarification, scope entry, sign-in | a field with its own border recipe |
 | `SonnyDialogHeader` + `sonnyDialogFrame(_:)` | every sheet: title, optional subtitle, Escape-bound close, one of three sizes | a sheet whose height is a measurement (`sonnyDialogFrame(width:height:)` is for that one) |
-| `CollectionEmptyState` | any list or panel with nothing in it, and a search with no result | a placeholder for a feature that does not exist yet |
+| `CollectionEmptyState(action:)` | any list or panel with nothing in it, and a search with no result; the page's own first action when there is one (Ask Sonny, New routine, Create workspace) and none when the sentence is the whole answer | a placeholder for a feature that does not exist yet |
 | `SettingsSectionBlock`, `SettingsToggleRow`, `SettingsAdaptiveControlRow`, `SettingsControlLabel` | Settings pages and any label-plus-control row that has to survive a narrow window | rows in a list panel |
 | `sonnyHoverHighlight()` + `sonnyPointerCursor()` | any row or control that is clickable and is not already a `SonnyButtonStyle` button | a static row |
 | `sonnyAnimation(_:value:)` | any implicit animation | a bare `.animation` or `withAnimation` that ignores Reduce Motion |

@@ -4249,6 +4249,9 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] ⌘⌥S and the toggle above the account row collapse the sidebar to icons with tooltips (mark, plus, five pages, avatar) and back, animating unless Reduce Motion is on; the state survives a relaunch; every icon still navigates and ⌘1 to ⌘5 still work collapsed.
 - [ ] Insights: clicking a recently-completed row opens that task's receipt on the Tasks page; clicking a workspace row in the breakdown opens that workspace's detail on the Workspaces page.
 
+**Empty states**
+- [ ] With no task history, the Tasks page's empty state offers "Ask Sonny" and pressing it opens the widget focused; with a search that matches nothing, or an unreadable task store, it offers no button. With no routines, Routines offers "New routine"; with no workspaces, Workspaces offers "Create workspace"; each opens the widget with the same draft its toolbar button does.
+
 **Menu bar and window**
 - [ ] The menu-bar glyph is the untinted inverse wand when idle, the filled wand in blue while a task runs, in amber while Sonny waits for an approval, and in red after a failure until it is dismissed; its tooltip says which. The status menu still reads New Task, Open Command Center, Quit Sonny.
 - [ ] The Command Center window shows no centred title; the sidebar's wordmark is the only "Sonny"; the traffic lights sit clear of it; the Window menu still names the window.

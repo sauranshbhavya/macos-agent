@@ -128,11 +128,18 @@ One lane, merged at `ddcd8b7c`.
   dialog's subscription row, whose line already says the plan.
 - Verified: the full flagged suite at `d2a8d78f`, 3024 tests in 203 suites passed with 8 known issues; `scripts/warnings` 0 at `d2a8d78f` (clean).
 
+## Phase 7, 2026-09-08: empty states that act
+
+- `CollectionEmptyState` takes an optional action, drawn as a secondary button under the
+  message. The Tasks page offers "Ask Sonny" when nothing has ever run (the same presentation
+  request the sidebar's button raises; a search with no result and an unreadable store keep the
+  plain sentence), Routines offers "New routine" and Workspaces offers "Create workspace", each the
+  page's own toolbar action, so a first launch shows what to do rather than what is missing.
+- Verified: VERIFY7_PLACEHOLDER
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
 
-7. **Empty states that act**: the Tasks, Routines and Workspaces empty states carry the page's
-   own primary action, so a first launch shows what to do rather than what is missing.
 8. **Final measurements** at the head that carries everything, and the changelog entry restated
    there.
