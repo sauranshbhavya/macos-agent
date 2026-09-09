@@ -1306,7 +1306,7 @@ private struct WidgetStepRow: View {
                 }
             }
         }
-        .frame(width: 13, height: 13)
+        .frame(width: 16, height: 16)
     }
 }
 
@@ -1327,7 +1327,7 @@ private struct WidgetItemJobRow: View {
                 Image(systemName: "square.stack.3d.up")
                     .font(WidgetType.iconSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
-                    .frame(width: 13, height: 13)
+                    .frame(width: 16, height: 16)
                 Text(title)
                     .font(WidgetType.caption)
                     .foregroundStyle(WidgetTheme.textFull)
@@ -1341,7 +1341,7 @@ private struct WidgetItemJobRow: View {
                     .foregroundStyle(WidgetTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .padding(.leading, 21)
+                    .padding(.leading, 24)
             }
         }
     }

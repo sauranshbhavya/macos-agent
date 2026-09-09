@@ -46,6 +46,22 @@ Landed in PR #224 (draft). Head `aca5804c` at the end of the phase.
   conventions rule, three appearance rows in the manual checklist.
 - Verified: 3012 tests in 201 suites with 8 known issues on the tree `c20bc4a9` carries (the flagged command, run before the commit; the Swift tree is the commit's), build clean.
 
+## Phase 4, 2026-09-08: the menu bar shows Sonny's state
+
+- `Sources/MacAgent/StatusItemPresentation.swift` (new): one value type maps (running, waiting
+  for approval, failed) to the status item's glyph, tint and VoiceOver name, with the widget's own
+  precedence (waiting outranks working outranks a failure, and a failure shows only once the run
+  has stopped). Idle is the inverse glyph untinted; every other state is the filled glyph, tinted
+  accent, warning or danger.
+- `AppDelegate` observes `isRunning`, `approvalRequest` and `errorMessage` together and applies
+  the presentation to the status-bar button (`contentTintColor` on the template image, the label
+  as the tooltip). The status menu's items are unchanged; `ProductShellTests` pins them.
+- `Tests/MacAgentTests/StatusItemPresentationTests.swift` (new): five tests on the mapping.
+- Widget: the step and job rows' icon slots go from 13pt to 16pt, the one size System B's own
+  rows still drew smaller than the glyphs beside them.
+- Verified: `StatusItemPresentationTests` and `ProductShellTests`, 106 tests in 2 suites passed,
+  on this tree before the commit; the whole suite runs on the phase 3 merge.
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
@@ -53,7 +69,6 @@ Ordered by how much of the product each unlocks; each phase ends verified and pu
 3. **Settings completeness**: a real Notifications page, a real Usage page, Profile as the
    account surface, and a keyboard-shortcuts panel and About window in place of items that lead
    nowhere.
-4. **Menu bar**: a status item that shows Sonny's state, and a status menu that is worth opening.
 5. **Command Center**: a jump-to palette on ⌘K over pages, routines, workspaces and tasks;
    sidebar collapse; empty states with composed glyphs; loading states.
 6. **Widget**: a polish pass on every state within System B.
