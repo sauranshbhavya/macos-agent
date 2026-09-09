@@ -4235,6 +4235,24 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] In Light: text is dark on paper, the sidebar is a shade darker than the canvas, cards and buttons keep their hairlines, the accent reads a step darker than in Dark, the mode segmented control's track and dividers read as greys rather than vanishing, and no white-on-white text or invisible control appears on any page or sheet.
 - [ ] The floating widget stays dark in Light and in System-on-light, its glass and its buttons unchanged.
 
+**Account menu, shortcuts and About**
+- [ ] The account row's menu reads Account (or Sign in), Settings, a divider, Keyboard shortcuts, About Sonny, and nothing is disabled. ⌘, opens Settings from anywhere in the window and from the app menu's "Settings…" item; ⌘/ opens the shortcuts sheet; both close on Escape.
+- [ ] The Keyboard shortcuts sheet lists three groups (Command Center, Widget, Anywhere); every chord it names works as listed, the key caps read as keys, and the Anywhere chords match the widget's mic hint.
+- [ ] About Sonny shows the mark, "Sonny", "Version 1.0 (1)" from the packaged bundle (or "development build" under `swift run`), and the copyright line; nothing else.
+
+**Settings: Notifications and Usage**
+- [ ] Notifications lists six switches (Approval needed, Task finished, Task failed, Routine ran, Watcher fired, Storage problem), all on by default. Switch "Task finished" off, run a task from the widget while another app is in front: no banner; switch it back on: the banner returns. The choice survives a relaunch.
+- [ ] Usage: signed out, Plan reads "Signed out" and the screen-control and top-up rows are absent; signed in, the plan chip, the screen-control line and the last top-up match the Account dialog. With nothing running the This-task section shows its empty state; run a task and it shows requests and tokens (an estimate is labelled "estimated"); a voice command adds a Voice row.
+
+**Jump to and the sidebar**
+- [ ] ⌘K opens the palette with the field focused. Empty, it lists the five pages then recent routines, workspaces and tasks; typing filters across all groups; ↑ and ↓ move one selection across groups; Return on a page switches to it, on a routine opens its detail on the Routines page, on a workspace its detail on the Workspaces page, on a task its receipt on the Tasks page; a query with no match shows "Nothing matches"; Escape closes.
+- [ ] ⌘⌥S and the toggle above the account row collapse the sidebar to icons with tooltips (mark, plus, five pages, avatar) and back, animating unless Reduce Motion is on; the state survives a relaunch; every icon still navigates and ⌘1 to ⌘5 still work collapsed.
+- [ ] Insights: clicking a recently-completed row opens that task's receipt on the Tasks page; clicking a workspace row in the breakdown opens that workspace's detail on the Workspaces page.
+
+**Menu bar and window**
+- [ ] The menu-bar glyph is the untinted inverse wand when idle, the filled wand in blue while a task runs, in amber while Sonny waits for an approval, and in red after a failure until it is dismissed; its tooltip says which. The status menu still reads New Task, Open Command Center, Quit Sonny.
+- [ ] The Command Center window shows no centred title; the sidebar's wordmark is the only "Sonny"; the traffic lights sit clear of it; the Window menu still names the window.
+
 **Copy and system**
 - [ ] The push-to-talk chord reads ⌃⌥Space in the widget's mic hint, the voice status line, the readiness rows and the registration error, never spelled out; the emergency stop reads ⌃⌥⎋.
 - [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.
