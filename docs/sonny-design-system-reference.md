@@ -8,7 +8,9 @@ Source of truth for Sonny's visual design, extracted from the user's own Figma w
 > surface ramp with opacity-based text and hairlines instead of §2.1's literals, and a control /
 > card / sheet radius rule instead of §2.3's per-component table. §2.4's accent `#5C84FE` is kept.
 > The routine detail sheet is System A now; System B (§3) is unchanged in its material and accents.
-> Everything below stays as the wireframe provenance.
+> System A also has a light reading of every token and a Dark / Light / System preference
+> (`SonnyAppearanceModel`); §2.6's "Light" and "System" swatches are live, and the third option's
+> label, open question 3 below, is "System". Everything below stays as the wireframe provenance.
 
 Treat this document as authoritative for implementation. Where something is genuinely unconfirmed, it's marked **UNCONFIRMED** — do not silently guess past those markers; ask instead.
 

@@ -48,6 +48,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     let accountModel: SonnyAccountModel
     let screenAccessModel: ScreenAccessOnboardingModel
     let firstRunCoordinator: FirstRunCoordinator
+    let appearanceModel: SonnyAppearanceModel
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
@@ -67,12 +68,18 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         accountModel: SonnyAccountModel,
         screenAccessModel: ScreenAccessOnboardingModel,
         firstRunCoordinator: FirstRunCoordinator,
+        // Defaulted, unlike the stores above, because it is a cosmetic preference read from plain
+        // `UserDefaults` and written only when the user changes it: a fixture that omits it reads
+        // a value and writes nothing, which is the opposite of the real-store hazard the rule above
+        // guards against.
+        appearanceModel: SonnyAppearanceModel = SonnyAppearanceModel(),
         activationManager: PrimaryWindowActivationManager = PrimaryWindowActivationManager()
     ) {
         self.viewModel = viewModel
         self.accountModel = accountModel
         self.screenAccessModel = screenAccessModel
         self.firstRunCoordinator = firstRunCoordinator
+        self.appearanceModel = appearanceModel
         self.activationManager = activationManager
         super.init()
     }
@@ -98,6 +105,9 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
                 screenAccessModel: screenAccessModel,
                 firstRunCoordinator: firstRunCoordinator
             )
+            // The Settings sheet reads the theme picker's model from here; a sheet inherits its
+            // presenter's environment.
+            .environmentObject(appearanceModel)
         )
         let window = makeWindow(
             title: "Sonny",

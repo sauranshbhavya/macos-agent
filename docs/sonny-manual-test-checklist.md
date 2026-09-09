@@ -4230,6 +4230,11 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Both sheets open on the shared chrome; fields have the raised fill with a blue hairline when focused; Send code, Verify and Sign out show a spinner while busy; Sign out is red; the plan name is an accent chip.
 - [ ] Screen access: each grant reads as a green "Granted" or amber "Not granted" chip beside its glyph; the relaunch guidance panel still appears after a Screen Recording request and "Couldn't restart Sonny." still appears only when the restart failed (as before).
 
+**Appearance**
+- [ ] Settings › Preferences › Interface theme offers Dark, Light and System, all selectable. Choosing Light repaints Command Center, the Settings sheet, the account menu popover and every dialog at once with no relaunch; choosing System follows a change made in System Settings › Appearance while Sonny is running; the choice survives a relaunch.
+- [ ] In Light: text is dark on paper, the sidebar is a shade darker than the canvas, cards and buttons keep their hairlines, the accent reads a step darker than in Dark, the mode segmented control's track and dividers read as greys rather than vanishing, and no white-on-white text or invisible control appears on any page or sheet.
+- [ ] The floating widget stays dark in Light and in System-on-light, its glass and its buttons unchanged.
+
 **Copy and system**
 - [ ] The push-to-talk chord reads ⌃⌥Space in the widget's mic hint, the voice status line, the readiness rows and the registration error, never spelled out; the emergency stop reads ⌃⌥⎋.
 - [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.

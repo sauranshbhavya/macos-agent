@@ -14,6 +14,8 @@ Because both surfaces render off the same state, a task submitted from either on
 
 ## Visual direction since 2026-09-08 (branch `ui-ux-claude`)
 
+Every `SonnyTheme` token resolves against the window's appearance (a dark and a light reading each), and `SonnyAppearanceModel` sets the application's appearance from the Settings picker. So a view never asks which appearance it is in and never writes `Color.white` or `Color.black` for a surface or a text colour: it names a token, or `SonnyTheme.onSurface(dark:light:)` for a step the tokens lack. The floating widget's panel is pinned `.darkAqua` and its `WidgetTheme` literals stay white on purpose.
+
 `SonnyTheme` / `SonnyType` / `SonnyRadius` are the system font on one cool-neutral ramp with a
 three-value radius rule, plus `SonnySpacing`, `SonnyMetrics`, `SonnyMotion` and the shared controls
 (`SonnyButtonStyle` with four tones and three sizes, `SonnyBadge`, `SonnyDialogHeader`,
@@ -69,7 +71,7 @@ The floating widget is unchanged and still shows all three states for **every** 
 
 ## Preferences
 
-A cosmetic, non-privacy-sensitive preference (e.g. pointer cursor behavior) goes through plain injected `UserDefaults`, not `LocalStorageEncryption` — don't add a new encrypted store for something with no privacy sensitivity. Read booleans with `object(forKey:) as? Bool ?? true`, not `.bool(forKey:)` — the latter silently defaults a missing key to `false`, which is wrong for any preference that should default to *on* for new users.
+A cosmetic, non-privacy-sensitive preference (e.g. pointer cursor behavior, the interface theme in `SonnyAppearanceModel`) goes through plain injected `UserDefaults`, not `LocalStorageEncryption` — don't add a new encrypted store for something with no privacy sensitivity. Read booleans with `object(forKey:) as? Bool ?? true`, not `.bool(forKey:)` — the latter silently defaults a missing key to `false`, which is wrong for any preference that should default to *on* for new users.
 
 ## Wireframe fidelity
 

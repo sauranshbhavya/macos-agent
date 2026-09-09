@@ -164,50 +164,88 @@ enum SonnyType {
 
 // MARK: - Palette
 
-/// Dark only, one cool-neutral ramp. Surfaces are opaque and step up in luminance by level;
-/// text, hairlines and fills are white at an opacity so they compose the same on every level.
-/// The brand accent is the one saturated colour and it is the same on every surface.
+/// One cool-neutral ramp with a dark and a light reading of every step. Surfaces are opaque and
+/// step up in luminance by level (in light they step down, since paper is the brightest thing);
+/// text, hairlines and fills are the foreground colour at an opacity, so they compose the same on
+/// every level. Every token is an `NSColor` with a dynamic provider, so it resolves against the
+/// appearance of the window it is drawn in: `SonnyAppearanceModel` sets that at the application,
+/// and the floating widget pins its own panel dark. The brand accent is the one saturated colour;
+/// its light reading is a step darker so white text on it keeps its contrast on paper.
 enum SonnyTheme {
     // Surfaces, level 0 to 4.
     /// Sidebar and the Settings dialog's own sidebar.
-    static let sidebar = Color(red: 0x0F / 255, green: 0x10 / 255, blue: 0x12 / 255)
+    static let sidebar = dynamic(dark: 0x0F1012, light: 0xECEDF0)
     /// The window canvas.
-    static let ink = Color(red: 0x14 / 255, green: 0x15 / 255, blue: 0x18 / 255)
+    static let ink = dynamic(dark: 0x141518, light: 0xF5F6F8)
     /// The bordered content panel inside each page.
-    static let collectionSurface = Color(red: 0x19 / 255, green: 0x1A / 255, blue: 0x1E / 255)
+    static let collectionSurface = dynamic(dark: 0x191A1E, light: 0xFFFFFF)
     /// Cards, secondary buttons, inputs, popovers.
-    static let surfaceRaised = Color(red: 0x1F / 255, green: 0x21 / 255, blue: 0x26 / 255)
+    static let surfaceRaised = dynamic(dark: 0x1F2126, light: 0xF2F3F6)
     /// Menus and a hovered card.
-    static let surfaceRaised2 = Color(red: 0x26 / 255, green: 0x29 / 255, blue: 0x30 / 255)
+    static let surfaceRaised2 = dynamic(dark: 0x262930, light: 0xE8EAEE)
 
     // Text.
-    static let text = Color.white.opacity(0.92)
+    static let text = onSurface(dark: 0.92, light: 0.88)
     /// Secondary text: subtitles, descriptions, metadata that still has to be read.
-    static let muted = Color.white.opacity(0.60)
+    static let muted = onSurface(dark: 0.60, light: 0.58)
     /// Tertiary text: timestamps, placeholders, counts.
-    static let textTertiary = Color.white.opacity(0.38)
+    static let textTertiary = onSurface(dark: 0.38, light: 0.42)
     /// Text on the accent fill.
     static let textOnAccent = Color.white
 
     // Hairlines and fills.
     /// Panel borders and the dividers between sections.
-    static let border = Color.white.opacity(0.09)
+    static let border = onSurface(dark: 0.09, light: 0.10)
     /// Card and button borders, and the dividers between rows.
-    static let cardBorder = Color.white.opacity(0.06)
-    static let fillHover = Color.white.opacity(0.05)
-    static let fillPressed = Color.white.opacity(0.09)
-    static let fillSelected = Color.white.opacity(0.10)
+    static let cardBorder = onSurface(dark: 0.06, light: 0.07)
+    static let fillHover = onSurface(dark: 0.05, light: 0.04)
+    static let fillPressed = onSurface(dark: 0.09, light: 0.08)
+    static let fillSelected = onSurface(dark: 0.10, light: 0.08)
 
     // Accent and semantics.
-    static let accent = Color(red: 0x5C / 255, green: 0x84 / 255, blue: 0xFE / 255)
+    static let accent = dynamic(dark: 0x5C84FE, light: 0x3B67E9)
     static let accentSubtle = accent.opacity(0.14)
     static let accentBorder = accent.opacity(0.40)
-    static let success = Color(red: 0x4C / 255, green: 0xC3 / 255, blue: 0x8A / 255)
-    static let warning = Color(red: 0xE8 / 255, green: 0xB8 / 255, blue: 0x4A / 255)
-    static let danger = Color(red: 0xE5 / 255, green: 0x48 / 255, blue: 0x4D / 255)
+    static let success = dynamic(dark: 0x4CC38A, light: 0x1E9E5F)
+    static let warning = dynamic(dark: 0xE8B84A, light: 0xA8760A)
+    static let danger = dynamic(dark: 0xE5484D, light: 0xD2353B)
     /// Every non-peak bar in the Insights chart.
     static let chartBarMuted = accent.opacity(0.22)
 
+    /// The foreground colour at an opacity: white on dark, black on light. For a view that needs a
+    /// step the named tokens do not have (the mode control's wireframe-literal track and dividers).
+    static func onSurface(dark: Double, light: Double) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.isSonnyLight
+                ? NSColor.black.withAlphaComponent(light)
+                : NSColor.white.withAlphaComponent(dark)
+        })
+    }
+
+    private static func dynamic(dark: UInt32, light: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.isSonnyLight ? NSColor(sonnyHex: light) : NSColor(sonnyHex: dark)
+        })
+    }
+}
+
+private extension NSAppearance {
+    /// Dark unless the appearance resolves to Aqua: the widget's vibrant-dark panel and every
+    /// dark variant answer false here without being named one by one.
+    var isSonnyLight: Bool {
+        bestMatch(from: [.aqua, .darkAqua]) == .aqua
+    }
+}
+
+private extension NSColor {
+    convenience init(sonnyHex hex: UInt32) {
+        self.init(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
+    }
 }
 
 // MARK: - Radius, spacing, metrics

@@ -6297,24 +6297,21 @@ struct SonnySettingsToggle: View {
 /// affordance (closed by default, opens on click, its own disclosure indicator) rather than a
 /// hand-styled swatch — and, being fully native chrome rather than a custom label, it has none of
 /// the composite-label rendering bug documented on `profileRow`.
+/// The three appearances, bound to `SonnyAppearanceModel` from the window's environment; the
+/// change is visible the moment the menu closes, and it is stored for the next launch.
 private struct SettingsThemeDropdown: View {
-    /// Fixed rather than a stored preference: "Light" and "System" are disabled below, so this
-    /// selection can never actually move, and there is nowhere in the product that reads it.
-    @State private var selection = "Dark"
+    @EnvironmentObject private var appearanceModel: SonnyAppearanceModel
 
     var body: some View {
-        Picker("Interface theme", selection: $selection) {
-            Text("Dark").tag("Dark")
-            Text("Light").tag("Light").disabled(true)
-            Text("System").tag("System").disabled(true)
+        Picker("Interface theme", selection: $appearanceModel.appearance) {
+            ForEach(SonnyAppearance.allCases) { appearance in
+                Text(appearance.title).tag(appearance)
+            }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .tint(SonnyTheme.accent)
         .frame(width: 180)
-        // The closed control names the selection only; the native picker announces each option,
-        // disabled ones included, once it is open, so the old "Light and System coming soon" clause
-        // would have said twice what VoiceOver already says once.
-        .accessibilityLabel("Interface theme, Dark selected")
+        .accessibilityLabel("Interface theme, \(appearanceModel.appearance.title) selected")
     }
 }

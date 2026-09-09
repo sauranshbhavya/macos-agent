@@ -87,6 +87,19 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    says what the user's own choice will do, which is a consequence rather than an explanation, and
    the founder drew the line there.
 
+12. **Light and System are real appearances, not menu items that lead nowhere.** Every
+   `SonnyTheme` token is an `NSColor` with a dynamic provider carrying a dark and a light reading,
+   so a view that names a token is right in both without knowing which it is in. The light ramp
+   steps down from paper (`#F5F6F8` canvas, white panels, `#F2F3F6` cards) and its foreground
+   tokens are black at an opacity; the accent darkens a step to `#3B67E9` so white text on it
+   keeps its contrast. `SonnyAppearanceModel` (`Sources/MacAgent/SonnyAppearance.swift`) stores the
+   choice in plain `UserDefaults` under `com.sonny.preferences.appearance`, defaulting to Dark, and
+   sets `NSApp.appearance` at launch and on change, so menus, popovers, sheets and alerts follow
+   together; System hands the choice back to macOS. The floating widget pins its panel to
+   `.darkAqua`: System B is dark by design, and its material and white-literal tokens stay as they
+   are. The mode segmented control's wireframe whites read as blacks at the same opacities on
+   light through `SonnyTheme.onSurface`.
+
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
 removed screen-access sentences, the descriptive Data-page button labels, and the bundled fonts

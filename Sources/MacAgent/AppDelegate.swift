@@ -10,11 +10,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let accountModel: SonnyAccountModel
     private let screenAccessModel: ScreenAccessOnboardingModel
     private let firstRunCoordinator: FirstRunCoordinator
+    /// The interface-theme preference, applied to `NSApp` at launch and on every change; Settings
+    /// binds its picker to this one instance through the Command Center's environment.
+    private let appearanceModel = SonnyAppearanceModel()
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
         accountModel: accountModel,
         screenAccessModel: screenAccessModel,
-        firstRunCoordinator: firstRunCoordinator
+        firstRunCoordinator: firstRunCoordinator,
+        appearanceModel: appearanceModel
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -104,6 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before any window exists, so the first frame is drawn in the chosen appearance.
+        appearanceModel.apply()
         registerBundledFonts()
 
         // The app shipped with no main menu at all until 2026-07-30 — `main.swift` is a bare

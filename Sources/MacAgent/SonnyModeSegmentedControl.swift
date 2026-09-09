@@ -7,8 +7,10 @@ import SwiftUI
 /// full-height capsule for the selected segment in `#0091FF` with a 3.9% white overlay, 1×20
 /// hairline dividers at 25% white between unselected neighbors only (the export shows no divider
 /// beside the selection), and 13px labels at 85% white — pure white on the selected segment.
-/// Type is System A's Inter per the design reference; the blue is this wireframe's own literal,
-/// not a System B token import.
+/// Type is System A's body token; the blue is this wireframe's own literal, not a System B token
+/// import. The whites are the wireframe's dark reading; through `SonnyTheme.onSurface` they read
+/// as blacks at the same opacities on the light appearance, which keeps the control's own
+/// contrast without a second drawing of it.
 struct SonnyModeSegmentedControl: View {
     @Binding var selection: AgentInteractionMode
 
@@ -35,6 +37,7 @@ struct SonnyModeSegmentedControl: View {
             Capsule()
                 .fill(Self.selectedFill)
                 .overlay(Capsule().fill(Color.white.opacity(0.0392157)))
+                // The overlay stays white in both appearances: it sits on the blue capsule.
                 .frame(width: segmentWidth, height: Self.controlHeight)
                 .offset(x: CGFloat(selectedIndex) * segmentWidth)
 
@@ -43,7 +46,7 @@ struct SonnyModeSegmentedControl: View {
             ForEach(1..<modes.count, id: \.self) { boundary in
                 if selectedIndex != boundary, selectedIndex != boundary - 1 {
                     Rectangle()
-                        .fill(Color.white.opacity(0.25))
+                        .fill(SonnyTheme.onSurface(dark: 0.25, light: 0.25))
                         .frame(width: 1, height: Self.dividerHeight)
                         .offset(
                             x: CGFloat(boundary) * segmentWidth - 0.5,
@@ -59,7 +62,7 @@ struct SonnyModeSegmentedControl: View {
                     } label: {
                         Text(mode.displayName)
                             .font(SonnyType.body)
-                            .foregroundStyle(mode == selection ? Color.white : Color.white.opacity(0.85))
+                            .foregroundStyle(mode == selection ? SonnyTheme.textOnAccent : SonnyTheme.onSurface(dark: 0.85, light: 0.85))
                             .frame(width: segmentWidth, height: Self.controlHeight)
                             .contentShape(Rectangle())
                     }
@@ -73,8 +76,8 @@ struct SonnyModeSegmentedControl: View {
         .frame(width: Self.controlWidth, height: Self.controlHeight)
         .background(
             ZStack {
-                Capsule().fill(Color.white.opacity(0.02))
-                Rectangle().fill(Color.white.opacity(0.07))
+                Capsule().fill(SonnyTheme.onSurface(dark: 0.02, light: 0.03))
+                Rectangle().fill(SonnyTheme.onSurface(dark: 0.07, light: 0.06))
             }
         )
         .clipShape(Capsule())
