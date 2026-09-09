@@ -514,22 +514,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The real `NSApp.mainMenu`, distinct from `makeStatusMenu()`'s status-item dropdown. Two
     /// menus, deliberately: an Edit menu because that is what routes the standard editing
     /// key equivalents to the first responder (nil targets → responder chain), and an app menu
-    /// carrying Settings and Quit — the first top-level item renders as the bold app menu whenever
+    /// carrying About, Settings, the standard Hide items and Quit — the first top-level item renders as the bold app menu whenever
     /// the bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
     /// app-name slot, and ⌘Q was equally menu-routed and equally broken (the status menu's own
-    /// "q" equivalent only dispatches while that dropdown is open). No File/View/Window/Help:
+    /// "q" equivalent only dispatches while that dropdown is open). No File, View or Help menu:
     /// nothing in the app needs them. "Settings…" is here too (phase 3) because a Mac app's own
-    /// app menu is where a user expects to find it, ⌘, included, beside the account menu's own row.
-    private func makeMainMenu() -> NSMenu {
+    /// app menu is where a user expects to find it, ⌘, included, beside the account menu's own row;
+    /// "About Sonny" and the Hide items (phase 9) for the same reason, the latter with nil targets
+    /// so AppKit's own `hide:`, `hideOtherApplications:` and `unhideAllApplications:` answer them.
+    /// Internal, like `makeStatusMenu()`, so `ProductShellTests` can assert the wiring by selector.
+    func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(
+            withTitle: "About Sonny",
+            action: #selector(openAbout),
+            keyEquivalent: ""
+        ).target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(
             withTitle: "Settings…",
             action: #selector(openSettings),
             keyEquivalent: ","
         ).target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Sonny", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(
+            withTitle: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit Sonny",
@@ -574,13 +592,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return mainMenu
     }
 
-    /// Just the two unambiguous actions for now — no "Recent"/usage section, since Sonny has no
+    /// The unambiguous actions and nothing else — no "Recent"/usage section, since Sonny has no
     /// real equivalent to a chat-app's usage percentage and its actual analog (recent tasks) is a
-    /// deliberate follow-up, not silently fabricated here.
+    /// deliberate follow-up, not silently fabricated here. The first item is named as the sidebar
+    /// names the same action ("Ask Sonny", the founder's ⌘N wording), because one action with two
+    /// names on two surfaces is the inconsistency the modernization removes; Settings… sits here
+    /// as it does in every menu-bar app's dropdown.
     func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(
-            withTitle: "New Task",
+            withTitle: "Ask Sonny",
             action: #selector(requestWidgetPresentation),
             keyEquivalent: ""
         ).target = self
@@ -588,6 +609,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(
             withTitle: "Open Command Center",
             action: #selector(openCommandCenter),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettings),
             keyEquivalent: ""
         ).target = self
         menu.addItem(.separator())
@@ -605,7 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `@FocusState`. The bump drives both halves at once: `observeWidgetPresentationRequests()`
     /// turns it into the `show()` call, and `FloatingWidgetView`'s `onChange` puts the cursor in
     /// the composer (expanding the compact capsule first, if it had collapsed). Calling `show()`
-    /// straight from the menu item is exactly why "New Task" read as doing nothing when the widget
+    /// straight from the menu item is exactly why the status menu's first item read as doing nothing when the widget
     /// was already on screen: the panel was re-fronted, and nothing else happened.
     ///
     /// `@objc` because the status menu item targets it by selector; Command Center's own row
@@ -643,6 +669,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// exactly the class of bug a title-only assertion cannot catch.
     @objc func openSettings() {
         windowCoordinator.showSettings()
+    }
+
+    /// The app menu's "About Sonny" item, internal for the same reason as `openSettings()`.
+    @objc func openAbout() {
+        windowCoordinator.showAbout()
     }
 
     @objc func quit() {

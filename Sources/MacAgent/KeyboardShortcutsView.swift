@@ -43,7 +43,8 @@ struct KeyboardShortcutsSheet: View {
             KeyboardShortcutRowContent(action: "Hide or show the sidebar", keys: ["⌘", "⌥", "S"]),
             KeyboardShortcutRowContent(action: "Close a sheet", keys: ["Esc"]),
             KeyboardShortcutRowContent(action: "Close the window", keys: ["⌘", "W"]),
-            KeyboardShortcutRowContent(action: "Minimize the window", keys: ["⌘", "M"])
+            KeyboardShortcutRowContent(action: "Minimize the window", keys: ["⌘", "M"]),
+            KeyboardShortcutRowContent(action: "Hide Sonny", keys: ["⌘", "H"])
         ]
         return rows
     }

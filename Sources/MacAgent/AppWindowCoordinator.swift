@@ -108,6 +108,13 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         commandCenterCommands.settingsRequests += 1
     }
 
+    /// The app menu's "About Sonny", through the same door as Settings: front the window, then
+    /// ask the view to present the sheet its account menu already presents.
+    func showAbout() {
+        showCommandCenter()
+        commandCenterCommands.aboutRequests += 1
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else {
             return

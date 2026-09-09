@@ -9,6 +9,9 @@ import Foundation
 @MainActor
 final class CommandCenterCommands: ObservableObject {
     @Published var settingsRequests = 0
+    /// The app menu's "About Sonny" item, the same shape as `settingsRequests`: the account
+    /// menu's own row sets `isAboutPresented` directly, and the menu bar reaches it through here.
+    @Published var aboutRequests = 0
     /// Set by the ⌘K jump-to palette (phase 5) when it activates a routine row: the id
     /// (`StoredRoutine.id`, which is the routine's name) `RoutinesView` should open its detail
     /// sheet for. Consumed the same two-door way `TasksFoundationView.consumeTaskDetailRequest`

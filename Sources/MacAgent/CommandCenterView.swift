@@ -139,6 +139,9 @@ struct CommandCenterView: View {
         .onChange(of: commands.settingsRequests) { _, _ in
             isSettingsPresented = true
         }
+        .onChange(of: commands.aboutRequests) { _, _ in
+            isAboutPresented = true
+        }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsDialogView(
                 viewModel: viewModel,

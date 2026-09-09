@@ -69,16 +69,20 @@ struct ProductShellTests {
             firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
+        // The first item is "Ask Sonny" since the ui-ux-claude modernization: the sidebar's ⌘N
+        // button and this item are one action, named once. The function keeps its historical name
+        // because the changelog and `WidgetControlNamingTests` cite it.
         let menu = delegate.makeStatusMenu()
-        #expect(menu.items.map(\.title) == ["New Task", "", "Open Command Center", "", "Quit Sonny"])
+        #expect(menu.items.map(\.title) == ["Ask Sonny", "", "Open Command Center", "Settings…", "", "Quit Sonny"])
 
         // Titles alone pin nothing about wiring: an item rewired to a different selector keeps its
         // title and a title-only assertion stays green. Every item gets its target, selector, and
         // key equivalent asserted — ⌘Q in particular, since app-wide Quit was menu-routed and
         // silently broken once already (see `makeMainMenu()`'s comment).
         let expectedItems: [(title: String, action: Selector, keyEquivalent: String)] = [
-            ("New Task", #selector(AppDelegate.requestWidgetPresentation), ""),
+            ("Ask Sonny", #selector(AppDelegate.requestWidgetPresentation), ""),
             ("Open Command Center", #selector(AppDelegate.openCommandCenter), ""),
+            ("Settings…", #selector(AppDelegate.openSettings), ""),
             ("Quit Sonny", #selector(AppDelegate.quit), "q")
         ]
         for expected in expectedItems {
@@ -88,7 +92,7 @@ struct ProductShellTests {
             #expect(item.keyEquivalent == expected.keyEquivalent)
         }
 
-        let newTask = try #require(menu.items.first { $0.title == "New Task" })
+        let newTask = try #require(menu.items.first { $0.title == "Ask Sonny" })
         let action = try #require(newTask.action)
         #expect(viewModel.widgetPresentationRequest == 0)
 
@@ -101,6 +105,57 @@ struct ProductShellTests {
 
         _ = (newTask.target as? NSObject)?.perform(action)
         #expect(viewModel.widgetPresentationRequest == 2)
+    }
+
+    /// The real app menu, pinned the way the status menu is: titles alone leave a rewired item
+    /// green. About and Settings target the delegate, whose doors bump `CommandCenterCommands`; the
+    /// three Hide items carry nil targets so AppKit's own responder-chain selectors answer them,
+    /// and ⌘H / ⌥⌘H are the equivalents every Mac app gives them.
+    @Test
+    func theAppMenuCarriesAboutSettingsTheHideItemsAndQuit() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let delegate = AppDelegate(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
+
+        let mainMenu = delegate.makeMainMenu()
+        #expect(mainMenu.items.map { $0.submenu?.title ?? "" } == ["", "Edit", "Window"])
+        let appMenu = try #require(mainMenu.items.first?.submenu)
+        #expect(appMenu.items.map(\.title) == [
+            "About Sonny", "", "Settings…", "", "Hide Sonny", "Hide Others", "Show All", "", "Quit Sonny"
+        ])
+
+        let delegateItems: [(title: String, action: Selector, keyEquivalent: String)] = [
+            ("About Sonny", #selector(AppDelegate.openAbout), ""),
+            ("Settings…", #selector(AppDelegate.openSettings), ","),
+            ("Quit Sonny", #selector(AppDelegate.quit), "q")
+        ]
+        for expected in delegateItems {
+            let item = try #require(appMenu.items.first { $0.title == expected.title })
+            #expect(item.target === delegate)
+            #expect(item.action == expected.action)
+            #expect(item.keyEquivalent == expected.keyEquivalent)
+        }
+
+        let hide = try #require(appMenu.items.first { $0.title == "Hide Sonny" })
+        #expect(hide.target == nil)
+        #expect(hide.action == #selector(NSApplication.hide(_:)))
+        #expect(hide.keyEquivalent == "h")
+        #expect(hide.keyEquivalentModifierMask == [.command])
+        let hideOthers = try #require(appMenu.items.first { $0.title == "Hide Others" })
+        #expect(hideOthers.target == nil)
+        #expect(hideOthers.action == #selector(NSApplication.hideOtherApplications(_:)))
+        #expect(hideOthers.keyEquivalent == "h")
+        #expect(hideOthers.keyEquivalentModifierMask == [.command, .option])
+        let showAll = try #require(appMenu.items.first { $0.title == "Show All" })
+        #expect(showAll.target == nil)
+        #expect(showAll.action == #selector(NSApplication.unhideAllApplications(_:)))
     }
 
     @Test
