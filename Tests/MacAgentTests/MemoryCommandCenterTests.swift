@@ -838,6 +838,32 @@ struct MemoryCommandCenterTests {
         }
     }
 
+    /// **The more-actions menu the overflow lane put on every Memory row names its subject**
+    /// (founder ask 2026-09-09: "Hamburger menu for all the extra fields in workspaces and memory
+    /// especially for destructive actions like delete"). Checked over the whole population rather
+    /// than one row, the same reason `everyMemoryRowsDetailNamesWhatItCounts` is a loop: the label
+    /// is built once from `title`, and a row wired to a different string would read "More actions"
+    /// with nothing after it.
+    @Test
+    func everyMemoryRowsMoreActionsLabelNamesTheRow() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        for category in MemoryCategory.allCases {
+            let row = MemoryRowPresentation.row(for: category, viewModel: fixture.viewModel)
+            #expect(row.moreActionsAccessibilityLabel == "More actions for \(category.title)")
+        }
+    }
+
+    /// The entries sheet's more-actions menu names the entry the same way (overflow lane,
+    /// 2026-09-09): a "Continue" entry and an ordinary one both get a menu labelled by their own
+    /// title, since `MemoryEntryPresentation` has no category to fall back on.
+    @Test
+    func theEntriesSheetsMoreActionsLabelNamesTheEntry() throws {
+        let entry = MemoryEntryPresentation(id: "1", title: "sonny.help", detail: "expands to a link")
+        #expect(entry.moreActionsAccessibilityLabel == "More actions for sonny.help")
+    }
+
     @Test
     func deletingOutputLocationMemoryLeavesEveryOtherTypeAlone() throws {
         let fixture = try makeMemoryFixture()

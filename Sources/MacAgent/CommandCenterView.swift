@@ -2872,6 +2872,12 @@ struct WorkspaceCardPresentation: Equatable {
     let appIcons: [WorkspaceAppIconPresentation]
     let urlsText: String?
 
+    /// The label the card's more-actions menu carries, so it names its subject rather than reading
+    /// as a bare "More actions" everywhere (overflow lane, founder ask 2026-09-09). A computed
+    /// property rather than a literal in the view body for the same reason `markAsTeamAccessibilityLabel`
+    /// exists on `WorkspaceDetailPresentation`: it is assertable without a SwiftUI inspection harness.
+    var moreActionsAccessibilityLabel: String { "More actions for \(name)" }
+
     @MainActor
     init(
         workspace: StoredWorkspace,
@@ -3692,24 +3698,32 @@ private struct WorkspaceCard: View {
                     AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
                 )
 
-                // Labeled like the card's other controls, not icon-only. Delete stays *here* rather
-                // than moving into the detail sheet SONNY-41 added: the original reasoning was that
-                // building a detail view purely to host a delete button would invent a surface to
-                // solve a placement problem, and that argument survives its own premise changing. A
-                // detail view now exists — but it exists because a workspace's *boundary* is
-                // materially more content than a card can show, which is a reason delete never had.
-                // Moving delete into it would be the same invention in reverse: hiding a
-                // one-click destructive action one level deeper for symmetry alone. Text only —
-                // the shared danger button carries no icon slot of its own here.
-                Button {
-                    showDeleteConfirmation = true
-                } label: {
-                    Text("Delete")
+                // Delete stays a one-click destructive action either way; it moves off the card's
+                // face and into the more-actions menu (founder ask, 2026-09-09: "Hamburger menu for
+                // all the extra fields in workspaces and memory especially for destructive actions
+                // like delete"). The detail view existing does not change where delete lives — a
+                // workspace's boundary is materially more content than a card can show, which is a
+                // reason delete never had and still does not; this is a placement change within the
+                // card, not a move onto a different surface. Mark as team joins it: `teamTypeRow`
+                // below keeps only its label text for a solo workspace now that the affordance
+                // beside it lives in this menu instead.
+                SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
+                    if presentation.isDefaultTeamType {
+                        Button(action: markAsTeam) {
+                            Text("Mark as team")
+                        }
+                        .disabled(isTaskInFlight)
+
+                        Divider()
+                    }
+
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Text("Delete workspace")
+                    }
+                    .disabled(isTaskInFlight)
                 }
-                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
-                .disabled(isTaskInFlight)
-                .accessibilityLabel("Delete \(presentation.name)")
-                .help("Delete \(presentation.name)")
                 .confirmationDialog(
                     "Delete \(presentation.name)?",
                     isPresented: $showDeleteConfirmation,
@@ -3753,30 +3767,14 @@ private struct WorkspaceCard: View {
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         case .solo:
-            HStack(spacing: SonnySpacing.xs) {
-                // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
-                // `.caption` applied uniformly across the row rather than leaving the "Mark as
-                // team" affordance (a real Sonny feature, no wireframe equivalent) at the old 11px.
-                Text("Just you")
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.muted)
-
-                if presentation.isDefaultTeamType {
-                    Text("·")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Button(action: markAsTeam) {
-                        Text("Mark as team")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .sonnyPointerCursor()
-                    .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
-                    .accessibilityLabel("Mark \(presentation.name) as a team workspace")
-                }
-            }
+            // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
+            // `.caption` applied uniformly across the row. The "Mark as team" affordance that used
+            // to sit beside this text moved into the card's more-actions menu (overflow lane,
+            // 2026-09-09): the row now keeps only its label text, and the control lives in the menu
+            // above.
+            Text("Just you")
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
         }
     }
 }
@@ -4357,6 +4355,10 @@ struct MemoryRowPresentation: Equatable {
     /// or zero because a file would not open, not because there is nothing in it.
     var canDelete: Bool { count > 0 || readability != .readable }
 
+    /// The label the row's more-actions menu carries, so it names its subject rather than reading
+    /// as a bare "More actions" (overflow lane, founder ask 2026-09-09).
+    var moreActionsAccessibilityLabel: String { "More actions for \(title)" }
+
     init(
         category: MemoryCategory,
         count: Int,
@@ -4791,19 +4793,21 @@ private struct MemoryRow: View {
                 .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .accessibilityLabel("View \(presentation.title)")
 
-            // Deliberately *not* disabled while memory is off, by policy or by the master
-            // switch. Deleting what is already stored is the next thing someone who turned
-            // recording off wants, and an administrator's disable-memory policy is furthered by
-            // a delete rather than contradicted by one. Only an empty row has nothing to do.
+            // Delete moves off the row's face and into the more-actions menu (founder ask,
+            // 2026-09-09). Deliberately *not* disabled while memory is off, by policy or by the
+            // master switch, exactly as the button it replaces was not: deleting what is already
+            // stored is the next thing someone who turned recording off wants, and an
+            // administrator's disable-memory policy is furthered by a delete rather than
+            // contradicted by one. Only an empty row has nothing to do.
             //
             // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
             // because the file would not open, not because there is nothing in it, so gating on
             // the count alone disabled the one control that repairs it at exactly the moment it
             // was needed. The founder's recovery was deleting the file by hand in the Finder.
-            Button("Delete", action: delete)
-                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
-                .disabled(!presentation.canDelete)
-                .accessibilityLabel("Delete \(presentation.title)")
+            SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
+                Button("Delete", role: .destructive, action: delete)
+                    .disabled(!presentation.canDelete)
+            }
 
             // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
             // `SettingsToggleRow` reaches for it everywhere else in Settings: one named type is
@@ -5191,6 +5195,9 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
     /// continue, and the row shows Delete alone, as it always has.
     var canContinue: Bool = false
 
+    /// The label the entry row's more-actions menu carries (overflow lane, founder ask 2026-09-09).
+    var moreActionsAccessibilityLabel: String { "More actions for \(title)" }
+
     /// The four list-backed types, rendered from the arrays `AgentViewModel` publishes.
     ///
     /// Built here rather than on the view model because it is presentation — the date formatter and
@@ -5459,9 +5466,11 @@ private struct MemoryEntryRow: View {
                     .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
             }
 
-            Button("Delete", action: delete)
-                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
-                .accessibilityLabel("Delete \(entry.title)")
+            // Delete moves off the row's face and into the more-actions menu, the same move the
+            // Memory row and the workspace card make (founder ask, 2026-09-09).
+            SonnyOverflowMenu(accessibilityLabel: entry.moreActionsAccessibilityLabel) {
+                Button("Delete", role: .destructive, action: delete)
+            }
         }
         .padding(.horizontal, SonnySpacing.xl)
         .frame(height: SonnyMetrics.listRowHeight + SonnySpacing.lg)
