@@ -3628,46 +3628,49 @@ private struct WorkspaceCard: View {
                 WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
 
-                Button(action: open) {
-                    Text("Open")
-                }
-                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
-                .disabled(isTaskInFlight)
-                .accessibilityLabel("Open \(presentation.name)")
-
-                // The "started from its card" half of the founder binding decision. Sits beside
-                // Open rather than replacing or branching it — Open still runs the workspace in one
-                // click, this one starts nothing and hands the user a bound composer. Deliberately
-                // *not* an Open-vs-Switch branch or an "Active" badge: those are the rejected
-                // persistent-active-workspace wireframe elements and stay unbuilt.
+                // The "started from its card" half of the founder binding decision. Now the card's
+                // one visible button and the surface's one primary — Open moved into the overflow
+                // menu below (founder ask, 2026-09-09: "remove the open button from each workspace
+                // sheet because, upon clicking anywhere inside a particular workspace sheet, it
+                // opens up the detailed view. Having an open button is pretty redundant."). New task
+                // starts nothing itself and hands the user a bound composer; it is not the same
+                // action as Open and stays reachable on its own. Deliberately *not* an Open-vs-Switch
+                // branch or an "Active" badge: those are the rejected persistent-active-workspace
+                // wireframe elements and stay unbuilt.
                 Button(action: beginTaskHere) {
                     Text("New task")
                 }
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(
                     AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
                 )
 
-                // Delete stays a one-click destructive action either way; it moves off the card's
-                // face and into the more-actions menu (founder ask, 2026-09-09: "Hamburger menu for
-                // all the extra fields in workspaces and memory especially for destructive actions
-                // like delete"). The detail view existing does not change where delete lives — a
-                // workspace's boundary is materially more content than a card can show, which is a
-                // reason delete never had and still does not; this is a placement change within the
-                // card, not a move onto a different surface. Mark as team joins it: `teamTypeRow`
+                // Open, Mark as team and Delete all live in the more-actions menu (founder ask,
+                // 2026-09-09: "Hamburger menu for all the extra fields in workspaces and memory
+                // especially for destructive actions like delete", extended the same day to Open
+                // itself). Open is not redundant with the card's tap-to-open-detail gesture — it
+                // launches the workspace's widget, the detail sheet does not — so it stays reachable
+                // rather than being dropped; it keeps the disabled predicate and the accessibility
+                // label the button on the face used to carry. Mark as team joins it: `teamTypeRow`
                 // below keeps only its label text for a solo workspace now that the affordance
                 // beside it lives in this menu instead.
                 SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
+                    Button(action: open) {
+                        Text("Open")
+                    }
+                    .disabled(isTaskInFlight)
+                    .accessibilityLabel("Open \(presentation.name)")
+
                     if presentation.isDefaultTeamType {
                         Button(action: markAsTeam) {
                             Text("Mark as team")
                         }
                         .disabled(isTaskInFlight)
                         .accessibilityLabel("Mark \(presentation.name) as a team workspace")
-
-                        Divider()
                     }
+
+                    Divider()
 
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
@@ -4744,13 +4747,26 @@ private struct MemoryRow: View {
 
             Spacer(minLength: SonnySpacing.md)
 
-            Button("View", action: view)
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
-                .accessibilityLabel("View \(presentation.title)")
+            // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
+            // `SettingsToggleRow` reaches for it everywhere else in Settings: one named type is
+            // where the row's toggle chrome lives, so a future change to it changes every row at
+            // once. Its body is System A's native `.switch` now — nothing here still hand-rolls
+            // a knob. It leads the trailing group now, with the overflow menu at the very end
+            // (founder ask, 2026-09-09: the hamburger menu belongs last, after the toggle).
+            SonnySettingsToggle(isOn: Binding(
+                get: { presentation.isRecording },
+                set: { isOn in setEnabled(isOn) }
+            ))
+                .disabled(!presentation.canChangeRecording)
+                .accessibilityLabel("Remember \(presentation.title)")
 
-            // Delete moves off the row's face and into the more-actions menu (founder ask,
-            // 2026-09-09). Deliberately *not* disabled while memory is off, by policy or by the
-            // master switch, exactly as the button it replaces was not: deleting what is already
+            // View and Delete both move off the row's face and into the more-actions menu
+            // (founder ask, 2026-09-09: "the 'view' option should also be inside the hamburger
+            // menu"). View leads, Delete follows a divider, matching the order the row's own
+            // labels always meant: look before you remove.
+            //
+            // Delete is deliberately *not* disabled while memory is off, by policy or by the
+            // master switch, exactly as the button it replaced was not: deleting what is already
             // stored is the next thing someone who turned recording off wants, and an
             // administrator's disable-memory policy is furthered by a delete rather than
             // contradicted by one. Only an empty row has nothing to do.
@@ -4760,22 +4776,15 @@ private struct MemoryRow: View {
             // the count alone disabled the one control that repairs it at exactly the moment it
             // was needed. The founder's recovery was deleting the file by hand in the Finder.
             SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
+                Button("View", action: view)
+                    .accessibilityLabel("View \(presentation.title)")
+
+                Divider()
+
                 Button("Delete", role: .destructive, action: delete)
                     .disabled(!presentation.canDelete)
                     .accessibilityLabel("Delete \(presentation.title)")
             }
-
-            // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
-            // `SettingsToggleRow` reaches for it everywhere else in Settings: one named type is
-            // where the row's toggle chrome lives, so a future change to it changes every row at
-            // once. Its body is System A's native `.switch` now — nothing here still hand-rolls
-            // a knob.
-            SonnySettingsToggle(isOn: Binding(
-                get: { presentation.isRecording },
-                set: { isOn in setEnabled(isOn) }
-            ))
-                .disabled(!presentation.canChangeRecording)
-                .accessibilityLabel("Remember \(presentation.title)")
         }
         .padding(.horizontal, SonnySpacing.xl)
         .frame(height: density.scaled(44))
