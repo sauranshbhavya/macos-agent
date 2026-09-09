@@ -53,6 +53,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     // a counter the main menu's "Settings…" item bumps, so there is nothing for a caller to supply.
     let commandCenterCommands = CommandCenterCommands()
     let notificationPreferences: SonnyNotificationPreferences
+    let densityModel: SonnyDensityModel
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
@@ -81,6 +82,11 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         // `UserDefaults` and written only when the user changes it, so a fixture that omits it reads
         // a value and writes nothing rather than reaching a real store.
         notificationPreferences: SonnyNotificationPreferences = SonnyNotificationPreferences(),
+        // Defaulted for the same reason `appearanceModel` and `notificationPreferences` are: a
+        // cosmetic preference read from plain `UserDefaults` and written only when the user drags
+        // the slider, so a fixture that omits it reads a value and writes nothing rather than
+        // reaching a real store.
+        densityModel: SonnyDensityModel = SonnyDensityModel(),
         activationManager: PrimaryWindowActivationManager = PrimaryWindowActivationManager()
     ) {
         self.viewModel = viewModel
@@ -89,6 +95,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         self.firstRunCoordinator = firstRunCoordinator
         self.appearanceModel = appearanceModel
         self.notificationPreferences = notificationPreferences
+        self.densityModel = densityModel
         self.activationManager = activationManager
         super.init()
     }
@@ -160,6 +167,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             // the sheet without a direct reference to this view's `@State`.
             .environmentObject(commandCenterCommands)
             .environmentObject(notificationPreferences)
+            .environmentObject(densityModel)
         )
         let window = makeWindow(
             title: "Sonny",

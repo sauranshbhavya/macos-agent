@@ -271,6 +271,7 @@ private struct JumpToPaletteRow: View {
     let row: JumpToPalettePresentation.Row
     let isSelected: Bool
     let activate: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         Button(action: activate) {
@@ -292,7 +293,7 @@ private struct JumpToPaletteRow: View {
                 }
             }
             .padding(.horizontal, SonnySpacing.lg)
-            .frame(height: SonnyMetrics.listRowHeight)
+            .frame(height: density.listRowHeight)
             .background(
                 RoundedRectangle(cornerRadius: SonnyRadius.control)
                     .fill(isSelected ? SonnyTheme.fillSelected : Color.clear)
