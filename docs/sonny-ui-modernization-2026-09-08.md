@@ -100,6 +100,15 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    are. The mode segmented control's wireframe whites read as blacks at the same opacities on
    light through `SonnyTheme.onSurface`.
 
+13. **The em-dash rule is for this branch's copy, not a rewrite of the founders' sentences.** The
+   sweep at the end of phase 7 found sixteen em dashes left inside string literals in the UI
+   target. Two are console output. One, the first-approval explainer, is the founders' own
+   exception. Every other user-visible one sits in a sentence the founders wrote and a test pins by
+   value ("Ran without asking", "Sonny paused", "Not restricted", "Not in effect", "can't be read",
+   "has to be inside Desktop or Documents", "never control Terminal"); rewriting their punctuation
+   would mean editing nine tests for no change in meaning, so they stay, and the rule holds for
+   every sentence this branch wrote.
+
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
 removed screen-access sentences, the descriptive Data-page button labels, and the bundled fonts
