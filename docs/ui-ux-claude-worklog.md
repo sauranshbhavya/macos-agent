@@ -169,6 +169,21 @@ One lane, merged at `ddcd8b7c`.
   the four conditions, its two targets and two killing suites unchanged between `813a8089` and
   `d525cf58`.
 
+## Phase 10, 2026-09-09: the Help menu, and opening the app while it runs
+
+- The main menu gains Help with one item, Keyboard shortcuts on ⌘/, through a third
+  `CommandCenterCommands` counter; the launcher installs it as `NSApp.helpMenu`, which puts the
+  system's search field over every menu item. The window's hidden ⌘/ button stays for when it is
+  key, since a view answers a key equivalent before the menu bar does.
+- A Dock click, a second launch from Spotlight or Launchpad, or a Finder double-click while the
+  app runs now shows Command Center when it is not on screen, through the coordinator's own
+  visibility rather than AppKit's `hasVisibleWindows`, which counts the widget's panel; a visible
+  window is left to AppKit's activation. `ProductShellTests` pins the Help menu beside the app
+  menu and drives the reopen path from nothing, from visible, and from closed.
+- Verified: 3028 in 203, exit 0, 8 known issues at `d9adc3fa` (the flagged suite);
+  `scripts/warnings` 0 at `d9adc3fa`, exit 0, every file compiled; the phase 8 battery carried on
+  the four conditions, its two targets and two killing suites unchanged between `813a8089` and `d9adc3fa`.
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries
