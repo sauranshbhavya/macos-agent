@@ -219,6 +219,66 @@ struct RunTaskAgainTests {
         #expect(!body.contains("executor"))
     }
 
+    // MARK: - Edit and run (row 11, the founders' ask of 2026-09-09)
+
+    /// The compose half, not the dispatch half: the command lands in the composer, the widget is
+    /// asked forward, and the record's own workspace travels with it — nothing is planned or run.
+    @Test
+    func editingAndRunningFillsTheComposerAndCarriesTheWorkspaceBinding() throws {
+        let fixture = try makeRunAgainFixture()
+        defer { fixture.cleanUp() }
+        let record = makeRecord(command: "zip the largest files", workspaceName: "Research")
+        let requestsBefore = fixture.viewModel.widgetPresentationRequest
+
+        let accepted = fixture.viewModel.editTaskAndRunAgain(record)
+
+        #expect(accepted)
+        #expect(fixture.viewModel.command == "zip the largest files")
+        #expect(fixture.viewModel.widgetPresentationRequest == requestsBefore + 1)
+        #expect(fixture.viewModel.pendingWorkspaceBinding == "Research")
+        // Nothing dispatched — this only fills the composer.
+        #expect(fixture.planner.commands.isEmpty)
+    }
+
+    /// Refused while another task is in flight, and nothing changes — the same in-flight superset
+    /// `followUpOnTask` refuses on.
+    @Test
+    func editingAndRunningIsRefusedWhileATaskIsInFlight() throws {
+        let fixture = try makeRunAgainFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.isRunning = true
+        let requestsBefore = fixture.viewModel.widgetPresentationRequest
+
+        let accepted = fixture.viewModel.editTaskAndRunAgain(makeRecord(command: "zip the largest files"))
+
+        #expect(!accepted)
+        #expect(fixture.viewModel.command.isEmpty)
+        #expect(fixture.viewModel.widgetPresentationRequest == requestsBefore)
+        #expect(fixture.viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// Refused while a clarification is open — a separate case from "in flight" above, because
+    /// this is the one that must reach `composeCommand`'s own guard rather than the in-flight one:
+    /// checked first, `editTaskAndRunAgain` cannot tell the two apart by outcome, only by which
+    /// guard the refusal is written to leave its trace at.
+    @Test
+    func editingAndRunningIsRefusedWhileAClarificationIsOpen() throws {
+        let fixture = try makeRunAgainFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.clarificationQuestion = "Which folder should Sonny use?"
+        let requestsBefore = fixture.viewModel.widgetPresentationRequest
+
+        let accepted = fixture.viewModel.editTaskAndRunAgain(makeRecord(command: "zip the largest files"))
+
+        #expect(!accepted)
+        #expect(fixture.viewModel.command.isEmpty)
+        #expect(fixture.viewModel.widgetPresentationRequest == requestsBefore)
+        #expect(fixture.viewModel.pendingWorkspaceBinding == nil)
+        // The clarification itself is untouched — a refused edit-and-run does not tear down the
+        // pause it found.
+        #expect(fixture.viewModel.clarificationQuestion == "Which folder should Sonny use?")
+    }
+
     // MARK: - Fixtures
 
     private func makeRecord(
