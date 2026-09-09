@@ -1606,14 +1606,24 @@ private struct InsightsOverviewBento: View {
                 InsightStatCard(stat: .currentStreak(summary))
             }
             GridRow {
-                WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
-                    .gridCellColumns(2)
-                WorkspaceBreakdownPanel(
-                    entries: workspaceBreakdown,
-                    openableWorkspaceNames: openableWorkspaceNames,
-                    openWorkspace: openWorkspace
-                )
-                    .gridCellColumns(2)
+                // A plain two-cell `GridRow` here centred whichever cell was shorter — `Grid`'s
+                // default cross-axis alignment for a row — so whenever the chart and the breakdown
+                // panel's natural heights differed, the panel's card started below the chart's top
+                // edge and ended above its bottom, and the blank space above it read as a bigger gap
+                // than the one between the stat cards even though every row shares one
+                // `verticalSpacing` (founder report, 2026-09-09). An `HStack(alignment: .top)` with
+                // one flexible side is the deterministic fix: both cells now share the row's top
+                // edge, and `WorkspaceBreakdownPanel`'s own `maxHeight: .infinity` (below) grows its
+                // card to whatever height the chart sets, without touching the chart at all.
+                HStack(alignment: .top, spacing: SonnySpacing.md) {
+                    WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+                    WorkspaceBreakdownPanel(
+                        entries: workspaceBreakdown,
+                        openableWorkspaceNames: openableWorkspaceNames,
+                        openWorkspace: openWorkspace
+                    )
+                }
+                .gridCellColumns(4)
             }
             GridRow {
                 TaskHistoryListPanel(
@@ -1704,15 +1714,33 @@ private struct WeeklyCompletionChart: View {
                         }
                         .frame(height: 120)
                         .help(dayTaskCountDescription(day: day, index: index))
+                        // Swapping the day label's own text for the count (2026-07-18) put the
+                        // replacement inside the label's own narrow column, so "N tasks" wrapped to
+                        // three lines and the row's baseline jumped (founder report, 2026-09-09).
+                        // The day label now never changes; the count floats in its own pill above
+                        // the bar instead, sized to its own text with `.fixedSize()` so it can never
+                        // wrap, and positioned entirely above this 120pt column (not just above
+                        // today's bar) so it can never cover any bar regardless of that day's height.
+                        .overlay(alignment: .top) {
+                            if hoveredDayIndex == index {
+                                Text(WeeklyCompletionChartPresentation.countLabel(for: counts[safe: index] ?? 0))
+                                    .font(SonnyType.caption)
+                                    .foregroundStyle(SonnyTheme.text)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                    .padding(.horizontal, SonnySpacing.sm)
+                                    .padding(.vertical, SonnySpacing.xs)
+                                    .background(SonnyTheme.surfaceRaised2, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
+                                    // Declares this pill's own bottom edge as its "top" alignment
+                                    // guide (plus a small gap), so aligning that guide to the
+                                    // column's top puts the whole pill above the column with no
+                                    // magic-number offset to keep in sync with the pill's own size.
+                                    .alignmentGuide(.top) { dimensions in dimensions[.bottom] + SonnySpacing.xs }
+                            }
+                        }
+                        .sonnyAnimation(SonnyMotion.quick, value: hoveredDayIndex)
 
-                        // Swaps to the exact count on hover (2026-07-18) — a native `.help()`
-                        // tooltip was tried first here and didn't render at all in the real app,
-                        // so this replaces it with a plain state-driven label change: no floating
-                        // overlay to mis-position, guaranteed to render exactly where the day
-                        // label already sits. The `.help()` above reaches the same words without
-                        // needing the swap, for a pointer that rests without triggering `onHover`'s
-                        // continuous tracking, or a screen reader reading the tooltip.
-                        Text(hoveredDayIndex == index ? "\(counts[safe: index] ?? 0) task\((counts[safe: index] ?? 0) == 1 ? "" : "s")" : day)
+                        Text(day)
                             .font(SonnyType.micro)
                             .foregroundStyle(hoveredDayIndex == index ? SonnyTheme.text : SonnyTheme.textTertiary)
                     }
@@ -1723,6 +1751,7 @@ private struct WeeklyCompletionChart: View {
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(dayTaskCountDescription(day: day, index: index))
+                    .accessibilityValue(WeeklyCompletionChartPresentation.countLabel(for: counts[safe: index] ?? 0))
                 }
             }
             .frame(maxWidth: .infinity)
@@ -1786,7 +1815,10 @@ private struct WorkspaceBreakdownPanel: View {
             }
         }
         .padding(SonnySpacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // `maxHeight: .infinity` is what lets this card grow to match the chart's height when the
+        // two sit side by side in the `HStack` above: the chart stays its own natural height, and
+        // this is the one that stretches to it (see the comment on that `HStack`).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .sonnyCard()
     }
 }
