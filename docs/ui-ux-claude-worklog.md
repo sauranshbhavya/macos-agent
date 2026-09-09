@@ -135,11 +135,27 @@ One lane, merged at `ddcd8b7c`.
   request the sidebar's button raises; a search with no result and an unreadable store keep the
   plain sentence), Routines offers "New routine" and Workspaces offers "Create workspace", each the
   page's own toolbar action, so a first launch shows what to do rather than what is missing.
-- Verified: VERIFY7_PLACEHOLDER
+- Verified: 3024 in 203, exit 0, 8 known issues at `31ddef2f` (the flagged suite); `scripts/warnings` 0 at
+  `31ddef2f`, exit 0, every file compiled.
 
-## Plan for the phases ahead
+## Phase 8, 2026-09-08: the copy boundary re-measured, the two value types mutated, the final figures
 
-Ordered by how much of the product each unlocks; each phase ends verified and pushed.
+- Decision 13 said every remaining em dash sat in a sentence a test pins by value. Re-measured with
+  the command it now carries, four did not: no test reads the vision pause summary or the
+  scheduled-run notice, and the quarantine confirmation and the terminals-never detail are pinned
+  by fragments the dash sits outside. Each took a period, a colon or a comma, every founder word
+  intact (`1c8540d8`). Fifteen dashes remain in the UI target's string literals: two console
+  lines, one act-log line, the founders' explainer twice, and ten in sentences their tests hold
+  with the dash inside the pinned text.
+- `StatusItemPresentation` and `JumpToPalettePresentation` went under a fourteen-mutant battery by
+  property. Hand-tracing the plan first found two assertions the suites did not hold (the failed
+  state's tint and the waiting and failed names; a whitespace-only query), added at `813a8089`
+  before the battery ran. Result: `scripts/mutate` over the two value types the branch added, fourteen mutants by property, at `813a8089`: 14 killed, 0 survived, 0 unattributed (its report is kept at `.build/mutate/813a808-20260908T234615-40023/report.log`); every kill is named by a test with a plain connection to its mutant, and three of them (the failed state borrowing the working tint, the waiting state borrowing the working name, the query matched with its whitespace) died only to the assertions the hand-trace added at `813a8089`, which is the direct evidence those were needed; the baseline read `PASSED  3026 tests in 203 suites`.
+- Verified: 3026 in 203, exit 0, 8 known issues at `813a8089` (the flagged suite; the count line is quoted in
+  the changelog entry); `scripts/warnings` 0 at `813a8089`, exit 0, every file compiled.
 
-8. **Final measurements** at the head that carries everything, and the changelog entry restated
-   there.
+## The plan
+
+Every phase in the plan has landed and the changelog entry is restated at the head that carries
+everything. What is left is the founders': the manual pass from the checklist's branch section,
+the comparison with the `ui-ux` branch, and the merge.

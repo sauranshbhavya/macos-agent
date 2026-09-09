@@ -4257,6 +4257,7 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] The Command Center window shows no centred title; the sidebar's wordmark is the only "Sonny"; the traffic lights sit clear of it; the Window menu still names the window.
 
 **Copy and system**
+- [ ] Settings › Screen control: the "Terminals, never" detail reads "...outside every permission Sonny has, so this is not something you can turn on." with a comma; in Memory, a row whose file is partly unreadable confirms with "Part of this can't be read. Sonny keeps that file instead of deleting it." as two sentences; a screen session paused by the lock screen summarises as "Sonny paused: your Mac was locked." with a colon.
 - [ ] The push-to-talk chord reads ⌃⌥Space in the widget's mic hint, the voice status line, the readiness rows and the registration error, never spelled out; the emergency stop reads ⌃⌥⎋.
 - [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.
 - [ ] No button anywhere reads in Title Case except proper nouns ("Open System Settings"); no user-visible string carries an em dash.

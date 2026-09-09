@@ -100,14 +100,21 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    are. The mode segmented control's wireframe whites read as blacks at the same opacities on
    light through `SonnyTheme.onSurface`.
 
-13. **The em-dash rule is for this branch's copy, not a rewrite of the founders' sentences.** The
-   sweep at the end of phase 7 found sixteen em dashes left inside string literals in the UI
-   target. Two are console output. One, the first-approval explainer, is the founders' own
-   exception. Every other user-visible one sits in a sentence the founders wrote and a test pins by
-   value ("Ran without asking", "Sonny paused", "Not restricted", "Not in effect", "can't be read",
-   "has to be inside Desktop or Documents", "never control Terminal"); rewriting their punctuation
-   would mean editing nine tests for no change in meaning, so they stay, and the rule holds for
-   every sentence this branch wrote.
+13. **The em-dash rule is for this branch's copy, not a rewrite of the founders' sentences.** At
+   `1c8540d8` fifteen lines of the UI target still carry an em dash inside a string literal
+   (`git grep -n '—' 1c8540d8 -- 'Sources/MacAgent/*.swift' | grep -vE ':[0-9]+: *///?' | grep -vE
+   ':[0-9]+: *\*' | wc -l` → 15, the two filters dropping comment lines). Two are console output,
+   one is an act-log line, two are the founders' own first-approval explainer (decision 8), and the
+   other ten sit in sentences a test pins by value with the dash inside the pinned text ("Ran
+   without asking", "Not restricted", "Not in effect", "Deleted output locations", the item-job
+   row's "— 40 files", "has to be inside Desktop or Documents"); rewriting their punctuation would
+   mean editing those tests for no change in meaning, so they stay. The first draft of this
+   decision counted sixteen where the same command answers nineteen at `80e2659e`, and named four
+   sentences as pinned by value that were not held by the dash at all: no test reads the vision
+   pause summary or the scheduled-run notice, and the quarantine confirmation and the
+   terminals-never detail are pinned by fragments the dash sits outside. Those four took a period,
+   a colon or a comma at `1c8540d8` with every founder word intact, and the rule holds for every
+   sentence this branch wrote.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
