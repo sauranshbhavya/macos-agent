@@ -4253,8 +4253,9 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] With no task history, the Tasks page's empty state offers "Ask Sonny" and pressing it opens the widget focused; with a search that matches nothing, or an unreadable task store, it offers no button. With no routines, Routines offers "New routine"; with no workspaces, Workspaces offers "Create workspace"; each opens the widget with the same draft its toolbar button does.
 
 **Menu bar and window**
-- [ ] The menu-bar glyph is the untinted inverse wand when idle, the filled wand in blue while a task runs, in amber while Sonny waits for an approval, and in red after a failure until it is dismissed; its tooltip says which. The status menu still reads New Task, Open Command Center, Quit Sonny.
+- [ ] The menu-bar glyph is the untinted inverse wand when idle, the filled wand in blue while a task runs, in amber while Sonny waits for an approval, and in red after a failure until it is dismissed; its tooltip says which. The status menu reads Ask Sonny, Open Command Center, Settings…, Quit Sonny; Ask Sonny opens the widget focused and Settings… opens Settings over Command Center.
 - [ ] The Command Center window shows no centred title; the sidebar's wordmark is the only "Sonny"; the traffic lights sit clear of it; the Window menu still names the window.
+- [ ] The app menu reads About Sonny, Settings… (⌘,), Hide Sonny (⌘H), Hide Others (⌥⌘H), Show All, Quit Sonny (⌘Q); About Sonny opens the About sheet over Command Center; ⌘H hides the app and Show All brings it back; the Keyboard shortcuts sheet lists ⌘H.
 
 **Copy and system**
 - [ ] Settings › Screen control: the "Terminals, never" detail reads "...outside every permission Sonny has, so this is not something you can turn on." with a comma; in Memory, a row whose file is partly unreadable confirms with "Part of this can't be read. Sonny keeps that file instead of deleting it." as two sentences; a screen session paused by the lock screen summarises as "Sonny paused: your Mac was locked." with a colon.

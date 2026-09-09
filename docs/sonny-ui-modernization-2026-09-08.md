@@ -115,6 +115,13 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    terminals-never detail are pinned by fragments the dash sits outside. Those four took a period,
    a colon or a comma at `1c8540d8` with every founder word intact, and the rule holds for every
    sentence this branch wrote.
+14. **One action, one name, on every surface.** The menu-bar dropdown's first item was "New
+   Task" and the sidebar's ⌘N button the founder ratified is "Ask Sonny", for the same
+   `widgetPresentationRequest`. The dropdown now says "Ask Sonny" and carries Settings… as every
+   menu-bar app's does; the app menu carries About Sonny and the standard Hide items.
+   `docs/sonny-founder-design-decisions.md` records the dropdown's shape as what shipped and the
+   menu-bar treatment as an open question, so this is the branch's call, flagged for the founders
+   with the rest.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the

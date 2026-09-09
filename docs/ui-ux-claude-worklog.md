@@ -154,6 +154,21 @@ One lane, merged at `ddcd8b7c`.
 - Verified: 3026 in 203, exit 0, 8 known issues at `813a8089` (the flagged suite; the count line is quoted in
   the changelog entry); `scripts/warnings` 0 at `813a8089`, exit 0, every file compiled.
 
+## Phase 9, 2026-09-09: the menu bar named like the app
+
+- The status item's dropdown said "New Task" for the action the sidebar calls "Ask Sonny"; it
+  now says "Ask Sonny" and carries Settings…. The app menu gains About Sonny (a second
+  `CommandCenterCommands` counter the coordinator bumps after fronting the window, turned into
+  the account menu's own sheet) and the standard Hide Sonny ⌘H, Hide Others ⌥⌘H and Show All
+  with nil targets; the Keyboard shortcuts sheet lists ⌘H. `ProductShellTests` pins both menus
+  by title, target, selector and key equivalent (decision 14). The first full suite on it trapped:
+  the builder set `NSApp.windowsMenu`, nil in a test process; the launcher installs it now
+  (`d525cf58`, and a pitfall paragraph in the changelog entry).
+- Verified: 3027 in 203, exit 0, 8 known issues at `d525cf58` (the flagged suite);
+  `scripts/warnings` 0 at `d525cf58`, exit 0, every file compiled; the phase 8 battery carried on
+  the four conditions, its two targets and two killing suites unchanged between `813a8089` and
+  `d525cf58`.
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries
