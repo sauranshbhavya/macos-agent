@@ -1307,7 +1307,14 @@ private struct InsightsView: View {
                 InsightsOverviewBento(
                     summary: summary,
                     workspaceBreakdown: workspaceBreakdown,
-                    recentRecords: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3)
+                    recentRecords: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3),
+                    // The same door a finished-run notification uses: the request selects Tasks
+                    // at the window root and the page opens the detail on appear. A record with
+                    // no id predates SONNY-115's backfill and has no sheet to open.
+                    openTask: { record in
+                        guard let id = record.id else { return }
+                        _ = viewModel.requestTaskDetail(taskID: id)
+                    }
                 )
                 .padding(.horizontal, SonnySpacing.xxxl)
                 .padding(.vertical, SonnySpacing.xxl)
@@ -1345,6 +1352,7 @@ private struct InsightsOverviewBento: View {
     let summary: TaskHistoryInsightsSummary
     let workspaceBreakdown: [WorkspaceTaskBreakdownEntry]
     let recentRecords: [CompletedTaskRecord]
+    let openTask: (CompletedTaskRecord) -> Void
 
     var body: some View {
         Grid(horizontalSpacing: SonnySpacing.md, verticalSpacing: SonnySpacing.md) {
@@ -1365,7 +1373,8 @@ private struct InsightsOverviewBento: View {
                     records: recentRecords,
                     title: "Recently completed",
                     emptyTitle: "No activity yet",
-                    emptyMessage: "Completed Sonny tasks will appear here."
+                    emptyMessage: "Completed Sonny tasks will appear here.",
+                    openTask: openTask
                 )
                 .gridCellColumns(4)
             }
@@ -1580,6 +1589,7 @@ private struct TaskHistoryListPanel: View {
     let title: String
     let emptyTitle: String
     let emptyMessage: String
+    let openTask: (CompletedTaskRecord) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: SonnySpacing.xs) {
@@ -1597,7 +1607,9 @@ private struct TaskHistoryListPanel: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(records.enumerated()), id: \.offset) { _, record in
-                        InsightsRecentActivityRow(record: record)
+                        InsightsRecentActivityRow(record: record) {
+                            openTask(record)
+                        }
                     }
                 }
             }
@@ -1613,31 +1625,47 @@ private struct TaskHistoryListPanel: View {
 /// carried no state — it was one fixed color on every row, so it told the reader nothing a plain
 /// list didn't already say. Dropped rather than kept as decoration, per the same rule the Tasks
 /// page's rows follow (`CLAUDE.md`'s "drop any decorative dot that carries no state").
+/// A recently completed task, and the way into its receipt: the row is a button that raises the
+/// same task-detail request a notification click raises, so Insights and Tasks share one door.
 private struct InsightsRecentActivityRow: View {
     let record: CompletedTaskRecord
+    let open: () -> Void
 
     var body: some View {
-        HStack(spacing: SonnySpacing.sm) {
-            Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
-                .font(SonnyType.body)
-                .foregroundStyle(SonnyTheme.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
+        Button(action: open) {
+            HStack(spacing: SonnySpacing.sm) {
+                Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-            Spacer(minLength: SonnySpacing.md)
+                Spacer(minLength: SonnySpacing.md)
 
-            Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.textTertiary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                Image(systemName: "chevron.right")
+                    .font(SonnyType.icon(9, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textTertiary)
+            }
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: 32)
+            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
-        .frame(height: 32)
+        .buttonStyle(.plain)
+        .padding(.horizontal, -SonnySpacing.sm)
+        .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(record.command), " +
             "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
         )
+        .accessibilityHint("Opens the task")
     }
 }
 
