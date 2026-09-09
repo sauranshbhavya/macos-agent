@@ -125,7 +125,7 @@ struct ProductShellTests {
         )
 
         let mainMenu = delegate.makeMainMenu()
-        #expect(mainMenu.items.map { $0.submenu?.title ?? "" } == ["", "Edit", "Window"])
+        #expect(mainMenu.items.map { $0.submenu?.title ?? "" } == ["", "Edit", "Window", "Help"])
         // `applicationDidFinishLaunching` installs the Window submenu as `NSApp.windowsMenu` by
         // looking the item up by this title, so the title is wiring rather than decoration.
         #expect(mainMenu.item(withTitle: "Window")?.submenu === mainMenu.items[2].submenu)
@@ -159,6 +159,59 @@ struct ProductShellTests {
         let showAll = try #require(appMenu.items.first { $0.title == "Show All" })
         #expect(showAll.target == nil)
         #expect(showAll.action == #selector(NSApplication.unhideAllApplications(_:)))
+
+        // The Help menu: found by title to become `NSApp.helpMenu`, one item, ⌘/, the delegate.
+        let helpMenu = try #require(mainMenu.item(withTitle: "Help")?.submenu)
+        #expect(helpMenu === mainMenu.items[3].submenu)
+        #expect(helpMenu.items.map(\.title) == ["Keyboard shortcuts"])
+        let shortcuts = try #require(helpMenu.items.first)
+        #expect(shortcuts.target === delegate)
+        #expect(shortcuts.action == #selector(AppDelegate.openKeyboardShortcuts))
+        #expect(shortcuts.keyEquivalent == "/")
+        #expect(shortcuts.keyEquivalentModifierMask == [.command])
+    }
+
+    /// Opening the app while it already runs (a Dock click, Spotlight, Launchpad, a Finder
+    /// double-click) shows Command Center when it is not on screen and leaves it alone when it is.
+    /// The same activation-policy dance as `coordinatorCreatesReusableCommandCenterWindowAndChangesActivationPolicy`,
+    /// because showing the window switches the app to `.regular`.
+    @Test
+    func reopeningTheAppShowsCommandCenterOnlyWhenItIsNotOnScreen() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let application = NSApplication.shared
+        let originalActivationPolicy = application.activationPolicy()
+        defer { _ = application.setActivationPolicy(originalActivationPolicy) }
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let coordinator = AppWindowCoordinator(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
+
+        #expect(coordinator.commandCenterWindow == nil)
+        #expect(!coordinator.isCommandCenterVisible)
+
+        coordinator.handleReopen()
+        let window = try #require(coordinator.commandCenterWindow)
+        #expect(window.isVisible)
+        #expect(coordinator.isCommandCenterVisible)
+
+        // On screen already: the same window, nothing new made.
+        coordinator.handleReopen()
+        #expect(coordinator.commandCenterWindow === window)
+
+        // Closed and reopened: the same window comes back rather than a second one.
+        window.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(!coordinator.isCommandCenterVisible)
+        coordinator.handleReopen()
+        #expect(coordinator.commandCenterWindow === window)
+        #expect(window.isVisible)
+        window.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
     }
 
     @Test

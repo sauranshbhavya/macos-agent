@@ -12,6 +12,10 @@ final class CommandCenterCommands: ObservableObject {
     /// The app menu's "About Sonny" item, the same shape as `settingsRequests`: the account
     /// menu's own row sets `isAboutPresented` directly, and the menu bar reaches it through here.
     @Published var aboutRequests = 0
+    /// The Help menu's "Keyboard shortcuts" item, the third of the same shape. The window keeps
+    /// its own hidden ⌘/ button for when it is key; this door is for the menu, which also answers
+    /// ⌘/ while the widget is key and puts the item under Help's own search field.
+    @Published var shortcutsRequests = 0
     /// Set by the ⌘K jump-to palette (phase 5) when it activates a routine row: the id
     /// (`StoredRoutine.id`, which is the routine's name) `RoutinesView` should open its detail
     /// sheet for. Consumed the same two-door way `TasksFoundationView.consumeTaskDetailRequest`

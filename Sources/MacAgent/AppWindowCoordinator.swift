@@ -115,6 +115,29 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         commandCenterCommands.aboutRequests += 1
     }
 
+    /// The Help menu's "Keyboard shortcuts", through the same door again.
+    func showKeyboardShortcuts() {
+        showCommandCenter()
+        commandCenterCommands.shortcutsRequests += 1
+    }
+
+    /// Whether Command Center is on screen right now: a window that was never made, or was closed,
+    /// or is miniaturized, is not.
+    var isCommandCenterVisible: Bool {
+        commandCenterWindow?.isVisible ?? false
+    }
+
+    /// What the app does when it is asked to open while already running: a Dock click, a second
+    /// launch from Spotlight or Launchpad, a Finder double-click. With Command Center on screen
+    /// AppKit's own activation is the whole answer; without it, the window is what the person
+    /// asked for, since the app has no other window of its own to show (the widget is a panel and
+    /// runs as an accessory once Command Center closes).
+    func handleReopen() {
+        if !isCommandCenterVisible {
+            showCommandCenter()
+        }
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else {
             return

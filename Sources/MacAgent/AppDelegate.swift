@@ -131,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Installed here rather than inside the builder: `NSApp` is nil in a test process, and the
         // builder is what `ProductShellTests` calls to assert the wiring.
         NSApp.windowsMenu = mainMenu.item(withTitle: "Window")?.submenu
+        // The Help menu gets the system's own search field once it is `NSApp.helpMenu`, which
+        // searches every menu item's title, so the shortcuts sheet is one way to find a command
+        // and the Help menu is the other.
+        NSApp.helpMenu = mainMenu.item(withTitle: "Help")?.submenu
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
@@ -521,8 +525,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// carrying About, Settings, the standard Hide items and Quit — the first top-level item renders as the bold app menu whenever
     /// the bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
     /// app-name slot, and ⌘Q was equally menu-routed and equally broken (the status menu's own
-    /// "q" equivalent only dispatches while that dropdown is open). No File, View or Help menu:
-    /// nothing in the app needs them. "Settings…" is here too (phase 3) because a Mac app's own
+    /// "q" equivalent only dispatches while that dropdown is open). No File or View menu: nothing
+    /// in the app needs them; a Help menu (phase 10) carries the Keyboard shortcuts sheet and the
+    /// system's search field. "Settings…" is here too (phase 3) because a Mac app's own
     /// app menu is where a user expects to find it, ⌘, included, beside the account menu's own row;
     /// "About Sonny" and the Hide items (phase 9) for the same reason, the latter with nil targets
     /// so AppKit's own `hide:`, `hideOtherApplications:` and `unhideAllApplications:` answer them.
@@ -594,6 +599,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowMenuItem.title = "Window"
         windowMenuItem.submenu = windowMenu
         mainMenu.addItem(windowMenuItem)
+
+        // Titled "Help" for the same lookup, which makes it `NSApp.helpMenu`. Its one item targets
+        // the delegate like About and Settings do, so ⌘/ opens the sheet from anywhere in the app,
+        // the widget included; the window's own hidden ⌘/ button still answers first while it is key.
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(
+            withTitle: "Keyboard shortcuts",
+            action: #selector(openKeyboardShortcuts),
+            keyEquivalent: "/"
+        ).target = self
+        helpMenuItem.title = "Help"
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
 
         return mainMenu
     }
@@ -680,6 +699,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The app menu's "About Sonny" item, internal for the same reason as `openSettings()`.
     @objc func openAbout() {
         windowCoordinator.showAbout()
+    }
+
+    /// The Help menu's "Keyboard shortcuts" item, likewise.
+    @objc func openKeyboardShortcuts() {
+        windowCoordinator.showKeyboardShortcuts()
+    }
+
+    /// A Dock click, a second launch from Spotlight or Launchpad, a Finder double-click while the
+    /// app already runs. `hasVisibleWindows` counts the widget's panel, so the coordinator decides
+    /// on Command Center's own visibility instead; `true` keeps AppKit's default reopen behaviour
+    /// (activation, and deminiaturizing) on top.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        windowCoordinator.handleReopen()
+        return true
     }
 
     @objc func quit() {

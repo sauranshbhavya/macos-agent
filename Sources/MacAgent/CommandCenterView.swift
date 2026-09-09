@@ -103,7 +103,9 @@ struct CommandCenterView: View {
 
             // Invisible: give Settings and Keyboard shortcuts a window-wide shortcut the same way
             // `TasksToolbarRow` gives ⌘F one, since neither has a visible on-screen control of its
-            // own outside the account menu.
+            // own outside the account menu. The app menu's Settings… and the Help menu's Keyboard
+            // shortcuts carry the same keys for when this window is not the key one; a view gets
+            // the key equivalent before the menu bar does, so while it is key these answer first.
             Button(action: { isSettingsPresented = true }) { EmptyView() }
                 .keyboardShortcut(",", modifiers: .command)
                 .frame(width: 0, height: 0)
@@ -141,6 +143,9 @@ struct CommandCenterView: View {
         }
         .onChange(of: commands.aboutRequests) { _, _ in
             isAboutPresented = true
+        }
+        .onChange(of: commands.shortcutsRequests) { _, _ in
+            isShortcutsPresented = true
         }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsDialogView(
