@@ -435,6 +435,43 @@ struct SonnyDialogCloseButton: View {
     }
 }
 
+/// The "more actions" menu a card or a row keeps its secondary and destructive actions in (founder
+/// ask, 2026-09-09): an ellipsis in a circle, the Mac convention, drawn as a small tertiary control
+/// so the row's one primary action stays the only thing that reads as a button. Callers pass menu
+/// content as they would to `Menu`; a destructive item takes `role: .destructive` and still confirms
+/// before it acts, as every delete in Command Center does. The menu style is `.button` with a plain
+/// button style rather than the deprecated borderless menu style, which the warnings count would
+/// flag; the indicator is hidden because the glyph already says what it is.
+struct SonnyOverflowMenu<Content: View>: View {
+    let accessibilityLabel: String
+    @ViewBuilder let content: () -> Content
+
+    init(accessibilityLabel: String = "More actions", @ViewBuilder content: @escaping () -> Content) {
+        self.accessibilityLabel = accessibilityLabel
+        self.content = content
+    }
+
+    var body: some View {
+        Menu {
+            content()
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                .foregroundStyle(SonnyTheme.muted)
+                .frame(width: SonnyMetrics.controlSmall, height: SonnyMetrics.controlSmall)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .accessibilityLabel(accessibilityLabel)
+        .help(accessibilityLabel)
+    }
+}
+
 /// The title row a sheet opens with: the title at the leading edge, the close control at the
 /// trailing edge, and one inset shared with `sonnyDialogFrame`.
 struct SonnyDialogHeader: View {
