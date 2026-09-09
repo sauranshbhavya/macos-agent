@@ -91,12 +91,29 @@ Two lanes, merged at `cf1af8a3`.
   admit the Usage page as the second legitimate reader of the allowance, Insights still at zero.
 - Verified: the full flagged suite at `72083b3d`, 3017 tests in 202 suites passed with 8 known issues; `scripts/warnings` 0 at `72083b3d` (clean). Then `9e05cde3` hides the window's centred title, which the sidebar's wordmark already says.
 
+## Phase 5, 2026-09-08: going anywhere from the keyboard, and a sidebar that gets out of the way
+
+One lane, merged at `ddcd8b7c`.
+
+- `Sources/MacAgent/JumpToPaletteView.swift` (new): ⌘K opens a palette over pages, routines,
+  workspaces and the twenty most recent tasks; ↑ ↓ move, Return activates, Escape closes; a page
+  selects itself, a routine or workspace opens its detail through `CommandCenterCommands`
+  (`routineToOpen`, `workspaceToOpen`, consumed by the two pages the same two-door way Tasks
+  consumes a detail request), a task raises the existing task-detail request. The matcher is a
+  value type with seven tests (`JumpToPaletteTests`).
+- The sidebar collapses to 56pt on ⌘⌥S (or its toggle above the account row): mark, an accent
+  plus button, icon-only rows and the avatar, each with a tooltip; the width animates through
+  `sonnyAnimation`; the choice persists in plain `UserDefaults`.
+- The Keyboard shortcuts sheet lists both.
+- Before the merge, on the same day: `ad5a2f5b` made Insights' recently-completed rows open
+  their task's receipt through the same request a notification uses; `9e05cde3` hid the window's
+  centred title, which the sidebar's wordmark already says.
+- Verified: the full flagged suite at `ddcd8b7c`, 3024 tests in 203 suites passed with 8 known issues (seven tests added); `scripts/warnings` 0 warnings at `ddcd8b7c`.
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
 
-5. **Command Center**: a jump-to palette on ⌘K over pages, routines, workspaces and tasks;
-   sidebar collapse; empty states with composed glyphs; loading states.
 6. **Widget**: a polish pass on every state within System B.
 7. **Second review**: the same adversarial workflow over the whole tree, a fix round, and the
    measurements re-taken at the head that carries them.
