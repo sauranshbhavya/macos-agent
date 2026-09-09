@@ -110,10 +110,29 @@ One lane, merged at `ddcd8b7c`.
   centred title, which the sidebar's wordmark already says.
 - Verified: the full flagged suite at `ddcd8b7c`, 3024 tests in 203 suites passed with 8 known issues (seven tests added); `scripts/warnings` 0 warnings at `ddcd8b7c`.
 
+## Phase 6, 2026-09-08: the second review and its fix round
+
+- The same adversarial workflow as phase 1 ran over phases 2 to 5 (base `838bebe8`): six
+  reviewers, every finding attacked by a skeptic; 20 findings, 17 confirmed, 3 refuted, one
+  verifier lost to a schema retry cap and its finding read by hand.
+- The one high finding was real: Settings › Usage read the subscription and the allowance but
+  nothing fetched them until the Account dialog opened, so a signed-in user who opened Settings
+  first read "Signed out". The page now runs the dialog's two refreshes on appear.
+- Everything else fixed in `d2a8d78f`: Insights rows are buttons only when they lead somewhere
+  (a record with an id; a workspace that still exists) and the workspace rows gained the chevron;
+  the palette's rows carry the `isSelected` trait; the mode control's light track equals its dark
+  one; a Window menu with Minimize and Close makes the shortcuts sheet's ⌘W true; the collapsed
+  sidebar's widths and the chevron size are metrics tokens; routine detail's empty steps use the
+  shared empty state; the Usage page's task section is titled for the last task as well as a
+  running one and its estimate row is one VoiceOver element; the plan badge left the Account
+  dialog's subscription row, whose line already says the plan.
+- Verified: the full flagged suite at `d2a8d78f`, 3024 tests in 203 suites passed with 8 known issues; `scripts/warnings` 0 at `d2a8d78f` (clean).
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
 
-6. **Widget**: a polish pass on every state within System B.
-7. **Second review**: the same adversarial workflow over the whole tree, a fix round, and the
-   measurements re-taken at the head that carries them.
+7. **Empty states that act**: the Tasks, Routines and Workspaces empty states carry the page's
+   own primary action, so a first launch shows what to do rather than what is missing.
+8. **Final measurements** at the head that carries everything, and the changelog entry restated
+   there.
