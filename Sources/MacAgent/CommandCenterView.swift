@@ -5777,14 +5777,16 @@ private struct SettingsPreferencesPage: View {
 
                 // Founder ask, 2026-09-09: "Information density slider for all the menus in Sonny
                 // app." Lives under the same "Theme" block as the appearance picker — both are
-                // whole-window looks rather than a single feature's setting.
+                // whole-window looks rather than a single feature's setting. The control itself is
+                // a segmented `Picker` rather than a slider — see `SettingsDensityPicker`'s doc
+                // comment for why, after the founders retired the third stop this phase.
                 SettingsAdaptiveControlRow {
                     SettingsControlLabel(
                         title: "Density",
                         detail: "How much fits on screen at once."
                     )
                 } trailing: {
-                    SettingsDensitySlider()
+                    SettingsDensityPicker()
                 }
             }
             .padding(.top, SonnySpacing.xxl)
@@ -6674,43 +6676,37 @@ private struct SettingsThemeDropdown: View {
     }
 }
 
-/// The density slider (founder ask, 2026-09-09): three stops, bound to `SonnyDensityModel` from
-/// the window's environment through `sliderValue` so a continuous `Slider` drag always lands on a
-/// whole case. The three titles underneath read directly off `SonnyDensity.allCases` rather than
-/// being spelled out a second time, so a fourth stop could never silently go unlabeled.
-private struct SettingsDensitySlider: View {
+/// The density control (founder ask, 2026-09-09): a two-stop preference, bound to
+/// `SonnyDensityModel` from the window's environment. Phase 11 shipped this as a `Slider` sized
+/// for three stops; the founders removed the third (Compact) the same round, and a two-stop
+/// slider reads as broken — a thumb that only ever sits at one end or the other looks like a
+/// toggle pretending to be a slider. A segmented `Picker` is what a two-way choice like this one
+/// looks like natively, and it reads its titles directly off `SonnyDensity.allCases` rather than
+/// spelling them out a second time, so a stop could never silently go unlabeled.
+private struct SettingsDensityPicker: View {
     @EnvironmentObject private var densityModel: SonnyDensityModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
-            Slider(
-                value: Binding(
-                    get: { densityModel.density.sliderValue },
-                    set: { densityModel.density = SonnyDensity(sliderValue: $0) }
-                ),
-                in: 0...2,
-                step: 1
+        Picker(
+            "",
+            selection: Binding(
+                get: { densityModel.density },
+                set: { densityModel.density = $0 }
             )
-            .tint(SonnyTheme.accent)
-            .frame(width: SonnyMetrics.settingsControlWidth)
-            // On the slider itself, never on a collapsed element around it: collapsing the subtree
-            // discards the slider's own adjustable trait and its increment and decrement actions,
-            // leaving VoiceOver able to read the stop but not change it (phase 11 review, F1).
-            .accessibilityLabel("Density")
-            .accessibilityValue(densityModel.density.title)
-
-            HStack {
-                ForEach(SonnyDensity.allCases) { stop in
-                    Text(stop.title)
-                    if stop != SonnyDensity.allCases.last {
-                        Spacer(minLength: 0)
-                    }
-                }
+        ) {
+            ForEach(SonnyDensity.allCases) { stop in
+                Text(stop.title).tag(stop)
             }
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.muted)
-            .frame(width: SonnyMetrics.settingsControlWidth)
-            .accessibilityHidden(true)
         }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .tint(SonnyTheme.accent)
+        .frame(width: SonnyMetrics.settingsControlWidth)
+        // On the picker itself, never on a collapsed element around it: collapsing the subtree
+        // would discard the control's own adjustable trait (phase 11 review, F1, which this
+        // control keeps following even though a segmented `Picker` already exposes each segment
+        // as its own element).
+        .accessibilityLabel("Density")
+        .accessibilityValue(densityModel.density.title)
     }
 }
