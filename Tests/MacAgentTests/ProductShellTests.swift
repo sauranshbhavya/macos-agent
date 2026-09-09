@@ -3742,6 +3742,9 @@ struct ProductShellTests {
         #expect(workspacePresentation.taskCountText == "2 tasks")
         #expect(workspacePresentation.appIcons.map(\.appName) == ["Safari", "Notes"])
         #expect(workspacePresentation.urlsText == "example.com")
+        // The overflow lane's more-actions label names the workspace, not a bare "More actions"
+        // (founder ask 2026-09-09).
+        #expect(workspacePresentation.moreActionsAccessibilityLabel == "More actions for Research")
 
         let teamWorkspace = StoredWorkspace(name: "Client Work", apps: [], urls: [], teamType: .team)
         let teamPresentation = WorkspaceCardPresentation(
@@ -3751,6 +3754,7 @@ struct ProductShellTests {
         )
         #expect(teamPresentation.effectiveTeamType == .team)
         #expect(teamPresentation.isDefaultTeamType == false)
+        #expect(teamPresentation.moreActionsAccessibilityLabel == "More actions for Client Work")
         #expect(teamPresentation.appIcons.isEmpty)
         #expect(teamPresentation.taskCount == 0)
         #expect(teamPresentation.taskCountText == "0 tasks")
