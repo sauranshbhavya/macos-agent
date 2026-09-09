@@ -59,8 +59,10 @@ Landed in PR #224 (draft). Head `aca5804c` at the end of the phase.
 - `Tests/MacAgentTests/StatusItemPresentationTests.swift` (new): five tests on the mapping.
 - Widget: the step and job rows' icon slots go from 13pt to 16pt, the one size System B's own
   rows still drew smaller than the glyphs beside them.
-- Verified: `StatusItemPresentationTests` and `ProductShellTests`, 106 tests in 2 suites passed,
-  on this tree before the commit; the whole suite runs on the phase 3 merge.
+- Verified: the full flagged suite at `6309bcd9`, 3017 tests in 202 suites passed with 8 known
+  issues (five tests added). The first run of it caught a scan reading the new observer in place
+  of the notification channel it looks for by the first `viewModel.$errorMessage` in the file; the
+  observer moved below those channels with a comment saying why (`6309bcd9`).
 
 ## Plan for the phases ahead
 
