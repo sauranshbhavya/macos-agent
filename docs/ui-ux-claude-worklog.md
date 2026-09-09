@@ -29,13 +29,27 @@ Landed in PR #224 (draft). Head `aca5804c` at the end of the phase.
 - Founder answers of 2026-09-08 ratified every flagged decision and restored the monthly
   schedule note.
 
+## Phase 2, 2026-09-08: Light and System appearances
+
+- `Sources/MacAgent/SonnyAppearance.swift` (new): `SonnyAppearance` (dark / light / system) and
+  `SonnyAppearanceModel`, a cosmetic preference in plain `UserDefaults` that sets
+  `NSApp.appearance` at launch and on change. Dark is the default for a new install.
+- `SonnyTheme`: every token is now an `NSColor` with a dynamic provider carrying a dark and a
+  light reading (surfaces step down from paper in light; foreground tokens are black at an
+  opacity; the accent darkens to `#3B67E9`); `SonnyTheme.onSurface(dark:light:)` for the mode
+  control's wireframe-literal steps. No view changed: a view names a token and is right in both.
+- `AppDelegate` owns the model and applies it before any window exists; `AppWindowCoordinator`
+  injects it into the Command Center's environment so the Settings sheet's picker binds to it;
+  the widget's panel pins `.darkAqua` so System B stays dark by design.
+- Settings › Preferences › Interface theme is live: Dark, Light and System, no disabled items.
+- Docs: decision 12 in the decision record, notes in the design-system reference and the UI
+  conventions rule, three appearance rows in the manual checklist.
+- Verified: 3012 tests in 201 suites with 8 known issues on the tree `c20bc4a9` carries (the flagged command, run before the commit; the Swift tree is the commit's), build clean.
+
 ## Plan for the phases ahead
 
 Ordered by how much of the product each unlocks; each phase ends verified and pushed.
 
-2. **Appearance**: real Light and System themes. The token layer becomes appearance-aware, a
-   cosmetic preference stores the choice, the Settings picker goes live, and the widget stays
-   dark by design.
 3. **Settings completeness**: a real Notifications page, a real Usage page, Profile as the
    account surface, and a keyboard-shortcuts panel and About window in place of items that lead
    nowhere.
