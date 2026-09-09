@@ -184,6 +184,66 @@ One lane, merged at `ddcd8b7c`.
   `scripts/warnings` 0 at `d9adc3fa`, exit 0, every file compiled; the phase 8 battery carried on
   the four conditions, its two targets and two killing suites unchanged between `813a8089` and `d9adc3fa`.
 
+## Phase 11, 2026-09-09: the founders' first round of asks, after running the branch
+
+The founders ran the packaged branch and asked for four things: a countdown of the recording cap,
+better Run again and task viewing, an information-density slider, and a menu for the extra and
+destructive actions on workspaces and memory. Four questions went back (what Run again should do
+and where it lives; a pane or a sheet; whether density touches text; the menu's glyph) and the
+recommended answer was chosen for each (decisions 15 to 18). The work ran as lanes again: voice,
+tasks and overflow in parallel from `ccfe63cc` (the head that added `SonnyOverflowMenu` to the
+design layer so two lanes would not build two menus), then density alone on the merged tree,
+because it edits every row-height site including the ones the other lanes rewrote.
+
+- **Voice** (`643848ab`, merged `2a5ffa86`): `VoiceRecordingCountdown`, a value type holding the
+  listening window (177 seconds, three under the cap, room for a late main thread, so what the widget records is accepted), the
+  thirty-second warning, the label ("2:59") and the VoiceOver phrase; `voiceRecordingStartedAt` on
+  the view model, set with `isRecordingVoice` and cleared on every path that clears it; an
+  auto-stop `Task` armed at start that calls the same `stopVoiceRecordingAndTranscribe()` the
+  mic's Stop and the hotkey release call, cancelled by any manual stop; the label leading the mic
+  in the composer, ticking in a `TimelineView`, width reserved for "9:59", faint until the last
+  thirty seconds and then the widget's new attention token; the mic's VoiceOver value reads "Stop,
+  2 minutes 59 seconds left". Ten tests: seven on the value type, three on the auto-stop, which
+  can only reach the stop path's failure arm in a test process (no real recorder), and say so.
+- **Tasks** (`b9371e58`, merged `2a7fda0a`): the page is an `HSplitView`, list at 300 minimum and
+  pane at 320, which leaves 11pt at the 900-wide window minimum with the sidebar expanded; the
+  sheet and `TaskLogDetailDialog` are gone. A row press, the ⌘K palette, Insights and the
+  finished-run notification all select into the pane through one door; ↑↓ walk the visible rows of
+  every expanded section, ⌫ opens the delete confirmation, Esc clears; the selection survives a
+  refresh while its record exists and a task selected from outside expands its collapsed section.
+  `TaskReceiptView` is the redesigned receipt: the command, a status badge and the metadata, then
+  Run again (primary), Edit and run, Follow up and a more-actions menu holding Delete task; the
+  result in full; "What Sonny planned" showing the plan summary only, because a founder decision of
+  2026-07-18 says the stored steps are never rendered (question raised); and "What Sonny did on
+  screen" moved intact with its delete in a section menu. `editTaskAndRunAgain` fills the widget
+  with the command and carries the workspace, refused in flight and during a clarification. The
+  row's context menu gained the three actions above its delete. Seventeen tests, fourteen on
+  `TasksSelectionPresentation` and three on the new door. `TaskDetailPresentation`'s height maths
+  lost its consumer and stays, with a doc comment and a question, since nothing deletes a test here.
+- **Overflow** (`a8471381`, merged `d1eac8b7`): the workspace card keeps Open and New task and
+  moves Mark as team and Delete workspace into its menu; the memory row keeps View and the toggle
+  and moves Delete; the entries sheet's row keeps Continue and moves Delete. Every moved action
+  keeps its label, its role, its disabled predicate and its confirmation. The per-entry Remove
+  inside the workspace editor and the Security page stay where they are, as the brief said. Eight
+  tests, six of them separate counted source scans with two positive controls.
+- The merged tree at `2a7fda0a`: 3063 in 206, exit 0, 8 known issues, exactly the thirty-five
+  tests the three lanes added.
+- **Density** (`379808de`, merged `a766043a`, run alone on the merged tree): `SonnyDensity`, three
+  stops with named values (rows 30/36/44, nav 26/30/36, compact 24/28/32, toolbar 32/36/40, card
+  inset 12/16/20, list gap 0/0/4, section gap 12/16/24, card floor 170/190/210) and a `scaled`
+  helper for the one-off heights, Default equal to the shipped metrics by test; an environment
+  value the Command Center root republishes from `SonnyDensityModel` (plain `UserDefaults`, the
+  appearance model's shape, an unknown stored string reading as Default) so every page and every
+  sheet re-reads it live with no state reset; every row, toolbar, group header, card inset, list
+  gap and page gap converted, in the sidebar, the five pages, the ⌘K palette, the shortcuts
+  sheet, the routine detail and the Settings sidebar; text, icons, control heights, radii,
+  dialog chrome and the widget untouched. A three-stop slider under the interface theme in
+  Settings › Preferences with the stop names beneath it. Six tests.
+- Reviewed by a third adversarial workflow over the merged tree at `a766043a`, five reviewers (the pane, the menus, the countdown, density, and rules and tests) with every finding attacked by an independent skeptic: 21 findings, 20 confirmed, 1 refuted. One high: the density slider collapsed its accessibility subtree, so VoiceOver could read the stop but not move it. Twelve medium: the receipt's delete clearing the selection before the model had removed anything; the mic's VoiceOver value read off a plain `Date()` rather than the label's tick; four menu items that lost their per-subject labels in the move; the card's disabled predicates and the memory row's predicate unasserted or loosely anchored; Default's four unmetricked density values pinned by ordering only, and a rounding test that truncation would pass; the one-second auto-stop margin against measured main-actor delays. Seven low: the list's ⌫ with the search field focused (the pair the skeptics split on; the guard is right under either reading), a missing double-schedule test, two stale comments, a literal width. Every one fixed in `01aa3be3`, and the battery's design added the identity-guard test at `edaa0cd3`.
+- Verified: 3073 in 208, exit 0, 8 known issues at `edaa0cd3` (the flagged suite; the count line is
+  quoted in the changelog entry); `scripts/warnings` 0 at `edaa0cd3`, exit 0, every file compiled;
+  `scripts/mutate` at `edaa0cd3`, 28 mutants by property (the nine palette mutants re-run because the density lane edited their file, five on `TasksSelectionPresentation`, four on `SonnyDensity`, five on `VoiceRecordingCountdown`, three on the auto-stop and two on Edit and run): 28 killed, 0 survived, 0 unattributed (its report is kept at `.build/mutate/edaa0cd-20260909T172537-89083/report.log`); every kill is named by a test with a plain connection to its mutant, and the auto-stop's recording-identity guard died only to the test its design showed missing, added at `edaa0cd3`.
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries

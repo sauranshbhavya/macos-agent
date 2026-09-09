@@ -122,11 +122,45 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    `docs/sonny-founder-design-decisions.md` records the dropdown's shape as what shipped and the
    menu-bar treatment as an open question, so this is the branch's call, flagged for the founders
    with the rest.
+15. **The countdown is three seconds short of the cap, and the widget stops itself at zero.** The
+   founders asked to see how long Sonny will keep listening (2026-09-09). The cap is 180 seconds
+   and is enforced after the fact: a recording held past it is refused. So the countdown runs
+   from 2:57, turns to the widget's attention colour for the last thirty seconds, and at 0:00 the
+   widget stops the recording through the same path as releasing the key, three seconds under the
+   cap (the stop is a main-actor task, and the held duration the cap judges is measured when it
+   actually runs) so what it recorded is accepted rather than refused. The digits are the whole message;
+   nothing on screen says "maximum" or explains the cap.
+16. **A finished task is a pane beside the list, Run again stays immediate, and editing is its own
+   action.** Chosen by the founders from three options each. The Tasks page keeps the list on the
+   leading side and shows the selected task's receipt on the trailing side, Mail-style; the sheet
+   went. Run again re-runs the exact command at once, as before, and appears on the row's context
+   menu as well as in the receipt; "Edit and run" opens the widget with the command in the field,
+   carrying the task's workspace, and is the way to change the words first; Follow up is unchanged.
+   The receipt shows the status, the time, the duration, the workspace, the result in full and
+   what Sonny did on screen; Delete task moved into the receipt's more-actions menu.
+17. **Density scales the rhythm, not the type.** The founders asked for an information-density
+   slider. Compact, Default and Comfortable change row heights, list gaps and card insets across
+   every Command Center page and the Settings sheet; text, icons, control heights and radii do
+   not move, the way Finder's and Mail's density controls work, and Default is exactly the
+   branch's existing metrics. The widget is outside it by System B's own rule. A three-stop slider
+   in Settings › Preferences, beside the interface theme.
+18. **A card's or row's extra actions live in an ellipsis menu, and the destructive one is only
+   there.** The founders asked for a hamburger menu for the extra fields on workspaces and memory,
+   especially for delete, and chose the Mac convention when offered it: an ellipsis in a circle at
+   the trailing edge. The main action stays a visible button (Open on a workspace card, View on a
+   memory row); the secondary and destructive actions move into the menu, delete in red, still
+   confirmed. Per-entry Remove controls inside an editor list are not card actions and stay where
+   they are.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
 removed screen-access sentences, the descriptive Data-page button labels, and the bundled fonts
 staying registered were each ratified as they stand; the monthly note was restored.
+
+**Founder decisions of 2026-09-09, in one place**, after running the branch: a countdown of the
+recording cap; Run again on the rows plus an editable re-run; a detail pane beside the task list
+with a redesigned receipt; a density setting that scales spacing and rows but not text; an
+ellipsis menu for secondary and destructive actions on workspace cards and memory rows.
 
 ## The tokens
 

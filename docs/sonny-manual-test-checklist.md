@@ -4265,6 +4265,15 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.
 - [ ] No button anywhere reads in Title Case except proper nouns ("Open System Settings"); no user-visible string carries an em dash.
 
+**The founders' first round (2026-09-09)**
+- [ ] Widget: press the mic (or hold ⌃⌥Space). A countdown appears leading the mic, starting at 2:57, in faint text; the text field does not shift as the digits change. At 0:30 it turns amber. At 0:00 Sonny stops listening on its own and transcribes what it heard, with no refusal. Stopping early cancels the countdown; VoiceOver on the mic reads "Stop, 2 minutes 57 seconds left".
+- [ ] Tasks: the page is a list beside a pane. A row press selects it (the row fills, the receipt fills the pane); ↑ and ↓ move through every open section as one list and stop at the ends; ⌫ on a selected row asks before deleting; Esc clears the selection; with nothing selected the pane says "No task selected".
+- [ ] Tasks: the receipt shows the command, a status badge (green done, red failed, grey cancelled), when it started, how long it took, the workspace and "Scheduled" where they apply; Run again (blue), Edit and run, Follow up; the … menu holds Delete task with the same confirmation as before. Result is the full text and can be selected; "What Sonny planned" shows the plan's summary; "What Sonny did on screen" reads as it did in the old sheet, with its delete in the section's … menu.
+- [ ] Tasks: Edit and run opens the widget with the command already in the field and, if the task ran in a workspace, runs the edited command there; Run again re-runs at once; both are greyed out while a task is running. Right-click a row: Run again, Edit and run, Follow up, then Delete task.
+- [ ] Tasks: ⌘K to a task, an Insights row, and clicking a finished-run notification each select that task in the pane, opening its section if it was collapsed. Shrink the window to 900 wide with the sidebar open: list and pane both stay usable.
+- [ ] Workspaces: each card shows Open and New task, and a … menu at the trailing edge with Mark as team (solo cards only) and Delete workspace in red; the delete still asks with the same sentence. Memory: each row shows View, the toggle and a … menu with Delete; the entries sheet's rows show Continue and a … menu with Delete. Hovering a … shows the highlight; VoiceOver names it "More actions for <name>".
+- [ ] Settings › Preferences: a Density slider sits under the interface theme with Compact, Default and Comfortable beneath it. Dragging it changes row heights, list gaps and card insets on every page, in the sidebar, in the ⌘K palette, in the shortcuts sheet and in the Settings sidebar itself, live, without closing Settings or changing the page; text and buttons keep their size; the widget does not change. Default looks exactly as before. The choice survives a relaunch.
+
 ## 8. How to report back
 
 For each real finding, give me:
