@@ -126,7 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // even though an accessory-policy app displays no menu bar — visibility and key-equivalent
         // routing are separate — and the bar *is* visible whenever Command Center has the app in
         // `.regular` policy.
-        NSApp.mainMenu = makeMainMenu()
+        let mainMenu = makeMainMenu()
+        NSApp.mainMenu = mainMenu
+        // Installed here rather than inside the builder: `NSApp` is nil in a test process, and the
+        // builder is what `ProductShellTests` calls to assert the wiring.
+        NSApp.windowsMenu = mainMenu.item(withTitle: "Window")?.submenu
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
@@ -581,13 +585,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A Window menu, so ⌘W and ⌘M route the way they do in every Mac app: to the key window
         // through the responder chain, with nil targets. The Keyboard shortcuts sheet lists both.
+        // Titled "Window" because `applicationDidFinishLaunching` finds it by that title to make
+        // it `NSApp.windowsMenu`.
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenuItem.title = "Window"
         windowMenuItem.submenu = windowMenu
         mainMenu.addItem(windowMenuItem)
-        NSApp.windowsMenu = windowMenu
 
         return mainMenu
     }

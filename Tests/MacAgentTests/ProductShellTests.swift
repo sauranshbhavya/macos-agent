@@ -126,6 +126,9 @@ struct ProductShellTests {
 
         let mainMenu = delegate.makeMainMenu()
         #expect(mainMenu.items.map { $0.submenu?.title ?? "" } == ["", "Edit", "Window"])
+        // `applicationDidFinishLaunching` installs the Window submenu as `NSApp.windowsMenu` by
+        // looking the item up by this title, so the title is wiring rather than decoration.
+        #expect(mainMenu.item(withTitle: "Window")?.submenu === mainMenu.items[2].submenu)
         let appMenu = try #require(mainMenu.items.first?.submenu)
         #expect(appMenu.items.map(\.title) == [
             "About Sonny", "", "Settings…", "", "Hide Sonny", "Hide Others", "Show All", "", "Quit Sonny"
