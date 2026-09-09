@@ -1075,15 +1075,33 @@ struct FloatingWidgetView: View {
 
     /// `voiceButtonTitle` alone once a recording ends; while one runs, the countdown's own words
     /// ride along so VoiceOver hears the same thing `voiceRecordingCountdownLabel` shows.
-    private var micButtonAccessibilityValue: String {
+    private func micButtonAccessibilityValue(now: Date) -> String {
         guard viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt else {
             return viewModel.voiceButtonTitle
         }
-        let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: Date())
+        let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: now)
         return "\(viewModel.voiceButtonTitle), \(VoiceRecordingCountdown.accessibilityValue(remaining: remaining))"
     }
 
+    /// The same four states the glyph reads, so a screen reader and a sighted user hear and see
+    /// one answer while a recording starts or a transcription runs. While one is running, the
+    /// countdown's own words ride along ("Stop, 2 minutes 57 seconds left"), read off the same
+    /// one-second `TimelineView` tick that drives `voiceRecordingCountdownLabel`, so VoiceOver never
+    /// hears a remaining time the label has already moved past (phase 11 review, F1 and F3).
+    @ViewBuilder
     private var micButton: some View {
+        if viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                micButtonBody
+                    .accessibilityValue(micButtonAccessibilityValue(now: context.date))
+            }
+        } else {
+            micButtonBody
+                .accessibilityValue(viewModel.voiceButtonTitle)
+        }
+    }
+
+    private var micButtonBody: some View {
         Button {
             viewModel.toggleVoiceRecording(origin: .widget)
         } label: {
@@ -1095,11 +1113,6 @@ struct FloatingWidgetView: View {
         .frame(width: 36, height: 36)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
         .accessibilityLabel("Voice input")
-        // The same four states the glyph reads, so a screen reader and a sighted user hear and see
-        // one answer while a recording starts or a transcription runs. While one is actually
-        // running, the countdown's own words ride along ("Stop, 2 minutes 59 seconds left") so
-        // VoiceOver hears what the composer row's label shows.
-        .accessibilityValue(micButtonAccessibilityValue)
         // **Transient reasons only** — the rule and its whole predicate live on
         // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
         // so every term folded in here is a press the user makes and never hears back about. The

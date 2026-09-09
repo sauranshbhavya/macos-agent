@@ -394,6 +394,35 @@ struct WidgetVoiceEntryTests {
         #expect(scheduledTask.isCancelled, "the manual stop must cancel the task it is racing")
     }
 
+    /// Two schedules back to back leave one live task: the second cancels the first, so a stop and
+    /// a fresh press inside one window never leave two auto-stops racing (phase 11 review, F3).
+    @Test
+    func schedulingASecondAutoStopCancelsTheFirst() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { nil }
+        viewModel.voiceRecordingListeningWindow = 60
+
+        let first = Date()
+        viewModel.isRecordingVoice = true
+        viewModel.voiceRecordingStartedAt = first
+        viewModel.scheduleVoiceRecordingAutoStop(startedAt: first)
+        let firstTask = try #require(viewModel.voiceRecordingAutoStopTask)
+
+        let second = first.addingTimeInterval(1)
+        viewModel.voiceRecordingStartedAt = second
+        viewModel.scheduleVoiceRecordingAutoStop(startedAt: second)
+        let secondTask = try #require(viewModel.voiceRecordingAutoStopTask)
+
+        await firstTask.value
+        #expect(firstTask.isCancelled, "the second schedule must cancel the first")
+        #expect(!secondTask.isCancelled)
+        secondTask.cancel()
+        await secondTask.value
+        #expect(viewModel.isRecordingVoice, "neither task stopped anything")
+    }
+
     /// **A hotkey release that arrives after the auto-stop has already ended the recording must do
     /// nothing a second time.** `endPushToTalkVoice`'s `guard isRecordingVoice else { return }` is
     /// what this pins: without it, a release landing after the countdown's own stop would call

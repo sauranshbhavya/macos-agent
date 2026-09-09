@@ -292,6 +292,9 @@ enum SonnyMetrics {
     static let sidebarWidthCollapsed: CGFloat = 56
     /// A collapsed sidebar row's selection fill, centred on its icon.
     static let sidebarCollapsedRowWidth: CGFloat = 36
+    /// The width of a Settings row's trailing control (the theme picker, the density slider): one
+    /// number, so the controls in a section line up and cannot drift apart one literal at a time.
+    static let settingsControlWidth: CGFloat = 180
 }
 
 // MARK: - Motion

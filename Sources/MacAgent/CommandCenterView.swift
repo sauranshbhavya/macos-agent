@@ -577,6 +577,11 @@ private struct TasksFoundationView: View {
     /// record it names (row 11, the founders' ask of 2026-09-09: the sheet becomes a pane beside
     /// the list, Mail-style).
     @State private var selectedTaskID: String?
+    /// The search field's focus, owned here so the list's key handlers can stand aside while the
+    /// field has it: a ⌫ meant for the query must never open a delete confirmation, and the arrows
+    /// are the field's own while it is editing. Two review skeptics read SwiftUI's key routing
+    /// two ways; the guard is right under either reading.
+    @FocusState private var isSearchFocused: Bool
     /// Resolved once per selection change rather than read as a computed property inside the pane —
     /// the same reasoning `TaskScreenRecordState`'s own doc comment gives for the sheet this
     /// replaced: a decrypt-and-scan of the journal on every render would make merely looking at a
@@ -639,8 +644,13 @@ private struct TasksFoundationView: View {
                     showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
                     onDeleteTask: {
                         guard let selectedRecord else { return }
+                        // The selection is not cleared here. `deleteTask` refreshes the history
+                        // only when it removed the record, and the `onChange` on
+                        // `taskHistoryRecords` then clears a selection whose record is gone; a
+                        // refused delete, which says why in the attention panel, keeps the task
+                        // selected and its receipt on screen rather than dropping to "No task
+                        // selected" over a row that is still in the list (phase 11 review, F1).
                         viewModel.deleteTask(selectedRecord)
-                        selectedTaskID = nil
                     },
                     onDeleteScreenRecord: {
                         guard let selectedRecord else { return }
@@ -686,6 +696,7 @@ private struct TasksFoundationView: View {
             selectTask(id: TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: records))
         }
         .onKeyPress(.upArrow) {
+            guard !isSearchFocused else { return .ignored }
             guard let previous = TasksSelectionPresentation.previous(before: selectedTaskID, in: sections) else {
                 return .ignored
             }
@@ -693,6 +704,7 @@ private struct TasksFoundationView: View {
             return .handled
         }
         .onKeyPress(.downArrow) {
+            guard !isSearchFocused else { return .ignored }
             guard let next = TasksSelectionPresentation.next(after: selectedTaskID, in: sections) else {
                 return .ignored
             }
@@ -700,6 +712,7 @@ private struct TasksFoundationView: View {
             return .handled
         }
         .onKeyPress(.delete) {
+            guard !isSearchFocused else { return .ignored }
             guard selectedTaskID != nil else { return .ignored }
             showDeleteConfirmationForSelectedTask = true
             return .handled
@@ -716,7 +729,7 @@ private struct TasksFoundationView: View {
             // persistent-active-workspace affordance (see the task-to-workspace
             // association decision in the changelog), so only the trailing
             // filter/search icons are built here.
-            TasksToolbarRow(viewModel: viewModel)
+            TasksToolbarRow(viewModel: viewModel, isFocused: $isSearchFocused)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -886,7 +899,8 @@ private struct TasksFoundationView: View {
 
 private struct TasksToolbarRow: View {
     @ObservedObject var viewModel: AgentViewModel
-    @FocusState private var isFocused: Bool
+    /// Owned by `TasksFoundationView`, which reads it to keep its own key handlers off the field.
+    var isFocused: FocusState<Bool>.Binding
     @Environment(\.sonnyDensity) private var density
 
     var body: some View {
@@ -899,7 +913,7 @@ private struct TasksToolbarRow: View {
                 .padding(.leading, SonnySpacing.xl)
                 .padding(.trailing, SonnySpacing.lg)
                 .sonnyTextField(size: .regular)
-                .focused($isFocused)
+                .focused(isFocused)
                 .frame(width: 220)
                 .overlay(alignment: .leading) {
                     Image(systemName: "magnifyingglass")
@@ -913,7 +927,7 @@ private struct TasksToolbarRow: View {
                     // the query is empty), so clearing the query never shifts the field's width.
                     Button {
                         viewModel.taskHistoryQuery = ""
-                        isFocused = true
+                        isFocused.wrappedValue = true
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
@@ -933,7 +947,7 @@ private struct TasksToolbarRow: View {
                 .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
 
             // Invisible: gives the search field a ⌘F shortcut from anywhere on this page.
-            Button(action: { isFocused = true }) { EmptyView() }
+            Button(action: { isFocused.wrappedValue = true }) { EmptyView() }
                 .keyboardShortcut("f", modifiers: .command)
                 .frame(width: 0, height: 0)
                 .opacity(0)
@@ -3508,6 +3522,7 @@ private struct WorkspaceCard: View {
                             Text("Mark as team")
                         }
                         .disabled(isTaskInFlight)
+                        .accessibilityLabel("Mark \(presentation.name) as a team workspace")
 
                         Divider()
                     }
@@ -3518,6 +3533,7 @@ private struct WorkspaceCard: View {
                         Text("Delete workspace")
                     }
                     .disabled(isTaskInFlight)
+                    .accessibilityLabel("Delete \(presentation.name)")
                 }
                 .confirmationDialog(
                     "Delete \(presentation.name)?",
@@ -4604,6 +4620,7 @@ private struct MemoryRow: View {
             SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
                 Button("Delete", role: .destructive, action: delete)
                     .disabled(!presentation.canDelete)
+                    .accessibilityLabel("Delete \(presentation.title)")
             }
 
             // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
@@ -5269,6 +5286,7 @@ private struct MemoryEntryRow: View {
             // Memory row and the workspace card make (founder ask, 2026-09-09).
             SonnyOverflowMenu(accessibilityLabel: entry.moreActionsAccessibilityLabel) {
                 Button("Delete", role: .destructive, action: delete)
+                    .accessibilityLabel("Delete \(entry.title)")
             }
         }
         .padding(.horizontal, SonnySpacing.xl)
@@ -6500,7 +6518,7 @@ private struct SettingsThemeDropdown: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .tint(SonnyTheme.accent)
-        .frame(width: 180)
+        .frame(width: SonnyMetrics.settingsControlWidth)
         .accessibilityLabel("Interface theme, \(appearanceModel.appearance.title) selected")
     }
 }
@@ -6523,7 +6541,12 @@ private struct SettingsDensitySlider: View {
                 step: 1
             )
             .tint(SonnyTheme.accent)
-            .frame(width: 180)
+            .frame(width: SonnyMetrics.settingsControlWidth)
+            // On the slider itself, never on a collapsed element around it: collapsing the subtree
+            // discards the slider's own adjustable trait and its increment and decrement actions,
+            // leaving VoiceOver able to read the stop but not change it (phase 11 review, F1).
+            .accessibilityLabel("Density")
+            .accessibilityValue(densityModel.density.title)
 
             HStack {
                 ForEach(SonnyDensity.allCases) { stop in
@@ -6535,11 +6558,8 @@ private struct SettingsDensitySlider: View {
             }
             .font(SonnyType.micro)
             .foregroundStyle(SonnyTheme.muted)
-            .frame(width: 180)
+            .frame(width: SonnyMetrics.settingsControlWidth)
             .accessibilityHidden(true)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Density")
-        .accessibilityValue(densityModel.density.title)
     }
 }

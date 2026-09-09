@@ -15,6 +15,14 @@ struct SonnyDensityTests {
         #expect(SonnyDensity.regular.navRowHeight == SonnyMetrics.navRowHeight)
         #expect(SonnyDensity.regular.compactRowHeight == SonnyMetrics.compactRowHeight)
         #expect(SonnyDensity.regular.toolbarHeight == SonnyMetrics.toolbarHeight)
+        // The four values with no metric token of their own, pinned to the literals the tree used
+        // before density existed (the card's SonnySpacing.lg inset and 190 floor, the pages'
+        // SonnySpacing.lg gap, rows with no gap), so Default cannot drift for a user who never
+        // touches the slider (phase 11 review, F1).
+        #expect(SonnyDensity.regular.cardInset == 16)
+        #expect(SonnyDensity.regular.cardMinHeight == 190)
+        #expect(SonnyDensity.regular.sectionGap == 16)
+        #expect(SonnyDensity.regular.rowGap == 0)
     }
 
     @Test
@@ -51,6 +59,9 @@ struct SonnyDensityTests {
         #expect(SonnyDensity.comfortable.scaled(56) > 56)
         // 44 * 0.85 = 37.4, which must round rather than truncate.
         #expect(SonnyDensity.compact.scaled(44) == 37)
+        // 47.6: rounding answers 48 where truncation would answer 47, so a `.rounded(.down)`
+        // mutant dies here rather than surviving on fractions under a half (phase 11 review, F2).
+        #expect(SonnyDensity.compact.scaled(56) == 48)
         // 52 * 1.2 = 62.4, rounds down; 32 * 1.2 = 38.4, rounds down too — picking one base whose
         // scaled comfortable value would round *up* under naive truncation is the point here.
         #expect(SonnyDensity.comfortable.scaled(32) == 38)

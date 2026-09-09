@@ -10,17 +10,18 @@ import MacAgentCore
 enum VoiceRecordingCountdown {
     /// How long the widget lets a recording run before it stops the recording itself.
     ///
-    /// **One second under `VoiceRecordingLimit.maximumDurationSeconds`, not equal to it.** The cap
-    /// refuses a recording whose *held* duration is past the limit
-    /// (`VoiceRecordingLimit.isTooLong`, `duration > maximumDurationSeconds`) — see
-    /// `FinishedRecording`'s doc comment for why the held duration, not the file's length, is the
-    /// number that decides that. A widget that stopped itself at exactly the cap would leave that
-    /// comparison sitting on a knife edge, where a few milliseconds of `Task` scheduling decide
-    /// whether the recording the widget itself ended is honoured or refused. Stopping one second
-    /// early keeps the measured duration under the cap with room to spare, so the countdown's own
-    /// promise — Sonny stops listening then — is a promise a auto-stopped recording actually gets
-    /// to keep.
-    static let listeningSeconds: TimeInterval = VoiceRecordingLimit.maximumDurationSeconds - 1
+    /// **Three seconds under `VoiceRecordingLimit.maximumDurationSeconds`, not equal to it.** The
+    /// cap refuses a recording whose *held* duration is past the limit (`VoiceRecordingLimit.isTooLong`,
+    /// `duration > maximumDurationSeconds`; see `FinishedRecording`'s doc comment for why the held
+    /// duration and not the file's length decides). The auto-stop is a `Task` sleeping on the main
+    /// actor, and `AudioCommandRecorder.stop()` measures the held duration at the moment that task
+    /// actually runs, so every millisecond the main thread is late is a millisecond added to the
+    /// number the cap judges. A one-second margin covers ordinary scheduling; this repository has
+    /// measured main-actor resumptions arriving seconds late under load (CLAUDE.md's wall-clock
+    /// gotcha), and a recording the widget itself ended must not be the one that gets refused. Three
+    /// seconds is the margin, so the countdown reads from 2:57 and the promise it makes, that Sonny
+    /// stops listening at 0:00 and keeps what it heard, is one an auto-stopped recording keeps.
+    static let listeningSeconds: TimeInterval = VoiceRecordingLimit.maximumDurationSeconds - 3
 
     /// At or under this many seconds remaining, the countdown reads as a warning.
     static let warningSeconds: TimeInterval = 30

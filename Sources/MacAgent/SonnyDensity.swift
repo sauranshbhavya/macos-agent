@@ -163,7 +163,7 @@ final class SonnyDensityModel: ObservableObject {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        // `object(forKey:) as? String`, not `string(forKey:)`, per the same rule `SonnyAppearanceModel`
+        // `object(forKey:) as? String`, not `string(forKey:)`, per the same rule `SonnyNotificationPreferences`
         // follows: a key that has never been written must read as the default rather than as
         // whatever a bare accessor happens to coerce a missing value to. An unknown stored string
         // (a value from a future release, or a corrupted default) also falls back to `.regular`

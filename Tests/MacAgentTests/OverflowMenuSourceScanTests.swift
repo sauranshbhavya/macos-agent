@@ -19,6 +19,15 @@ struct OverflowMenuSourceScanTests {
     func theWorkspaceCardHoldsExactlyOneOverflowMenuAndNoDangerButtonOnItsFace() throws {
         let source = try MacAgentSource.read("CommandCenterView.swift")
         let card = try MacAgentSource.braceBlock(of: source, openedBy: "private struct WorkspaceCard: View {")
+        // The two moved actions keep the disabled predicate the buttons had, inside the menu, and
+        // a label that names the workspace, as the buttons did (phase 11 review, F1, F2 and F5).
+        let menu = try MacAgentSource.braceBlock(
+            of: card,
+            openedBy: "SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {"
+        )
+        #expect(menu.components(separatedBy: ".disabled(isTaskInFlight)").count - 1 == 2)
+        #expect(menu.contains(".accessibilityLabel(\"Mark \\(presentation.name) as a team workspace\")"))
+        #expect(menu.contains(".accessibilityLabel(\"Delete \\(presentation.name)\")"))
 
         // One menu, counted rather than merely found present — a second one added later without
         // updating this test would otherwise read as the same clean pass.
@@ -56,8 +65,13 @@ struct OverflowMenuSourceScanTests {
         #expect(row.components(separatedBy: "SonnyOverflowMenu(").count - 1 == 1)
         #expect(!row.contains("tone: .danger"))
         #expect(row.contains("Button(\"Delete\", role: .destructive, action: delete)"))
-        // The disabled predicate SONNY-239 built travels with the button into the menu unchanged.
-        #expect(row.contains(".disabled(!presentation.canDelete)"))
+        // The disabled predicate SONNY-239 built travels with the button into the menu unchanged,
+        // asserted as the adjacent pair so it cannot be satisfied by that predicate on some other
+        // control in the row (phase 11 review, F6).
+        #expect(row.contains(
+            "Button(\"Delete\", role: .destructive, action: delete)\n                    .disabled(!presentation.canDelete)"
+        ))
+        #expect(row.contains(".accessibilityLabel(\"Delete \\(presentation.title)\")"))
     }
 
     @Test
@@ -68,6 +82,7 @@ struct OverflowMenuSourceScanTests {
         #expect(row.components(separatedBy: "SonnyOverflowMenu(").count - 1 == 1)
         #expect(!row.contains("tone: .danger"))
         #expect(row.contains("Button(\"Delete\", role: .destructive, action: delete)"))
+        #expect(row.contains(".accessibilityLabel(\"Delete \\(entry.title)\")"))
         // Continue is unaffected by the move — still its own visible button, still secondary tone.
         #expect(row.contains("tone: .secondary, size: .small"))
     }

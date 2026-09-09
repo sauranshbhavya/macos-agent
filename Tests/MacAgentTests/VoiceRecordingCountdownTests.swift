@@ -13,19 +13,19 @@ struct VoiceRecordingCountdownTests {
     /// second, not equal to it — see `VoiceRecordingCountdown`'s own doc comment for why equal to
     /// the cap would still be refusable.
     @Test
-    func listeningSecondsIsUnderTheCapByOne() {
+    func listeningSecondsIsUnderTheCapByThree() {
         #expect(
             VoiceRecordingCountdown.listeningSeconds
-                == VoiceRecordingLimit.maximumDurationSeconds - 1
+                == VoiceRecordingLimit.maximumDurationSeconds - 3
         )
     }
 
     /// The first label a recording shows, the moment it starts (no time elapsed yet).
     @Test
-    func theFirstLabelIsTwoFiftyNine() {
+    func theFirstLabelIsTwoFiftySeven() {
         let startedAt = Date()
         let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: startedAt)
-        #expect(VoiceRecordingCountdown.label(remaining: remaining) == "2:59")
+        #expect(VoiceRecordingCountdown.label(remaining: remaining) == "2:57")
     }
 
     /// At zero and below, the label reads "0:00" rather than going negative.

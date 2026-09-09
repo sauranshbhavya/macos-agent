@@ -330,9 +330,9 @@ final class AgentViewModel: ObservableObject {
     /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
     @Published var completedRunNotice: CompletedRunNotice?
 
-    /// A request to open one task's detail dialog, set when the user clicks a finished-run
-    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and presents
-    /// the same sheet a click on a history row opens.
+    /// A request to show one task's detail, set when the user clicks a finished-run
+    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and selects
+    /// that task into the pane beside the list, the same selection a click on a history row makes.
     ///
     /// Published state rather than a direct call because the sheet is driven by view-local state the
     /// app delegate cannot reach, and `.claude/rules/macagent-ui-conventions.md`'s shared-state rule
