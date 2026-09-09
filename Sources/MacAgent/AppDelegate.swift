@@ -261,50 +261,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ride the same subscription (see `requestWidgetPresentation()`). Independent of
     /// `notificationService`'s bundle-identity guard: showing the widget works identically under
     /// `swift run`, unlike system notifications.
-    /// The menu-bar glyph follows Sonny's state, so a user in another app can see whether Sonny is
-    /// working, waiting for them, or stopped on a failure without opening anything. The mapping
-    /// lives in `StatusItemPresentation`; this only applies it. Template images take
-    /// `contentTintColor` on a status-bar button, so the idle state hands the tint back to the bar.
-    private func observeStatusItemState() {
-        Publishers.CombineLatest3(
-            viewModel.$isRunning,
-            viewModel.$approvalRequest.map { $0 != nil },
-            viewModel.$errorMessage.map { $0 != nil }
-        )
-        .map { isRunning, isAwaitingApproval, hasFailure in
-            StatusItemPresentation.forState(
-                isRunning: isRunning,
-                isAwaitingApproval: isAwaitingApproval,
-                hasFailure: hasFailure
-            )
-        }
-        .removeDuplicates()
-        .receive(on: RunLoop.main)
-        .sink { [weak self] presentation in
-            self?.applyStatusItemPresentation(presentation)
-        }
-        .store(in: &cancellables)
-    }
-
-    private func applyStatusItemPresentation(_ presentation: StatusItemPresentation) {
-        guard let button = statusItem?.button else { return }
-        button.image = NSImage(
-            systemSymbolName: presentation.systemImageName,
-            accessibilityDescription: presentation.accessibilityLabel
-        )
-        switch presentation.tint {
-        case .plain:
-            button.contentTintColor = nil
-        case .accent:
-            button.contentTintColor = NSColor(SonnyTheme.accent)
-        case .attention:
-            button.contentTintColor = NSColor(SonnyTheme.warning)
-        case .failure:
-            button.contentTintColor = NSColor(SonnyTheme.danger)
-        }
-        button.toolTip = presentation.accessibilityLabel
-    }
-
     private func observeWidgetPresentationRequests() {
         viewModel.$widgetPresentationRequest
             .dropFirst()
@@ -499,6 +455,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("Sonny could not register font \(fontName): \(registrationError.localizedDescription)")
         }
     }
+
+    /// **Placed after the notification subscriptions on purpose.** `StandingWatcherRunTests` finds the
+    /// notification channels by the *first* `viewModel.$errorMessage` in this file and reads the
+    /// region up to its `.store`, expecting the `!isUserWorkingInSonny` gate; this observer reads the
+    /// same publisher with no gate (it is not a notification), so it has to come later in the file.
+    /// The menu-bar glyph follows Sonny's state, so a user in another app can see whether Sonny is
+    /// working, waiting for them, or stopped on a failure without opening anything. The mapping
+    /// lives in `StatusItemPresentation`; this only applies it. Template images take
+    /// `contentTintColor` on a status-bar button, so the idle state hands the tint back to the bar.
+    private func observeStatusItemState() {
+        Publishers.CombineLatest3(
+            viewModel.$isRunning,
+            viewModel.$approvalRequest.map { $0 != nil },
+            viewModel.$errorMessage.map { $0 != nil }
+        )
+        .map { isRunning, isAwaitingApproval, hasFailure in
+            StatusItemPresentation.forState(
+                isRunning: isRunning,
+                isAwaitingApproval: isAwaitingApproval,
+                hasFailure: hasFailure
+            )
+        }
+        .removeDuplicates()
+        .receive(on: RunLoop.main)
+        .sink { [weak self] presentation in
+            self?.applyStatusItemPresentation(presentation)
+        }
+        .store(in: &cancellables)
+    }
+
+    private func applyStatusItemPresentation(_ presentation: StatusItemPresentation) {
+        guard let button = statusItem?.button else { return }
+        button.image = NSImage(
+            systemSymbolName: presentation.systemImageName,
+            accessibilityDescription: presentation.accessibilityLabel
+        )
+        switch presentation.tint {
+        case .plain:
+            button.contentTintColor = nil
+        case .accent:
+            button.contentTintColor = NSColor(SonnyTheme.accent)
+        case .attention:
+            button.contentTintColor = NSColor(SonnyTheme.warning)
+        case .failure:
+            button.contentTintColor = NSColor(SonnyTheme.danger)
+        }
+        button.toolTip = presentation.accessibilityLabel
+    }
+
 
     /// The real `NSApp.mainMenu`, distinct from `makeStatusMenu()`'s status-item dropdown. Two
     /// menus only, deliberately: an Edit menu because that is what routes the standard editing
