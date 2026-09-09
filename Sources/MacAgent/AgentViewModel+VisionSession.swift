@@ -292,7 +292,7 @@ extension AgentViewModel: VisionSessionInteracting {
     /// has not yet looked at the screen.
     func awaitVisionResume(_ pause: VisionSessionPause) async throws -> Bool {
         visionSessionPause = pause
-        finalSummary = "Sonny paused — \(pause.reason.userFacingReason)."
+        finalSummary = "Sonny paused: \(pause.reason.userFacingReason)."
 
         let resumed = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in

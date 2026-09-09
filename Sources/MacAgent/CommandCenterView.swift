@@ -4863,7 +4863,7 @@ enum MemoryDeletionCopy {
             // confirmation in the app does — *and* a file it keeps. Replacing the first with the
             // second understated the press at exactly the moment it destroyed the most.
             return message(for: category)
-                + " Part of this can't be read — Sonny keeps that file instead of deleting it."
+                + " Part of this can't be read. Sonny keeps that file instead of deleting it."
         case .unreadable:
             return unreadableMessage(for: category)
         }
@@ -5922,7 +5922,7 @@ private struct SettingsSecurityAccessPage: View {
 
                     SettingsControlLabel(
                         title: "Terminals, never",
-                        detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has — so this is not something you can turn on."
+                        detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has, so this is not something you can turn on."
                     )
 
                     SettingsControlLabel(

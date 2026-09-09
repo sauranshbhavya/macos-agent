@@ -7732,7 +7732,7 @@ final class AgentViewModel: ObservableObject {
             return
         case .missed:
             resolveOccurrence(for: next.routine.name, at: occurrence)
-            scheduledRunNotice = "“\(next.routine.name)” did not run at its scheduled time — too much time had passed by the time Sonny was available again."
+            scheduledRunNotice = "“\(next.routine.name)” did not run at its scheduled time. Too much time had passed by the time Sonny was available again."
         case .due:
             guard next.routine.schedule?.unattendedTrusted == true else {
                 // An enabled schedule without unattended trust cannot run: the outer run-routine
