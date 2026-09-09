@@ -157,6 +157,10 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         )
         window.title = title
         window.titlebarAppearsTransparent = true
+        // The sidebar's wordmark already says "Sonny" under the traffic lights; a second one
+        // centred in the transparent title bar is the one thing this window would show twice.
+        // The title itself stays set for the Window menu, Mission Control and accessibility.
+        window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.minSize = minimumSize
         window.contentViewController = contentViewController
