@@ -17,6 +17,7 @@ struct RoutineDetailView: View {
     let routine: StoredRoutine
     @ObservedObject var viewModel: AgentViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.sonnyDensity) private var density
     @State private var unattendedAdvisory: String?
     @State private var showDeleteRoutineConfirmation = false
     /// Uncommitted schedule edits. Nil means "showing what is saved".
@@ -113,7 +114,7 @@ struct RoutineDetailView: View {
                 minHeight: 72
             )
         } else {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: density.rowGap) {
                 ForEach(routine.steps) { step in
                     RoutineDetailStepRow(step: step)
                 }
@@ -502,6 +503,7 @@ struct RoutineDetailView: View {
 
 private struct RoutineDetailStepRow: View {
     let step: AgentStep
+    @Environment(\.sonnyDensity) private var density
 
     /// Icon slot matching the floating widget's own row grammar (§3.3.2: "icon slot... + label
     /// text") — `docs/sonny-founder-design-decisions.md` asks for "one consistent... experience"
@@ -545,6 +547,6 @@ private struct RoutineDetailStepRow: View {
                     .help(step.description)
             }
         }
-        .frame(height: SonnyMetrics.compactRowHeight)
+        .frame(height: density.compactRowHeight)
     }
 }

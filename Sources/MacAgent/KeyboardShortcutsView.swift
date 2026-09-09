@@ -97,6 +97,7 @@ private struct KeyboardShortcutRowContent {
 private struct KeyboardShortcutGroup: View {
     let title: String
     let rows: [KeyboardShortcutRowContent]
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         VStack(alignment: .leading, spacing: SonnySpacing.sm) {
@@ -104,7 +105,7 @@ private struct KeyboardShortcutGroup: View {
                 .font(SonnyType.settingsSectionLabel)
                 .foregroundStyle(SonnyTheme.text)
 
-            VStack(spacing: 0) {
+            VStack(spacing: density.rowGap) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                     KeyboardShortcutRow(action: row.action, keys: row.keys, isLast: index == rows.count - 1)
                 }
@@ -117,6 +118,7 @@ private struct KeyboardShortcutRow: View {
     let action: String
     let keys: [String]
     let isLast: Bool
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack {
@@ -132,7 +134,7 @@ private struct KeyboardShortcutRow: View {
                 }
             }
         }
-        .frame(height: 32)
+        .frame(height: density.scaled(32))
         .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }

@@ -66,6 +66,10 @@ struct CommandCenterView: View {
     // bumps `CommandCenterCommands.settingsRequests` instead, and the `onChange` below turns that
     // into the same presentation this menu's own "Settings" row drives.
     @EnvironmentObject private var commands: CommandCenterCommands
+    // The information-density preference (founder ask, 2026-09-09). Read here, at the window's
+    // root, and republished into `\.sonnyDensity` below so every row-height site in the tree reads
+    // one value without each needing its own `@EnvironmentObject`.
+    @EnvironmentObject private var densityModel: SonnyDensityModel
     // Collapsed-sidebar preference (phase 5). A cosmetic, per-Mac preference like the appearance
     // and notification models beside it, so a plain `UserDefaults` read is fine rather than routing
     // it through the view model — seeded once here, at view-identity creation, and written back on
@@ -129,6 +133,10 @@ struct CommandCenterView: View {
         .foregroundStyle(SonnyTheme.text)
         .tint(SonnyTheme.accent)
         .environment(\.sonnyPointerCursorsEnabled, viewModel.usePointerCursors)
+        // Re-evaluated whenever `densityModel` publishes, since this view observes it above — every
+        // sheet this file presents (Settings included) inherits the same value, the way it already
+        // inherits `appearanceModel`'s.
+        .environment(\.sonnyDensity, densityModel.density)
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
@@ -348,7 +356,7 @@ struct CommandCenterView: View {
             if isSidebarCollapsed {
                 profileAvatar
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .frame(height: SonnyMetrics.listRowHeight)
+                    .frame(height: densityModel.density.listRowHeight)
                     .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             } else {
                 HStack(spacing: SonnySpacing.sm) {
@@ -367,7 +375,7 @@ struct CommandCenterView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, SonnySpacing.sm)
-                .frame(height: SonnyMetrics.listRowHeight)
+                .frame(height: densityModel.density.listRowHeight)
                 .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
         }
@@ -451,7 +459,7 @@ struct CommandCenterView: View {
             }
             .foregroundStyle(SonnyTheme.text)
             .padding(.horizontal, SonnySpacing.sm)
-            .frame(height: SonnyMetrics.compactRowHeight)
+            .frame(height: densityModel.density.compactRowHeight)
             .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
@@ -491,7 +499,7 @@ struct CommandCenterView: View {
                 Image(systemName: destination.systemImage)
                     .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
                     .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
-                    .frame(width: SonnyMetrics.sidebarCollapsedRowWidth, height: SonnyMetrics.navRowHeight)
+                    .frame(width: SonnyMetrics.sidebarCollapsedRowWidth, height: densityModel.density.navRowHeight)
                     .background(
                         RoundedRectangle(cornerRadius: SonnyRadius.control)
                             .fill(selected ? SonnyTheme.fillSelected : Color.clear)
@@ -516,7 +524,7 @@ struct CommandCenterView: View {
                     }
                 }
                 .padding(.horizontal, SonnySpacing.sm)
-                .frame(height: SonnyMetrics.navRowHeight)
+                .frame(height: densityModel.density.navRowHeight)
                 .background(
                     RoundedRectangle(cornerRadius: SonnyRadius.control)
                         .fill(selected ? SonnyTheme.fillSelected : Color.clear)
@@ -603,6 +611,7 @@ private struct TasksFoundationView: View {
     @State private var collapseState: TaskSectionCollapseState
     private let collapseStore: TaskSectionCollapseStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sonnyDensity) private var density
 
     init(viewModel: AgentViewModel, collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore()) {
         self.viewModel = viewModel
@@ -611,7 +620,7 @@ private struct TasksFoundationView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: greeting)
 
             // Above both the list and the pane rather than inside the list's own scroll area (row
@@ -878,6 +887,7 @@ private struct TasksFoundationView: View {
 private struct TasksToolbarRow: View {
     @ObservedObject var viewModel: AgentViewModel
     @FocusState private var isFocused: Bool
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack {
@@ -930,7 +940,7 @@ private struct TasksToolbarRow: View {
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: SonnyMetrics.toolbarHeight)
+        .frame(height: density.toolbarHeight)
     }
 }
 
@@ -1484,6 +1494,7 @@ private struct InsightsView: View {
     /// door the ⌘K palette uses, so there is one way a workspace detail opens from elsewhere.
     let select: (CommandCenterDestination) -> Void
     @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var summary: TaskHistoryInsightsSummary {
         TaskHistoryInsights.summarize(records: viewModel.taskHistoryRecords, now: Date())
@@ -1494,7 +1505,7 @@ private struct InsightsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Insights")
 
             CommandCenterAttentionPanel(viewModel: viewModel)
@@ -1775,6 +1786,7 @@ private struct WorkspaceBreakdownRow: View {
     /// no chevron, no hover and no hint, rather than a door that opens onto nothing.
     let isOpenable: Bool
     let open: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     @ViewBuilder
     var body: some View {
@@ -1831,7 +1843,7 @@ private struct WorkspaceBreakdownRow: View {
                     .foregroundStyle(SonnyTheme.textTertiary)
             }
         }
-        .frame(height: 32)
+        .frame(height: density.scaled(32))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.workspaceName): \(percentageText)")
     }
@@ -1847,6 +1859,7 @@ private struct TaskHistoryListPanel: View {
     let emptyTitle: String
     let emptyMessage: String
     let openTask: (CompletedTaskRecord) -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         VStack(alignment: .leading, spacing: SonnySpacing.xs) {
@@ -1862,7 +1875,7 @@ private struct TaskHistoryListPanel: View {
                     minHeight: 96
                 )
             } else {
-                VStack(spacing: 0) {
+                VStack(spacing: density.rowGap) {
                     ForEach(Array(records.enumerated()), id: \.offset) { _, record in
                         InsightsRecentActivityRow(record: record, isOpenable: record.id != nil) {
                             openTask(record)
@@ -1890,6 +1903,7 @@ private struct InsightsRecentActivityRow: View {
     /// open, so the row is a line rather than a button that does nothing.
     let isOpenable: Bool
     let open: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     @ViewBuilder
     var body: some View {
@@ -1897,7 +1911,7 @@ private struct InsightsRecentActivityRow: View {
             Button(action: open) {
                 rowContent
                     .padding(.horizontal, SonnySpacing.sm)
-                    .frame(height: 32)
+                    .frame(height: density.scaled(32))
                     .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
             .buttonStyle(.plain)
@@ -1909,7 +1923,7 @@ private struct InsightsRecentActivityRow: View {
             .accessibilityHint("Opens the task")
         } else {
             rowContent
-                .frame(height: 32)
+                .frame(height: density.scaled(32))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(accessibilityText)
         }
@@ -1965,6 +1979,7 @@ private struct CommandCenterGroupHeader: View {
     /// wireframe's title/count position is untouched, and because both System A chevrons that
     /// already exist (the sidebar profile row, the account menu's disclosure rows) are trailing.
     var disclosure: Disclosure? = nil
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         if let disclosure {
@@ -2007,7 +2022,7 @@ private struct CommandCenterGroupHeader: View {
         }
         .padding(.horizontal, SonnySpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: SonnyMetrics.listRowHeight)
+        .frame(height: density.listRowHeight)
         .background(SonnyTheme.surfaceRaised)
         .sonnyDivider()
     }
@@ -2095,6 +2110,7 @@ private struct TaskHistoryGroupedPanel: View {
     /// Offered only when nothing has ever run: a search with no result or an unreadable store
     /// keeps the plain sentence.
     let emptyStateAction: CollectionEmptyState.Action?
+    @Environment(\.sonnyDensity) private var density
 
     private var sections: [TaskSectionPresentation] {
         TaskSectionPresentation.sections(
@@ -2131,7 +2147,7 @@ private struct TaskHistoryGroupedPanel: View {
                             )
                         )
 
-                        VStack(spacing: 0) {
+                        VStack(spacing: density.rowGap) {
                             // Keyed on the record's own id, not `\.startedAt`. Whole-second
                             // timestamps mean two runs of one command inside the same second share
                             // a `startedAt`, and SwiftUI collapses rows that share an id — so the
@@ -2222,6 +2238,7 @@ private struct TaskHistoryRow: View {
     let onFollowUp: () -> Void
     let onDelete: () -> Void
     @State private var showDeleteConfirmation = false
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.sm + 2) {
@@ -2257,7 +2274,7 @@ private struct TaskHistoryRow: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .frame(height: SonnyMetrics.listRowHeight)
+        .frame(height: density.listRowHeight)
         // Text sits at the page's usual `xl` inset; the highlight itself is inset only `sm` from
         // the row's true edge, so it reads as a floating rounded rect rather than a full-bleed fill.
         .padding(.horizontal, SonnySpacing.xl - SonnySpacing.sm)
@@ -2927,13 +2944,14 @@ private struct RoutinesView: View {
     // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
     // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
     @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var sections: [RoutineCadenceSection] {
         RoutineGrouping.groupedByCadence(routines: viewModel.savedRoutines)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Routines")
 
             VStack(spacing: 0) {
@@ -2966,7 +2984,7 @@ private struct RoutinesView: View {
                     )
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: density.rowGap) {
                             // Cadence-grouped per `11-MainAppRoutines.svg`, which has Daily /
                             // Weekly / Monthly headings with counts rather than one flat list.
                             ForEach(sections) { section in
@@ -3059,9 +3077,10 @@ private struct RoutinesView: View {
 /// per-row action of its own.
 private struct WatchingCollection: View {
     @ObservedObject var viewModel: AgentViewModel
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: density.rowGap) {
             // No action title: there is no "New watcher" button, because Command Center has no
             // composer — a watcher is started by asking, the same way a routine's own New button
             // pre-fills the widget rather than creating anything here. Offering a button that only
@@ -3087,6 +3106,7 @@ private struct StandingWatcherRow: View {
     let presentation: StandingWatcherRowPresentation
     let isLast: Bool
     let stop: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.md) {
@@ -3122,7 +3142,7 @@ private struct StandingWatcherRow: View {
                 .accessibilityLabel("Stop watching \(presentation.subject)")
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: 44)
+        .frame(height: density.scaled(44))
         .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
@@ -3132,6 +3152,7 @@ private struct RoutineRow: View {
     let isLast: Bool
     let setEnabled: (Bool) -> Void
     let openDetail: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.md) {
@@ -3198,7 +3219,7 @@ private struct RoutineRow: View {
         }
         .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: 56)
+        .frame(height: density.scaled(56))
         .contentShape(Rectangle())
         .onTapGesture(perform: openDetail)
         .sonnyPointerCursor()
@@ -3218,6 +3239,7 @@ private struct WorkspacesView: View {
     // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
     // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
     @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var selectedWorkspace: StoredWorkspace? {
         guard let selectedWorkspaceName else {
@@ -3231,7 +3253,7 @@ private struct WorkspacesView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Workspaces")
 
             VStack(spacing: 0) {
@@ -3415,6 +3437,7 @@ private struct WorkspaceCard: View {
     let delete: () -> Void
     let openDetail: () -> Void
     @State private var showDeleteConfirmation = false
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3512,12 +3535,12 @@ private struct WorkspaceCard: View {
                 }
             }
         }
-        .padding(SonnySpacing.lg)
+        .padding(density.cardInset)
         // Wireframe's measured 190pt fits the no-saved-URL case; kept as the card's floor. The
         // fixed 356pt width and 216pt height ceiling are gone — the grid's adaptive column now
         // decides width, and content decides height rather than clipping against a hand-measured
         // worst case.
-        .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: density.cardMinHeight, alignment: .topLeading)
         .sonnyCard()
         // Whole-card tap opens the detail sheet, matching the routine row's `openDetail` gesture.
         // The hit area is the card's own rounded bounds; a SwiftUI `Button` consumes its own tap
@@ -4277,9 +4300,10 @@ private struct MemoryView: View {
 
     @State private var entriesCategory: MemoryCategory?
     @State private var deletionCategory: MemoryCategory?
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Memory")
 
             masterPanel
@@ -4398,7 +4422,7 @@ private struct MemoryView: View {
                 .sonnyDivider(SonnyTheme.border)
 
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: density.rowGap) {
                     // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
                     // groups — one flat stack of every row adopts the row idiom without the
                     // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
@@ -4536,6 +4560,7 @@ private struct MemoryRow: View {
     let view: () -> Void
     let delete: () -> Void
     let setEnabled: (Bool) -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.md) {
@@ -4594,7 +4619,7 @@ private struct MemoryRow: View {
                 .accessibilityLabel("Remember \(presentation.title)")
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: SonnyMetrics.listRowHeight + SonnySpacing.sm)
+        .frame(height: density.scaled(44))
         .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
@@ -5104,6 +5129,7 @@ private struct MemoryEntriesSheet: View {
     let category: MemoryCategory
     @Binding var isPresented: Bool
     @State private var pendingDeletion: PendingEntryDeletion?
+    @Environment(\.sonnyDensity) private var density
 
     /// The row a confirmation is open for. Carries the position it was rendered at, because that is
     /// what `AgentViewModel.deleteMemoryEntry(in:at:)` takes — and carries the title so the dialog
@@ -5135,7 +5161,7 @@ private struct MemoryEntriesSheet: View {
                 .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: density.rowGap) {
                         ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                             MemoryEntryRow(
                                 entry: entry,
@@ -5211,6 +5237,7 @@ private struct MemoryEntryRow: View {
     let canContinueNow: Bool
     let continueTask: () -> Void
     let delete: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.md) {
@@ -5245,7 +5272,7 @@ private struct MemoryEntryRow: View {
             }
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: SonnyMetrics.listRowHeight + SonnySpacing.lg)
+        .frame(height: density.scaled(52))
         .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
@@ -5257,6 +5284,7 @@ private struct CollectionHeader: View {
     /// the Routines and Workspaces call sites are unchanged.
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(spacing: SonnySpacing.md) {
@@ -5272,7 +5300,7 @@ private struct CollectionHeader: View {
             }
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: SonnyMetrics.toolbarHeight)
+        .frame(height: density.toolbarHeight)
     }
 }
 
@@ -5423,6 +5451,7 @@ struct SettingsDialogView: View {
     @ObservedObject var accountModel: SonnyAccountModel
     @Binding var isPresented: Bool
     @State private var selection: SettingsSection = .preferences
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -5502,7 +5531,7 @@ struct SettingsDialogView: View {
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, SonnySpacing.sm)
-                        .frame(height: SonnyMetrics.navRowHeight)
+                        .frame(height: density.navRowHeight)
                         .background(
                             RoundedRectangle(cornerRadius: SonnyRadius.control)
                                 .fill(selected ? SonnyTheme.fillSelected : Color.clear)
@@ -5573,6 +5602,20 @@ private struct SettingsPreferencesPage: View {
                 } trailing: {
                     SettingsThemeDropdown()
                         .fixedSize(horizontal: true, vertical: false)
+                }
+
+                SettingsDivider()
+
+                // Founder ask, 2026-09-09: "Information density slider for all the menus in Sonny
+                // app." Lives under the same "Theme" block as the appearance picker — both are
+                // whole-window looks rather than a single feature's setting.
+                SettingsAdaptiveControlRow {
+                    SettingsControlLabel(
+                        title: "Density",
+                        detail: "How much fits on screen at once."
+                    )
+                } trailing: {
+                    SettingsDensitySlider()
                 }
             }
             .padding(.top, SonnySpacing.xxl)
@@ -6459,5 +6502,44 @@ private struct SettingsThemeDropdown: View {
         .tint(SonnyTheme.accent)
         .frame(width: 180)
         .accessibilityLabel("Interface theme, \(appearanceModel.appearance.title) selected")
+    }
+}
+
+/// The density slider (founder ask, 2026-09-09): three stops, bound to `SonnyDensityModel` from
+/// the window's environment through `sliderValue` so a continuous `Slider` drag always lands on a
+/// whole case. The three titles underneath read directly off `SonnyDensity.allCases` rather than
+/// being spelled out a second time, so a fourth stop could never silently go unlabeled.
+private struct SettingsDensitySlider: View {
+    @EnvironmentObject private var densityModel: SonnyDensityModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+            Slider(
+                value: Binding(
+                    get: { densityModel.density.sliderValue },
+                    set: { densityModel.density = SonnyDensity(sliderValue: $0) }
+                ),
+                in: 0...2,
+                step: 1
+            )
+            .tint(SonnyTheme.accent)
+            .frame(width: 180)
+
+            HStack {
+                ForEach(SonnyDensity.allCases) { stop in
+                    Text(stop.title)
+                    if stop != SonnyDensity.allCases.last {
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.muted)
+            .frame(width: 180)
+            .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Density")
+        .accessibilityValue(densityModel.density.title)
     }
 }

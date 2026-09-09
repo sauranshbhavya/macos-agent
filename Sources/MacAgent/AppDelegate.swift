@@ -17,13 +17,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// bound to by Settings › Notifications through the Command Center's environment — the same
     /// path `appearanceModel` takes.
     private let notificationPreferences = SonnyNotificationPreferences()
+    /// The information-density preference (founder ask, 2026-09-09), bound to by Settings ›
+    /// Preferences through the Command Center's environment — the same path `appearanceModel` takes.
+    private let densityModel = SonnyDensityModel()
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
         accountModel: accountModel,
         screenAccessModel: screenAccessModel,
         firstRunCoordinator: firstRunCoordinator,
         appearanceModel: appearanceModel,
-        notificationPreferences: notificationPreferences
+        notificationPreferences: notificationPreferences,
+        densityModel: densityModel
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
