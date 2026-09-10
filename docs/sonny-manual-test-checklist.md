@@ -4283,6 +4283,10 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Settings › Preferences: Density is a two-way choice, Default and Comfortable, with no Compact; a Mac that had chosen Compact opens on Default; Comfortable still spreads rows, gaps and card insets everywhere and Default is unchanged.
 - [ ] Tasks, after the rework: with a task selected the list is a narrow column and the receipt takes the rest; the title reads whole on up to three lines; the badge, date, duration and workspace sit on one line, or the badge on its own line when the pane is narrow, never a phrase split across lines; Run again, Edit and run and Follow up read whole, on one row or two; drag the divider to its limit and shrink the window to 900 wide: nothing truncates or overlaps.
 
+**The founders' third round (2026-09-10)**
+- [ ] Sidebar: on a Mac that never touched the toggle, Sonny opens with the sidebar collapsed to its rail. The toggle sits at the top: expanded, at the right end of the "Sonny" row, tooltip "Close sidebar (⌘⌥S)"; collapsed, directly under the mark, tooltip "Open sidebar (⌘⌥S)"; there is no toggle at the bottom any more; ⌘⌥S still works both ways; the choice survives a relaunch.
+- [ ] Tasks, with a task open: each row reads the title on the first line with the date alone at the right, and "Completed in 8s · hehe" on the second; hovering a truncated title shows the whole command; shrink the window to 900 wide with the sidebar expanded: the Show picker sits on its own row and the search field takes the full width beneath it, its prompt whole.
+
 ## 8. How to report back
 
 For each real finding, give me:

@@ -176,6 +176,18 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    Open button redundant beside a card whose whole face opens the detail. Open is not the detail,
    it opens the widget bound to that workspace, so it did not vanish: it is the card menu's first
    item, still disabled while a task runs. New task became the card's primary.
+24. **The sidebar opens collapsed, and its toggle lives at the top.** The founders asked for the
+   rail by default and for the toggle where ChatGPT keeps it. A Mac that has never touched the
+   toggle opens on the rail; one that expanded it stays expanded. Expanded, the toggle sits at the
+   trailing edge of the wordmark row; collapsed, directly beneath the mark, before Ask Sonny; there
+   is one toggle, and its words are "Open sidebar" and "Close sidebar", the founder's own from the
+   screenshot they sent.
+25. **Beside the receipt, the list row gives its width to the title.** The founders found the list
+   column poor whenever a task was open: a 260 to 380pt column spent a trailing column on the
+   workspace name while titles truncated to a few words, and the search field sat squeezed beside
+   the Show picker. The workspace joins the second line after the status ("Completed in 8s ·
+   hehe"), the date alone keeps the trailing edge, the title carries its full text in a tooltip,
+   and the toolbar drops the search field to its own row when one row cannot hold both.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
@@ -190,6 +202,10 @@ ellipsis menu for secondary and destructive actions on workspace cards and memor
 **Founder decisions of 2026-09-09, second round, in one place**, after running phase 11: the pane
 only while a task is chosen, with a close; a page-size picker for the task list; Compact removed;
 the memory row's menu last with View inside; the workspace card's Open button gone from its face.
+
+**Founder decisions of 2026-09-10, third round, in one place**, after running the receipt rework:
+the sidebar collapsed by default with its toggle at the top, and the list column beside the
+receipt reworked so titles get the width.
 
 ## The tokens
 

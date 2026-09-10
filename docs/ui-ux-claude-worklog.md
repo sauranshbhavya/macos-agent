@@ -290,6 +290,35 @@ calls made. Four lanes ran in parallel from `ee88c3e4` on disjoint regions.
   quoted in the changelog entry); `scripts/warnings` 0 at `559fa6b3`, exit 0, every file compiled;
   `scripts/mutate` at `559fa6b3`, 12 mutants by property (the density model's four re-run because their file moved, four on `TaskListPageSize`, one on the chart's wording, and the three auto-stop mutants re-run because their killing suite moved): 12 killed, 0 survived, 0 unattributed (its report is kept at `.build/mutate/559fa6b-20260910T095513-17728/report.log`); every kill is named by its own suite. A first run at `5ac01639` killed its first ten and stalled on the eleventh, the mutant that drops the cancel, because two tests awaited a cancelled task's value; it was stopped through its trap, which restored the tree, and the tests read the flag instead (`559fa6b3`).
 
+## Phase 13, 2026-09-10: the founders' third round, after running the receipt rework
+
+Three asks with screenshots: the sidebar should open collapsed; its toggle should live where
+ChatGPT keeps it, at the top; and the list column beside the receipt "doesn't look good and it has
+always been like it". No question needed to go back; decisions 24 and 25 record the calls. Two
+lanes ran in parallel from `7d9aca1f` on disjoint regions.
+
+- **Sidebar** (`24b0bedd`, merged `1d93d5be`): the seed reads the stored choice with `?? true`,
+  so a Mac that never touched the toggle opens on the rail and one that expanded it stays
+  expanded. The toggle left the bottom of the sidebar: expanded, it sits at the trailing edge of
+  the wordmark row after a spacer; collapsed, directly beneath the centred mark as the first
+  control above Ask Sonny (the wordmark is a `@ViewBuilder` over the two states, the mark one
+  shared helper). Its words are "Open sidebar" and "Close sidebar", with the ⌘⌥S tooltip, and the
+  shortcuts sheet's row reads "Open or close the sidebar". Five scans in a new
+  `SidebarSourceScanTests`: the seed, one `sidebar.left` in the sidebar region, the toggle called
+  only from the wordmark, the two labels by value, the sheet's row.
+- **The list column** (`530f7d94`, merged `92e01438`): the row's second line reads the status and
+  the workspace joined by a dot (`TaskHistoryRowPresentation.detailLine`, three tests: alone,
+  joined, an empty name treated as none), the date alone keeps the trailing edge, the title and
+  the detail line carry their full text in tooltips, and the row keeps its height. The toolbar is
+  a `ViewThatFits`: the one-row form first, then the Show picker on its own row with the search
+  field full width beneath, on a `minHeight` frame so the second form has room. One scan added to
+  `TasksPaneSourceScanTests`: no trailing workspace text, one `detailLine(` call, the one-row
+  candidate leading, the `minHeight` frame.
+- Reviewed by a fifth adversarial workflow over the merged tree at `92e01438`, three reviewers (the sidebar, the list column, rules and tests) with every finding attacked by an independent skeptic: 9 findings, 7 confirmed, 2 refuted, none high. Three medium: the hidden ⌘F button built inside both toolbar candidates with no test pinning its count (the two refuted findings were the same shape read as two live shortcuts, which `ViewThatFits` does not produce); the row's two tooltips unpinned; the row's accessibility label re-deriving the workspace clause while the visible line came from the presentation, so an empty workspace name read ", ," to VoiceOver. Four low: the title's tooltip without its "Untitled task" fallback, a scan matching one spelling of the trailing text, the narrow candidate's search field unpinned, and a test comment citing the wrong precedent. Every one answered in `300f33cf`: the shortcut button built once on the `ViewThatFits`, the label reading the same detail line as the eye, the tooltip fallback, and the scans pinning the tooltips, the label, the shape of the trailing edge, the search field in both candidates and the shortcut's cardinality.
+- Verified: 3110 in 214, exit 0, 8 known issues at `300f33cf` (the flagged suite; the count line is
+  quoted in the changelog entry); `scripts/warnings` 0 at `300f33cf`, exit 0, every file compiled; every
+  battery carried on the four conditions (no target or killing suite moved since `0307de0d`).
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries
