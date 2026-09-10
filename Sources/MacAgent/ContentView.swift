@@ -625,6 +625,36 @@ struct SonnyBadge: View {
     }
 }
 
+// MARK: - Key cap
+
+/// A single keyboard glyph or short word drawn as a physical key: the shortcuts sheet's own look,
+/// shared rather than reinvented because `CommandKeyHintBadge` (phase 14, the founders' hold-⌘
+/// hints) needed the identical chrome at a smaller size — `font`, `minWidth` and `height` are the
+/// three numbers that scale, everything else (the raised fill, the hairline, the corner radius) is
+/// the one recipe. Moved here from `KeyboardShortcutsView.swift`, where it was private to that one
+/// sheet, so a second caller in another file can reach it; the sheet's own row is unchanged in
+/// every value it passes, so its rendering does not move a pixel.
+struct SonnyKeyCap: View {
+    let text: String
+    var font: Font = SonnyType.mono
+    var minWidth: CGFloat = 22
+    var height: CGFloat = 22
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, SonnySpacing.xs + 2)
+            .frame(minWidth: minWidth)
+            .frame(height: height)
+            .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .strokeBorder(SonnyTheme.cardBorder, lineWidth: 1)
+            )
+    }
+}
+
 // MARK: - Pointer and hover
 
 private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {

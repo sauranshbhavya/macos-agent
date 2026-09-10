@@ -130,29 +130,11 @@ private struct KeyboardShortcutRow: View {
 
             HStack(spacing: SonnySpacing.xs) {
                 ForEach(keys, id: \.self) { key in
-                    KeyCap(text: key)
+                    SonnyKeyCap(text: key)
                 }
             }
         }
         .frame(height: density.scaled(32))
         .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
-    }
-}
-
-private struct KeyCap: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(SonnyType.mono)
-            .foregroundStyle(SonnyTheme.text)
-            .padding(.horizontal, SonnySpacing.xs + 2)
-            .frame(minWidth: 22)
-            .frame(height: 22)
-            .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.control)
-                    .strokeBorder(SonnyTheme.cardBorder, lineWidth: 1)
-            )
     }
 }
