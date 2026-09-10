@@ -1037,74 +1037,102 @@ private struct TasksToolbarRow: View {
     @Binding var pageSize: TaskListPageSize
     @Environment(\.sonnyDensity) private var density
 
+    /// With the receipt pane open the list narrows to `SonnyMetrics.tasksListMinWidth` (260), and
+    /// the Show picker plus the search field at its 220pt ideal do not both fit there — the field's
+    /// 120pt floor left the prompt reading "Search task" (founder, 2026-09-10). Rather than clip
+    /// the field further, the narrow candidate drops to two rows: the picker alone on the first,
+    /// the field at its full width on the second. The one-row candidate leads so it wins whenever
+    /// there is room for it.
     var body: some View {
-        HStack {
-            // Leads the search field rather than trailing it — Gmail's own placement for the same
-            // idiom. No "sort" beside it: the list is newest first, and the founders asked for a
-            // count, not an order.
-            Picker("Show", selection: $pageSize) {
-                ForEach(TaskListPageSize.allCases) { size in
-                    Text(size.title).tag(size)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                showPicker
+                Spacer()
+                searchField(minWidth: 120, idealWidth: 220, maxWidth: 220)
+                focusShortcutButton
             }
-            .pickerStyle(.menu)
-            .tint(SonnyTheme.accent)
-            .fixedSize()
-            .accessibilityLabel("Show, \(pageSize.title) selected")
-
-            Spacer()
-            // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no
-            // matching behind it. The filter icon beside it stays deliberately dropped (2026-07-18
-            // review): no filter feature exists or is planned.
-            TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
-                .padding(.leading, SonnySpacing.xl)
-                .padding(.trailing, SonnySpacing.lg)
-                .sonnyTextField(size: .regular)
-                .focused(isFocused)
-                // Flexible down to 120 so the row fits the list's floor (`SonnyMetrics.tasksListMinWidth`,
-                // 260) beside the Show picker: 40 of padding, the picker and this field share it
-                // (phase 12 review, F3; the floor came down with the receipt's rework, 2026-09-10).
-                .frame(minWidth: 120, idealWidth: 220, maxWidth: 220)
-                .overlay(alignment: .leading) {
-                    Image(systemName: "magnifyingglass")
-                        .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
-                        .foregroundStyle(SonnyTheme.textTertiary)
-                        .padding(.leading, SonnySpacing.sm)
-                        .allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+                HStack {
+                    showPicker
+                    Spacer(minLength: 0)
                 }
-                .overlay(alignment: .trailing) {
-                    // Always mounted rather than conditionally inserted (opacity 0 and disabled when
-                    // the query is empty), so clearing the query never shifts the field's width.
-                    Button {
-                        viewModel.taskHistoryQuery = ""
-                        isFocused.wrappedValue = true
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
-                            .foregroundStyle(SonnyTheme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .sonnyPointerCursor()
-                    .padding(.trailing, SonnySpacing.sm)
-                    .opacity(viewModel.taskHistoryQuery.isEmpty ? 0 : 1)
-                    .disabled(viewModel.taskHistoryQuery.isEmpty)
-                    .accessibilityLabel("Clear search")
-                }
-                .onExitCommand {
-                    guard !viewModel.taskHistoryQuery.isEmpty else { return }
-                    viewModel.taskHistoryQuery = ""
-                }
-                .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
-
-            // Invisible: gives the search field a ⌘F shortcut from anywhere on this page.
-            Button(action: { isFocused.wrappedValue = true }) { EmptyView() }
-                .keyboardShortcut("f", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .accessibilityHidden(true)
+                // No floor needed: the row's own width is the field's only constraint now.
+                searchField(minWidth: nil, idealWidth: nil, maxWidth: .infinity)
+                focusShortcutButton
+            }
         }
         .padding(.horizontal, SonnySpacing.xl)
-        .frame(height: density.toolbarHeight)
+        // `minHeight` rather than `height` so the two-row candidate has room to grow into
+        // (founder, 2026-09-10); the one-row candidate still reads at exactly `density.toolbarHeight`.
+        .frame(minHeight: density.toolbarHeight)
+    }
+
+    /// Leads the search field rather than trailing it — Gmail's own placement for the same idiom.
+    /// No "sort" beside it: the list is newest first, and the founders asked for a count, not an
+    /// order.
+    private var showPicker: some View {
+        Picker("Show", selection: $pageSize) {
+            ForEach(TaskListPageSize.allCases) { size in
+                Text(size.title).tag(size)
+            }
+        }
+        .pickerStyle(.menu)
+        .tint(SonnyTheme.accent)
+        .fixedSize()
+        .accessibilityLabel("Show, \(pageSize.title) selected")
+    }
+
+    // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no matching
+    // behind it. The filter icon beside it stays deliberately dropped (2026-07-18 review): no
+    // filter feature exists or is planned. Built once per `ViewThatFits` candidate — the same
+    // shape `TaskReceiptView.moreActionsMenu`'s doc comment gives for a small, stateless control.
+    @ViewBuilder
+    private func searchField(minWidth: CGFloat?, idealWidth: CGFloat?, maxWidth: CGFloat?) -> some View {
+        TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
+            .padding(.leading, SonnySpacing.xl)
+            .padding(.trailing, SonnySpacing.lg)
+            .sonnyTextField(size: .regular)
+            .focused(isFocused)
+            .frame(minWidth: minWidth, idealWidth: idealWidth, maxWidth: maxWidth)
+            .overlay(alignment: .leading) {
+                Image(systemName: "magnifyingglass")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .padding(.leading, SonnySpacing.sm)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .trailing) {
+                // Always mounted rather than conditionally inserted (opacity 0 and disabled when
+                // the query is empty), so clearing the query never shifts the field's width.
+                Button {
+                    viewModel.taskHistoryQuery = ""
+                    isFocused.wrappedValue = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .padding(.trailing, SonnySpacing.sm)
+                .opacity(viewModel.taskHistoryQuery.isEmpty ? 0 : 1)
+                .disabled(viewModel.taskHistoryQuery.isEmpty)
+                .accessibilityLabel("Clear search")
+            }
+            .onExitCommand {
+                guard !viewModel.taskHistoryQuery.isEmpty else { return }
+                viewModel.taskHistoryQuery = ""
+            }
+            .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
+    }
+
+    /// Invisible: gives the search field a ⌘F shortcut from anywhere on this page.
+    private var focusShortcutButton: some View {
+        Button(action: { isFocused.wrappedValue = true }) { EmptyView() }
+            .keyboardShortcut("f", modifiers: .command)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
     }
 }
 
@@ -2454,6 +2482,14 @@ private struct TaskHistoryRow: View {
     @Environment(\.sonnyDensity) private var density
 
     var body: some View {
+        // The workspace name no longer holds its own trailing column (founder, 2026-09-10): it
+        // joins the status on the second line instead, so the title and the date keep the row's
+        // whole width between them. See `TaskHistoryRowPresentation`'s doc comment.
+        let detailLine = TaskHistoryRowPresentation.detailLine(
+            status: taskStatusText(for: record),
+            workspaceName: record.workspaceName
+        )
+
         HStack(spacing: SonnySpacing.sm + 2) {
             taskStatusIcon(for: record.outcomeStatus)
                 .frame(width: 16, height: 16)
@@ -2465,21 +2501,16 @@ private struct TaskHistoryRow: View {
                     .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .help(record.command)
 
-                Text(taskStatusText(for: record))
+                Text(detailLine)
                     .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.textTertiary)
                     .lineLimit(1)
+                    .help(detailLine)
             }
 
             Spacer(minLength: SonnySpacing.md)
-
-            if let workspaceName = record.workspaceName {
-                Text(workspaceName)
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.textTertiary)
-                    .lineLimit(1)
-            }
 
             Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
                 .font(SonnyType.caption)
