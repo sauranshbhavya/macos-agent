@@ -97,4 +97,25 @@ struct TasksPaneSourceScanTests {
         let onPageSize = try MacAgentSource.braceBlock(of: page, openedBy: ".onChange(of: pageSize) { _, newValue in")
         #expect(onPageSize.contains("TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: displayedRecords)"))
     }
+
+    /// The row's own width goes to the title now (founder, 2026-09-10): the workspace name left the
+    /// trailing column for the second line's `detailLine(`, and the toolbar drops to two rows,
+    /// one-row candidate leading, rather than clip the search field further.
+    @Test
+    func theRowsTrailingEdgeHoldsNoWorkspaceTextAndTheToolbarOffersTheOneRowFormFirst() throws {
+        let source = try MacAgentSource.read("CommandCenterView.swift")
+
+        let row = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TaskHistoryRow: View {")
+        #expect(row.components(separatedBy: "Text(workspaceName)").count - 1 == 0)
+        #expect(row.components(separatedBy: "TaskHistoryRowPresentation.detailLine(").count - 1 == 1)
+
+        let toolbar = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TasksToolbarRow: View {")
+        let toolbarBody = try MacAgentSource.braceBlock(of: toolbar, openedBy: "var body: some View {")
+        #expect(toolbarBody.contains(".frame(minHeight: density.toolbarHeight)"))
+
+        let fits = try MacAgentSource.braceBlock(of: toolbarBody, openedBy: "ViewThatFits(in: .horizontal) {")
+        let oneRow = try #require(fits.range(of: "HStack {"))
+        let twoRow = try #require(fits.range(of: "VStack(alignment: .leading, spacing: SonnySpacing.sm) {"))
+        #expect(oneRow.lowerBound < twoRow.lowerBound, "the one-row candidate must lead so it wins whenever it fits")
+    }
 }
