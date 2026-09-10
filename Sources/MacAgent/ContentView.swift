@@ -295,6 +295,15 @@ enum SonnyMetrics {
     /// The width of a Settings row's trailing control (the theme picker, the density slider): one
     /// number, so the controls in a section line up and cannot drift apart one literal at a time.
     static let settingsControlWidth: CGFloat = 180
+    /// The Tasks page's split: the list is a column with a floor, an ideal and a ceiling, and the
+    /// receipt is the side that grows. `TasksToolbarRow`'s search field derives its own floor from
+    /// `tasksListMinWidth` (40 of padding, the Show picker and the field share it); a change here
+    /// is a change there.
+    static let tasksListMinWidth: CGFloat = 260
+    static let tasksListIdealWidth: CGFloat = 320
+    static let tasksListMaxWidth: CGFloat = 380
+    static let taskReceiptMinWidth: CGFloat = 360
+    static let taskReceiptIdealWidth: CGFloat = 520
 }
 
 // MARK: - Motion

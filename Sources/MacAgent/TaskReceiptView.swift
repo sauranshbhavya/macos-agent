@@ -65,42 +65,50 @@ struct TaskReceiptView: View {
     // MARK: - Header
 
     private func header(for record: CompletedTaskRecord) -> some View {
-        HStack(alignment: .top, spacing: SonnySpacing.md) {
-            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+            HStack(alignment: .top, spacing: SonnySpacing.md) {
                 Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized)
                     .font(SonnyType.settingsContentTitle)
                     .foregroundStyle(SonnyTheme.text)
                     .lineLimit(3)
                     .help(record.command)
 
-                // One line where the pane is wide enough, two where it is not; every phrase is
-                // `fixedSize`, so "Completed in 8s" can never break in the middle (founder,
-                // 2026-09-10: the pane read as cluttered, and this row was half of why).
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: SonnySpacing.sm) {
-                        SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
-                        metadataPhrases(for: record)
-                    }
-                    VStack(alignment: .leading, spacing: SonnySpacing.xs) {
-                        SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
-                        HStack(spacing: SonnySpacing.sm) {
-                            metadataPhrases(for: record)
-                        }
-                    }
-                }
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.muted)
+                Spacer(minLength: SonnySpacing.md)
+
+                closeButton
             }
 
-            Spacer(minLength: SonnySpacing.md)
-
-            closeButton
+            // Its own full-width row under the title, not beside the close control, so the one-line
+            // form is offered the receipt's whole content width rather than that width minus the
+            // control and its gap (receipt review, F1). One line where the pane is wide enough, two
+            // where it is not; every phrase but the workspace name is `fixedSize`, so "Completed in
+            // 8s" can never break in the middle (founder, 2026-09-10: the pane read as cluttered,
+            // and this row was half of why).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: SonnySpacing.sm) {
+                    badge(for: record)
+                    metadataPhrases(for: record)
+                }
+                VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                    badge(for: record)
+                    HStack(spacing: SonnySpacing.sm) {
+                        metadataPhrases(for: record)
+                    }
+                }
+            }
+            .font(SonnyType.caption)
+            .foregroundStyle(SonnyTheme.muted)
         }
         .padding(.bottom, SonnySpacing.xl)
     }
 
-    /// The phrases after the badge, each on one line: when it started, how long it took, the
-    /// workspace, and "Scheduled" when a routine ran it.
+    private func badge(for record: CompletedTaskRecord) -> some View {
+        SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
+    }
+
+    /// The phrases after the badge: when it started, how long it took, the workspace, and
+    /// "Scheduled" when a routine ran it. Each is `fixedSize` except the workspace name, whose
+    /// length is the user's, so it keeps one line and truncates rather than pushing the others.
     @ViewBuilder
     private func metadataPhrases(for record: CompletedTaskRecord) -> some View {
         Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
@@ -167,21 +175,42 @@ struct TaskReceiptView: View {
     /// A button's label is never truncated: each is `fixedSize`, and `ViewThatFits` drops to two
     /// rows when the pane is too narrow for one (founder, 2026-09-10: "Run ag…", "Edit an…" and
     /// "Follow…" were the other half of what read as clutter).
+    ///
+    /// **The delete confirmation sits on the `ViewThatFits`, not on the menu inside it.** The menu is
+    /// built once per candidate, twice in all, and a `confirmationDialog` on a node built twice is
+    /// the shape SwiftUI has dropped a dialog for before in this app (`ApprovedAppRevocationRow` and
+    /// the Data page's Remove All carry the same note); the `ViewThatFits` is rendered exactly once.
     private func actionsRow(for record: CompletedTaskRecord) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: SonnySpacing.sm) {
                 taskActionButtons(for: record)
                 Spacer(minLength: SonnySpacing.md)
-                moreActionsMenu(for: record)
+                moreActionsMenu
             }
             VStack(alignment: .leading, spacing: SonnySpacing.sm) {
-                HStack(spacing: SonnySpacing.sm) {
-                    taskActionButtons(for: record)
+                if TaskDetailPresentation.showsTaskActions(for: record) {
+                    HStack(spacing: SonnySpacing.sm) {
+                        taskActionButtons(for: record)
+                    }
                 }
                 HStack {
                     Spacer(minLength: 0)
-                    moreActionsMenu(for: record)
+                    moreActionsMenu
                 }
+            }
+        }
+        .confirmationDialog(
+            TaskDeletePresentation.taskConfirmationTitle(for: record),
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(TaskDeletePresentation.taskConfirmButtonLabel, role: .destructive, action: onDeleteTask)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Reads the resolved state, which this view already has, rather than the record's
+            // bare link — the same reason the old sheet's message did.
+            if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
+                Text(message)
             }
         }
         .padding(.bottom, SonnySpacing.xl)
@@ -222,24 +251,11 @@ struct TaskReceiptView: View {
         }
     }
 
-    private func moreActionsMenu(for record: CompletedTaskRecord) -> some View {
+    /// The menu alone; its confirmation lives on `actionsRow`'s `ViewThatFits` (see there).
+    private var moreActionsMenu: some View {
         SonnyOverflowMenu(accessibilityLabel: "More actions for this task") {
             Button(TaskDeletePresentation.taskActionLabel, role: .destructive) {
                 showDeleteConfirmation = true
-            }
-        }
-        .confirmationDialog(
-            TaskDeletePresentation.taskConfirmationTitle(for: record),
-            isPresented: $showDeleteConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(TaskDeletePresentation.taskConfirmButtonLabel, role: .destructive, action: onDeleteTask)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            // Reads the resolved state, which this view already has, rather than the record's
-            // bare link — the same reason the old sheet's message did.
-            if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
-                Text(message)
             }
         }
     }

@@ -663,7 +663,12 @@ private struct TasksFoundationView: View {
                         // its buttons (founder, 2026-09-10). Its ideal is the width its rows need;
                         // the receipt is the side that grows.
                         listPane
-                            .frame(minWidth: 260, idealWidth: 320, maxWidth: 380, maxHeight: .infinity)
+                            .frame(
+                                minWidth: SonnyMetrics.tasksListMinWidth,
+                                idealWidth: SonnyMetrics.tasksListIdealWidth,
+                                maxWidth: SonnyMetrics.tasksListMaxWidth,
+                                maxHeight: .infinity
+                            )
 
                         TaskReceiptView(
                             viewModel: viewModel,
@@ -694,7 +699,12 @@ private struct TasksFoundationView: View {
                                 refreshSelectedScreenRecord()
                             }
                         )
-                        .frame(minWidth: 360, idealWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                        .frame(
+                            minWidth: SonnyMetrics.taskReceiptMinWidth,
+                            idealWidth: SonnyMetrics.taskReceiptIdealWidth,
+                            maxWidth: .infinity,
+                            maxHeight: .infinity
+                        )
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -1032,9 +1042,9 @@ private struct TasksToolbarRow: View {
                 .padding(.trailing, SonnySpacing.lg)
                 .sonnyTextField(size: .regular)
                 .focused(isFocused)
-                // Flexible down to 120 so the row fits the list's 260pt floor beside the Show
-                // picker: 40 of padding, the picker, and this field must share 260 (phase 12 review, F3;
-                // the floor came down with the receipt's rework, 2026-09-10).
+                // Flexible down to 120 so the row fits the list's floor (`SonnyMetrics.tasksListMinWidth`,
+                // 260) beside the Show picker: 40 of padding, the picker and this field share it
+                // (phase 12 review, F3; the floor came down with the receipt's rework, 2026-09-10).
                 .frame(minWidth: 120, idealWidth: 220, maxWidth: 220)
                 .overlay(alignment: .leading) {
                     Image(systemName: "magnifyingglass")
