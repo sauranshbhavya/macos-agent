@@ -701,18 +701,23 @@ private struct TasksFoundationView: View {
             // `TaskReceiptView` used to show in its place.
             Group {
                 if selectedTaskID != nil {
-                    HSplitView {
-                        // A column, not the elastic side: with no ceiling the list kept every spare
-                        // point and the receipt sat at its floor, wrapping its title and truncating
-                        // its buttons (founder, 2026-09-10). Its ideal is the width its rows need;
-                        // the receipt is the side that grows.
-                        listPane
-                            .frame(
-                                minWidth: SonnyMetrics.tasksListMinWidth,
-                                idealWidth: SonnyMetrics.tasksListIdealWidth,
-                                maxWidth: SonnyMetrics.tasksListMaxWidth,
-                                maxHeight: .infinity
-                            )
+                    // A fixed share rather than a draggable split (founder, 2026-09-10, fifth
+                    // round: the list "occupy 60% of the box" and the detail view 40% when it
+                    // opens). An `HSplitView` keeps its divider where it was last dragged and
+                    // hands a resize to both sides, so no pair of ideal widths reads as 60/40 at
+                    // more than one window size; the share is measured off the panel on every
+                    // layout instead and holds at every width. The 1pt rule between the two is
+                    // the divider the split used to draw.
+                    GeometryReader { proxy in
+                        let listWidth = (proxy.size.width * SonnyMetrics.tasksListShare).rounded()
+                        HStack(spacing: 0) {
+                            listPane
+                                .frame(width: listWidth)
+                                .frame(maxHeight: .infinity)
+
+                            Rectangle()
+                                .fill(SonnyTheme.border)
+                                .frame(width: 1)
 
                         TaskReceiptView(
                             viewModel: viewModel,
@@ -743,12 +748,8 @@ private struct TasksFoundationView: View {
                                 refreshSelectedScreenRecord()
                             }
                         )
-                        .frame(
-                            minWidth: SonnyMetrics.taskReceiptMinWidth,
-                            idealWidth: SonnyMetrics.taskReceiptIdealWidth,
-                            maxWidth: .infinity,
-                            maxHeight: .infinity
-                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -1062,12 +1063,13 @@ private struct TasksToolbarRow: View {
     @Binding var pageSize: TaskListPageSize
     @Environment(\.sonnyDensity) private var density
 
-    /// With the receipt pane open the list narrows to `SonnyMetrics.tasksListMinWidth` (260), and
-    /// the Show picker plus the search field at its 220pt ideal do not both fit there — the field's
-    /// 120pt floor left the prompt reading "Search task" (founder, 2026-09-10). Rather than clip
-    /// the field further, the narrow candidate drops to two rows: the picker alone on the first,
-    /// the field at its full width on the second. The one-row candidate leads so it wins whenever
-    /// there is room for it.
+    /// With the receipt pane open the list is `SonnyMetrics.tasksListShare` of the panel, about
+    /// 470pt at the 900-wide minimum window, so the Show picker and the search field at its 220pt
+    /// ideal fit on one row there. The two-row candidate stays for a narrower list: when the list
+    /// was a 260pt column (phases 12 and 13) the field's 120pt floor left the prompt reading
+    /// "Search task" (founder, 2026-09-10), and rather than clip the field the narrow candidate
+    /// drops to two rows, the picker alone on the first and the field at its full width on the
+    /// second. The one-row candidate leads so it wins whenever there is room for it.
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack {
