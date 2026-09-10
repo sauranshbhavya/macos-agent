@@ -354,6 +354,28 @@ regions.
   quoted in the changelog entry); `scripts/warnings` 0 at `d7907310`, exit 0, every file compiled;
   A fourth battery re-ran the thirteen mutants whose evidence phase 14 moved, the nine palette mutants (their file moved with the hover-inset lane) and the four density mutants (their file and killing suite moved with the list-rhythm lane), at `d7907310`: 13 killed, 0 survived, 0 unattributed (`scripts/mutate`, exit 0, its report at `.build/mutate/d790731-20260910T172407-69878/report.log`).
 
+## Phase 15, 2026-09-10: the founders' fifth round, after running phase 14
+
+One ask with a screenshot: the list at 60% of the box and the detail view at 40% when it opens.
+Decision 29 records the call. One commit on the branch, no lane needed.
+
+- **The split** (`668013fc`): `GeometryReader` measures the panel and the list takes
+  `SonnyMetrics.tasksListShare` (0.6) of it, rounded; the receipt takes the rest with no floor or
+  ideal; a one-point rule in the border token replaces the split's divider, and the drag goes
+  with it. The five width tokens are replaced by the one share; the toolbar's two-row candidate
+  stays for a narrower list. `TaskReceiptSourceScanTests` pins the share's value, one
+  `GeometryReader` in the selected branch reading it once, the receipt's frame with no floor, and
+  the rule; `TasksPaneSourceScanTests` pins that the branch with no selection holds no
+  `GeometryReader`.
+- Reviewed by a seventh adversarial workflow over `668013fc`, two reviewers (the split's layout at every window size, and rules and tests) with every finding attacked by an independent skeptic: 12 findings, 12 confirmed, 0 refuted. Two high, one defect from two sides: at the 900-wide minimum window 40% of the panel is 317pt with the sidebar collapsed and 251pt with it expanded, under the 360pt floor the draggable split used to enforce, and the receipt's metadata row (about 307pt at its widest, "Canceled after 1h 23m · Scheduled") and its three fixedSize buttons (about 248pt) have no fallback under that, so they overflowed. Four medium: the scan counting a closure signature rather than the bare `GeometryReader` token, no pin on the list-rule-receipt order, the no-selection branch pinned against the reader and the receipt only, and the work log without this phase. Six low: the toolbar comment's one figure for two sidebar states (found twice), a long comment line, the receipt call's indentation, and a commit message naming a filtered count without its filter. Every one answered in `0a6eab1e`: the arithmetic in `TasksSplitPresentation.listWidth(panelWidth:)`, the list's share capped at what the restored `taskReceiptMinWidth` and the rule leave and never negative, so the share holds from the default window up (705/469 with the sidebar collapsed, 607/403 expanded at 1280) and the receipt reads whole below it (the list 434 or 270 at the minimum); six unit tests and four plan mutants for it; the scans tightened; the comments restated; the fix commit naming its filter.
+- Verified: 3146 in 219, exit 0, 8 known issues at `0a6eab1e` (the flagged suite; the count line is
+  quoted in the changelog entry); `scripts/warnings` 0 at `0a6eab1e`, exit 0, every file compiled; the
+  batteries carried to `0a6eab1e` on the four conditions (`git diff --stat d7907310 0a6eab1e` over every target and
+  killing suite prints nothing).
+- **The mutation plan** (`14d7e2d9`, then `0a6eab1e`): `mutation/plans/ui-ux-claude.txt` holds the branch's
+  42 mutants under the founders' 2026-09-10 decision that a branch writes its plan and does not run it,
+  the ones its four batteries ran plus four for the split's arithmetic, and every one matches the tree at `0a6eab1e` (`scripts/mutate mutation/plans/ui-ux-claude.txt --check`, exit 0, 42 lines reading `1 match`); nothing was run, per the decision.
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries

@@ -4294,6 +4294,9 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Hold ⌘ alone for a moment: a key cap appears on each of the five nav rows (⌘1 to ⌘5), on Ask Sonny (⌘N) and on the sidebar toggle (⌘⌥S). Expanded, each sits at the control's trailing edge, and the Tasks row's count (if any) gives way to it; collapsed, each hangs just beneath its icon, covering neither that icon nor the next. Release ⌘, or press ⌘1, and they vanish at once; ⌘⇧ shows nothing.
 - [ ] Turn Caps Lock on and hold ⌘ again: the caps still appear. Close the Command Center window, reopen it from the Dock, hold ⌘: they still appear. Hold ⌘ until they show, then click the floating widget or another app: they vanish.
 
+**The founders' fifth round (2026-09-10)**
+- [ ] Tasks: select a task. The list is 60% of the panel and the receipt 40% at the default window, and still 60/40 at full screen, in both sidebar states; at the 900-wide minimum the receipt holds its width and the list gives (the list about 434pt with the sidebar collapsed, 270 with it expanded), and the receipt's title, metadata, buttons and sections read whole (the buttons may fall to two rows); the Show picker and the search field share one row in the list; a thin rule separates the two and there is no drag handle.
+
 ## 8. How to report back
 
 For each real finding, give me:

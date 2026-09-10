@@ -206,6 +206,14 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    already hears each row's shortcut. Each cap is one key cap holding the whole chord: expanded,
    it sits in the control's trailing slot (on the Tasks row in place of the active count);
    collapsed, it hangs beneath the icon in the gap between controls, covering nothing.
+29. **With a task open, the list is 60% of the panel and the receipt 40%.** The founders asked
+   for the proportion outright after running phase 14, where the list was a 260 to 380pt column
+   and the receipt took the rest. A share measured off the panel holds at every window size,
+   where a draggable split keeps its divider where it was last dragged and reads as 60/40 at one
+   size only; the divider goes with the drag, a one-point rule standing where it was. The
+   receipt keeps the 360pt floor its metadata row and its three buttons need, and at a window
+   too narrow for both (the 900-wide minimum, in either sidebar state) the list gives, so the
+   proportion holds from the default window up and the receipt reads whole below it.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
@@ -228,6 +236,9 @@ receipt reworked so titles get the width.
 **Founder decisions of 2026-09-10, fourth round, in one place**, after running phase 13: taller
 task rows and a Show picker with its margin; hover fills with air on every row; a larger default
 window applied once; and ⌘-held hints in the sidebar.
+
+**Founder decisions of 2026-09-10, fifth round, in one place**, after running phase 14: the Tasks
+list at 60% of the panel and the receipt at 40%.
 
 ## The tokens
 
