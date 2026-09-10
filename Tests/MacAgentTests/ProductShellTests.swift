@@ -626,8 +626,26 @@ struct ProductShellTests {
             try render(window: commandCenterWindow, to: URL(fileURLWithPath: snapshotPath))
         }
 
+        // Phase 14: the hold-⌘ hint monitor lives exactly as long as the window is on screen.
+        #expect(coordinator.isCommandKeyHintMonitorInstalled, "installed with the window")
+
         commandCenterWindow.close()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(application.activationPolicy() == .accessory)
+        #expect(coordinator.isCommandKeyHintMonitorInstalled == false, "removed when the window closes")
+
+        // Phase 14's review, F2: the window controller is kept and reused after a close, so an
+        // install tied to its making ran once per process while the removal ran on every close,
+        // and the hints were gone for good after the first close. Showing again reinstalls it — on
+        // the same window, so nothing here comes from making a new one.
+        coordinator.showCommandCenter()
+        #expect(coordinator.commandCenterWindow === commandCenterWindow)
+        #expect(commandCenterWindow.isVisible)
+        #expect(coordinator.isCommandKeyHintMonitorInstalled, "shown again, the monitor is back")
+
+        commandCenterWindow.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(coordinator.isCommandKeyHintMonitorInstalled == false)
         #expect(application.activationPolicy() == .accessory)
     }
 

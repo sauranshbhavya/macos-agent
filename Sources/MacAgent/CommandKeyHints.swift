@@ -59,6 +59,18 @@ final class CommandKeyHintModel: ObservableObject {
     /// Any key going down while a hold is armed or the hints are already showing ends both at once —
     /// a ⌘-shortcut firing must never leave its badge lingering over the page that shortcut opened.
     func otherKeyPressed() {
+        cancelHoldAndHide()
+    }
+
+    /// The window losing key status — the widget's panel coming forward, another app — while a hold
+    /// is counting or the hints are showing. The coordinator's local monitor receives nothing once
+    /// another window is key, so without this a glimpse that was on screen when focus left would
+    /// stay there until this window's next event.
+    func focusLost() {
+        cancelHoldAndHide()
+    }
+
+    private func cancelHoldAndHide() {
         holdTask?.cancel()
         holdTask = nil
         isShowingHints = false

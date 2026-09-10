@@ -119,4 +119,61 @@ struct CommandKeyHintsTests {
         try await Self.waitUntilShowing(model)
         #expect(model.isShowingHints == true, "a fresh hold after a hide must show the hints again")
     }
+
+    /// The one path where the hold task's own cancellation guard matters, and the one
+    /// `releasedBeforeTheDelayNeverShows` cannot reach (phase 14's review, F7 of the rules lane):
+    /// there the release lands before the task has ever run, so `flagsChanged`'s synchronous branch
+    /// decides everything and a model without `guard !Task.isCancelled` passes it. Here the test
+    /// suspends after arming so the task is genuinely counting, releases, and then keeps reading the
+    /// flag for a while: a model that dropped the guard flips it to true the moment the cancelled
+    /// sleep throws, which is what this reads for. It is a bounded read of the flag, never an await
+    /// of the task (the file's own rule), and a correct model passes it whatever the machine is
+    /// doing — if a stall let the hold fire before the release, the release itself hides the hints,
+    /// and nothing can show them again afterwards. The hold is long on purpose, so the release lands
+    /// while it is still counting on any ordinary run.
+    @Test
+    func releasedWhileTheHoldIsCountingNeverShowsAfterwards() async throws {
+        let model = CommandKeyHintModel(holdDelay: 0.5)
+        defer { model.holdTask?.cancel() }
+
+        model.flagsChanged(commandHeldAlone: true)
+        try await Task.sleep(for: .milliseconds(5))
+        model.flagsChanged(commandHeldAlone: false)
+        #expect(model.holdTask == nil, "the release drops the hold")
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline, !model.isShowingHints {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.isShowingHints == false, "a hold released while counting must never show, however late its cancelled task runs")
+    }
+
+    /// The window losing key status while the hints are up — the widget's panel, another app —
+    /// hides them at once; the coordinator's local monitor receives nothing from then on, so nothing
+    /// else could.
+    @Test
+    func focusLostWhileShowingHidesAtOnce() async throws {
+        let model = CommandKeyHintModel(holdDelay: Self.shortDelay)
+        defer { model.holdTask?.cancel() }
+
+        model.flagsChanged(commandHeldAlone: true)
+        try await Self.waitUntilShowing(model)
+        #expect(model.isShowingHints == true, "setup: the hold must have fired before this test can prove focus loss hides it")
+
+        model.focusLost()
+        #expect(model.isShowingHints == false, "a glimpse on screen when focus left would otherwise stay until the window's next event")
+    }
+
+    @Test
+    func focusLostWhileTheHoldIsCountingCancelsIt() {
+        let model = CommandKeyHintModel(holdDelay: Self.shortDelay)
+        defer { model.holdTask?.cancel() }
+
+        model.flagsChanged(commandHeldAlone: true)
+        #expect(model.holdTask != nil, "setup: a hold is counting")
+
+        model.focusLost()
+        #expect(model.holdTask == nil, "a hold armed in a window that is no longer key must not fire into it later")
+        #expect(model.isShowingHints == false)
+    }
 }

@@ -61,9 +61,19 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
-    /// Installed with the Command Center window and removed when it closes (`windowWillClose`); the
-    /// monitor outlives neither. `Any?` is `addLocalMonitorForEvents`'s own return type.
+    /// Installed each time Command Center is shown (`showCommandCenter`) and removed when it closes
+    /// (`windowWillClose`); the monitor outlives neither. `Any?` is `addLocalMonitorForEvents`'s own
+    /// return type. On every show rather than once when the window is made, because the window
+    /// controller is kept and reused after a close: an install tied to its making ran once per
+    /// process while the removal ran on every close, and the hints were gone for good after the
+    /// first close (phase 14's review, F2).
     private var commandKeyEventMonitor: Any?
+
+    /// Whether the hold-⌘ monitor is in place right now; what the window test reads across a
+    /// show, a close and a second show.
+    var isCommandKeyHintMonitorInstalled: Bool {
+        commandKeyEventMonitor != nil
+    }
 
     var commandCenterWindow: NSWindow? {
         commandCenterWindowController?.window
@@ -110,6 +120,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     func showCommandCenter() {
         let controller = commandCenterWindowController ?? makeCommandCenterWindowController()
         commandCenterWindowController = controller
+        installCommandKeyHintMonitor()
         present(controller)
     }
 
@@ -160,6 +171,14 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         removeCommandKeyHintMonitor()
     }
 
+    /// A local monitor sees nothing once another window is key — the widget's panel, another app —
+    /// so a glimpse that was on screen when focus left would otherwise stay there until this window's
+    /// next event (phase 14's review, F3 of the rules lane). Losing key status hides the hints and
+    /// drops any hold still counting.
+    func windowDidResignKey(_ notification: Notification) {
+        commandKeyHintModel.focusLost()
+    }
+
     // Renamed from "SonnyCommandCenterWindow" (2026-09-10, this phase): `makeWindow` below restores
     // whatever a Mac last resized *this* autosave key to, and a Mac that already had a smaller frame
     // saved under the old name would otherwise keep restoring it forever, never seeing the new
@@ -207,7 +226,6 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             contentViewController: hostingController
         )
         window.delegate = self
-        installCommandKeyHintMonitor()
         let controller = NSWindowController(window: window)
         // **On the controller, not only the window — this is the fix, not decoration.** `NSWindow`
         // has its own `setFrameAutosaveName(_:)`, which is what this used to call directly here, and
@@ -231,14 +249,15 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     /// `.keyDown` tells it a key fired, which ends a hold or a showing hint immediately (a
     /// ⌘-shortcut firing must never leave its badges lingering over the page it just opened). The
     /// event is returned untouched either way, so nothing else observing these events changes.
+    /// Idempotent — a show while the monitor is already in place is a no-op — which is what lets
+    /// `showCommandCenter` call it every time rather than only when the window is made.
     private func installCommandKeyHintMonitor() {
         guard commandKeyEventMonitor == nil else { return }
         commandKeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
             guard let self else { return event }
             switch event.type {
             case .flagsChanged:
-                let heldModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                self.commandKeyHintModel.flagsChanged(commandHeldAlone: heldModifiers == .command)
+                self.commandKeyHintModel.flagsChanged(commandHeldAlone: CommandKeyChord.isCommandHeldAlone(event.modifierFlags))
             case .keyDown:
                 self.commandKeyHintModel.otherKeyPressed()
             default:

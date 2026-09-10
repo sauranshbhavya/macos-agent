@@ -304,6 +304,13 @@ enum SonnyMetrics {
     static let tasksListMaxWidth: CGFloat = 380
     static let taskReceiptMinWidth: CGFloat = 360
     static let taskReceiptIdealWidth: CGFloat = 520
+    /// The hold-⌘ hint cap: shorter than a shortcuts-sheet cap (22) so it reads as a badge on the
+    /// control it names. `hintBadgeDrop` is how far beneath a collapsed-rail control the cap's
+    /// centre hangs — half its height plus a point, so it clears the icon above it and the one
+    /// below (`CommandKeyHintBadge.swift`).
+    static let hintBadgeHeight: CGFloat = 14
+    static let hintBadgeMinWidth: CGFloat = 12
+    static let hintBadgeDrop: CGFloat = 8
 }
 
 // MARK: - Motion

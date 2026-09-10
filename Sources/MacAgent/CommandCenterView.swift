@@ -266,6 +266,7 @@ struct CommandCenterView: View {
             VStack(spacing: SonnySpacing.sm) {
                 sidebarMark
                 sidebarToggleButton
+                    .commandKeyHintBelow("⌘⌥S", isShowing: commandKeyHints.isShowingHints)
             }
         } else {
             HStack(spacing: SonnySpacing.sm) {
@@ -277,6 +278,11 @@ struct CommandCenterView: View {
 
                 Spacer(minLength: 0)
 
+                // Expanded, the cap sits inline beside the toggle rather than over it: a three-key
+                // chord is wider than the 28pt button, and an overlay spilled it across the icon.
+                if commandKeyHints.isShowingHints {
+                    CommandKeyHintBadge(chord: "⌘⌥S")
+                }
                 sidebarToggleButton
             }
             .padding(.horizontal, SonnySpacing.sm)
@@ -313,13 +319,9 @@ struct CommandCenterView: View {
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("Ask Sonny")
             .help("Ask Sonny (⌘N)")
-            // Collapsed, there is no permanent ⌘N text to swap out — the icon alone, so a badge
-            // overlay is the only way to show the hint, the same shape as `sidebarButton`'s.
-            .overlay(alignment: .topTrailing) {
-                if commandKeyHints.isShowingHints {
-                    CommandKeyHintBadge(keys: ["⌘", "N"])
-                }
-            }
+            // Collapsed, there is no permanent ⌘N text to swap out — the icon alone, so the cap
+            // hangs beneath the button, the same treatment as the collapsed nav rows.
+            .commandKeyHintBelow("⌘N", isShowing: commandKeyHints.isShowingHints)
         } else {
             Button {
                 viewModel.widgetPresentationRequest += 1
@@ -332,7 +334,7 @@ struct CommandCenterView: View {
                     // Expanded, the ⌘N hint is already on screen permanently as plain text; while
                     // ⌘ is held it reads as the shared badge instead of reprinting a second one.
                     if commandKeyHints.isShowingHints {
-                        CommandKeyHintBadge(keys: ["⌘", "N"])
+                        CommandKeyHintBadge(chord: "⌘N")
                     } else {
                         Text("⌘N")
                             .font(SonnyType.mono)
@@ -357,7 +359,9 @@ struct CommandCenterView: View {
 
     /// Lives inside `sidebarWordmark` now, at the top of the sidebar in both states, rather than
     /// above the account row at the bottom (2026-09-10: ChatGPT's own placement, by founder ask).
-    /// The one `sidebar.left` glyph in the sidebar.
+    /// The one `sidebar.left` glyph in the sidebar. Its ⌘⌥S cap is placed by `sidebarWordmark`, the
+    /// only view that knows which state the toggle is in: inline beside it when expanded, hanging
+    /// beneath it in the collapsed rail.
     private var sidebarToggleButton: some View {
         Button(action: toggleSidebarCollapsed) {
             Image(systemName: "sidebar.left")
@@ -367,11 +371,6 @@ struct CommandCenterView: View {
         .keyboardShortcut("s", modifiers: [.command, .option])
         .accessibilityLabel(isSidebarCollapsed ? "Open sidebar" : "Close sidebar")
         .help(isSidebarCollapsed ? "Open sidebar (⌘⌥S)" : "Close sidebar (⌘⌥S)")
-        .overlay(alignment: .topTrailing) {
-            if commandKeyHints.isShowingHints {
-                CommandKeyHintBadge(keys: ["⌘", "⌥", "S"])
-            }
-        }
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
@@ -529,7 +528,9 @@ struct CommandCenterView: View {
     /// the icon and the label both step up from muted to text when selected so the state reads
     /// without colour. `ordinal` is the row's ⌘-number, which is the same order the sidebar shows.
     /// Collapsed, the row is the icon alone, centred in a 36x30 selection fill, with a `.help()`
-    /// tooltip carrying the title the row no longer has room to print.
+    /// tooltip carrying the title the row no longer has room to print. The ⌘-number cap has one
+    /// site per state: expanded, it takes the row's trailing slot — the one the Tasks row's count
+    /// uses, so the two swap rather than overlap — and collapsed, it hangs beneath the tile.
     private func sidebarButton(_ destination: CommandCenterDestination, ordinal: Int) -> some View {
         let selected = isSelected(destination)
         return Button {
@@ -545,6 +546,7 @@ struct CommandCenterView: View {
                             .fill(selected ? SonnyTheme.fillSelected : Color.clear)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+                    .commandKeyHintBelow("⌘\(ordinal)", isShowing: commandKeyHints.isShowingHints)
             } else {
                 HStack(spacing: SonnySpacing.sm) {
                     Image(systemName: destination.systemImage)
@@ -555,7 +557,9 @@ struct CommandCenterView: View {
                         .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
                         .foregroundStyle(SonnyTheme.text)
                     Spacer(minLength: SonnySpacing.sm)
-                    if destination == .tasks, viewModel.activeTaskCount > 0 {
+                    if commandKeyHints.isShowingHints {
+                        CommandKeyHintBadge(chord: "⌘\(ordinal)")
+                    } else if destination == .tasks, viewModel.activeTaskCount > 0 {
                         // The wireframe's "22" count is a Linear inbox placeholder; what is shown is
                         // the one number Sonny has, the active-task count, and only while it is
                         // non-zero.
@@ -579,15 +583,6 @@ struct CommandCenterView: View {
         .accessibilityLabel(destination.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .help(destination.title)
-        // One overlay covers both states: collapsed, the row is a small centred icon and this sits
-        // at its top trailing corner exactly where the founders pointed; expanded, it lands at the
-        // row's own trailing edge, near the top rather than vertically centred, which reads as a
-        // glimpse rather than a permanent part of the row.
-        .overlay(alignment: .topTrailing) {
-            if commandKeyHints.isShowingHints {
-                CommandKeyHintBadge(keys: ["⌘", "\(ordinal)"])
-            }
-        }
     }
 
     private func isSelected(_ destination: CommandCenterDestination) -> Bool {
