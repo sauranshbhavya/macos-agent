@@ -52,6 +52,17 @@ release does not pass it, so no single build can cover the test targets and rele
 `scripts/warnings selftest` re-proves every guard, including the one that matters: it reproduces
 the vanishing warning on a second incremental build, then shows the harness reporting it anyway.
 
+Mutation batteries are founder-triggered (decided 2026-09-10): `scripts/mutate-all` runs every
+plan under `mutation/plans/` through `scripts/mutate` in turn, about once a week, on a clean
+`main` (`WORKFLOW.md`'s Weekly battery section has the exit codes and what a session owes when
+one finds something). A branch writes its own `mutation/plans/<branch-name>.txt`
+(`scripts/mutate --help` has the format) and commits it — a plan being edited is an uncommitted
+file, and `scripts/mutate` refuses to start against a dirty tree, so the plan is committed before
+anything ever runs against it — and names that path in its changelog entry's `Mutation plan:`
+line. Nothing runs at PR time, after a rebase, or after a fix round. `scripts/warnings` still
+refuses to run beside a battery, and the worktree is still frozen for a battery's whole duration,
+exactly as before — none of that changed, only who presses the button and when.
+
 Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
 refuses to **start** while `git status --porcelain` prints anything: a hand-rolled battery reverts
 its mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
@@ -221,6 +232,10 @@ settle" twin → **2** for the view-model backstops, and the server one → **1*
 `scripts/mutate-untrusted-failures` records 65 for the first of those, which was true
 when written; a new test using the same helper joins the population the day it lands and no count of
 it stays current, so re-run the command rather than quoting either number.
+
+*(The three paragraphs below describe the per-branch mutation-battery era, which ended 2026-09-10;
+they now govern how an OLD battery result is read — `WORKFLOW.md` step 5's reading-guidance bullet
+— not what a branch does, since no branch runs a battery any more. Otherwise untouched.)*
 
 **Scoping a re-run by what a round changed is not scoping it by whose evidence moved, and the wrong
 one is the one a session can see** (SONNY-391). `WORKFLOW.md` step 5 carries a mutant across a
@@ -414,7 +429,7 @@ terminal so it is answered once, at setup, rather than mid-build.
 
 - **Work is ticket-driven via Plane.so — `WORKFLOW.md` is the process source of truth.** One ticket = one independently verifiable outcome, claimed by moving it to In Progress via `scripts/plane`, implemented by a single Claude Code CLI session that owns it start to finish. Every ticket closes with a comment written for a session with zero conversation history: completion evidence, or — if left open — why, what was tried, and the gotchas. Parallel sessions follow WORKFLOW.md's disjointness and worktree rules; only one packaged `MacAgent.app` runs live at a time. (The v1 two-agent Codex/Claude rotation this replaces is preserved in the changelog's historical sections.)
 - Before merge, a *fresh* CLI session with no implementer context reviews the branch: reads the real diff in full, reruns the real test suite unless `WORKFLOW.md` step 7 exempts the diff, hand-traces any non-trivial logic (date math, state machines) rather than trusting a passing suite alone — hunting for problems, not validating. How deep that review goes, and how many rounds it gets, are step 7's to set.
-- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, scope a battery re-run — after a fix round as much as a rebase — to the mutants whose evidence actually moved, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
+- **How much verification to run, and how deep the review goes, are `WORKFLOW.md`'s to set, not a session's to judge fresh each time** — step 5's verification-economy rules (carry a figure only with a tree-identity proof, mutate the property rather than one mutant per changed file, write the branch's mutation plan rather than run it, one full suite run before pushing, no Postgres for a Swift-only diff, stop and report past about ninety minutes) and step 7's review-depth rules (right-size the review to the stakes; the deep adversarial pass is for security, money, data loss and boundary code). Nothing there removes a check; it removes repeated work around the checks.
 - **Wireframe fidelity is the literal baseline for any page that has a wireframe, not a reference consulted only for whatever a given ticket happens to need.** Build/match the page's *entire* wireframe first — every element, not just the one thing a specific ticket is adding — then layer that ticket's own feature/data-model work on top of it. Never deflect from the wireframe's established design language while extending it. Pulling exact measurements for the one thing being built is not the same as confirming the whole page still matches once changes land — that gap is exactly how a real mismatch survived undetected across branch 8 and all of branch 9 (the Routines row's yellow badge is wired to step count, but the wireframe's own SVG layer is literally named `streak`) until caught by direct comparison against the raw SVG, not the derived design-reference doc. When a wireframe element is deliberately not built (out of scope, or an interaction model already rejected), that's a stated, reasoned exception recorded in the changelog — not a silent gap.
 - Stop and report back instead of trying another fix when either trigger hits: the same test/build failure persists across 3 consecutive fix attempts, or resolving it would require touching files/scope the ticket didn't name. Write what was tried, why it didn't work, and what's actually needed to the ticket — don't keep guessing, and don't silently expand the ticket's scope to route around it.
 - Commits and pushes to a ticket's branch are pre-authorized for the session implementing it — no per-commit approval needed. Opening a PR is fine. **Merging is a founder's, always** — either founder, depending on who is working, and never a session: never merge, and never rewrite pushed history. **One exception, already authorized rather than granted here:** the `git push --force-with-lease` a rebase requires, on the session's own ticket branch — never bare `--force`, and never any other branch, `main` included. `WORKFLOW.md`'s merge-one-branch-at-a-time rule states it in full. Commit titles reference the ticket identifier (e.g. `fix(core): SONNY-12 ...`).

@@ -157,6 +157,7 @@ Reviewed by: fresh session (per WORKFLOW.md step 7) — findings and their resol
 Spec sections covered: (list; flag any left partial and why)
 Files changed: (actual list — not "see diff")
 Tests: (exact command run, from CLAUDE.md) -> (pass/fail, counts) at <SHA — the head that merges; re-measured if the head moves after this is written>
+Mutation plan: mutation/plans/<name>.txt (founder-triggered, not run on this branch)
 
 Behavior added: (one bullet per new capability)
 Behavior preserved (required, no blanket claims): (one bullet per EXISTING flow this branch touched, confirming it still works — "everything else still works" is not acceptable, name them)
