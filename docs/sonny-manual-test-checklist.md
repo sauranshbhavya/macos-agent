@@ -4281,6 +4281,7 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Memory: each row reads icon, name and detail, the toggle, then the … menu at the end; the menu holds View then Delete, both naming the row for VoiceOver; the entries sheet's rows keep Continue as their one button and their menu last.
 - [ ] Workspaces: each card shows New task as its one button (blue); the card's face opens the detail; the … menu holds Open (which opens the widget for that workspace), Mark as team on solo cards, then Delete workspace in red with the same confirmation.
 - [ ] Settings › Preferences: Density is a two-way choice, Default and Comfortable, with no Compact; a Mac that had chosen Compact opens on Default; Comfortable still spreads rows, gaps and card insets everywhere and Default is unchanged.
+- [ ] Tasks, after the rework: with a task selected the list is a narrow column and the receipt takes the rest; the title reads whole on up to three lines; the badge, date, duration and workspace sit on one line, or the badge on its own line when the pane is narrow, never a phrase split across lines; Run again, Edit and run and Follow up read whole, on one row or two; drag the divider to its limit and shrink the window to 900 wide: nothing truncates or overlaps.
 
 ## 8. How to report back
 
