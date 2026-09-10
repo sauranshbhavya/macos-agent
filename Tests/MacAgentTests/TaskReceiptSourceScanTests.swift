@@ -12,26 +12,35 @@ struct TaskReceiptSourceScanTests {
     /// keeps its divider where it was last dragged and so reads as 60/40 at one window size only.
     @Test
     func theSplitIsAFixedShareReadFromTheMetrics() throws {
-        #expect(SonnyMetrics.tasksListShare == 0.6)
-
         let source = try MacAgentSource.read("CommandCenterView.swift")
         let page = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TasksFoundationView: View {")
         #expect(!page.contains("HSplitView"))
         let gate = try #require(page.range(of: "if selectedTaskID != nil {"))
         let withSelection = try MacAgentSource.braceBlock(of: String(page[gate.lowerBound...]), openedBy: "if selectedTaskID != nil {")
-        #expect(withSelection.components(separatedBy: "GeometryReader { proxy in").count - 1 == 1)
+        // The bare token, not a closure signature: a second reader under another parameter name
+        // would slip past "GeometryReader { proxy in" (phase 15 review, F1 of the rules lane).
+        #expect(withSelection.components(separatedBy: "GeometryReader").count - 1 == 1)
         #expect(withSelection.contains("HStack(spacing: 0) {"))
-        #expect(withSelection.components(separatedBy: "SonnyMetrics.tasksListShare").count - 1 == 1, "the share is read once, for the list's width")
-        #expect(withSelection.contains("let listWidth = (proxy.size.width * SonnyMetrics.tasksListShare).rounded()"))
+        // The arithmetic lives in `TasksSplitPresentation` (unit-tested), and the view reads no
+        // token of its own for the width: one call, its answer the list's frame.
+        #expect(withSelection.components(separatedBy: "TasksSplitPresentation.listWidth(panelWidth: proxy.size.width)").count - 1 == 1)
+        #expect(!withSelection.contains("SonnyMetrics.tasksListShare"))
         #expect(withSelection.contains("listPane\n                                .frame(width: listWidth)"))
-        // The receipt takes whatever the list leaves, with no floor or ideal of its own to fight the share.
+        // The order is the layout: list, rule, receipt (the rules lane's F2 named the swap).
+        let listRange = try #require(withSelection.range(of: "listPane"))
+        let ruleRange = try #require(withSelection.range(of: "Rectangle()"))
+        let receiptRange = try #require(withSelection.range(of: "TaskReceiptView("))
+        #expect(listRange.lowerBound < ruleRange.lowerBound)
+        #expect(ruleRange.lowerBound < receiptRange.lowerBound)
+        // The receipt takes whatever the list leaves: its floor is applied by the arithmetic that
+        // sizes the list, not by a frame of its own that would fight the HStack.
         let receipt = try #require(withSelection.range(of: "TaskReceiptView("))
         let receiptTail = String(withSelection[receipt.lowerBound...])
         #expect(receiptTail.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
         #expect(!receiptTail.contains("minWidth:"))
         #expect(!receiptTail.contains("idealWidth:"))
-        // The rule between the two: the divider the split used to draw, one point of the border token.
-        #expect(withSelection.contains("Rectangle()\n                                .fill(SonnyTheme.border)\n                                .frame(width: 1)"))
+        // The rule between the two: the divider the split used to draw, the border token at the rule's width.
+        #expect(withSelection.contains("Rectangle()\n                                .fill(SonnyTheme.border)\n                                .frame(width: SonnyMetrics.tasksSplitRuleWidth)"))
     }
 
     /// The one-line candidate comes first in both `ViewThatFits`, so the fallback is a fallback: swapped,

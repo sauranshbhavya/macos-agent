@@ -348,3 +348,35 @@
 >>> to
         "\(count) tasks"
 >>> end
+
+>>> mutant X1 the receipt's floor no longer takes from the list
+>>> file Sources/MacAgent/TasksSplitPresentation.swift
+>>> from
+        let widestTheReceiptAllows = panelWidth - receiptMinWidth - ruleWidth
+>>> to
+        let widestTheReceiptAllows = panelWidth
+>>> end
+
+>>> mutant X2 the list can go negative at a tiny panel
+>>> file Sources/MacAgent/TasksSplitPresentation.swift
+>>> from
+        return max(0, min(shared, widestTheReceiptAllows))
+>>> to
+        return min(shared, widestTheReceiptAllows)
+>>> end
+
+>>> mutant X3 the share truncates instead of rounding
+>>> file Sources/MacAgent/TasksSplitPresentation.swift
+>>> from
+        let shared = (panelWidth * share).rounded()
+>>> to
+        let shared = (panelWidth * share).rounded(.down)
+>>> end
+
+>>> mutant X4 the list's share drifts from the founders' 60
+>>> file Sources/MacAgent/ContentView.swift
+>>> from
+    static let tasksListShare: CGFloat = 0.6
+>>> to
+    static let tasksListShare: CGFloat = 0.5
+>>> end

@@ -706,10 +706,12 @@ private struct TasksFoundationView: View {
                     // opens). An `HSplitView` keeps its divider where it was last dragged and
                     // hands a resize to both sides, so no pair of ideal widths reads as 60/40 at
                     // more than one window size; the share is measured off the panel on every
-                    // layout instead and holds at every width. The 1pt rule between the two is
-                    // the divider the split used to draw.
+                    // layout instead and holds at every width that can hold both, the receipt's
+                    // floor taking from the list below that (`TasksSplitPresentation` has the
+                    // arithmetic and the reason). The rule between the two is the divider the
+                    // split used to draw.
                     GeometryReader { proxy in
-                        let listWidth = (proxy.size.width * SonnyMetrics.tasksListShare).rounded()
+                        let listWidth = TasksSplitPresentation.listWidth(panelWidth: proxy.size.width)
                         HStack(spacing: 0) {
                             listPane
                                 .frame(width: listWidth)
@@ -717,38 +719,38 @@ private struct TasksFoundationView: View {
 
                             Rectangle()
                                 .fill(SonnyTheme.border)
-                                .frame(width: 1)
+                                .frame(width: SonnyMetrics.tasksSplitRuleWidth)
 
-                        TaskReceiptView(
-                            viewModel: viewModel,
-                            record: selectedRecord,
-                            screenRecord: selectedScreenRecord,
-                            showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
-                            onClose: { selectedTaskID = nil },
-                            onDeleteTask: {
-                                guard let selectedRecord else { return }
-                                // The selection is not cleared here. `deleteTask` refreshes the
-                                // history only when it removed the record, and the `onChange` on
-                                // `taskHistoryRecords` then clears a selection whose record is
-                                // gone; a refused delete, which says why in the attention panel,
-                                // keeps the task selected and its receipt on screen rather than
-                                // dropping to "No task selected" over a row that is still in the
-                                // list (phase 11 review, F1).
-                                viewModel.deleteTask(selectedRecord)
-                            },
-                            onDeleteScreenRecord: {
-                                guard let selectedRecord else { return }
-                                viewModel.deleteScreenRecord(for: selectedRecord)
-                                // Re-resolve rather than clear: the task itself is still here, and
-                                // the whole point of this action is that its receipt survives.
-                                // Re-resolving moves the pane to the state a task with no screen
-                                // record has always had, which is also the state a task that never
-                                // ran one has — the equality this ticket owes, carried over from
-                                // the sheet the pane replaced.
-                                refreshSelectedScreenRecord()
-                            }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            TaskReceiptView(
+                                viewModel: viewModel,
+                                record: selectedRecord,
+                                screenRecord: selectedScreenRecord,
+                                showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
+                                onClose: { selectedTaskID = nil },
+                                onDeleteTask: {
+                                    guard let selectedRecord else { return }
+                                    // The selection is not cleared here. `deleteTask` refreshes the
+                                    // history only when it removed the record, and the `onChange` on
+                                    // `taskHistoryRecords` then clears a selection whose record is
+                                    // gone; a refused delete, which says why in the attention panel,
+                                    // keeps the task selected and its receipt on screen rather than
+                                    // dropping to "No task selected" over a row that is still in the
+                                    // list (phase 11 review, F1).
+                                    viewModel.deleteTask(selectedRecord)
+                                },
+                                onDeleteScreenRecord: {
+                                    guard let selectedRecord else { return }
+                                    viewModel.deleteScreenRecord(for: selectedRecord)
+                                    // Re-resolve rather than clear: the task itself is still here, and
+                                    // the whole point of this action is that its receipt survives.
+                                    // Re-resolving moves the pane to the state a task with no screen
+                                    // record has always had, which is also the state a task that never
+                                    // ran one has — the equality this ticket owes, carried over from
+                                    // the sheet the pane replaced.
+                                    refreshSelectedScreenRecord()
+                                }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1063,9 +1065,11 @@ private struct TasksToolbarRow: View {
     @Binding var pageSize: TaskListPageSize
     @Environment(\.sonnyDensity) private var density
 
-    /// With the receipt pane open the list is `SonnyMetrics.tasksListShare` of the panel, about
-    /// 470pt at the 900-wide minimum window, so the Show picker and the search field at its 220pt
-    /// ideal fit on one row there. The two-row candidate stays for a narrower list: when the list
+    /// With the receipt pane open the list is `SonnyMetrics.tasksListShare` of the panel, less what
+    /// the receipt's floor needs at a narrow one (`TasksSplitPresentation`): at the 900-wide minimum
+    /// window that is 434pt with the sidebar collapsed (its default) and 270pt with it expanded, and
+    /// the Show picker and the search field at its 220pt ideal fit on one row in the first. The
+    /// two-row candidate stays for the second and for any narrower list: when the list
     /// was a 260pt column (phases 12 and 13) the field's 120pt floor left the prompt reading
     /// "Search task" (founder, 2026-09-10), and rather than clip the field the narrow candidate
     /// drops to two rows, the picker alone on the first and the field at its full width on the

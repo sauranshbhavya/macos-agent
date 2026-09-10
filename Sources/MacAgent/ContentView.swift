@@ -297,9 +297,14 @@ enum SonnyMetrics {
     static let settingsControlWidth: CGFloat = 180
     /// The Tasks page with a task open: the list's share of the panel's width, the receipt taking
     /// the rest. A share rather than a set of widths, so the proportion the founders asked for
-    /// (60/40, 2026-09-10) holds at every window size; `TasksToolbarRow`'s two-row candidate is
-    /// what absorbs a list narrower than its one-row toolbar needs.
+    /// (60/40, 2026-09-10) holds at every window size that can hold both; below that the receipt
+    /// keeps `taskReceiptMinWidth`, the floor its metadata row and its three buttons need, and the
+    /// list gives (`TasksSplitPresentation`). `tasksSplitRuleWidth` is the rule between the two,
+    /// the divider the draggable split used to draw. `TasksToolbarRow`'s two-row candidate is what
+    /// absorbs a list narrower than its one-row toolbar needs.
     static let tasksListShare: CGFloat = 0.6
+    static let taskReceiptMinWidth: CGFloat = 360
+    static let tasksSplitRuleWidth: CGFloat = 1
     /// The hold-⌘ hint cap: shorter than a shortcuts-sheet cap (22) so it reads as a badge on the
     /// control it names. `hintBadgeDrop` is how far beneath a collapsed-rail control the cap's
     /// centre hangs — half its height plus a point, so it clears the icon above it and the one

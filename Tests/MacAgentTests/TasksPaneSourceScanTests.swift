@@ -60,6 +60,8 @@ struct TasksPaneSourceScanTests {
         let withoutSelection = try MacAgentSource.braceBlock(of: String(page[gate.upperBound...]), openedBy: "} else {")
         #expect(withoutSelection.contains("listPane"))
         #expect(!withoutSelection.contains("GeometryReader"))
+        #expect(!withoutSelection.contains("HStack(spacing: 0)"))
+        #expect(!withoutSelection.contains("Rectangle()"))
         #expect(!withoutSelection.contains("TaskReceiptView"))
     }
 

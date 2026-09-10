@@ -6,8 +6,9 @@ import Foundation
 ///
 /// **Why the workspace name moved here rather than staying a trailing column.** With the receipt
 /// pane open the list narrowed to a 260 to 380pt column (phases 12 and 13; since the fifth round
-/// it is `SonnyMetrics.tasksListShare` of the panel), and a trailing `Text(workspaceName)` was spending that width on a second
-/// piece of metadata while the title — the thing a person actually reads a row for — was truncated
+/// it is `SonnyMetrics.tasksListShare` of the panel), and a trailing `Text(workspaceName)` was
+/// spending that width on a second piece of metadata while the title — the thing a person
+/// actually reads a row for — was truncated
 /// to a few words (founder, 2026-09-10: "Allow claude a…", "Compare https://sim…"). Folding the
 /// workspace into the row's existing status line, the way the receipt's own metadata row already
 /// joins its phrases with " · ", gives the trailing edge back to the date alone.
