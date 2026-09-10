@@ -4274,6 +4274,14 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Workspaces: each card shows Open and New task, and a … menu at the trailing edge with Mark as team (solo cards only) and Delete workspace in red; the delete still asks with the same sentence. Memory: each row shows View, the toggle and a … menu with Delete; the entries sheet's rows show Continue and a … menu with Delete. Hovering a … shows the highlight; VoiceOver names it "More actions for <name>".
 - [ ] Settings › Preferences: a Density slider sits under the interface theme with Compact, Default and Comfortable beneath it. Dragging it changes row heights, list gaps and card insets on every page, in the sidebar, in the ⌘K palette, in the shortcuts sheet and in the Settings sidebar itself, live, without closing Settings or changing the page; text and buttons keep their size; the widget does not change. Default looks exactly as before. The choice survives a relaunch.
 
+**The founders' second round (2026-09-09)**
+- [ ] Tasks: on arrival nothing is selected and the list fills the page; pressing a row opens the pane beside it; the × at the receipt's top right (or Esc) closes it and the list is full width again; ⌘K to a task, an Insights row and a finished-run notification still open the pane on that task.
+- [ ] Tasks: a "Show" menu leads the search field with 10, 25, 50, 100 and All (25 to begin with); the sections and the ↑↓ walk cover only the shown rows; under the last section a line reads "25 of 69 shown" with a Show all beside it, absent when nothing is hidden; the choice survives a relaunch; opening a task from ⌘K that is beyond the shown rows still shows it, and the next change of the menu or leaving the page goes back to the chosen size.
+- [ ] Insights: the chart card and the "Breakdown by workspace" card share one top edge and one height, with the same gap between them as between the stat cards, at the window minimum and wide. Hovering a day keeps the day name in place and shows "30 tasks" (or "1 task") in a small pill above that bar, on one line, never covering the bar.
+- [ ] Memory: each row reads icon, name and detail, the toggle, then the … menu at the end; the menu holds View then Delete, both naming the row for VoiceOver; the entries sheet's rows keep Continue as their one button and their menu last.
+- [ ] Workspaces: each card shows New task as its one button (blue); the card's face opens the detail; the … menu holds Open (which opens the widget for that workspace), Mark as team on solo cards, then Delete workspace in red with the same confirmation.
+- [ ] Settings › Preferences: Density is a two-way choice, Default and Comfortable, with no Compact; a Mac that had chosen Compact opens on Default; Comfortable still spreads rows, gaps and card insets everywhere and Default is unchanged.
+
 ## 8. How to report back
 
 For each real finding, give me:

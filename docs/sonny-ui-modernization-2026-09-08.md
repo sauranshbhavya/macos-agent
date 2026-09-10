@@ -151,6 +151,31 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    memory row); the secondary and destructive actions move into the menu, delete in red, still
    confirmed. Per-entry Remove controls inside an editor list are not card actions and stay where
    they are.
+19. **The task pane exists only while a task is chosen, and it can be closed.** The founders ran
+   phase 11 and found the pane always there, empty when nothing was chosen and with no way to
+   dismiss it once something was. Nothing is selected on appear now; the list has the page to
+   itself until a row is pressed, the receipt carries a close control at its header's trailing
+   edge, and Esc closes it too. A task requested from elsewhere still opens the pane by selecting.
+20. **The Tasks list has a page size, not a sort.** The founders asked, Gmail in mind, to choose how
+   many tasks to see. A "Show" picker in the toolbar offers 10, 25, 50, 100 and All, remembered
+   between launches, with a footer saying how many of the total are shown and a Show all beside
+   it. The cap applies after the search and before grouping, so the sections and the keyboard walk
+   see only the shown rows. No sort control: the list is newest first and the ask was a count. A
+   task opened from the palette, Insights or a notification that falls outside the window is shown
+   anyway for that visit, without touching the remembered size.
+21. **Compact is gone, and a two-way choice is a segmented control.** The founders judged that
+   nobody would choose Compact because it clutters the app. Density is Default and Comfortable
+   now; a user who had chosen Compact lands on Default through the unknown-value fallback. A
+   slider with two stops reads as broken, so the control the founders asked for as a slider became
+   a segmented picker at two stops; the row's title and detail did not change.
+22. **A memory row's menu is last, after the toggle, and View lives inside it.** The founders'
+   call on the row's order: icon, name and detail, the recording toggle, then the ellipsis menu
+   holding View and Delete. The entries sheet's row keeps Continue as its one visible action and
+   its menu last.
+23. **A workspace card has one button, New task; Open lives in its menu.** The founders found the
+   Open button redundant beside a card whose whole face opens the detail. Open is not the detail,
+   it opens the widget bound to that workspace, so it did not vanish: it is the card menu's first
+   item, still disabled while a task runs. New task became the card's primary.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
@@ -161,6 +186,10 @@ staying registered were each ratified as they stand; the monthly note was restor
 recording cap; Run again on the rows plus an editable re-run; a detail pane beside the task list
 with a redesigned receipt; a density setting that scales spacing and rows but not text; an
 ellipsis menu for secondary and destructive actions on workspace cards and memory rows.
+
+**Founder decisions of 2026-09-09, second round, in one place**, after running phase 11: the pane
+only while a task is chosen, with a close; a page-size picker for the task list; Compact removed;
+the memory row's menu last with View inside; the workspace card's Open button gone from its face.
 
 ## The tokens
 

@@ -244,6 +244,44 @@ because it edits every row-height site including the ones the other lanes rewrot
   quoted in the changelog entry); `scripts/warnings` 0 at `edaa0cd3`, exit 0, every file compiled;
   `scripts/mutate` at `edaa0cd3`, 28 mutants by property (the nine palette mutants re-run because the density lane edited their file, five on `TasksSelectionPresentation`, four on `SonnyDensity`, five on `VoiceRecordingCountdown`, three on the auto-stop and two on Edit and run): 28 killed, 0 survived, 0 unattributed (its report is kept at `.build/mutate/edaa0cd-20260909T172537-89083/report.log`); every kill is named by a test with a plain connection to its mutant, and the auto-stop's recording-identity guard died only to the test its design showed missing, added at `edaa0cd3`.
 
+## Phase 12, 2026-09-09: the founders' second round, after running phase 11
+
+Seven asks came back from running phase 11 with screenshots: the task pane always present and
+unclosable, the Insights breakdown card mis-sized against its neighbours, the memory row's menu and
+View in the wrong places, Compact judged a stop nobody would choose, the workspace card's Open
+redundant beside a face that opens the detail, the chart's hover count wrapping in its column, and
+a way to choose how many tasks to see. No question needed to go back; decisions 19 to 23 record the
+calls made. Four lanes ran in parallel from `ee88c3e4` on disjoint regions.
+
+- **Tasks list** (`021df3d6`, merged `7a29814b`): the pane renders only with a selection, nothing
+  is selected on appear, the receipt's header carries a close control ("Close task") and Esc still
+  clears; the appearance animates through `sonnyAnimation`. `TaskListPageSize` (10, 25, 50, 100,
+  All; default 25; a `UserDefaults` store on the collapse store's pattern) caps the search-filtered
+  records before grouping, a "Show" picker leads the search field, a footer reads "25 of 69 shown"
+  with Show all beside it, and a task requested from elsewhere that falls outside the window lifts
+  the cap for that visit only. Sixteen tests: fourteen on the value type and store, two scans.
+- **Insights** (`0e5dc010`, merged `3015935f`): the bento's second row is an `HStack(alignment:
+  .top)` spanning the grid's four columns, the breakdown panel filling the row the chart sets, with
+  the stat cards' own `SonnySpacing.md` gap between them (the brief said `lg`; the lane measured the
+  stat row and matched it). The chart's day label no longer changes on hover; the count sits in a
+  pill above the hovered bar, `fixedSize`, one line, with an accessibility value on the column, and
+  `WeeklyCompletionChartPresentation.countLabel(for:)` holds the wording (two tests).
+- **Memory and workspaces** (`64baf46a`, merged `2af40170`): the memory row reads icon, texts,
+  toggle, then the menu, with View first in the menu and Delete after a divider; the workspace
+  card's face has New task alone, now the primary, and its menu reads Open (still
+  `openWorkspaceWidget`, still disabled in flight), Mark as team, Delete workspace. The entries
+  sheet's row already had the target shape. Two scans added, one extended. The lane's question:
+  the detail sheet has no way to open the widget for its workspace; whether it should is the
+  founders' (not added).
+- **Density, two stops** (`34f1512c`, merged `fe9fcd3c`): `SonnyDensity` is Default and
+  Comfortable; a stored "compact" reads as Default through the existing fallback, pinned by test;
+  the control is a two-way segmented picker with its label and value on the picker itself, since a
+  slider with two stops reads as broken. Two tests added, three followed the case removal.
+- Reviewed by a fourth adversarial workflow over the merged tree at `fe9fcd3c`, five reviewers (the Tasks list, Insights, the memory row and the card, density, and rules and tests) with every finding attacked by an independent skeptic: 20 findings, 18 confirmed, 2 refuted. Two high: the chart's hover pill needed about 27pt above the bar row and the title was 16pt away, so it landed on the title on every hover (found by three reviewers); and only the breakdown panel was flexible in height, so a panel taller than the chart put the gap back under the chart. Ten medium: a page size shrunk below the selection leaving the pane open on a row the list no longer drew (found twice); the Show picker and the 220pt search field not fitting the list's 300pt floor (found twice); the two-segment density picker cramped in a 180pt frame; the request override's guard and ternary pinned by an assignment's text only, and no pin on what a shrunk size does to the selection; the primary tone and Open's predicate asserted by bare containment. Six low: the pill spilling past the card at the ends of the week, the chart's wiring unpinned, and three more scan gaps. Every one fixed in `5ac01639`, plus the two auto-stop tests' wall-clock windows the insights lane's first run had exposed; the battery then exposed the other half of that bet and `559fa6b3` closed it.
+- Verified: 3097 in 211, exit 0, 8 known issues at `559fa6b3` (the flagged suite; the count line is
+  quoted in the changelog entry); `scripts/warnings` 0 at `559fa6b3`, exit 0, every file compiled;
+  `scripts/mutate` at `559fa6b3`, 12 mutants by property (the density model's four re-run because their file moved, four on `TaskListPageSize`, one on the chart's wording, and the three auto-stop mutants re-run because their killing suite moved): 12 killed, 0 survived, 0 unattributed (its report is kept at `.build/mutate/559fa6b-20260910T095513-17728/report.log`); every kill is named by its own suite. A first run at `5ac01639` killed its first ten and stalled on the eleventh, the mutant that drops the cancel, because two tests awaited a cancelled task's value; it was stopped through its trap, which restored the tree, and the tests read the flag instead (`559fa6b3`).
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries
