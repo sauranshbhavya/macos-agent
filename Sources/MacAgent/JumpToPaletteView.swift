@@ -292,7 +292,11 @@ private struct JumpToPaletteRow: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, SonnySpacing.lg)
+            // Text sits at the palette's usual `lg` inset; the highlight itself is inset only
+            // `sm` from the row's true edge (the `TaskHistoryRow` shape), so hovering shows a
+            // floating rounded rect with air on every side instead of a fill flush with the
+            // dialog's own edges (founder, 2026-09-10).
+            .padding(.horizontal, SonnySpacing.lg - SonnySpacing.sm)
             .frame(height: density.listRowHeight)
             .background(
                 RoundedRectangle(cornerRadius: SonnyRadius.control)
@@ -303,6 +307,7 @@ private struct JumpToPaletteRow: View {
         .buttonStyle(.plain)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
+        .padding(.horizontal, SonnySpacing.sm)
         .accessibilityLabel(row.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

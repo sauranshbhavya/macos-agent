@@ -3468,8 +3468,12 @@ private struct RoutineRow: View {
                     .accessibilityLabel("Run \(presentation.name) on schedule")
             }
         }
+        // Text sits at the page's usual `xl` inset; the highlight itself is inset only `sm` from
+        // the row's true edge, so the fill floats clear of the text on each side instead of
+        // hugging it (founder, 2026-09-10 — the same `TaskHistoryRow` shape this file already uses).
+        .padding(.horizontal, SonnySpacing.xl - SonnySpacing.sm)
         .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
-        .padding(.horizontal, SonnySpacing.xl)
+        .padding(.horizontal, SonnySpacing.sm)
         .frame(height: density.scaled(56))
         .contentShape(Rectangle())
         .onTapGesture(perform: openDetail)
