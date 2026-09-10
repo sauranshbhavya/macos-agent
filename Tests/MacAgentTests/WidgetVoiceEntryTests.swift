@@ -392,10 +392,13 @@ struct WidgetVoiceEntryTests {
         #expect(viewModel.isRecordingVoice == false, "the manual stop must have run")
         #expect(viewModel.voiceRecordingStartedAt == nil)
 
-        // Cancellation interrupts the sleep almost immediately, so this awaits a real signal rather
-        // than a wall-clock window — it would otherwise sit for the full sixty seconds above.
-        await scheduledTask.value
+        // `cancel()` sets `isCancelled` synchronously, so the flag is the signal and nothing is
+        // awaited. Awaiting the task's value here would wait out the whole window under a mutant
+        // that drops the cancel, which is how the phase 12 battery stalled on exactly that mutant
+        // for a day-long window instead of reporting the kill. The task is cancelled again
+        // afterwards either way, so nothing sleeping outlives the test.
         #expect(scheduledTask.isCancelled, "the manual stop must cancel the task it is racing")
+        scheduledTask.cancel()
     }
 
     /// Two schedules back to back leave one live task: the second cancels the first, so a stop and
@@ -419,12 +422,13 @@ struct WidgetVoiceEntryTests {
         viewModel.scheduleVoiceRecordingAutoStop(startedAt: second)
         let secondTask = try #require(viewModel.voiceRecordingAutoStopTask)
 
-        await firstTask.value
+        // The flag, never the first task's value: under a mutant that drops the cancel the value
+        // would take the whole window to arrive (see the stop test above).
         #expect(firstTask.isCancelled, "the second schedule must cancel the first")
         #expect(!secondTask.isCancelled)
-        secondTask.cancel()
-        await secondTask.value
         #expect(viewModel.isRecordingVoice, "neither task stopped anything")
+        firstTask.cancel()
+        secondTask.cancel()
     }
 
     /// An auto-stop scheduled for one recording must never stop a different one: the guard on
