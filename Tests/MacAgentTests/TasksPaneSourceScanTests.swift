@@ -127,14 +127,35 @@ struct TasksPaneSourceScanTests {
 
         let fits = try MacAgentSource.braceBlock(of: toolbarBody, openedBy: "ViewThatFits(in: .horizontal) {")
         let oneRow = try #require(fits.range(of: "HStack {"))
-        let twoRow = try #require(fits.range(of: "VStack(alignment: .leading, spacing: SonnySpacing.sm) {"))
+        // `SonnySpacing.md`, not `.sm` — phase 14's founder ask ("the spacing between each list
+        // thing is very, very tight"): the picker row and the search row of the two-row candidate
+        // now keep `.md` between them rather than the tighter `.sm` this pin held through phase 13.
+        let twoRow = try #require(fits.range(of: "VStack(alignment: .leading, spacing: SonnySpacing.md) {"))
         #expect(oneRow.lowerBound < twoRow.lowerBound, "the one-row candidate must lead so it wins whenever it fits")
         // Both candidates hold the search field once; the hidden ⌘F button is built once, outside them.
-        let narrow = try MacAgentSource.braceBlock(of: fits, openedBy: "VStack(alignment: .leading, spacing: SonnySpacing.sm) {")
+        let narrow = try MacAgentSource.braceBlock(of: fits, openedBy: "VStack(alignment: .leading, spacing: SonnySpacing.md) {")
         #expect(narrow.components(separatedBy: "searchField(").count - 1 == 1)
         #expect(fits.components(separatedBy: "searchField(").count - 1 == 2)
         #expect(fits.components(separatedBy: "focusShortcutButton").count - 1 == 0)
         #expect(toolbarBody.components(separatedBy: "focusShortcutButton").count - 1 == 1)
         #expect(toolbar.components(separatedBy: ".keyboardShortcut(\"f\"").count - 1 == 1)
+    }
+
+    /// The founders' ask of 2026-09-10: the toolbar's content was sitting hard against the panel's
+    /// top edge, and the two-line task rows had almost no air above or below their text. Both are
+    /// now explicit literals rather than a `minHeight`-centered box or a single-line row height, so
+    /// a regression to either shows up here by name.
+    @Test
+    func theToolbarKeepsItsMarginsAndTheRowsReadTwoLineHeight() throws {
+        let source = try MacAgentSource.read("CommandCenterView.swift")
+
+        let toolbar = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TasksToolbarRow: View {")
+        let toolbarBody = try MacAgentSource.braceBlock(of: toolbar, openedBy: "var body: some View {")
+        #expect(toolbarBody.contains(".padding(.top, SonnySpacing.md)"))
+        #expect(toolbarBody.contains(".padding(.bottom, SonnySpacing.sm)"))
+
+        let row = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TaskHistoryRow: View {")
+        #expect(row.contains(".frame(height: density.twoLineRowHeight)"))
+        #expect(!row.contains(".frame(height: density.listRowHeight)"))
     }
 }
