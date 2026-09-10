@@ -151,8 +151,8 @@ has documented consequences:
   checkout: budget a cold `swift build`, and don't share `.build/` between worktrees.
 - **Cap: about five concurrent heavy threads, reviewers counted.** The constraint this
   expresses is the machine's, not a human's. A heavy thread is anything holding a build — an
-  implementing lane, and equally a reviewing session running the full suite,
-  `scripts/warnings`, or a mutation battery. Reviewers are not free, and a wave that counts
+  implementing lane, and equally a reviewing session running the full suite or
+  `scripts/warnings`, and a founder's `scripts/mutate-all` while it runs. Reviewers are not free, and a wave that counts
   only implementers is already over the cap. Past roughly five, every lane slows every other
   one: during the 2026-08-27/28 wave the flagged suite went from about 40s to about 200s and
   `scripts/warnings` from about 120s to about 460s. **Those four figures are that wave's own
@@ -325,8 +325,13 @@ something up.)
   proof, not merely the new SHA. (Several sessions in the 2026-08-27/28 wave held the proof
   and re-ran anyway. That re-run is the waste this removes — the rule is untouched.)
 - **Write the plan; do not run it.** Every branch that adds or changes behaviour writes its
-  mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format)
-  and names that path in its changelog entry's `Mutation plan:` line. Nothing runs at PR time,
+  mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format;
+  a slash in the branch name is a folder, so `fix/some-name`'s plan is
+  `mutation/plans/fix/some-name.txt`, and `scripts/mutate-all` reads the folder recursively),
+  commits it, and names that path in its changelog entry's `Mutation plan:` line. `scripts/mutate
+  --help` still says to keep a plan outside the working tree; that describes the retired
+  per-branch run, where a plan was a scratch file, and does not apply here — a branch's plan is
+  committed, which is exactly what keeps the tree clean for the run. Nothing runs at PR time,
   after a rebase, or after a fix round — the founders run every plan in the repository together,
   about weekly (`## Weekly battery`, below). **Mutate the property, not the diff**, still governs
   what goes into the plan: it covers the behaviour the ticket claims to protect and every test
@@ -911,7 +916,8 @@ something, so the record shows when the repository's plans were last actually me
 than only when one of them found something.
 
 This is founder-triggered, never a session's to start. A session that wants a shape measured adds
-it to the relevant branch's `mutation/plans/<branch-name>.txt` and says so in its changelog entry
+it to the relevant branch's `mutation/plans/<branch-name>.txt` (one folder down for a slashed
+branch name) and says so in its changelog entry
 or its review (step 5, step 7) — it does not run `scripts/mutate-all` itself.
 
 ## 8. Merge strategy, and the history rewrite of 2026-08-24

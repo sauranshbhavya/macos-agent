@@ -56,10 +56,13 @@ Mutation batteries are founder-triggered (decided 2026-09-10): `scripts/mutate-a
 plan under `mutation/plans/` through `scripts/mutate` in turn, about once a week, on a clean
 `main` (`WORKFLOW.md`'s Weekly battery section has the exit codes and what a session owes when
 one finds something). A branch writes its own `mutation/plans/<branch-name>.txt`
-(`scripts/mutate --help` has the format) and commits it — a plan being edited is an uncommitted
-file, and `scripts/mutate` refuses to start against a dirty tree, so the plan is committed before
-anything ever runs against it — and names that path in its changelog entry's `Mutation plan:`
-line. Nothing runs at PR time, after a rebase, or after a fix round. `scripts/warnings` still
+(`scripts/mutate --help` has the format; a slash in the branch name is a folder, so
+`fix/some-name`'s plan is `mutation/plans/fix/some-name.txt`, read recursively) and commits it —
+a plan being edited is an uncommitted file, and `scripts/mutate` refuses to start against a dirty
+tree, so the plan is committed before anything ever runs against it; `scripts/mutate --help`'s
+line about keeping a plan outside the working tree describes the retired per-branch run, where a
+plan was a scratch file, and does not apply to a branch's own committed plan — and names that path
+in its changelog entry's `Mutation plan:` line. Nothing runs at PR time, after a rebase, or after a fix round. `scripts/warnings` still
 refuses to run beside a battery, and the worktree is still frozen for a battery's whole duration,
 exactly as before — none of that changed, only who presses the button and when.
 
