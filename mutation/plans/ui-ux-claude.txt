@@ -1,0 +1,350 @@
+# ui-ux-claude: the branch's mutation plan, one record per property the branch added or changed.
+# Written under the founders' decision of 2026-09-10 (batteries are founder-triggered, over every
+# plan under mutation/plans/, about weekly; a branch writes its plan and does not run it). These are
+# the mutants the branch's batteries ran while batteries were still a per-branch step (phase 8
+# at 813a8089, phase 11 at edaa0cd3, phase 12 at 559fa6b3, the palette and density mutants re-run at
+# d7907310), each killed then; the plan is what a weekly run measures them against from now on.
+# Format: scripts/mutate --help. Every `from` block must match its file exactly once.
+
+>>> mutant S1 work in progress outranks a question waiting for the user
+>>> file Sources/MacAgent/StatusItemPresentation.swift
+>>> from
+        if isAwaitingApproval {
+            return .waiting
+        }
+        if isRunning {
+            return .working
+        }
+>>> to
+        if isRunning {
+            return .working
+        }
+        if isAwaitingApproval {
+            return .waiting
+        }
+>>> end
+
+>>> mutant S2 a failure shows while a run is still going
+>>> file Sources/MacAgent/StatusItemPresentation.swift
+>>> from
+        if isRunning {
+            return .working
+        }
+        if hasFailure {
+            return .failed
+        }
+>>> to
+        if hasFailure {
+            return .failed
+        }
+        if isRunning {
+            return .working
+        }
+>>> end
+
+>>> mutant S3 idle draws the filled glyph like every other state
+>>> file Sources/MacAgent/StatusItemPresentation.swift
+>>> from
+        systemImageName: "wand.and.stars.inverse",
+>>> to
+        systemImageName: "wand.and.stars",
+>>> end
+
+>>> mutant S4 the failed state borrows the working tint
+>>> file Sources/MacAgent/StatusItemPresentation.swift
+>>> from
+        tint: .failure,
+>>> to
+        tint: .accent,
+>>> end
+
+>>> mutant S5 the waiting state borrows the working VoiceOver name
+>>> file Sources/MacAgent/StatusItemPresentation.swift
+>>> from
+        accessibilityLabel: "Sonny, waiting for you"
+>>> to
+        accessibilityLabel: "Sonny, working"
+>>> end
+
+>>> mutant J1 matching becomes case-sensitive
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        title.range(of: query, options: .caseInsensitive) != nil
+>>> to
+        title.range(of: query) != nil
+>>> end
+
+>>> mutant J2 the routines group loses its cap under a query
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        let routineRows: [Row] = mostRecentFirst(matchingRoutines, count: isEmptyQuery ? defaultRecentCount : groupCap)
+>>> to
+        let routineRows: [Row] = mostRecentFirst(matchingRoutines, count: isEmptyQuery ? defaultRecentCount : matchingRoutines.count)
+>>> end
+
+>>> mutant J3 an empty query filters the pages by an empty title match
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+            .filter { isEmptyQuery || matches(trimmed, $0.element.title) }
+>>> to
+            .filter { !isEmptyQuery && matches(trimmed, $0.element.title) }
+>>> end
+
+>>> mutant J4 a page's ordinal is its position after filtering
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        let pageRows: [Row] = pages.enumerated()
+            .filter { isEmptyQuery || matches(trimmed, $0.element.title) }
+>>> to
+        let pageRows: [Row] = pages.filter { isEmptyQuery || matches(trimmed, $0.title) }.enumerated()
+>>> end
+
+>>> mutant J5 the task window is array order rather than most recent first
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        let recentTasks = tasks.sorted { $0.startedAt > $1.startedAt }.prefix(recentTaskWindow)
+>>> to
+        let recentTasks = tasks.prefix(recentTaskWindow)
+>>> end
+
+>>> mutant J6 a task row's time is the palette's own clock rather than the task's
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+                trailing: TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: now)
+>>> to
+                trailing: TaskHistoryDateFormatter.relativeTimestamp(for: now, now: now)
+>>> end
+
+>>> mutant J7 a group with no rows keeps its header
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        ].filter { !$0.rows.isEmpty }
+>>> to
+        ]
+>>> end
+
+>>> mutant J8 most recent first becomes oldest first
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        Array(items.suffix(count).reversed())
+>>> to
+        Array(items.suffix(count))
+>>> end
+
+>>> mutant J9 the query is matched with its whitespace
+>>> file Sources/MacAgent/JumpToPaletteView.swift
+>>> from
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+>>> to
+        let trimmed = query
+>>> end
+
+>>> mutant T1 the next selection wraps past the last row
+>>> file Sources/MacAgent/TasksSelectionPresentation.swift
+>>> from
+        return ids[min(index + 1, ids.count - 1)]
+>>> to
+        return ids[(index + 1) % ids.count]
+>>> end
+
+>>> mutant T2 the previous selection wraps past the first row
+>>> file Sources/MacAgent/TasksSelectionPresentation.swift
+>>> from
+        return ids[max(index - 1, 0)]
+>>> to
+        return ids[(index - 1 + ids.count) % ids.count]
+>>> end
+
+>>> mutant T3 a refresh keeps a selection whose record is gone
+>>> file Sources/MacAgent/TasksSelectionPresentation.swift
+>>> from
+        guard let current, records.contains(where: { $0.taskRowIdentity == current }) else {
+            return nil
+        }
+        return current
+>>> to
+        return current
+>>> end
+
+>>> mutant T4 the section containing a task is always the first section
+>>> file Sources/MacAgent/TasksSelectionPresentation.swift
+>>> from
+        sections.first { section in section.records.contains { $0.taskRowIdentity == taskID } }?.id
+>>> to
+        sections.first?.id
+>>> end
+
+>>> mutant T5 next with nothing selected answers nothing instead of the first row
+>>> file Sources/MacAgent/TasksSelectionPresentation.swift
+>>> from
+        guard let current, let index = ids.firstIndex(of: current) else { return ids.first }
+        return ids[min(index + 1, ids.count - 1)]
+>>> to
+        guard let current, let index = ids.firstIndex(of: current) else { return nil }
+        return ids[min(index + 1, ids.count - 1)]
+>>> end
+
+>>> mutant D1 Default's list row height drifts from the shipped metric
+>>> file Sources/MacAgent/SonnyDensity.swift
+>>> from
+        case .regular: return 36
+        case .comfortable: return 44
+>>> to
+        case .regular: return 34
+        case .comfortable: return 44
+>>> end
+
+>>> mutant D2 Comfortable's section gap falls below Default's
+>>> file Sources/MacAgent/SonnyDensity.swift
+>>> from
+        case .regular: return 16
+        case .comfortable: return 24
+>>> to
+        case .regular: return 16
+        case .comfortable: return 14
+>>> end
+
+>>> mutant D3 scaled truncates instead of rounding
+>>> file Sources/MacAgent/SonnyDensity.swift
+>>> from
+        return (base * factor).rounded()
+>>> to
+        return (base * factor).rounded(.down)
+>>> end
+
+>>> mutant D4 the model defaults to Comfortable
+>>> file Sources/MacAgent/SonnyDensity.swift
+>>> from
+        density = stored.flatMap(SonnyDensity.init(rawValue:)) ?? .regular
+>>> to
+        density = stored.flatMap(SonnyDensity.init(rawValue:)) ?? .comfortable
+>>> end
+
+>>> mutant V1 the listening window loses its margin under the cap
+>>> file Sources/MacAgent/VoiceRecordingCountdown.swift
+>>> from
+    static let listeningSeconds: TimeInterval = VoiceRecordingLimit.maximumDurationSeconds - 3
+>>> to
+    static let listeningSeconds: TimeInterval = VoiceRecordingLimit.maximumDurationSeconds
+>>> end
+
+>>> mutant V2 the warning starts a second late
+>>> file Sources/MacAgent/VoiceRecordingCountdown.swift
+>>> from
+        remaining <= warningSeconds
+>>> to
+        remaining < warningSeconds
+>>> end
+
+>>> mutant V3 remaining goes negative past the window
+>>> file Sources/MacAgent/VoiceRecordingCountdown.swift
+>>> from
+        max(0, listeningSeconds - now.timeIntervalSince(startedAt))
+>>> to
+        listeningSeconds - now.timeIntervalSince(startedAt)
+>>> end
+
+>>> mutant V4 the label drops the zero padding on seconds
+>>> file Sources/MacAgent/VoiceRecordingCountdown.swift
+>>> from
+        return String(format: "%d:%02d", minutes, seconds)
+>>> to
+        return String(format: "%d:%d", minutes, seconds)
+>>> end
+
+>>> mutant V5 VoiceOver loses the singular second
+>>> file Sources/MacAgent/VoiceRecordingCountdown.swift
+>>> from
+            parts.append(seconds == 1 ? "1 second" : "\(seconds) seconds")
+>>> to
+            parts.append("\(seconds) seconds")
+>>> end
+
+>>> mutant A1 an auto-stop fires on whatever recording is live
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            guard let self, self.voiceRecordingStartedAt == startedAt else { return }
+>>> to
+            guard let self else { return }
+>>> end
+
+>>> mutant A2 a manual stop leaves the auto-stop task running
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        voiceRecordingAutoStopTask?.cancel()
+        voiceRecordingAutoStopTask = nil
+>>> to
+        voiceRecordingAutoStopTask = nil
+>>> end
+
+>>> mutant A3 a second schedule leaves the first task running
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+    func scheduleVoiceRecordingAutoStop(startedAt: Date) {
+        voiceRecordingAutoStopTask?.cancel()
+        let window = voiceRecordingListeningWindow
+>>> to
+    func scheduleVoiceRecordingAutoStop(startedAt: Date) {
+        let window = voiceRecordingListeningWindow
+>>> end
+
+>>> mutant E1 Edit and run drops the task's workspace
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        pendingWorkspaceBinding = record.workspaceName
+        composeCommand(record.command)
+        return true
+>>> to
+        composeCommand(record.command)
+        return true
+>>> end
+
+>>> mutant E2 Edit and run is no longer refused while a task is in flight
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard !isTaskInFlight else {
+            logStore.append(.observe, "Edit and run ignored while a task is in flight.")
+            return false
+        }
+>>> to
+>>> end
+
+>>> mutant P1 the page shows the last records rather than the first
+>>> file Sources/MacAgent/TaskListPageSize.swift
+>>> from
+        return Array(records.prefix(limit))
+>>> to
+        return Array(records.suffix(limit))
+>>> end
+
+>>> mutant P2 All caps the list at nothing
+>>> file Sources/MacAgent/TaskListPageSize.swift
+>>> from
+        self == .all ? nil : rawValue
+>>> to
+        rawValue
+>>> end
+
+>>> mutant P3 the footer shows when nothing is hidden
+>>> file Sources/MacAgent/TaskListPageSize.swift
+>>> from
+        guard shown < total else { return nil }
+>>> to
+        guard shown <= total else { return nil }
+>>> end
+
+>>> mutant P4 an unwritten preference loads as All
+>>> file Sources/MacAgent/TaskListPageSize.swift
+>>> from
+            return .defaultSize
+>>> to
+            return .all
+>>> end
+
+>>> mutant C1 one task reads plural
+>>> file Sources/MacAgent/WeeklyCompletionChartPresentation.swift
+>>> from
+        "\(count) task\(count == 1 ? "" : "s")"
+>>> to
+        "\(count) tasks"
+>>> end
