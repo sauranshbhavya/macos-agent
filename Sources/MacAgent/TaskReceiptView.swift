@@ -73,18 +73,19 @@ struct TaskReceiptView: View {
                     .lineLimit(3)
                     .help(record.command)
 
-                HStack(spacing: SonnySpacing.xs) {
-                    SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
-                    Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
-                    Text("·")
-                    Text(taskStatusText(for: record))
-                    if let workspaceName = record.workspaceName {
-                        Text("·")
-                        Text(workspaceName)
+                // One line where the pane is wide enough, two where it is not; every phrase is
+                // `fixedSize`, so "Completed in 8s" can never break in the middle (founder,
+                // 2026-09-10: the pane read as cluttered, and this row was half of why).
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: SonnySpacing.sm) {
+                        SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
+                        metadataPhrases(for: record)
                     }
-                    if record.effectiveTrigger == .scheduled {
-                        Text("·")
-                        Text("Scheduled")
+                    VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                        SonnyBadge(text: statusBadgeText(for: record), tone: statusBadgeTone(for: record))
+                        HStack(spacing: SonnySpacing.sm) {
+                            metadataPhrases(for: record)
+                        }
                     }
                 }
                 .font(SonnyType.caption)
@@ -95,7 +96,28 @@ struct TaskReceiptView: View {
 
             closeButton
         }
-        .padding(.bottom, SonnySpacing.lg)
+        .padding(.bottom, SonnySpacing.xl)
+    }
+
+    /// The phrases after the badge, each on one line: when it started, how long it took, the
+    /// workspace, and "Scheduled" when a routine ran it.
+    @ViewBuilder
+    private func metadataPhrases(for record: CompletedTaskRecord) -> some View {
+        Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
+            .fixedSize()
+        Text("·")
+        Text(taskStatusText(for: record))
+            .fixedSize()
+        if let workspaceName = record.workspaceName {
+            Text("·")
+            Text(workspaceName)
+                .lineLimit(1)
+        }
+        if record.effectiveTrigger == .scheduled {
+            Text("·")
+            Text("Scheduled")
+                .fixedSize()
+        }
     }
 
     /// The `SonnyDialogCloseButton` shape (`ContentView.swift`), rebuilt rather than reused: that
@@ -141,60 +163,85 @@ struct TaskReceiptView: View {
     /// same way the sheet this pane replaces kept "Run again"/"Follow up" away from "Delete task",
     /// so an ordinary action and a destructive one are never adjacent and read as two kinds of
     /// thing rather than a row of similar-looking options.
+    ///
+    /// A button's label is never truncated: each is `fixedSize`, and `ViewThatFits` drops to two
+    /// rows when the pane is too narrow for one (founder, 2026-09-10: "Run ag…", "Edit an…" and
+    /// "Follow…" were the other half of what read as clutter).
     private func actionsRow(for record: CompletedTaskRecord) -> some View {
-        HStack(spacing: SonnySpacing.sm) {
-            if TaskDetailPresentation.showsTaskActions(for: record) {
-                Button(TaskDetailPresentation.runAgainActionLabel) {
-                    viewModel.runTaskAgain(record)
-                }
-                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
-                .sonnyPointerCursor()
-                .disabled(viewModel.isTaskInFlight)
-                .accessibilityLabel(TaskDetailPresentation.runAgainActionLabel)
-                .help(TaskDetailPresentation.runAgainActionLabel)
-
-                Button(TaskDetailPresentation.editAndRunActionLabel) {
-                    viewModel.editTaskAndRunAgain(record)
-                }
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
-                .sonnyPointerCursor()
-                .disabled(viewModel.isTaskInFlight)
-                .accessibilityLabel(TaskDetailPresentation.editAndRunActionLabel)
-                .help(TaskDetailPresentation.editAndRunActionLabel)
-
-                Button(FollowUpPresentation.actionLabel) {
-                    viewModel.followUpOnTask(record)
-                }
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
-                .sonnyPointerCursor()
-                .disabled(viewModel.isTaskInFlight)
-                .accessibilityLabel(FollowUpPresentation.actionLabel)
-                .help(FollowUpPresentation.actionLabel)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: SonnySpacing.sm) {
+                taskActionButtons(for: record)
+                Spacer(minLength: SonnySpacing.md)
+                moreActionsMenu(for: record)
             }
-
-            Spacer(minLength: SonnySpacing.md)
-
-            SonnyOverflowMenu(accessibilityLabel: "More actions for this task") {
-                Button(TaskDeletePresentation.taskActionLabel, role: .destructive) {
-                    showDeleteConfirmation = true
+            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+                HStack(spacing: SonnySpacing.sm) {
+                    taskActionButtons(for: record)
                 }
-            }
-            .confirmationDialog(
-                TaskDeletePresentation.taskConfirmationTitle(for: record),
-                isPresented: $showDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button(TaskDeletePresentation.taskConfirmButtonLabel, role: .destructive, action: onDeleteTask)
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                // Reads the resolved state, which this view already has, rather than the record's
-                // bare link — the same reason the old sheet's message did.
-                if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
-                    Text(message)
+                HStack {
+                    Spacer(minLength: 0)
+                    moreActionsMenu(for: record)
                 }
             }
         }
-        .padding(.bottom, SonnySpacing.lg)
+        .padding(.bottom, SonnySpacing.xl)
+    }
+
+    @ViewBuilder
+    private func taskActionButtons(for record: CompletedTaskRecord) -> some View {
+        if TaskDetailPresentation.showsTaskActions(for: record) {
+            Button(TaskDetailPresentation.runAgainActionLabel) {
+                viewModel.runTaskAgain(record)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
+            .fixedSize()
+            .sonnyPointerCursor()
+            .disabled(viewModel.isTaskInFlight)
+            .accessibilityLabel(TaskDetailPresentation.runAgainActionLabel)
+            .help(TaskDetailPresentation.runAgainActionLabel)
+
+            Button(TaskDetailPresentation.editAndRunActionLabel) {
+                viewModel.editTaskAndRunAgain(record)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+            .fixedSize()
+            .sonnyPointerCursor()
+            .disabled(viewModel.isTaskInFlight)
+            .accessibilityLabel(TaskDetailPresentation.editAndRunActionLabel)
+            .help(TaskDetailPresentation.editAndRunActionLabel)
+
+            Button(FollowUpPresentation.actionLabel) {
+                viewModel.followUpOnTask(record)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+            .fixedSize()
+            .sonnyPointerCursor()
+            .disabled(viewModel.isTaskInFlight)
+            .accessibilityLabel(FollowUpPresentation.actionLabel)
+            .help(FollowUpPresentation.actionLabel)
+        }
+    }
+
+    private func moreActionsMenu(for record: CompletedTaskRecord) -> some View {
+        SonnyOverflowMenu(accessibilityLabel: "More actions for this task") {
+            Button(TaskDeletePresentation.taskActionLabel, role: .destructive) {
+                showDeleteConfirmation = true
+            }
+        }
+        .confirmationDialog(
+            TaskDeletePresentation.taskConfirmationTitle(for: record),
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(TaskDeletePresentation.taskConfirmButtonLabel, role: .destructive, action: onDeleteTask)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Reads the resolved state, which this view already has, rather than the record's
+            // bare link — the same reason the old sheet's message did.
+            if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
+                Text(message)
+            }
+        }
     }
 
     // MARK: - What this task produced
@@ -205,7 +252,7 @@ struct TaskReceiptView: View {
     private func resultSection(for record: CompletedTaskRecord) -> some View {
         if let resultText = TaskDetailPresentation.resultText(for: record) {
             SettingsDivider()
-                .padding(.bottom, SonnySpacing.md)
+                .padding(.bottom, SonnySpacing.lg)
 
             VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 Text(TaskDetailPresentation.resultSectionTitle)
@@ -214,12 +261,13 @@ struct TaskReceiptView: View {
 
                 Text(resultText)
                     .font(SonnyType.body)
+                    .lineSpacing(SonnySpacing.xs / 2)
                     .foregroundStyle(SonnyTheme.text)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.bottom, SonnySpacing.lg)
+            .padding(.bottom, SonnySpacing.xl)
         }
     }
 
@@ -232,7 +280,7 @@ struct TaskReceiptView: View {
     private var plannedSection: some View {
         if let summary = planDetail?.planSummary, !summary.isEmpty {
             SettingsDivider()
-                .padding(.bottom, SonnySpacing.md)
+                .padding(.bottom, SonnySpacing.lg)
 
             VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 Text(TaskDetailPresentation.plannedSectionTitle)
@@ -241,11 +289,12 @@ struct TaskReceiptView: View {
 
                 Text(summary)
                     .font(SonnyType.body)
+                    .lineSpacing(SonnySpacing.xs / 2)
                     .foregroundStyle(SonnyTheme.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.bottom, SonnySpacing.lg)
+            .padding(.bottom, SonnySpacing.xl)
         }
     }
 
@@ -260,7 +309,7 @@ struct TaskReceiptView: View {
     private var visionSessionSection: some View {
         if TaskDeletePresentation.showsScreenRecordSection(screenRecord) {
             SettingsDivider()
-                .padding(.bottom, SonnySpacing.md)
+                .padding(.bottom, SonnySpacing.lg)
 
             VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 HStack(alignment: .firstTextBaseline) {
@@ -313,7 +362,7 @@ struct TaskReceiptView: View {
                     }
                 }
             }
-            .padding(.bottom, SonnySpacing.lg)
+            .padding(.bottom, SonnySpacing.xl)
         }
     }
 
