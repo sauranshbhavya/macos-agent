@@ -106,8 +106,20 @@ struct TasksPaneSourceScanTests {
         let source = try MacAgentSource.read("CommandCenterView.swift")
 
         let row = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TaskHistoryRow: View {")
-        #expect(row.components(separatedBy: "Text(workspaceName)").count - 1 == 0)
         #expect(row.components(separatedBy: "TaskHistoryRowPresentation.detailLine(").count - 1 == 1)
+        // The shape, not one spelling: outside the `detailLine(` call, nothing in the row names the
+        // workspace, so a trailing `Text(record.workspaceName ?? "")` cannot come back either
+        // (phase 13 review, F3). The control: the call itself names it twice.
+        #expect(row.components(separatedBy: "workspaceName").count - 1 == 2, "named only by the detailLine call: its label and its argument")
+        #expect(!row.contains("Text(record.workspaceName"))
+        #expect(!row.contains("Text(workspaceName"))
+        // The tooltips carry the full texts, the title's with the same fallback its label has.
+        #expect(row.contains(".help(record.command.isEmpty ? \"Untitled task\" : record.command)"))
+        #expect(row.contains(".help(detailLine)"))
+        // The accessibility label reads the same detail line the eye reads.
+        let label = try MacAgentSource.region(of: row, from: ".accessibilityLabel(", to: ".accessibilityAddTraits(")
+        #expect(label.contains("\\(detailLine)"))
+        #expect(!label.contains("workspaceName"))
 
         let toolbar = try MacAgentSource.braceBlock(of: source, openedBy: "private struct TasksToolbarRow: View {")
         let toolbarBody = try MacAgentSource.braceBlock(of: toolbar, openedBy: "var body: some View {")
@@ -117,5 +129,12 @@ struct TasksPaneSourceScanTests {
         let oneRow = try #require(fits.range(of: "HStack {"))
         let twoRow = try #require(fits.range(of: "VStack(alignment: .leading, spacing: SonnySpacing.sm) {"))
         #expect(oneRow.lowerBound < twoRow.lowerBound, "the one-row candidate must lead so it wins whenever it fits")
+        // Both candidates hold the search field once; the hidden ⌘F button is built once, outside them.
+        let narrow = try MacAgentSource.braceBlock(of: fits, openedBy: "VStack(alignment: .leading, spacing: SonnySpacing.sm) {")
+        #expect(narrow.components(separatedBy: "searchField(").count - 1 == 1)
+        #expect(fits.components(separatedBy: "searchField(").count - 1 == 2)
+        #expect(fits.components(separatedBy: "focusShortcutButton").count - 1 == 0)
+        #expect(toolbarBody.components(separatedBy: "focusShortcutButton").count - 1 == 1)
+        #expect(toolbar.components(separatedBy: ".keyboardShortcut(\"f\"").count - 1 == 1)
     }
 }

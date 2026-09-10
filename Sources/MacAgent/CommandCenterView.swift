@@ -1049,7 +1049,6 @@ private struct TasksToolbarRow: View {
                 showPicker
                 Spacer()
                 searchField(minWidth: 120, idealWidth: 220, maxWidth: 220)
-                focusShortcutButton
             }
             VStack(alignment: .leading, spacing: SonnySpacing.sm) {
                 HStack {
@@ -1058,8 +1057,14 @@ private struct TasksToolbarRow: View {
                 }
                 // No floor needed: the row's own width is the field's only constraint now.
                 searchField(minWidth: nil, idealWidth: nil, maxWidth: .infinity)
-                focusShortcutButton
             }
+        }
+        // Built once, outside the two candidates: `ViewThatFits` renders one candidate at a time,
+        // so a shortcut inside each would still be one live control, but a shortcut-bearing button
+        // that exists in two places is the shape a reader has to reason about every time; here it
+        // exists in one, and the scan pins that (phase 13 review).
+        .overlay(alignment: .topLeading) {
+            focusShortcutButton
         }
         .padding(.horizontal, SonnySpacing.xl)
         // `minHeight` rather than `height` so the two-row candidate has room to grow into
@@ -2501,7 +2506,7 @@ private struct TaskHistoryRow: View {
                     .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(record.command)
+                    .help(record.command.isEmpty ? "Untitled task" : record.command)
 
                 Text(detailLine)
                     .font(SonnyType.caption)
@@ -2537,8 +2542,10 @@ private struct TaskHistoryRow: View {
         .onTapGesture(perform: onSelect)
         .sonnyPointerCursor()
         .accessibilityElement(children: .combine)
+        // The same detail line the eye reads, so an empty workspace name is silent for both
+        // (phase 13 review, F4).
         .accessibilityLabel(
-            "\(record.command), \(taskStatusText(for: record))\(record.workspaceName.map { ", \($0)" } ?? ""), " +
+            "\(record.command.isEmpty ? "Untitled task" : record.command), \(detailLine), " +
             "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
         )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)

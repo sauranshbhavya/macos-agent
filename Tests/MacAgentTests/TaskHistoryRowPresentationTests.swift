@@ -3,7 +3,7 @@ import Testing
 
 /// The Tasks list row's second line, after the founder's 2026-09-10 ask to give the title back the
 /// width a trailing workspace column was spending. Kept out of the SwiftUI body for the same reason
-/// `TaskSearchPresentation` and `TaskDetailPresentation` are: this repository has no view-rendering
+/// `TaskSearchPresentation` and `TaskDeletePresentation` are: this repository has no view-rendering
 /// tests.
 struct TaskHistoryRowPresentationTests {
     @Test
