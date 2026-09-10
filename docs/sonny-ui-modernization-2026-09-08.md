@@ -188,6 +188,24 @@ Dials: variance 3, motion 3, density 6. A tool people live in, not a landing pag
    the Show picker. The workspace joins the second line after the status ("Completed in 8s ·
    hehe"), the date alone keeps the trailing edge, the title carries its full text in a tooltip,
    and the toolbar drops the search field to its own row when one row cannot hold both.
+26. **A two-line row has its own height, and a hover fill has air.** The founders found the task
+   rows "very, very tight" and the routine row's hover fill hugging its text. A row that shows a
+   title and a detail line reads `twoLineRowHeight` (48, 56 comfortable) rather than the
+   single-line row height; and every row with a hover fill keeps `SonnySpacing.sm` of fill beyond
+   its text on each side, the shape the task row already had, with its outer inset unchanged.
+27. **The window opens larger, and now actually does.** The default was 1180×780 on paper and
+   900×620 on screen: the hosting controller resized the window to the view's minimum on layout,
+   and the frame autosave had never saved a frame because `showWindow` cleared its name. Both are
+   fixed, the default is 1280×840 under a new autosave name so every Mac gets it once and keeps
+   whatever it resizes to afterwards, and the minimum stays 900×620.
+28. **Hold ⌘ and the sidebar shows its keys.** As the Claude app does: after ⌘ alone has been held
+   a third of a second, key caps appear on the nav rows (⌘1 to ⌘5), Ask Sonny (⌘N) and the
+   toggle (⌘⌥S), and vanish the moment ⌘ is released, another modifier joins, or a key is pressed,
+   so a shortcut that fires never leaves hints over the page it opened. A local event monitor on
+   the Command Center window feeds a small model; the caps are hidden from VoiceOver, which
+   already hears each row's shortcut. Each cap is one key cap holding the whole chord: expanded,
+   it sits in the control's trailing slot (on the Tasks row in place of the active count);
+   collapsed, it hangs beneath the icon in the gap between controls, covering nothing.
 
 **Founder decisions of 2026-09-08, in one place**: the system font, the palette, routine detail on
 System A, Ask Sonny on ⌘N, the chord as glyphs, the two lightly edited verbatim sentences, the
@@ -206,6 +224,10 @@ the memory row's menu last with View inside; the workspace card's Open button go
 **Founder decisions of 2026-09-10, third round, in one place**, after running the receipt rework:
 the sidebar collapsed by default with its toggle at the top, and the list column beside the
 receipt reworked so titles get the width.
+
+**Founder decisions of 2026-09-10, fourth round, in one place**, after running phase 13: taller
+task rows and a Show picker with its margin; hover fills with air on every row; a larger default
+window applied once; and ⌘-held hints in the sidebar.
 
 ## The tokens
 

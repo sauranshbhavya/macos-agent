@@ -319,6 +319,41 @@ lanes ran in parallel from `7d9aca1f` on disjoint regions.
   quoted in the changelog entry); `scripts/warnings` 0 at `300f33cf`, exit 0, every file compiled; every
   battery carried on the four conditions (no target or killing suite moved since `0307de0d`).
 
+## Phase 14, 2026-09-10: the founders' fourth round, after running phase 13
+
+Five asks with screenshots: the task rows too tight; the Show picker against the panel's top
+edge when the receipt is open; a routine row's hover fill with no air; a larger default window;
+and, as the Claude app does, the shortcuts shown while ⌘ is held. No question needed to go back;
+decisions 26 to 28 record the calls. Three lanes ran in parallel from `561e17fe` on disjoint
+regions.
+
+- **List rhythm** (`81db07af`, merged `29158b09`): `SonnyDensity.twoLineRowHeight` (48, 56
+  comfortable) for a row with a title and a detail line; `TaskHistoryRow` reads it and the extra
+  height is air above and below its texts. The toolbar carries `md` above and `sm` below its
+  content in both `ViewThatFits` forms, and the two-row form's rows sit `md` apart. Its picker
+  already shared the section headers' inset. One scan added, two density pins extended.
+- **Hover insets** (`e44aca7b`, merged `a0f5b690`): `RoutineRow` and `JumpToPaletteRow` move to
+  the task row's split shape (inner inset less `sm`, the highlight, then `sm` outside), so the fill
+  floats clear of the text on both sides and the row's own inset stays. `WorkspaceBreakdownRow`
+  and `InsightsRecentActivityRow` already had the sibling shape; the group header's band and the
+  Settings sidebar rows were right as they were; `StandingWatcherRow` gets no whole-row fill,
+  since only its Stop is a control. Seven scans in a new `HoverInsetSourceScanTests`, each row's
+  shape pinned by the order of its paddings.
+- **Window and hints** (`36f2e6ab`, merged `bb2a04a0`): the default grows to 1280×840 under the
+  autosave name `SonnyCommandCenterWindow.v2`, and the lane found why the founders never saw the
+  old default: the hosting controller resized the window to the view's 900×620 minimum on layout,
+  and `showWindow` cleared the window's autosave name the instant it showed, so no frame had ever
+  been saved. Both fixed (sizing options off with the content size re-applied; the autosave name
+  on the window controller). `CommandKeyHintModel` shows hints after ⌘ alone is held for a third
+  of a second and hides them on release, another modifier or any key; a local event monitor on
+  the Command Center window feeds it and is removed when the window closes; `CommandKeyHintBadge`
+  draws the shared `SonnyKeyCap` (moved out of the shortcuts sheet) on the nav rows, the toggle
+  and Ask Sonny. Eleven tests in two new suites.
+- Reviewed by a sixth adversarial workflow over the merged tree at `bb2a04a0`, three reviewers (rhythm and insets, the window and the hints, rules and tests) with every finding attacked by an independent skeptic: 15 findings, 15 confirmed, 0 refuted, and every one on the hold-⌘ hints. Six high, two defects found three times each: the monitor was installed once, when the window was made, and removed on every close, so the hints were gone for good after the first close, because the window controller is kept and reused; and the "⌘ alone" test compared the whole device-independent flag set, so a lit Caps Lock made ⌘ read as never alone. Six medium: the two-key cap wider than the collapsed rail's 36pt tile and covering its icon (found twice), the Tasks row's cap on top of its active count (found twice), the three-key cap spilling across the 28pt toggle, nothing resetting the model when the window stopped being key, and the release test satisfied by the synchronous branch alone so a dropped cancellation guard survived it. Three low: the flags reduction unpinned by any scan (found twice) and the badge's sizes as literals. Every one answered in `d7907310`: the monitor installed on every show and read across a show, a close and a second show by the window test; `CommandKeyChord.isCommandHeldAlone` reducing to the four chord modifiers, with ten flag sets pinned and the old mask forbidden by scan; `focusLost` from `windowDidResignKey`; one cap per chord, inline in the control's trailing slot when expanded (swapping with the Tasks count) and hung beneath the icon when collapsed, each site pinned per state; the cap's three sizes as `SonnyMetrics` tokens with the badge file scanned for any digit; and a test that suspends with a hold counting, releases, and reads the flag for two seconds.
+- Verified: 3140 in 218, exit 0, 8 known issues at `d7907310` (the flagged suite; the count line is
+  quoted in the changelog entry); `scripts/warnings` 0 at `d7907310`, exit 0, every file compiled;
+  A fourth battery re-ran the thirteen mutants whose evidence phase 14 moved, the nine palette mutants (their file moved with the hover-inset lane) and the four density mutants (their file and killing suite moved with the list-rhythm lane), at `d7907310`: 13 killed, 0 survived, 0 unattributed (`scripts/mutate`, exit 0, its report at `.build/mutate/d790731-20260910T172407-69878/report.log`).
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries

@@ -4287,6 +4287,13 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 - [ ] Sidebar: on a Mac that never touched the toggle, Sonny opens with the sidebar collapsed to its rail. The toggle sits at the top: expanded, at the right end of the "Sonny" row, tooltip "Close sidebar (⌘⌥S)"; collapsed, directly under the mark, tooltip "Open sidebar (⌘⌥S)"; there is no toggle at the bottom any more; ⌘⌥S still works both ways; the choice survives a relaunch.
 - [ ] Tasks, with a task open: each row reads the title on the first line with the date alone at the right, and "Completed in 8s · hehe" on the second; hovering a truncated title shows the whole command; shrink the window to 900 wide with the sidebar expanded: the Show picker sits on its own row and the search field takes the full width beneath it, its prompt whole.
 
+**The founders' fourth round (2026-09-10)**
+- [ ] Tasks: each row has visible air above and below its two lines (48pt rows at Default, 56 at Comfortable); with the receipt open, the Show picker sits as far from the panel's top as the rows sit from its sides, aligned with the section headers, and the search field a clear step beneath it.
+- [ ] Hover a routine, a watcher, an Insights row, a ⌘K result, a section header and a Settings sidebar row: the grey fill extends a little past the text on both sides rather than hugging it, and the row's own inset is unchanged.
+- [ ] Quit Sonny, open it again: the window opens at 1280×840 on a Mac that had a smaller saved frame from before this build; resize it, relaunch, and it keeps the new size; it still cannot go under 900×620.
+- [ ] Hold ⌘ alone for a moment: a key cap appears on each of the five nav rows (⌘1 to ⌘5), on Ask Sonny (⌘N) and on the sidebar toggle (⌘⌥S). Expanded, each sits at the control's trailing edge, and the Tasks row's count (if any) gives way to it; collapsed, each hangs just beneath its icon, covering neither that icon nor the next. Release ⌘, or press ⌘1, and they vanish at once; ⌘⇧ shows nothing.
+- [ ] Turn Caps Lock on and hold ⌘ again: the caps still appear. Close the Command Center window, reopen it from the Dock, hold ⌘: they still appear. Hold ⌘ until they show, then click the floating widget or another app: they vanish.
+
 ## 8. How to report back
 
 For each real finding, give me:
