@@ -70,6 +70,9 @@ struct CommandCenterView: View {
     // root, and republished into `\.sonnyDensity` below so every row-height site in the tree reads
     // one value without each needing its own `@EnvironmentObject`.
     @EnvironmentObject private var densityModel: SonnyDensityModel
+    // Whether to show a glimpse of each ⌘-shortcut while ⌘ is held alone (phase 14, founder ask).
+    // Fed by `AppWindowCoordinator`'s local event monitor; this view only reads the flag.
+    @EnvironmentObject private var commandKeyHints: CommandKeyHintModel
     // Collapsed-sidebar preference (phase 5; defaulted to collapsed in phase 13, 2026-09-10, per
     // the founders' ask — a Mac that has never touched the toggle now opens on the rail, and one
     // that already expanded it keeps reading that choice back). A cosmetic, per-Mac preference
@@ -310,6 +313,13 @@ struct CommandCenterView: View {
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("Ask Sonny")
             .help("Ask Sonny (⌘N)")
+            // Collapsed, there is no permanent ⌘N text to swap out — the icon alone, so a badge
+            // overlay is the only way to show the hint, the same shape as `sidebarButton`'s.
+            .overlay(alignment: .topTrailing) {
+                if commandKeyHints.isShowingHints {
+                    CommandKeyHintBadge(keys: ["⌘", "N"])
+                }
+            }
         } else {
             Button {
                 viewModel.widgetPresentationRequest += 1
@@ -319,10 +329,16 @@ struct CommandCenterView: View {
                         .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
                     Text("Ask Sonny")
                     Spacer(minLength: 0)
-                    Text("⌘N")
-                        .font(SonnyType.mono)
-                        .foregroundStyle(SonnyTheme.textOnAccent.opacity(0.7))
-                        .accessibilityHidden(true)
+                    // Expanded, the ⌘N hint is already on screen permanently as plain text; while
+                    // ⌘ is held it reads as the shared badge instead of reprinting a second one.
+                    if commandKeyHints.isShowingHints {
+                        CommandKeyHintBadge(keys: ["⌘", "N"])
+                    } else {
+                        Text("⌘N")
+                            .font(SonnyType.mono)
+                            .foregroundStyle(SonnyTheme.textOnAccent.opacity(0.7))
+                            .accessibilityHidden(true)
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -351,6 +367,11 @@ struct CommandCenterView: View {
         .keyboardShortcut("s", modifiers: [.command, .option])
         .accessibilityLabel(isSidebarCollapsed ? "Open sidebar" : "Close sidebar")
         .help(isSidebarCollapsed ? "Open sidebar (⌘⌥S)" : "Close sidebar (⌘⌥S)")
+        .overlay(alignment: .topTrailing) {
+            if commandKeyHints.isShowingHints {
+                CommandKeyHintBadge(keys: ["⌘", "⌥", "S"])
+            }
+        }
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
@@ -558,6 +579,15 @@ struct CommandCenterView: View {
         .accessibilityLabel(destination.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .help(destination.title)
+        // One overlay covers both states: collapsed, the row is a small centred icon and this sits
+        // at its top trailing corner exactly where the founders pointed; expanded, it lands at the
+        // row's own trailing edge, near the top rather than vertically centred, which reads as a
+        // glimpse rather than a permanent part of the row.
+        .overlay(alignment: .topTrailing) {
+            if commandKeyHints.isShowingHints {
+                CommandKeyHintBadge(keys: ["⌘", "\(ordinal)"])
+            }
+        }
     }
 
     private func isSelected(_ destination: CommandCenterDestination) -> Bool {

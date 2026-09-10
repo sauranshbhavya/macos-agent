@@ -584,6 +584,15 @@ struct ProductShellTests {
         let viewModel = fixture.viewModel
         let firstRunSuite = FirstRunDefaultsSuite()
         defer { firstRunSuite.removeAtEndOfTest() }
+        // `NSWindow`'s frame autosave writes to the real, un-sandboxed `UserDefaults.standard` under
+        // "NSWindow Frame <name>" — there is no hermetic seam for it, unlike every other preference
+        // this suite touches. A window this smoke test (or a manual `SONNY_UI_SMOKE=1` run) already
+        // showed once would have saved a real frame under this exact key, and the content-size
+        // assertion below is specifically about the *no-saved-frame* default — so it is cleared
+        // first, deliberately, rather than assumed absent.
+        let autosaveDefaultsKey = "NSWindow Frame SonnyCommandCenterWindow.v2"
+        UserDefaults.standard.removeObject(forKey: autosaveDefaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: autosaveDefaultsKey) }
         let coordinator = AppWindowCoordinator(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
@@ -598,6 +607,17 @@ struct ProductShellTests {
         #expect(commandCenterWindow.styleMask.contains(.resizable))
         #expect(commandCenterWindow.isVisible)
         #expect(application.activationPolicy() == .regular)
+        // Phase 14 (founder ask): the default content size, raised from 1180×780, and the renamed
+        // autosave key — `commandCenterWindow.contentView` is the hosting controller's view, which
+        // fills the content rect exactly, so this reads the size `NSWindow(contentRect:)` was given
+        // rather than the outer frame, which also carries the (zero-height, transparent) title bar.
+        #expect(commandCenterWindow.contentView?.frame.size == NSSize(width: 1_280, height: 840))
+        // Read on the window itself, and correct only because `makeCommandCenterWindowController`
+        // also sets `windowFrameAutosaveName` on the *controller* — `NSWindowController.showWindow`
+        // resyncs the window's own autosave name from that controller property (empty by default),
+        // clearing anything set directly on the window beforehand; see that method's own comment on
+        // the fix, found and corrected in this same phase.
+        #expect(commandCenterWindow.frameAutosaveName == "SonnyCommandCenterWindow.v2")
 
         coordinator.showCommandCenter()
         #expect(coordinator.commandCenterWindow === commandCenterWindow)

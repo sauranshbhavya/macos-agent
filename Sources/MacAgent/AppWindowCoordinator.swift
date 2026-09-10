@@ -54,9 +54,16 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     let commandCenterCommands = CommandCenterCommands()
     let notificationPreferences: SonnyNotificationPreferences
     let densityModel: SonnyDensityModel
+    // Created here for the same reason `commandCenterCommands` is: it carries no state a fixture
+    // would need to control, only a transient on-screen flag fed by the local event monitor below,
+    // and nothing about it is written to disk (phase 14, the founders' hold-⌘ hints ask).
+    let commandKeyHintModel = CommandKeyHintModel()
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
+    /// Installed with the Command Center window and removed when it closes (`windowWillClose`); the
+    /// monitor outlives neither. `Any?` is `addLocalMonitorForEvents`'s own return type.
+    private var commandKeyEventMonitor: Any?
 
     var commandCenterWindow: NSWindow? {
         commandCenterWindowController?.window
@@ -150,7 +157,17 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             return
         }
         activationManager.closeWindow(id: ObjectIdentifier(window))
+        removeCommandKeyHintMonitor()
     }
+
+    // Renamed from "SonnyCommandCenterWindow" (2026-09-10, this phase): `makeWindow` below restores
+    // whatever a Mac last resized *this* autosave key to, and a Mac that already had a smaller frame
+    // saved under the old name would otherwise keep restoring it forever, never seeing the new
+    // default even once. A fresh key means every Mac gets the new default on its next launch and
+    // keeps whatever it resizes to after that — the same one-time-reset shape a stored preference's
+    // key gets when its default changes. Named once here since two call sites now need it: the
+    // window's own restore-or-center logic, and the window controller's autosave binding below.
+    private static let commandCenterAutosaveName = "SonnyCommandCenterWindow.v2"
 
     private func makeCommandCenterWindowController() -> NSWindowController {
         let hostingController = NSHostingController(
@@ -168,16 +185,74 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             .environmentObject(commandCenterCommands)
             .environmentObject(notificationPreferences)
             .environmentObject(densityModel)
+            .environmentObject(commandKeyHintModel)
         )
+        // Without this, `NSHostingController` keeps the window sized to its SwiftUI content's own
+        // preferred size for the life of the window, not only at creation — `CommandCenterView`'s
+        // root carries a `minWidth`/`minHeight` and no `idealWidth`/`idealHeight`, so its preferred
+        // size is that minimum, and a later layout pass (state changing after `.onAppear`, for one)
+        // would silently shrink the window back to 900×620 even after `makeWindow` below sets the
+        // size explicitly. An empty set turns that automatic resizing off entirely, leaving the
+        // window's size exactly what `NSWindow(contentRect:)`/`setContentSize` and the user's own
+        // resizing make it.
+        hostingController.sizingOptions = []
         let window = makeWindow(
             title: "Sonny",
-            contentSize: NSSize(width: 1_180, height: 780),
+            // Raised from 1180×780 to 1280×840 (2026-09-10 founder ask: "make the default size of
+            // the command center, when it opens, slightly bigger"). The minimum stays 900×620 —
+            // that is the floor the layout still works at, not the size a fresh install opens to.
+            contentSize: NSSize(width: 1_280, height: 840),
             minimumSize: NSSize(width: 900, height: 620),
-            autosaveName: "SonnyCommandCenterWindow",
+            autosaveName: Self.commandCenterAutosaveName,
             contentViewController: hostingController
         )
         window.delegate = self
-        return NSWindowController(window: window)
+        installCommandKeyHintMonitor()
+        let controller = NSWindowController(window: window)
+        // **On the controller, not only the window — this is the fix, not decoration.** `NSWindow`
+        // has its own `setFrameAutosaveName(_:)`, which is what this used to call directly here, and
+        // it silently loses to `NSWindowController.showWindow(_:)`: that method resyncs the window's
+        // autosave name from the *controller's* `windowFrameAutosaveName` (empty by default for a
+        // bare `NSWindowController(window:)`), which clears whatever the window had just been given.
+        // Measured directly (a throwaway script reproduced it byte for byte outside this app): a
+        // window's `setFrameAutosaveName` call reads back correctly right up until `showWindow(nil)`
+        // runs, after which `frameAutosaveName` is empty again — so every frame this window was ever
+        // resized to was silently never saved, and every launch centred it at the default size
+        // instead of restoring anything. Setting the name here, on the controller, is what
+        // `showWindow(nil)` in `present(_:)` does not clear; `makeWindow` still calls
+        // `setFrameUsingName` itself first, only to decide whether to centre a window with no saved
+        // frame yet, and this reapplies the same lookup (Apple's own documented side effect of this
+        // assignment) with no visible effect when it agrees, which is every time until it disagrees.
+        controller.windowFrameAutosaveName = Self.commandCenterAutosaveName
+        return controller
+    }
+
+    /// Phase 14's hold-⌘ hints. `.flagsChanged` tells `commandKeyHintModel` whether ⌘ is down alone;
+    /// `.keyDown` tells it a key fired, which ends a hold or a showing hint immediately (a
+    /// ⌘-shortcut firing must never leave its badges lingering over the page it just opened). The
+    /// event is returned untouched either way, so nothing else observing these events changes.
+    private func installCommandKeyHintMonitor() {
+        guard commandKeyEventMonitor == nil else { return }
+        commandKeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            switch event.type {
+            case .flagsChanged:
+                let heldModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                self.commandKeyHintModel.flagsChanged(commandHeldAlone: heldModifiers == .command)
+            case .keyDown:
+                self.commandKeyHintModel.otherKeyPressed()
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private func removeCommandKeyHintMonitor() {
+        if let commandKeyEventMonitor {
+            NSEvent.removeMonitor(commandKeyEventMonitor)
+        }
+        commandKeyEventMonitor = nil
     }
 
     private func makeWindow(
@@ -202,9 +277,16 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.minSize = minimumSize
         window.contentViewController = contentViewController
+        // Assigning `contentViewController` hands the window over to `NSHostingController`'s own
+        // preferred-content-size logic, which for a SwiftUI view whose root carries only a
+        // `minWidth`/`minHeight` (no `idealWidth`/`idealHeight` — `CommandCenterView`'s own root
+        // frame is exactly that) resolves to that minimum rather than the size the window was just
+        // created with: measured directly, the window this produced was 900×620 regardless of the
+        // 1_280×840 passed to `NSWindow(contentRect:)` above. Setting it again here, after the
+        // content view controller is in place, is what makes the requested size stick.
+        window.setContentSize(contentSize)
         window.isReleasedWhenClosed = false
         let restoredSavedFrame = window.setFrameUsingName(autosaveName)
-        window.setFrameAutosaveName(autosaveName)
         if !restoredSavedFrame {
             window.center()
         }
