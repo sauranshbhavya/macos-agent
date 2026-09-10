@@ -53,6 +53,19 @@ enum SonnyDensity: String, CaseIterable, Identifiable {
         }
     }
 
+    /// A row that shows a title and a detail line, one above the other — `TaskHistoryRow` today.
+    /// The texts inside keep the same sizes at both stops; only the air above and below them
+    /// grows, which is the whole point (founder, 2026-09-10: "the spacing between each list thing
+    /// is very, very tight, so maybe we can increase it a bit" — the Tasks rows were sitting in
+    /// `listRowHeight` (36/44), sized for a single line, with almost none of it left over for a
+    /// second). Single-line rows (`CommandCenterGroupHeader`, the Insights rows) are untouched.
+    var twoLineRowHeight: CGFloat {
+        switch self {
+        case .regular: return 48
+        case .comfortable: return 56
+        }
+    }
+
     /// The sidebar's own rows and Settings' sidebar rows.
     var navRowHeight: CGFloat {
         switch self {

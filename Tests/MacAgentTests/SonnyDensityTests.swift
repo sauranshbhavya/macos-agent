@@ -24,6 +24,10 @@ struct SonnyDensityTests {
         // The whole point of `regular`: a user who never touches the control sees no change from
         // what shipped before this ticket.
         #expect(SonnyDensity.regular.listRowHeight == SonnyMetrics.listRowHeight)
+        // `twoLineRowHeight` has no `SonnyMetrics` twin — it is new in phase 14, replacing
+        // `listRowHeight` (36) for `TaskHistoryRow` so its second line gets air rather than
+        // sitting in a box sized for one line. 48 is the founders' literal for Default.
+        #expect(SonnyDensity.regular.twoLineRowHeight == 48)
         #expect(SonnyDensity.regular.navRowHeight == SonnyMetrics.navRowHeight)
         #expect(SonnyDensity.regular.compactRowHeight == SonnyMetrics.compactRowHeight)
         #expect(SonnyDensity.regular.toolbarHeight == SonnyMetrics.toolbarHeight)
@@ -40,6 +44,7 @@ struct SonnyDensityTests {
     @Test
     func everyNamedValueStrictlyIncreasesFromRegularToComfortable() {
         #expect(SonnyDensity.regular.listRowHeight < SonnyDensity.comfortable.listRowHeight)
+        #expect(SonnyDensity.regular.twoLineRowHeight < SonnyDensity.comfortable.twoLineRowHeight)
         #expect(SonnyDensity.regular.navRowHeight < SonnyDensity.comfortable.navRowHeight)
         #expect(SonnyDensity.regular.compactRowHeight < SonnyDensity.comfortable.compactRowHeight)
         #expect(SonnyDensity.regular.toolbarHeight < SonnyDensity.comfortable.toolbarHeight)

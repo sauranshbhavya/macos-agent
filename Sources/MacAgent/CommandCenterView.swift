@@ -1050,7 +1050,10 @@ private struct TasksToolbarRow: View {
                 Spacer()
                 searchField(minWidth: 120, idealWidth: 220, maxWidth: 220)
             }
-            VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+            // `SonnySpacing.md` between the picker row and the search row (founder, 2026-09-10) —
+            // was `.sm`, tight enough to read as one cramped block once the toolbar dropped to two
+            // rows; `TasksPaneSourceScanTests` pins this literal, updated in the same commit.
+            VStack(alignment: .leading, spacing: SonnySpacing.md) {
                 HStack {
                     showPicker
                     Spacer(minLength: 0)
@@ -1067,8 +1070,16 @@ private struct TasksToolbarRow: View {
             focusShortcutButton
         }
         .padding(.horizontal, SonnySpacing.xl)
-        // `minHeight` rather than `height` so the two-row candidate has room to grow into
-        // (founder, 2026-09-10); the one-row candidate still reads at exactly `density.toolbarHeight`.
+        // The picker used to sit centered inside a `toolbarHeight`-tall box, which read as pressed
+        // up against the panel's own top edge (founder, 2026-09-10: "forced up against the edge of
+        // the margin"). Explicit top/bottom padding replaces that centering: `SonnySpacing.md`
+        // above the content, so it never sits nearer the panel's top edge than the rows' own inset
+        // reads, and `SonnySpacing.sm` below it, so the first section header keeps a visible gap
+        // rather than butting against the toolbar. `minHeight` is now a floor under that padding
+        // rather than the value the one-row candidate renders at exactly — both candidates grow
+        // past it once their content plus this padding needs more room.
+        .padding(.top, SonnySpacing.md)
+        .padding(.bottom, SonnySpacing.sm)
         .frame(minHeight: density.toolbarHeight)
     }
 
@@ -2523,7 +2534,11 @@ private struct TaskHistoryRow: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .frame(height: density.listRowHeight)
+        // `twoLineRowHeight`, not `listRowHeight` — this row shows a title and a detail line, and
+        // the single-line height left almost no air above or below either (founder, 2026-09-10).
+        // The texts keep their own sizes; the extra height is air the HStack's default vertical
+        // centering puts above and below them.
+        .frame(height: density.twoLineRowHeight)
         // Text sits at the page's usual `xl` inset; the highlight itself is inset only `sm` from
         // the row's true edge, so it reads as a floating rounded rect rather than a full-bleed fill.
         .padding(.horizontal, SonnySpacing.xl - SonnySpacing.sm)
