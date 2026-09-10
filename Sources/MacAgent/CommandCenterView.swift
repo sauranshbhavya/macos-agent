@@ -70,10 +70,12 @@ struct CommandCenterView: View {
     // root, and republished into `\.sonnyDensity` below so every row-height site in the tree reads
     // one value without each needing its own `@EnvironmentObject`.
     @EnvironmentObject private var densityModel: SonnyDensityModel
-    // Collapsed-sidebar preference (phase 5). A cosmetic, per-Mac preference like the appearance
-    // and notification models beside it, so a plain `UserDefaults` read is fine rather than routing
-    // it through the view model — seeded once here, at view-identity creation, and written back on
-    // every toggle by `toggleSidebarCollapsed()`.
+    // Collapsed-sidebar preference (phase 5; defaulted to collapsed in phase 13, 2026-09-10, per
+    // the founders' ask — a Mac that has never touched the toggle now opens on the rail, and one
+    // that already expanded it keeps reading that choice back). A cosmetic, per-Mac preference
+    // like the appearance and notification models beside it, so a plain `UserDefaults` read is
+    // fine rather than routing it through the view model — seeded once here, at view-identity
+    // creation, and written back on every toggle by `toggleSidebarCollapsed()`.
     private static let sidebarCollapsedDefaultsKey = "com.sonny.preferences.sidebarCollapsed"
     @State private var isSidebarCollapsed: Bool
 
@@ -90,7 +92,7 @@ struct CommandCenterView: View {
         self.firstRunCoordinator = firstRunCoordinator
         _selection = State(initialValue: initialSelection)
         _isSidebarCollapsed = State(
-            initialValue: UserDefaults.standard.object(forKey: Self.sidebarCollapsedDefaultsKey) as? Bool ?? false
+            initialValue: UserDefaults.standard.object(forKey: Self.sidebarCollapsedDefaultsKey) as? Bool ?? true
         )
     }
 
@@ -240,8 +242,6 @@ struct CommandCenterView: View {
 
             Spacer()
 
-            sidebarToggleButton
-
             profileRow
         }
         .padding(.horizontal, isSidebarCollapsed ? SonnySpacing.sm : SonnySpacing.md)
@@ -252,26 +252,44 @@ struct CommandCenterView: View {
         .sonnyAnimation(SonnyMotion.standard, value: isSidebarCollapsed)
     }
 
-    /// The mark alone when collapsed; the mark plus "Sonny" expanded.
+    /// Expanded: the mark, "Sonny", a spacer, and the collapse toggle at the trailing edge —
+    /// ChatGPT's own sidebar keeps its toggle here, and the founders pointed at it by name
+    /// (2026-09-10). Collapsed: the mark stays centred at the rail's top with the toggle directly
+    /// beneath it, the first control above `askSonnyButton` — the toggle no longer sits above
+    /// `profileRow` at the bottom.
+    @ViewBuilder
     private var sidebarWordmark: some View {
-        HStack(spacing: SonnySpacing.sm) {
-            ZStack {
-                RoundedRectangle(cornerRadius: SonnyRadius.control)
-                    .fill(SonnyTheme.accentSubtle)
-                Image(systemName: "wand.and.stars")
-                    .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.accent)
+        if isSidebarCollapsed {
+            VStack(spacing: SonnySpacing.sm) {
+                sidebarMark
+                sidebarToggleButton
             }
-            .frame(width: 22, height: 22)
+        } else {
+            HStack(spacing: SonnySpacing.sm) {
+                sidebarMark
 
-            if !isSidebarCollapsed {
                 Text("Sonny")
                     .font(SonnyType.sidebarWordmark)
                     .foregroundStyle(SonnyTheme.text)
+
+                Spacer(minLength: 0)
+
+                sidebarToggleButton
             }
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.controlLarge)
         }
-        .padding(.horizontal, isSidebarCollapsed ? 0 : SonnySpacing.sm)
-        .frame(height: SonnyMetrics.controlLarge)
+    }
+
+    private var sidebarMark: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                .fill(SonnyTheme.accentSubtle)
+            Image(systemName: "wand.and.stars")
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                .foregroundStyle(SonnyTheme.accent)
+        }
+        .frame(width: 22, height: 22)
     }
 
     /// The one primary action in the window. It raises the same presentation request the menu-bar
@@ -321,8 +339,9 @@ struct CommandCenterView: View {
         UserDefaults.standard.set(isSidebarCollapsed, forKey: Self.sidebarCollapsedDefaultsKey)
     }
 
-    /// Sits above the account row in both sidebar states, since it is what gets you from one to
-    /// the other.
+    /// Lives inside `sidebarWordmark` now, at the top of the sidebar in both states, rather than
+    /// above the account row at the bottom (2026-09-10: ChatGPT's own placement, by founder ask).
+    /// The one `sidebar.left` glyph in the sidebar.
     private var sidebarToggleButton: some View {
         Button(action: toggleSidebarCollapsed) {
             Image(systemName: "sidebar.left")
@@ -330,8 +349,8 @@ struct CommandCenterView: View {
         }
         .buttonStyle(SonnyButtonStyle(tone: .tertiary, width: SonnyMetrics.controlRegular))
         .keyboardShortcut("s", modifiers: [.command, .option])
-        .accessibilityLabel(isSidebarCollapsed ? "Show sidebar" : "Hide sidebar")
-        .help(isSidebarCollapsed ? "Show sidebar (⌘⌥S)" : "Hide sidebar (⌘⌥S)")
+        .accessibilityLabel(isSidebarCollapsed ? "Open sidebar" : "Close sidebar")
+        .help(isSidebarCollapsed ? "Open sidebar (⌘⌥S)" : "Close sidebar (⌘⌥S)")
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu

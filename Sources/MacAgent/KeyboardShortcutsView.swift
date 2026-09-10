@@ -40,7 +40,7 @@ struct KeyboardShortcutsSheet: View {
             KeyboardShortcutRowContent(action: "Clear the search", keys: ["Esc"]),
             KeyboardShortcutRowContent(action: "Settings", keys: ["⌘", ","]),
             KeyboardShortcutRowContent(action: "Keyboard shortcuts", keys: ["⌘", "/"]),
-            KeyboardShortcutRowContent(action: "Hide or show the sidebar", keys: ["⌘", "⌥", "S"]),
+            KeyboardShortcutRowContent(action: "Open or close the sidebar", keys: ["⌘", "⌥", "S"]),
             KeyboardShortcutRowContent(action: "Close a sheet", keys: ["Esc"]),
             KeyboardShortcutRowContent(action: "Close the window", keys: ["⌘", "W"]),
             KeyboardShortcutRowContent(action: "Minimize the window", keys: ["⌘", "M"]),
