@@ -1,7 +1,11 @@
 # SONNY-442 — the screen-control door waits once for the refresh a curable refusal started.
 # Property: at sessionStart a refusal a refresh cures waits once and reports the second answer;
-# a refusal no refresh cures, and every stepBoundary refusal, never waits; nothing asks a third time.
-# Killers expected: ScreenControlGateRefreshWaitTests.
+# a refusal no refresh cures, and every stepBoundary refusal, never waits; nothing asks a third time;
+# the wait comes before the second ask, and a stop ends the wait.
+# Killers expected: ScreenControlGateRefreshWaitTests (G5 by the event-order assertions and by
+# theRealServiceAdmitsOnTheFirstPressWhileItsRefreshIsInFlight, which composes the real service);
+# G6 by aStopDuringTheDoorsWaitEndsTheWaitBeforeTheRefreshDoes; G7 by
+# VisionSessionRunTests.aStopWhileTheDoorWaitsEndsTheRunAsCanceledNotAsARefusal.
 
 >>> mutant G1 the wait dropped: the first refusal is reported as before
 >>> file Sources/MacAgentCore/ScreenControlGate.swift
@@ -41,4 +45,32 @@
 >>> to
             await entitlements.awaitPendingRefresh()
             _ = await entitlements.claimConfirmation()
+>>> end
+
+>>> mutant G5 the order swapped: the door asks again and then waits, so the second read lands before the refresh has written (PR #229's F3)
+>>> file Sources/MacAgentCore/ScreenControlGate.swift
+>>> from
+            await entitlements.awaitPendingRefresh()
+            confirmation = await entitlements.claimConfirmation()
+>>> to
+            confirmation = await entitlements.claimConfirmation()
+            await entitlements.awaitPendingRefresh()
+>>> end
+
+>>> mutant G6 the wait no longer ends on cancellation: a stop waits for the refresh (PR #229's F1)
+>>> file Sources/MacAgentCore/EntitlementService.swift
+>>> from
+        guard let task = refreshTask else { return }
+        await RefreshWait.untilFinished(task)
+>>> to
+        await refreshTask?.value
+>>> end
+
+>>> mutant G7 the adapter's cancellation check dropped: a stopped run ends with the refusal (PR #229's F1)
+>>> file Sources/MacAgentCore/VisionSessionCapabilityAdapter.swift
+>>> from
+        try Task.checkCancellation()
+        if case .refused(let refusal) = admission {
+>>> to
+        if case .refused(let refusal) = admission {
 >>> end

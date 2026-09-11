@@ -360,12 +360,31 @@ public struct SonnyScreenControlGate: ScreenControlGating {
         // waits is what keeps §16.3's instant feel for everything else. Here the answer is the
         // only thing between a signed-in user and a session, and refusing "Connect once so Sonny
         // can check your plan" while that check is already on the wire sends them to press Retry a
-        // moment later, which is what the founders' pass read on test 55 after a sign-out and
-        // sign-in had cleared the claim. The Account dialog already reads twice for the same
-        // reason (`SonnyAccountModel.refreshSubscription()`); this is that shape at the door,
-        // bounded by the client's own request timeout, the bound that dialog accepts too. Only at
+        // moment later, which is what the founders' pass read on test 55. What puts a Mac in that
+        // state is a claim that is not there when the door reads — nothing cached yet, or a sign-in
+        // as another account, whose first reader discards the old claim and starts the refresh the
+        // next reader lands before. A same-account sign-out and sign-in is **not** one of them:
+        // `SonnyAccountService.signOut` clears the tokens and leaves the claim in the Keychain
+        // (PR #229's F4), so what produced test 55's refusal on the founders' Mac is not established.
+        // The Account dialog already reads twice for the same reason
+        // (`SonnyAccountModel.refreshSubscription()`); this is that shape at the door. Only at
         // `.sessionStart`: a boundary that waited on the network would be the mid-session stall
         // the allowance branch below refuses to be.
+        //
+        // **The wait's bound is the client's, and it is not one timeout** (PR #229's F2).
+        // `refreshNow()` sends with `SonnyBackendTimeouts.auth`, 20 s of idle time per request, and
+        // a transport timeout is not retried — so a gateway that accepts and hangs costs 20 s. The
+        // retryable codes (`server.error`, `server.unavailable`, `provider.unavailable`) get three
+        // attempts with a server-named `Retry-After` honoured up to 20 s each, about 100 s in all;
+        // an access-token refresh that falls due first is one more 20 s request. **A stop does not
+        // wait for any of it**: `awaitPendingRefresh` returns the moment the run is cancelled, and
+        // the adapter turns the cut-short answer into the run's own "Canceled." (F1).
+        //
+        // **Wait first, then ask — the order is the fix.** With the real service the second read
+        // answers from the store, and the refresh writes the store when it ends; a read taken
+        // before the wait lands on the same empty store the first one did and reports the refusal
+        // this branch exists to stop. `ScreenControlGateRefreshWaitTests` holds the order by an
+        // event list and by composing the real service (F3).
         if case .refused(let refusal) = confirmation, moment == .sessionStart, refusal.isCuredByARefresh {
             await entitlements.awaitPendingRefresh()
             confirmation = await entitlements.claimConfirmation()

@@ -597,23 +597,28 @@ struct ScreenControlGateFreeCapabilityTests {
 /// hold what waits, what does not, and that nothing asks a third time.
 @Suite
 struct ScreenControlGateRefreshWaitTests {
-    /// A confirmer whose answers are a script, consumed one per ask, with the waits counted.
+    /// A confirmer whose answers are a script, consumed one per ask, **with the asks and the waits
+    /// recorded in one ordered list** (PR #229's F3): counts alone were satisfied by a gate that
+    /// asked again and then waited, which with the real service re-reads the store before the
+    /// refresh has written it and brings back the exact refusal this branch exists to stop.
     private final class ScriptedEntitlementConfirmation: ScreenControlEntitlementConfirming, @unchecked Sendable {
         private var answers: [EntitlementDecision]
-        private(set) var asks = 0
-        private(set) var waits = 0
+        private(set) var events: [String] = []
 
         init(_ answers: [EntitlementDecision]) {
             self.answers = answers
         }
 
+        var asks: Int { events.filter { $0 == "ask" }.count }
+        var waits: Int { events.filter { $0 == "wait" }.count }
+
         func claimConfirmation() async -> EntitlementDecision {
-            asks += 1
+            events.append("ask")
             return answers.isEmpty ? .refused(.noClaim) : answers.removeFirst()
         }
 
         func awaitPendingRefresh() async {
-            waits += 1
+            events.append("wait")
         }
     }
 
@@ -633,8 +638,8 @@ struct ScreenControlGateRefreshWaitTests {
         let subject = Self.gate(scripted)
 
         #expect(await subject.decide(at: .sessionStart) == .allowed)
-        #expect(scripted.asks == 2)
-        #expect(scripted.waits == 1)
+        // The order, not only the counts: the wait sits between the two asks.
+        #expect(scripted.events == ["ask", "wait", "ask"])
     }
 
     /// Still refused after the wait: the second answer is the one reported, and there is no third.
@@ -644,8 +649,97 @@ struct ScreenControlGateRefreshWaitTests {
         let subject = Self.gate(scripted)
 
         #expect(await subject.decide(at: .sessionStart) == .refused(.entitlementUnconfirmed(.lapsed)))
-        #expect(scripted.asks == 2)
-        #expect(scripted.waits == 1)
+        #expect(scripted.events == ["ask", "wait", "ask"])
+    }
+
+    /// **The real service, composed with the real gate, nothing cached** (PR #229's F3): the first
+    /// press admits, because the door waited for the refresh its first read started and read the
+    /// claim that refresh wrote. The gateway answers after 0.3 s, which is not a bet the correct
+    /// code has to win — it waits however long the refresh takes — but the margin that makes the
+    /// swapped order fail every time rather than by chance: a door that asks again *before*
+    /// waiting re-reads an empty store and refuses. Exactly one request is sent.
+    @Test
+    @MainActor
+    func theRealServiceAdmitsOnTheFirstPressWhileItsRefreshIsInFlight() async throws {
+        let signer = EntitlementServiceTests.Signer()
+        let fixture = SignedInBackendFixture(now: { EntitlementServiceTests.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let body = try JSONSerialization.data(withJSONObject: ["entitlement": signer.claim(subject: "test-user")])
+        let seen = RecordedBackendRequests()
+        fixture.register { request in
+            seen.append(request)
+            Thread.sleep(forTimeInterval: 0.3)
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        let service = EntitlementService(
+            client: fixture.client,
+            store: EntitlementServiceTests.MemoryStore(),
+            keys: signer.keys
+        )
+        let subject = SonnyScreenControlGate(
+            entitlements: service,
+            allowance: StubAllowanceReading(.runsLeft(9), autoTopUp: .none),
+            topUp: StubTopUpPurchasing.neverCalled()
+        )
+
+        #expect(await subject.decide(at: .sessionStart) == .allowed)
+        #expect(seen.all.map(\.path) == ["/v1/account/entitlements"])
+    }
+
+    /// **A stop during the door's wait ends the wait at once, before the refresh does** (PR #229's
+    /// F1). The gateway's reply is held behind a semaphore the test releases only after the door
+    /// has answered, so the refresh cannot finish first: if the door answers at all, the wait ended
+    /// on cancellation. The answer is the refusal the store still holds — no claim — which the
+    /// adapter turns into the run's "Canceled." (`aStopWhileTheDoorWaitsEndsTheRunAsCanceledNotAsARefusal`
+    /// in `VisionSessionRunTests`). A wait that cannot be cancelled does not hang this test: a
+    /// backstop lets the reply through after ten seconds, the refresh then writes the claim, and
+    /// the assertion that the store was still empty when the door answered is what goes red.
+    @Test
+    @MainActor
+    func aStopDuringTheDoorsWaitEndsTheWaitBeforeTheRefreshDoes() async throws {
+        let signer = EntitlementServiceTests.Signer()
+        let fixture = SignedInBackendFixture(now: { EntitlementServiceTests.issuedAt.addingTimeInterval(60) })
+        defer { fixture.unregister() }
+        let body = try JSONSerialization.data(withJSONObject: ["entitlement": signer.claim(subject: "test-user")])
+        let onTheWire = RecordedBackendRequests()
+        let release = DispatchSemaphore(value: 0)
+        fixture.register { request in
+            onTheWire.append(request)
+            release.wait()
+            return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
+        }
+        let store = EntitlementServiceTests.MemoryStore()
+        let service = EntitlementService(client: fixture.client, store: store, keys: signer.keys)
+        let subject = SonnyScreenControlGate(
+            entitlements: service,
+            allowance: StubAllowanceReading(.runsLeft(9), autoTopUp: .none),
+            topUp: StubTopUpPurchasing.neverCalled()
+        )
+
+        let door = Task { await subject.decide(at: .sessionStart) }
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while onTheWire.all.isEmpty {
+            if Date() > deadline {
+                Issue.record("the refresh never reached the wire")
+                release.signal()
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let backstop = Task {
+            try? await Task.sleep(for: .seconds(10))
+            release.signal()
+        }
+        door.cancel()
+        let decision = await door.value
+        let claimWrittenBeforeTheDoorAnswered = store.current != nil
+        backstop.cancel()
+        release.signal()
+        await service.awaitPendingRefresh()
+
+        #expect(!claimWrittenBeforeTheDoorAnswered, "the door waited for the refresh instead of ending on the stop")
+        #expect(decision == .refused(.entitlementUnconfirmed(.noClaim)))
+        #expect(onTheWire.all.map(\.path) == ["/v1/account/entitlements"])
     }
 
     /// The refusals no refresh can cure are refused at once with no wait — a signed-out Mac is
@@ -656,8 +750,7 @@ struct ScreenControlGateRefreshWaitTests {
         let subject = Self.gate(scripted)
 
         #expect(await subject.decide(at: .sessionStart) == .refused(.entitlementUnconfirmed(refusal)))
-        #expect(scripted.asks == 1)
-        #expect(scripted.waits == 0)
+        #expect(scripted.events == ["ask"])
     }
 
     /// A step boundary never waits on the network, whatever the refusal: the allowance branch of
@@ -668,8 +761,7 @@ struct ScreenControlGateRefreshWaitTests {
         let subject = Self.gate(scripted)
 
         #expect(await subject.decide(at: .stepBoundary) == .refused(.entitlementUnconfirmed(.noClaim)))
-        #expect(scripted.asks == 1)
-        #expect(scripted.waits == 0)
+        #expect(scripted.events == ["ask"])
     }
 
     /// An entitled first answer asks nothing twice — the common case still never waits.
@@ -679,8 +771,7 @@ struct ScreenControlGateRefreshWaitTests {
         let subject = Self.gate(scripted)
 
         #expect(await subject.decide(at: .sessionStart) == .allowed)
-        #expect(scripted.asks == 1)
-        #expect(scripted.waits == 0)
+        #expect(scripted.events == ["ask"])
     }
 
     /// The list of curable refusals is the list `EntitlementService.evaluate` starts a refresh

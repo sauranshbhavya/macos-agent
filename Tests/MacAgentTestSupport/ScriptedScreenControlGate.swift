@@ -40,6 +40,18 @@ public final class ScriptedScreenControlGate: ScreenControlGating, @unchecked Se
         ScriptedScreenControlGate(answers: [], thereafter: .allowed)
     }
 
+    /// A gate whose door waits until the run is stopped and then answers as the real one does
+    /// after a cut-short wait — a refusal, never "stopped" (SONNY-442, PR #229's F1). The wait is
+    /// a cancellable sleep that nothing but cancellation ends inside a test's life, so what a test
+    /// over this gate measures is whether the caller turns the refusal into a cancellation.
+    public static func holdingUntilStopped() -> ScriptedScreenControlGate {
+        let gate = ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceUnknown))
+        gate.holdsUntilStopped = true
+        return gate
+    }
+
+    private var holdsUntilStopped = false
+
     /// Allowed for `steps` consults and refused from then on — the mid-run exhaustion shape.
     public static func allowing(
         steps: Int,
@@ -57,8 +69,14 @@ public final class ScriptedScreenControlGate: ScreenControlGating, @unchecked Se
     }
 
     public func decide(at moment: ScreenControlGateMoment) async -> ScreenControlGateDecision {
-        lock.withLock {
+        let holds = lock.withLock {
             recorded.append(moment)
+            return holdsUntilStopped
+        }
+        if holds {
+            try? await Task.sleep(for: .seconds(600))
+        }
+        return lock.withLock {
             guard !answers.isEmpty else { return fallback }
             return answers.removeFirst()
         }

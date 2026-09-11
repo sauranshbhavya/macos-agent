@@ -471,8 +471,16 @@ public actor EntitlementService {
     /// which is what makes the subscription row appear the *first* time a user opens Account rather
     /// than the second. It does not weaken the property above: `decision(for:)` and
     /// `currentSubscription()` still never wait, and a caller that wants to is opting in by name.
+    ///
+    /// **Ends on cancellation as well as on the refresh** (SONNY-442, PR #229's F1). This used to
+    /// be `await refreshTask?.value`, and a `Task<Void, Never>`'s value has no cancellation point,
+    /// so a stop pressed while the screen-control door waited here did nothing until the refresh
+    /// ended — up to the client's whole retry budget for a hung gateway. The refresh itself is not
+    /// cancelled, because it is the background refresh every reader shares; only this wait ends,
+    /// and the caller reads whatever the cache holds at that moment.
     public func awaitPendingRefresh() async {
-        await refreshTask?.value
+        guard let task = refreshTask else { return }
+        await RefreshWait.untilFinished(task)
     }
 
     /// One refresh at a time, whatever the number of callers.
@@ -493,6 +501,52 @@ public actor EntitlementService {
 
     private func clearRefreshTask() {
         refreshTask = nil
+    }
+}
+
+/// A wait on an unstructured task that ends when the task does **or when the waiter is cancelled**,
+/// whichever comes first (SONNY-442). `withTaskCancellationHandler`'s `onCancel` and the task's
+/// completion both race to resume one continuation, and the lock makes exactly one of them win;
+/// a cancellation that arrived before the continuation was armed resumes it the moment it is.
+/// The same shape `AgentViewModel.requestVisionActionApproval` uses for a stop during an approval.
+private final class RefreshWait: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var fired = false
+
+    static func untilFinished(_ task: Task<Void, Never>) async {
+        let wait = RefreshWait()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                wait.arm(continuation)
+                Task {
+                    await task.value
+                    wait.fire()
+                }
+            }
+        } onCancel: {
+            wait.fire()
+        }
+    }
+
+    private func arm(_ continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        if fired {
+            lock.unlock()
+            continuation.resume()
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    private func fire() {
+        lock.lock()
+        fired = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume()
     }
 }
 
