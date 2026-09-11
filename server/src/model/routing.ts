@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type pg from "pg";
 import type { WithConnection } from "../db/connection.js";
+import { STATEMENT_TIMEOUT_MS } from "../db/pool.js";
 import { errorBody } from "../errors.js";
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "./upstream.js";
 
@@ -170,7 +171,7 @@ const TRANSACTION_CONTROL: ReadonlySet<string> = new Set(["BEGIN", "COMMIT", "RO
  * than the evidence.
  */
 export async function withDatabaseDeadline<T>(
-  deadline: { readonly total: number },
+  deadline: { readonly total: number; readonly perStatement?: number },
   client: pg.Client,
   work: (bounded: pg.Client) => Promise<T>,
 ): Promise<T> {
@@ -199,9 +200,17 @@ export async function withDatabaseDeadline<T>(
         if (remaining <= 0) {
           throw new ProviderTimedOut("the route's total deadline elapsed");
         }
+        // **A `SET` replaces the pool's bound for the statement; it does not cap it** (PR #235's
+        // fresh review, F1). A remainder wider than the pool's ten seconds handed to Postgres here is
+        // a statement Postgres lets run for the whole remainder, so a caller whose statements §12
+        // derives a ten-second bound for passes `perStatement` and each statement takes the smaller
+        // of the two. The deletion routes pass none and keep their recorded composition, where the
+        // innermost `SET` governs in either direction.
+        const statementBudget =
+          deadline.perStatement === undefined ? remaining : Math.min(remaining, deadline.perStatement);
         // Interpolated because `SET` takes no bind parameter, and safe because the value is this
         // arithmetic and never anything a caller supplied.
-        await target.query(`SET statement_timeout TO ${Math.ceil(remaining)}`);
+        await target.query(`SET statement_timeout TO ${Math.ceil(statementBudget)}`);
         applied = true;
         return (target.query as (...rest: unknown[]) => Promise<unknown>).apply(target, args);
       };
@@ -243,9 +252,11 @@ export async function withDatabaseDeadline<T>(
  * alternative — a store built per request over one leased client — reshapes every store factory and
  * every fixture that constructs one. This leaves both stores exactly as they are and puts the budget
  * where the lease is taken: `underTotalDeadline` starts the request's budget, and the `WithConnection`
- * `leasingUnderTotalDeadline` returns reads what is left of it before each lease and hands that to
- * `withDatabaseDeadline`, whose per-statement `SET statement_timeout` is the instrument SONNY-428
- * built and PR #212's F1 requires. One budget for the whole handler, however many leases it takes —
+ * `leasingUnderTotalDeadline` returns refuses a spent budget before leasing, bounds the wait for a
+ * connection by what is left, reads what is left again once the connection is in hand and hands
+ * that — capped at the pool's own per-statement bound — to `withDatabaseDeadline`, whose
+ * per-statement `SET statement_timeout` is the instrument SONNY-428 built and PR #212's F1
+ * requires. One budget for the whole handler, however many leases it takes —
  * the consent switch takes two, its write and the re-read it answers with, and a per-lease budget
  * would have been thirty seconds wearing §12's fifteen.
  *
@@ -273,27 +284,124 @@ export function underTotalDeadline<T>(
 /**
  * `withConnection`, bounding each lease by what is left of the request's budget — if it has one.
  *
- * **What is left is read twice, and the second reading is the one that counts** (PR #235's review,
- * F1). `withDatabaseDeadline` anchors its own deadline at `Date.now()` when it is *entered*, which
- * is after `withConnection` has waited for a free pooled connection; a remainder computed before
- * that wait would hand the wrapper a budget the wait had already spent, so time queued for a
- * connection was added on top of the request's total rather than taken out of it — measured by the
- * reviewer at a 400 ms wait against a 1000 ms budget as a 1401 ms bound. The pool's
- * `connectionTimeoutMillis` (5 s) is how wide that could get, and pool contention is exactly the
- * load a total deadline is for. So the remainder is recomputed inside the lease, once the connection
- * is in hand. The reading before the lease stays: a budget already spent refuses without taking a
- * connection, which is the cheap half.
+ * **Three readings of the clock, and each closes a hole the round before it left open.** The first,
+ * before the lease: a budget already spent refuses without taking a connection, the cheap half. The
+ * second, around the wait: the pool hands over a connection when it has one, which under load is
+ * later than the budget allows, so the wait is raced against what is left — a wait that outlasts the
+ * budget ends at the budget with `ProviderTimedOut`, and the connection the pool later hands that
+ * abandoned wait goes straight back with nothing run on it (PR #235's fresh review, F3: the round
+ * before had taken the wait *out of* the budget's arithmetic, which is right, and left it unbounded,
+ * which is not — a 1000 ms budget was measured answering at 2996 ms behind a three-second holder,
+ * and at 5003 ms as a `500` when the pool's own connect timeout won). The third, once the
+ * connection is in hand: `withDatabaseDeadline` anchors its deadline where it is entered, after the
+ * wait, so the remainder is read there and not before it — read before, the wait's time was added on
+ * top of the total (PR #235's first review measured that order at `834a8c75`, a pre-rebase head, as
+ * a 1401 ms bound granted against a 1000 ms budget at a 400 ms wait).
+ *
+ * **Why the race here is not the race PR #212's F1 forbids.** That rule is about racing work that
+ * *holds* a connection: abandoning it leaves statements landing on a released client. What is raced
+ * here is the wait *for* a connection, before any work holds one; the work itself still runs to its
+ * own end under `withDatabaseDeadline` and is never abandoned. The one thing the race has to get
+ * right is the lease that arrives after its caller was answered, and that is the `expired` check in
+ * `leaseWithin`'s callback: the connection returns through `withConnection`'s own `finally`, so
+ * nothing leaks and nothing runs on it.
+ *
+ * **The pool's own connect timeout inside a budget is a timeout, not a bug** (the same finding).
+ * `pg-pool` rejects a wait it gives up on with a plain `Error` and no code, in one wording for its
+ * queue and another for a new client's connect — both the root handler answers as `500 server.error`;
+ * inside a declared budget that wait is exactly the wait the budget bounds, so either is answered as
+ * `ProviderTimedOut` — §12's `504`, retryable — and outside one it is rethrown untouched, because
+ * outside a budget nothing here changes.
+ *
+ * **Beneath the budget the pool's per-statement bound still holds** (F1 of the same review). A
+ * `SET statement_timeout TO <remaining>` replaces the pool's startup value for the statement, so a
+ * fifteen-second remainder handed to Postgres was a fifteen-second statement on routes §12 derives a
+ * ten-second one for — the reviewer's eleven-second statement completed inside the budget and was
+ * cancelled at ten outside it. Each statement is now bounded by the smaller of the remainder and
+ * `perStatementMs`, which is the pool's own `STATEMENT_TIMEOUT_MS` unless a caller says otherwise;
+ * the one caller that does is a test that shortens it to keep a real lock-blocked statement cheap.
  */
-export function leasingUnderTotalDeadline(withConnection: WithConnection): WithConnection {
+export interface LeaseBudgetOptions {
+  /** The per-statement ceiling beneath the budget; the pool's own bound unless a test says otherwise. */
+  readonly perStatementMs?: number;
+}
+
+/**
+ * The two wordings `connectionTimeoutMillis` produces, both `pg-pool`'s (`pg-pool/index.js`) and
+ * neither carrying a code, so the words are the only handle: one for a wait in its queue it gave up
+ * on, one for a new client whose connect it gave up on — the second is what a fresh connection meets
+ * when the database is slow to answer the handshake. Both are the pool's connect timeout, and inside
+ * a budget both are the wait the budget bounds.
+ */
+const POOL_CONNECT_TIMEOUT_MESSAGES: ReadonlySet<string> = new Set([
+  "timeout exceeded when trying to connect",
+  "Connection terminated due to connection timeout",
+]);
+
+function isPoolConnectTimeout(error: unknown): boolean {
+  return error instanceof Error && POOL_CONNECT_TIMEOUT_MESSAGES.has(error.message);
+}
+
+export function leasingUnderTotalDeadline(
+  withConnection: WithConnection,
+  options: LeaseBudgetOptions = {},
+): WithConnection {
+  const perStatementMs = options.perStatementMs ?? STATEMENT_TIMEOUT_MS;
+  if (!(perStatementMs > 0)) {
+    // `SET statement_timeout TO 0` is Postgres for no timeout, so a ceiling of nothing would switch
+    // the bound off rather than tighten it; refused at wiring time, where it is a configuration.
+    throw new Error("perStatementMs must be a positive number of milliseconds");
+  }
   return async <T>(work: (client: pg.Client) => Promise<T>): Promise<T> => {
     const request = totalDeadlineOfThisRequest.getStore();
     if (request === undefined) return withConnection(work);
-    if (request.expiresAt - Date.now() <= 0) {
+    const beforeTheLease = request.expiresAt - Date.now();
+    if (beforeTheLease <= 0) {
       throw new ProviderTimedOut("the route's total deadline elapsed");
     }
-    return withConnection((client) => {
+    return leaseWithin(beforeTheLease, withConnection, (client) => {
       const remaining = request.expiresAt - Date.now();
-      return withDatabaseDeadline({ total: remaining }, client, work);
+      return withDatabaseDeadline({ total: remaining, perStatement: perStatementMs }, client, work);
     });
   };
+}
+
+/** The value a lease's callback returns when the budget ran out before the pool answered. */
+const ABANDONED: unique symbol = Symbol("the budget elapsed while waiting for a connection");
+
+/**
+ * Take a lease, giving up on the *wait* for one after `budgetMs`; the work, once it has a
+ * connection, is never raced (see `leasingUnderTotalDeadline` above).
+ */
+function leaseWithin<T>(
+  budgetMs: number,
+  withConnection: WithConnection,
+  work: (client: pg.Client) => Promise<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      reject(new ProviderTimedOut("the route's total deadline elapsed while waiting for a database connection"));
+    }, budgetMs);
+    withConnection<T | typeof ABANDONED>(async (client) => {
+      // The pool answered after the caller was told no: hand the connection straight back.
+      if (expired) return ABANDONED;
+      clearTimeout(timer);
+      return work(client);
+    }).then(
+      (value) => {
+        if (value !== ABANDONED) resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        if (expired) return;
+        reject(
+          isPoolConnectTimeout(error)
+            ? new ProviderTimedOut("the pool gave up waiting for a database connection inside the route's total deadline")
+            : error,
+        );
+      },
+    );
+  });
 }

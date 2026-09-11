@@ -9,15 +9,21 @@
 # that runs this plan under the default Swift command reports every mutant here SURVIVED without a
 # test having seen it (SONNY-455 records the gap).
 #
-# Killers expected, all in test/account-deadline.test.ts, as PR #235's first review measured them by
-# hand (the first draft of this header undercounted M3, M4 and M6): M1 by the entitlements route
-# test; M2 by the credits GET route test; M3 by the consent PUT route test's band assertion and the
-# two-leases test; M4 by the two-leases test, the per-lease unit test and the pool-wait test (PR
-# #235's second review measured this after the pool-wait test joined the file; the first correction
-# of this line named the refuses-before-leasing test instead, which never reaches M4's line); M5 by
-# the refuses-before-leasing unit test; M6 by the bare-lease unit test, the charge-route
-# decision test and the two-leases test (the gate's admit lease, outside any budget, gains a SET
-# under M6 and breaks that test's exact sequence); M7 by the pool-wait test.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #235, 2026-09-11),
+# under the command above unless a line says otherwise. M1 by the entitlements route test; M2 by the
+# credits GET route test; M3 by the two-leases test alone (the route test's first SET is the pool's
+# ten seconds whichever total the handler declares, so the band assertion that used to kill M3 no
+# longer can — the six-second step between the two leases is what tells fifteen from sixty); M4 by
+# the two-leases test, the per-lease unit test, the pool-wait test and the wider-budget test; M5 by
+# the refuses-before-leasing unit test; M6 by the bare-lease unit test, the charge-route decision
+# test, the two-leases test and the pool-timeout-outside-a-budget test; M7 by the pool-wait test;
+# M8 by every route test's first-SET assertion, the two-leases test, the wider-budget test and, in
+# test/account-deadline.db.test.ts at a lane database, the wider-than-the-pool direction; M9 by the
+# pool-held-empty unit test, the pool-timeout-inside-a-budget unit test (the mapping goes with the
+# timer) and, at a lane database, the real-pool wait test and the real-pool connect-timeout test;
+# M10 by the
+# pool-timeout-inside-a-budget unit test and, at a lane database, the real-pool connect-timeout
+# test; M11 and M12 by the every-error-is-not-a-timeout route tests, one per route.
 
 >>> mutant M1 the entitlement read runs under no budget
 >>> file server/src/routes/entitlements.ts
@@ -56,9 +62,9 @@
 >>> mutant M5 a budget of exactly nothing still takes a connection
 >>> file server/src/model/routing.ts
 >>> from
-    if (request.expiresAt - Date.now() <= 0) {
+    if (beforeTheLease <= 0) {
 >>> to
-    if (request.expiresAt - Date.now() < 0) {
+    if (beforeTheLease < 0) {
 >>> end
 
 >>> mutant M6 a lease outside any declared budget is bounded anyway, widening routes the ticket never named
@@ -74,11 +80,62 @@
 >>> mutant M7 the remainder read before the pool wait, so a queued connection's time is added on top of the budget
 >>> file server/src/model/routing.ts
 >>> from
-    return withConnection((client) => {
+    return leaseWithin(beforeTheLease, withConnection, (client) => {
       const remaining = request.expiresAt - Date.now();
-      return withDatabaseDeadline({ total: remaining }, client, work);
+      return withDatabaseDeadline({ total: remaining, perStatement: perStatementMs }, client, work);
     });
 >>> to
     const remaining = request.expiresAt - Date.now();
-    return withConnection((client) => withDatabaseDeadline({ total: remaining }, client, work));
+    return leaseWithin(beforeTheLease, withConnection, (client) =>
+      withDatabaseDeadline({ total: remaining, perStatement: perStatementMs }, client, work),
+    );
+>>> end
+
+>>> mutant M8 the per-statement ceiling dropped: the remainder replaces the pool's bound for the statement (PR #235's fresh review, F1)
+>>> file server/src/model/routing.ts
+>>> from
+        const statementBudget =
+          deadline.perStatement === undefined ? remaining : Math.min(remaining, deadline.perStatement);
+>>> to
+        const statementBudget = remaining;
+>>> end
+
+>>> mutant M9 the wait for a connection unbounded again: the lease taken directly, no timer and no mapping (PR #235's fresh review, F3)
+>>> file server/src/model/routing.ts
+>>> from
+    return leaseWithin(beforeTheLease, withConnection, (client) => {
+>>> to
+    return withConnection((client) => {
+>>> end
+
+>>> mutant M10 the pool's connect timeout inside a budget rethrown as the plain error: a 500 again (PR #235's fresh review, F3)
+>>> file server/src/model/routing.ts
+>>> from
+  return error instanceof Error && POOL_CONNECT_TIMEOUT_MESSAGES.has(error.message);
+>>> to
+  return false;
+>>> end
+
+>>> mutant M11 the entitlement read dresses every store error as a timeout (PR #235's fresh review, X4)
+>>> file server/src/routes/entitlements.ts
+>>> from
+      return sendUpstreamFailure(request, reply, error);
+>>> to
+      void error;
+      return reply.status(504).send({ error: { code: "provider.timeout", message: "The upstream provider did not answer in time.", request_id: request.id, retryable: true } });
+>>> end
+
+>>> mutant M12 the credits read dresses every store error as a timeout (PR #235's fresh review, X3)
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+    } catch (error) {
+      return sendUpstreamFailure(request, reply, error);
+    }
+>>> to
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+    } catch (error) {
+      void error;
+      return reply.status(504).send({ error: { code: "provider.timeout", message: "The upstream provider did not answer in time.", request_id: request.id, retryable: true } });
+    }
 >>> end

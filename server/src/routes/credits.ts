@@ -65,7 +65,14 @@ import { sendUpstreamFailure, underTotalDeadline } from "../model/routing.js";
  * whole handler, carried to every lease it takes — the `PUT` takes two, its write and the re-read it
  * answers with. A statement cancelled inside it answers `504 provider.timeout`, retryable, which is
  * honest for both: the read costs nothing to repeat, and the setting is idempotent — a retry writes
- * the same value again. The charge below is on §12's own `topUp` row with `withinTotalDeadline`,
+ * the same value again. **What that `504` does not say on the `PUT`** (PR #235's fresh review, F2):
+ * its two leases are two transactions, the write autocommits on the first, and a budget that runs
+ * out in the re-read — or in the wait for its connection — answers `504` with the setting already
+ * written; the Mac's one automatic retry ordinarily converges on the `200`, and a retry that also
+ * times out leaves the toggle showing off while the gateway holds consent, until the next read.
+ * One lease in one transaction would roll the write back with the timeout; that touches
+ * `CreditStore`'s seam (SONNY-300) and is recorded on SONNY-434 for the founders rather than taken
+ * here. The charge below is on §12's own `topUp` row with `withinTotalDeadline`,
  * and its reads before and after the charge deliberately stay on the pool's per-statement bound,
  * because its deadline answers `topup.unconfirmed` and a second bound with a different answer on
  * the same handler would be two promises about one request.

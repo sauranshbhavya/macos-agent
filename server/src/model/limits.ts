@@ -129,13 +129,18 @@ export const DEADLINE_MS = {
    *   They reach no provider and every one of them holds a pooled connection, so `withDeadlines` is
    *   forbidden for them by PR #212's F1 and the `upstream` half of this row has nothing to bound:
    *   they take `CONTENT_DELETION_DEADLINE_MS` below, through `withDatabaseDeadline`.
-   * - **Three of the four account routes are wired now, and by a third shape** (SONNY-434).
-   *   `routes/entitlements.ts`, and the read and the consent switch in `routes/credits.ts`, wait on
-   *   the database rather than on a provider, and their stores lease connections internally, so the
-   *   handler holds no client for `withDatabaseDeadline` to wrap. They take `ACCOUNT_DEADLINE_MS`
-   *   below through `underTotalDeadline`, a request-scoped budget every lease inside the handler
-   *   reads; `model/routing.ts` carries the reasoning. The per-statement bound `db/pool.ts` sets
-   *   (SONNY-427) is what governs them outside that scope and everything else always.
+   * - **Three of the five `/v1/account/*` routes are wired now, and by a third shape** (SONNY-434;
+   *   five, because `DELETE /v1/account/content` is one of the four deletion routes above — this
+   *   line said four until PR #235's fresh review counted, and the count is
+   *   `git grep -nE 'app\.(get|put|post|delete)\((CREDITS_PATH|AUTO_TOP_UP_PATH|TOP_UP_PATH|"/v1/account/)' -- server/src`
+   *   from the repository root, which answers 0 run from inside `server/` for the pathspec reason
+   *   `CLAUDE.md` names). `routes/entitlements.ts`, and the read and the consent switch in
+   *   `routes/credits.ts`, wait on the database rather than on a provider, and their stores lease
+   *   connections internally, so the handler holds no client for `withDatabaseDeadline` to wrap.
+   *   They take `ACCOUNT_DEADLINE_MS` below through `underTotalDeadline`, a request-scoped budget
+   *   every lease inside the handler reads, beneath which the per-statement bound `db/pool.ts` sets
+   *   (SONNY-427) still holds — each statement takes the smaller of the two; `model/routing.ts`
+   *   carries the reasoning. Outside that scope, and everywhere else, the pool's bound governs alone.
    * - **`POST /v1/account/credits/top-up` is the fourth and is not database-bound at all**: it
    *   charges at the payment provider, so this row was never its. It has **its own row now**, below
    *   (SONNY-430). It was folded into the sentence above until PR #212's F4 — the lane's own
