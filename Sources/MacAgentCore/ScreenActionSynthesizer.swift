@@ -52,14 +52,22 @@ public struct SystemScreenActionSynthesizer: ScreenActionSynthesizing {
     public init() {}
 
     public func activateApp(bundleIdentifier: String) async -> Bool {
-        await MainActor.run {
-            guard let app = NSRunningApplication
+        // Through Launch Services, not `NSRunningApplication.activate(options:)` (SONNY-440): that
+        // call answers false from a process that is not the active app, which Sonny is not while a
+        // command typed into its non-activating widget runs. `RunningAppActivation`'s doc comment
+        // carries the whole reason; this is the same route the app switcher takes, so a session
+        // started from the background brings its target forward exactly as one started with
+        // Command Center in front did on the founders' pass.
+        let bundleURL = await MainActor.run {
+            NSRunningApplication
                 .runningApplications(withBundleIdentifier: bundleIdentifier)
-                .first else {
-                return false
-            }
-            return app.activate(options: [])
+                .first?
+                .bundleURL
         }
+        guard let bundleURL else {
+            return false
+        }
+        return await RunningAppActivation.activate(bundleURL: bundleURL)
     }
 
     public func frontmostBundleIdentifier() async -> String? {

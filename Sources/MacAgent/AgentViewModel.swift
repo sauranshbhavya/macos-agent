@@ -1229,7 +1229,7 @@ final class AgentViewModel: ObservableObject {
         // shape the tree no longer has (SONNY-395).
         finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
-        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
+        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
         documentConverter: any DocumentConverting = AutoDocumentConverter(),

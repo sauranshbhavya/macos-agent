@@ -4330,6 +4330,23 @@ fresh install, or, with Sonny quit, `rm ~/Library/Application\ Support/Sonny/cli
       `clipboard history`: it is listed, and the Settings toggle reads on throughout. **What would
       be a finding:** the copy missing from the list while the toggle reads on.
 
+### Switching to a running app from the background (new 2026-09-11, SONNY-440)
+
+`switch to <app>` and `focus <app>` used to fail with "Could not switch to <app>." whenever Sonny was
+not the active app — which it never is while you type into the widget from somewhere else — because
+the activation call macOS 14 deprecated refuses a background process. Activation goes through Launch
+Services now, the route `open <app>` already took. Screen control's own "bring the app forward" took
+the same route.
+
+- [ ] With Chrome running and Finder in front, click into the widget and type `switch to Chrome`:
+      Chrome comes forward. Repeat from a full-screen app on another Space: it still comes forward.
+- [ ] `focus chrome` (the planner's route for the same ask, as the founders typed it): the same.
+- [ ] Quit Safari, type `switch to Safari`: "No running app matched Safari." and nothing launches
+      (the tool launches nothing, by design; `open Safari` is the launch).
+- [ ] Screen control, Normal mode, Safari running behind another app: `in Safari, scroll to the
+      bottom of the page`. Safari comes forward before the first capture and the session runs (as
+      before, now from the background too).
+
 ## 8. How to report back
 
 For each real finding, give me:
