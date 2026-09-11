@@ -1,0 +1,44 @@
+# SONNY-445 and SONNY-446 — a zip result carries an Open suggestion, and an outcome counts down
+# from its own longer delay. Property: the zip adapter emits .openFile at the archive path; a
+# result or failure gets the outcome delay, idle keeps six seconds, a parked question has none.
+# Killers expected: AgentRunnerTests.aZipResultCarriesOpenFirstAndRevealAtTheArchivePath (Z1),
+# WidgetAutoCollapseDelayTests (Z2, Z3, Z4).
+
+>>> mutant Z1 the Open suggestion dropped: only Reveal is emitted, as before
+>>> file Sources/MacAgentCore/LargestFilesZipCapabilityAdapter.swift
+>>> from
+            RunSuggestion(
+                title: "Open zip",
+                kind: .openFile,
+                value: spec.outputURL.path
+            ),
+>>> to
+>>> end
+
+>>> mutant Z2 an outcome counts down from the idle figure, as before
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+        case .result, .failure:
+            return outcome
+>>> to
+        case .result, .failure:
+            return idle
+>>> end
+
+>>> mutant Z3 idle counts down from the outcome figure
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+        case .idle, .resumeOffer, .working, .tooOld, .updateAvailable:
+            return idle
+>>> to
+        case .idle, .resumeOffer, .working, .tooOld, .updateAvailable:
+            return outcome
+>>> end
+
+>>> mutant Z4 the outcome figure shortened back under idle
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+    static let outcome: Duration = .seconds(20)
+>>> to
+    static let outcome: Duration = .seconds(5)
+>>> end

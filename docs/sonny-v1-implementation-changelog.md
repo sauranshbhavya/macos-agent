@@ -171,6 +171,41 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-zip-result-carries-its-chip-and-stays
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-445** (a zip result showed no file chip: the zip adapter offered only Reveal and the panel draws its chip off Open — the founders' pass, test 9); **SONNY-446** (a result cleared itself six seconds after it landed, before it could be read or acted on — the same row). The wave 7 overnight session (run log SONNY-438), sixth branch of its chain, cut from `fix/the-mic-tracker-passes-clicks-and-keeps-its-area` at `952b60ed`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: §3.3 (the widget's result panel and its collapse), shape unchanged.
+Files changed:
+- `Sources/MacAgentCore/LargestFilesZipCapabilityAdapter.swift` — `suggestions(for:)` emits `Open zip` (`.openFile`) before `Reveal zip in Finder`, the order the draft and web-research adapters use
+- `Sources/MacAgent/WidgetAutoCollapseDelay.swift` (new) — `idle` six seconds, `outcome` twenty, `delay(for:)` over every `WidgetState`, nil for the parked states
+- `Sources/MacAgent/FloatingWidgetView.swift` — `scheduleAutoDismissIfNeeded` reads the delay for the state from that type; the one literal is gone
+- `Tests/MacAgentCoreTests/AgentRunnerTests.swift` — `aZipResultCarriesOpenFirstAndRevealAtTheArchivePath`: a zip run's result carries Open at the archive path, first, and Reveal at the same path
+- `Tests/MacAgentTests/WidgetAutoCollapseDelayTests.swift` (new, 4) — the two figures and their order; result and failure on the outcome figure; idle and working on the idle figure; a parked question with no clock
+- `mutation/plans/fix/a-zip-result-carries-its-chip-and-stays.txt`, `docs/sonny-manual-test-checklist.md` (a section naming both tickets), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/a-zip-result-carries-its-chip-and-stays.txt (founder-triggered, not run on this branch) — four mutants: the Open suggestion dropped, an outcome on the idle figure, idle on the outcome figure, the outcome figure shortened under idle.
+
+Behavior added: a zip result shows the file chip (real icon, name, size, modified date, Open); a result or a transient failure stays twenty seconds untouched before it collapses and clears, where idle still collapses after six.
+Behavior preserved (required, no blanket claims):
+- Idle, the resume offer, and the too-old and update-available walls collapse after six seconds exactly as before; a notified outcome never collapses (SONNY-121) and a persistent failure is never cleared (`isCollapsible` and `shouldClearOutcomeOnDismiss` untouched); typing restarts the countdown.
+- The zip's Reveal suggestion is still emitted at the same path; `RecentArtifactStore` still records the zip through the preview's writes and now also through the Open suggestion, the same path once.
+- The draft, web-research and DOCX adapters' suggestions are untouched.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A result panel that draws its chip off one suggestion kind is only as complete as the adapters that emit it.** `WidgetResultPanel` reads `suggestions.first { $0.kind == .openFile }`; three adapters emitted `.openFile` and the zip emitted Reveal alone, so the one capability the founders' pass reached first had no chip while the checklist's confirmed chip row was about a draft. The rule is on the emitting side: a capability that produces one file emits Open for it, and Reveal beside it. The DOCX converter emits Reveal on a folder, which is not a file to open, and is left as is.
+
+**A collapse timer that also clears is measured against reading, not idleness.** Six seconds is right for a widget nobody is using; a result is being read, and the same timer cleared it. Splitting the figure by state, on a type a test holds, is the least change; the alternatives (hover pauses the countdown; a result with a chip holds until the next command) are recorded on SONNY-446 for the founders.
+
+Known limitations / deferred scope: twenty seconds is the session's reading of "long enough to act on"; the founders may want another figure or one of the two alternatives.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/a-refusal-in-sonnys-own-words (SONNY-447), cut from this branch's head.
+
 ### Branch: fix/the-mic-tracker-passes-clicks-and-keeps-its-area
 Status: complete
 Date: 2026-09-11

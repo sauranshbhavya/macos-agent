@@ -170,6 +170,31 @@ struct AgentRunnerTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// SONNY-445. The widget's result panel draws its file chip off the first `.openFile`
+    /// suggestion and nothing else, and the zip emitted Reveal alone — so a zipped result showed
+    /// its path in a sentence and no chip (the founders' pass, test 9). Open first, at the archive,
+    /// then Reveal at the same path, the order the draft and web-research adapters use.
+    @Test
+    func aZipResultCarriesOpenFirstAndRevealAtTheArchivePath() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let zipArchiver = RecordingZipArchiver()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: largestPlan(root: root, output: output)),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver)
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files")
+        let result = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
+
+        #expect(result.suggestions.map(\.kind) == [.openFile, .revealInFinder])
+        #expect(result.suggestions.map(\.value) == [output.path, output.path])
+        #expect(result.suggestions.first?.title == "Open zip")
+    }
+
     /// The follow-up-correction machinery is the subject: the planner receives the correction and
     /// the prior context, and the refined plan is the one that runs. Under the consequence rule a
     /// collision-free tier-2 zip auto-runs, so the corrected plan executes without a prompt — the

@@ -178,8 +178,17 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         return LargestFileSpec(folder: folder, count: count, outputURL: outputURL)
     }
 
+    /// Open first, then Reveal, the order the draft and web-research adapters use (SONNY-445).
+    /// The widget's result panel draws its file chip off the first `.openFile` suggestion and
+    /// nothing else, so a result with only Reveal — which is what this emitted — showed the zip's
+    /// path in a sentence and no chip, no icon, no size, no Open: the founders' pass, test 9.
     private func suggestions(for spec: LargestFileSpec) -> [RunSuggestion] {
         [
+            RunSuggestion(
+                title: "Open zip",
+                kind: .openFile,
+                value: spec.outputURL.path
+            ),
             RunSuggestion(
                 title: "Reveal zip in Finder",
                 kind: .revealInFinder,

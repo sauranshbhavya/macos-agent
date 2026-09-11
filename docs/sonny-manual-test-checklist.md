@@ -4461,6 +4461,22 @@ below is the measurement of the outcome, whatever sends the event.
 - [ ] Let the widget collapse with the pointer resting on the mic, expand it and hover: the hint
       shows (SONNY-179's case, unchanged).
 
+### A zip result carries its chip, and a result stays long enough to act on (new 2026-09-11, SONNY-445 and SONNY-446)
+
+The zip adapter offered only Reveal and the result panel draws its chip off Open, so a zipped
+result showed a sentence and no chip (the founders' pass, test 9); and one six-second timer
+collapsed, which is to say cleared, a result before it could be read. An outcome waits twenty
+seconds now; idle still collapses after six.
+
+- [ ] `zip my largest files` (answer `~/Desktop` if asked): the result shows the chip with the
+      zip's real icon, name, size and "Modified" date; compare with Get Info; Open opens the zip.
+- [ ] Leave that result alone: it is still there at fifteen seconds and gone at about twenty-five.
+- [ ] `calc 2*2`: the same twenty-second stay. Then leave the widget idle with nothing typed: it
+      collapses to the capsule after about six to eight seconds, as before.
+- [ ] A failure ("Sonny couldn't finish this one." with the gateway stopped) stays about twenty
+      seconds and then clears; a notified outcome (a failure while you work in another app) still
+      holds until you dismiss it (as before).
+
 ## 8. How to report back
 
 For each real finding, give me:
