@@ -171,6 +171,38 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-settle-never-moves-a-row-off-granted
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-435** (a top-up settle named its row by id alone, so a settle arriving after the grant moved a paid row off `granted`: a first attempt outran the route's deadline and its finalize granted late, a second attempt found the row outstanding, met the provider's `412`, failed its read-back and wrote `unconfirmed` with zero credits over the grant — filed 2026-09-07 from PR #220's O1, deferred to this wave). The wave 7 overnight session (run log SONNY-438), eleventh branch of its chain, cut from `fix/three-account-routes-take-the-total-deadline` at `834a8c75`. **Built after a written blocker had been posted on the ticket** saying it would not be: the blocker's reason was that no lane database was up, and the session then started one by `CLAUDE.md`'s recipe and withdrew that reason on the ticket.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: none new; §9's guarantee about the charge route — a charge is made once and its record is what the account's next attempt reads — kept true against a settle that arrives late.
+Files changed:
+- `server/src/credit/topup.ts` — `settleTopUpAttempt`'s `UPDATE` takes `AND outcome IN ('attempted', 'unconfirmed')`: a settle writes onto a row still waiting for an answer and never onto a closed one, in either direction; the two states are the same two `readOutstandingTopUp` names; the doc comment carries the sequence and what a silent no-match costs
+- `server/test/topup.db.test.ts` — a new block: the late settle leaves the grant standing (and the row is no longer outstanding); the reverse interleaving ends granted; a declined row does not take a later grant
+- `mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-435), this entry
+
+Tests: **server half, at `9ac64421`, with the database suite run at a lane database** — `npm run build` exit 0; `npm test` exit 0, `Test Files  33 passed | 23 skipped (56)`, `Tests  897 passed | 456 skipped (1353)` (the skips are the database suites without `DATABASE_URL`; three more than SONNY-434's head because the three new tests are database tests); `npm run typecheck` exit 0; `npm run check:secrets` exit 0; **`npm run test:db` exit 0, `Test Files  56 passed (56)`, `Tests  1353 passed (1353)`**, against `sonny-gw-db-wave-7` (`postgres:17`, host port 32833 handed out by Docker) — 1350 at the chain's previous head `834a8c75` on the same database, the three added being this block. `test/topup.db.test.ts` alone → 30 passed, the three named as passed under `--reporter=verbose`. Every exit read from a file with nothing between the command and it. `scripts/mutate mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt --check` at `9ac64421` → exit 0, two mutants, each `1 match`. **Both mutants were measured rather than traced**, by hand on the working tree that became `9ac64421`, running that file at the lane database: T1 (the condition dropped) → `Tests  2 failed | 28 passed (30)`, killed by `a settle that arrives after the grant leaves the grant standing` and `a declined row does not take a later grant either`; T2 (`outcome = 'attempted'` alone) → `Tests  1 failed | 29 passed (30)`, killed by `an unconfirmed row still takes the grant that arrives after it`. App half unchanged by construction: `git diff --stat 58a25851 HEAD -- Sources Tests` prints nothing. `scripts/no-attribution tree` → exit 0, 0 of 721 tracked files, at `9ac64421`. `scripts/changelog-order` → exit 2 with ten findings, all the chain's earlier unmerged entries: the known chain cost recorded on SONNY-438. The server tree is byte-identical between `9ac64421` and the head this entry commits on (`git diff --stat 9ac64421 HEAD -- server` prints nothing).
+Mutation plan: mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt (founder-triggered, not run through `scripts/mutate` on this branch; **a server-half plan whose killers are database tests — its header names the `MUTATE_TEST_CMD` and the lane database it needs, apart from `scripts/mutate-all`, SONNY-455**) — two mutants: the condition dropped, only a never-answered row may settle.
+
+Behavior added: a paid top-up row stays `granted` whatever settles after it; a `declined` row stays `declined`; an `unconfirmed` row still takes the grant that resolves it.
+Behavior preserved (required, no blanket claims):
+- Every settle a fresh attempt makes lands on a row that is `attempted`, and the resolution of an outstanding order lands on `attempted` or `unconfirmed` — the only two states `readOutstandingTopUp` hands back — so no path in `attemptTopUp` settles a row this condition refuses (`topup.test.ts` 68 in 1 and the rest of `topup.db.test.ts` unchanged and green).
+- `credit_topup_provider_order_idx` still refuses a second grant for one order (`charges one provider order once`, unchanged).
+- The route's answers are unchanged: a late caller still hears `topup.unconfirmed` from the provider's own words, and the next balance read shows the pack.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A state machine's terminal states have to be terminal in the statement, not only in the prose.** 0019's comment splits `outcome` into resolvable and closed and calls the split "the whole recovery"; the settle statement did not know it, so the one writer of the column could move a row from any state to any state and the recovery held only while nothing arrived out of order. The condition is the schema's own table of states written into its one writer. The alternative — a `CHECK` or trigger refusing a transition off a closed outcome — was not taken because it would turn the late settle into a thrown error, and `chargeAndSettle`'s guard turns a thrown settle into `unconfirmed` for the *caller*, which is the same pessimistic answer with a stack trace attached.
+
+**A no-op settle is honest and pessimistic, and the pessimism is recorded rather than fixed.** The late caller does not learn its write matched nothing; it answers `unconfirmed` and the row already says `granted`. Reporting the refusal so the caller can answer `granted` is the follow-up named on the ticket, kept out of this branch because it changes the store's contract and every fake that implements it.
+
+Known limitations / deferred scope: the no-op settle's pessimistic answer, above (landing spot: SONNY-435's closing comment).
+Open questions (required, write "none" if true): none.
+
+Next branch: none in this chain. SONNY-436 stays open with a written blocker; the run log (SONNY-438) says why.
+
 ### Branch: fix/three-account-routes-take-the-total-deadline
 Status: complete
 Date: 2026-09-11
