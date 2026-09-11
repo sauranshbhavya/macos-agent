@@ -1,7 +1,10 @@
 # SONNY-437 — a CRLF robots.txt keeps its rules. Property: the parser yields one element per line
 # whatever the line endings, so a group is closed only by a genuinely empty line.
-# Killers expected: WebResearchServiceTests (robotsPolicyReadsACRLFFileAsItReadsAnLFOne,
-# robotsPolicyReadsMixedLineEndings).
+# Killers expected, per mutant (PR #234's second review traced each test against each mutant):
+# R1 by robotsPolicyReadsACRLFFileAsItReadsAnLFOne and robotsPolicyReadsMixedLineEndings; R2 by
+# aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings alone, and only while a blank line closes a
+# group. SONNY-454 (the RFC 9309 reading, where only the next user-agent line or the end of the file
+# closes one) makes R2 an equivalent mutant nothing can kill; that branch retires or replaces it.
 
 >>> mutant R1 the character split put back: CRLF yields an empty element between every two lines
 >>> file Sources/MacAgentCore/WebResearchService.swift
