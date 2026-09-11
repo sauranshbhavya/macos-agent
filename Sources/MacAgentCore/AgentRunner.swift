@@ -173,7 +173,19 @@ public final class AgentRunner {
     private func prepareResolvedPlan(_ plan: AgentPlan, source: PreparedPlanSource) throws -> PreparedAgentRun {
         logStore.append(.observe, "Received plan: \(plan.summary)")
         logStore.append(.validate, "Validating whitelist and supported operations")
-        var preparedRun = try executor.prepare(plan: plan)
+        var preparedRun: PreparedAgentRun
+        do {
+            preparedRun = try executor.prepare(plan: plan)
+        } catch AgentExecutionError.unsupported(let reason) {
+            // **The planner's reason stays in the act log, as SONNY-447 requires** (PR #232's fresh
+            // review, F1): the user reads `AgentExecutionError.unsupported`'s own sentence on every
+            // surface, and this line is what lets a trace say why. Here rather than in the executor
+            // because this is the one funnel both `prepare` doors share, so a refusal typed or
+            // pre-built lands in the same log once. The unified-log line beside the throw is the
+            // support session's copy, redacted as private; this one is the run's own record.
+            logStore.append(.observe, "The planner refused this request: \(reason)")
+            throw AgentExecutionError.unsupported(reason)
+        }
         preparedRun.source = source
         logStore.append(.preview, "Prepared \(preparedRun.previews.count) preview item(s)")
         return preparedRun

@@ -4500,9 +4500,15 @@ test 16). A refused request reads "Sonny can't do that yet." now, whatever the p
 planner's reason goes to the log.
 
 - [ ] Signed in: `what is the weather today`, `what's on my calendar`, `remind me in 5 minutes`.
-      Each fails with "Sonny can't do that yet." and Retry; no "Unsupported:", no "tool", no
-      "registered" anywhere on screen.
-- [ ] Command Center › Tasks: the three rows are under Failed with the same sentence.
+      Each that the planner refuses fails with "Sonny can't do that yet." and Retry; no
+      "Unsupported:", no "tool", no "registered" anywhere on screen. The founders' pass saw the
+      weather one refused; the planner may instead answer one of the others with a question (a
+      missing detail, such as which reminder), which is not this row's failure — note which.
+- [ ] Command Center › Tasks: the refused rows are under Failed, each reading its command and
+      "Failed after …"; select one, and the pane shows "Sonny can't do that yet." and nothing of
+      the planner's.
+- [ ] Command Center › Tasks › a refused row › the trace: one line reads "The planner refused this
+      request: <the planner's reason>" — the reason stays in the act log, as the ticket asks.
 - [ ] `log show --last 5m --predicate 'subsystem == "com.sonny.macagent" AND category == "planner"'`
       in Terminal: three lines reading "The planner refused a request: <private>" — the reason is
       redacted, because a model-authored sentence can echo your command; with private logging

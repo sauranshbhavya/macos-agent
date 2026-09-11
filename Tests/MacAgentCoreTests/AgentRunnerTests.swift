@@ -196,6 +196,39 @@ struct AgentRunnerTests {
         }
     }
 
+    /// **The planner's reason reaches the act log, through both `prepare` doors** (SONNY-447,
+    /// PR #232's fresh review, F1). The ticket asks for the reason to stay in the act log so a
+    /// trace says why; the branch's first version had taken it out of that log and tested none.
+    /// The log carries the reason once per refusal and never the user's sentence in its place;
+    /// the pre-built door is driven too, because the runner's one funnel is what makes the two
+    /// doors one path.
+    @Test
+    func aRefusedPlansReasonReachesTheActLog() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reason = "Unsupported: there is no registered weather lookup tool available."
+        let plan = AgentPlan(
+            summary: "Unsupported request.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "unsupported", operation: .unsupported, description: reason)]
+        )
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(planner: StaticPlanner(plan: plan), executor: makeExecutor(root: root), logStore: logStore)
+
+        await #expect(throws: AgentExecutionError.unsupported(reason)) {
+            _ = try await runner.prepare(command: "what is the weather today")
+        }
+        let typed = logStore.events.map(\.message)
+        #expect(typed.filter { $0 == "The planner refused this request: \(reason)" }.count == 1, "\(typed)")
+        #expect(!typed.contains { $0.contains(AgentExecutionError.unsupportedRequestSentence) }, "the user's sentence stood in for the reason: \(typed)")
+
+        #expect(throws: AgentExecutionError.unsupported(reason)) {
+            _ = try runner.prepare(plan: plan)
+        }
+        let prebuilt = logStore.events.map(\.message)
+        #expect(prebuilt.filter { $0 == "The planner refused this request: \(reason)" }.count == 1, "\(prebuilt)")
+    }
+
     /// SONNY-445. The widget's result panel draws its file chip off the first `.openFile`
     /// suggestion and nothing else, and the zip emitted Reveal alone — so a zipped result showed
     /// its path in a sentence and no chip (the founders' pass, test 9). Open first, at the archive,
