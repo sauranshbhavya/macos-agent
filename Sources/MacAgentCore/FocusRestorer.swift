@@ -16,10 +16,21 @@ import Foundation
 /// default is `inert()`, so a fixture that never heard of focus can neither read the developer's
 /// frontmost app nor bring one forward; `forThisMac()` is what the shipping view model passes, and
 /// a scan test pins that it does.
+///
+/// **Both requirements are main-actor isolated, and the read is synchronous.** They are AppKit
+/// calls (`NSWorkspace.frontmostApplication`, an `NSRunningApplication` activation), the adapters'
+/// `execute` is already `@MainActor`, and a nonisolated `async` read would cost four executor hops
+/// per open step for an answer the inert restorer gives without moving. Measured: with the read
+/// declared `async` and nonisolated, the first test of each of `ResumableTaskRunTests.swift`'s
+/// three serialized suites — the three that start when every suite in the run is contending for
+/// the main actor — crossed their 30 s idle backstop in two consecutive full runs (`ebcf113e`,
+/// `a8d40159`) and passed in 0.1 s each alone; on the main actor the same runs cost nothing.
 public protocol FocusRestoring: Sendable {
     /// The app in front right now, or `nil` when nothing is (or the restorer is inert).
-    func frontmost() async -> RunningApp?
+    @MainActor
+    func frontmost() -> RunningApp?
     /// Brings `app` back in front. `false` when Launch Services refused or the app is gone.
+    @MainActor
     func bringToFront(_ app: RunningApp) async -> Bool
 }
 
@@ -30,14 +41,14 @@ public extension FocusRestoring {
     ///
     /// `onRestore` is told which app came back, so the run's trace can say so.
     ///
-    /// Runs in the caller's isolation (`#isolation`), so an adapter's non-`Sendable` `log` and
-    /// context can be captured by both closures without crossing an executor.
+    /// Main-actor isolated like the adapters that call it, so an adapter's non-`Sendable` `log` and
+    /// context are captured by both closures without crossing an executor.
+    @MainActor
     func restoringFocus<T>(
-        isolation: isolated (any Actor)? = #isolation,
         onRestore: (RunningApp) -> Void = { _ in },
         _ work: () async throws -> T
     ) async rethrows -> T {
-        let before = await frontmost()
+        let before = frontmost()
         let result: T
         do {
             result = try await work()
@@ -55,8 +66,9 @@ public extension FocusRestoring {
 
     /// Brings `before` back if the open moved the front; `true` when it did and the activation
     /// succeeded. Nothing moved — the opened app was already in front — is `false` with no call.
+    @MainActor
     private func restored(_ before: RunningApp) async -> Bool {
-        if let now = await frontmost(), now.bundleIdentifier == before.bundleIdentifier {
+        if let now = frontmost(), now.bundleIdentifier == before.bundleIdentifier {
             return false
         }
         return await bringToFront(before)
@@ -105,10 +117,12 @@ public struct FocusRestorer: FocusRestoring {
         FocusRestorer(frontmost: { nil }, activation: { _ in false })
     }
 
-    public func frontmost() async -> RunningApp? {
-        await frontmostRead()
+    @MainActor
+    public func frontmost() -> RunningApp? {
+        frontmostRead()
     }
 
+    @MainActor
     public func bringToFront(_ app: RunningApp) async -> Bool {
         await activation(app)
     }

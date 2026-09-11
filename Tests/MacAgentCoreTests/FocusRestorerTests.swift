@@ -20,7 +20,7 @@ struct FocusRestorerTests {
             self.frontmostAnswers = frontmost
         }
 
-        func frontmost() async -> RunningApp? {
+        func frontmost() -> RunningApp? {
             frontmostAnswers.isEmpty ? nil : frontmostAnswers.removeFirst()
         }
 
@@ -35,7 +35,7 @@ struct FocusRestorerTests {
         let restorer = ScriptedRestorer(frontmost: [Self.xcode, Self.safari])
         var restored: [RunningApp] = []
 
-        let result = try await restorer.restoringFocus(onRestore: { restored.append($0) }) { "opened" }
+        let result = await restorer.restoringFocus(onRestore: { restored.append($0) }) { "opened" }
 
         #expect(result == "opened")
         #expect(restorer.broughtToFront == [Self.xcode])
@@ -46,7 +46,7 @@ struct FocusRestorerTests {
     func anOpenThatMovedNothingRestoresNothing() async throws {
         let restorer = ScriptedRestorer(frontmost: [Self.safari, Self.safari])
 
-        _ = try await restorer.restoringFocus { "opened" }
+        _ = await restorer.restoringFocus { "opened" }
 
         #expect(restorer.broughtToFront.isEmpty)
     }
@@ -55,7 +55,7 @@ struct FocusRestorerTests {
     func nothingInFrontBeforehandRestoresNothing() async throws {
         let restorer = ScriptedRestorer(frontmost: [nil, Self.safari])
 
-        _ = try await restorer.restoringFocus { "opened" }
+        _ = await restorer.restoringFocus { "opened" }
 
         #expect(restorer.broughtToFront.isEmpty)
     }
@@ -78,7 +78,7 @@ struct FocusRestorerTests {
         restorer.activationSucceeds = false
         var restored: [RunningApp] = []
 
-        _ = try await restorer.restoringFocus(onRestore: { restored.append($0) }) { "opened" }
+        _ = await restorer.restoringFocus(onRestore: { restored.append($0) }) { "opened" }
 
         #expect(restorer.broughtToFront == [Self.xcode])
         #expect(restored.isEmpty)

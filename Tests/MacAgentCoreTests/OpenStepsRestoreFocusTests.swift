@@ -45,7 +45,7 @@ struct OpenStepsRestoreFocusTests {
 
     private struct ScreenRestorer: FocusRestoring {
         let screen: Screen
-        func frontmost() async -> RunningApp? { screen.frontmost }
+        func frontmost() -> RunningApp? { screen.frontmost }
         func bringToFront(_ app: RunningApp) async -> Bool {
             screen.broughtToFront(app)
             return true
