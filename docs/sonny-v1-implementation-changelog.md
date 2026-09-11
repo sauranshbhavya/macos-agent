@@ -201,7 +201,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 **The larger ask in the founders' note is SONNY-453**, not this branch: weather, calendar and reminders as capabilities, with the permission and provider decisions that are the founders'.
 
-Known limitations / deferred scope: the sentence is one sentence for every refused request; a refusal that names what Sonny cannot do ("Sonny can't read calendars yet.") would need a vocabulary of refusals this repository owns, which is a copy decision for the founders.
+Known limitations / deferred scope: the sentence is one sentence for every refused request; a refusal that names what Sonny cannot do ("Sonny can't read calendars yet.") would need a vocabulary of refusals this repository owns, which is a copy decision for the founders. **And a follow-up on a refused task now hands the planner the fixed sentence as the previous outcome, where it used to hand the planner's own reason** (PR #232's first review): `recordPriorTaskContext` records `error.localizedDescription`, so a correction such as "try again with Safari" arrives with "Sonny can't do that yet." rather than the cause. Recorded rather than changed, because the two catch sites that would carry the reason are the lines the chain's next branch (SONNY-449) edits, and a fix there would hand the founders a merge conflict; the reason still reaches the log, and carrying it into the prior context is a small follow-up on SONNY-447.
 Open questions (required, write "none" if true): none.
 
 Next branch: fix/an-unreadable-store-names-the-way-out (SONNY-449), cut from this branch's head. SONNY-448 (quit under a sheet) is left open with a written blocker and no branch.

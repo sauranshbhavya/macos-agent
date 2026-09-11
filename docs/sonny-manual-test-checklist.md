@@ -4504,8 +4504,9 @@ planner's reason goes to the log.
       "registered" anywhere on screen.
 - [ ] Command Center › Tasks: the three rows are under Failed with the same sentence.
 - [ ] `log show --last 5m --predicate 'subsystem == "com.sonny.macagent" AND category == "planner"'`
-      in Terminal: three lines reading "The planner refused a request: …" with the planner's own
-      reason after the colon.
+      in Terminal: three lines reading "The planner refused a request: <private>" — the reason is
+      redacted, because a model-authored sentence can echo your command; with private logging
+      enabled for the process it reads in full.
 
 ## 8. How to report back
 

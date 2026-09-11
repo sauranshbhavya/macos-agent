@@ -1600,8 +1600,11 @@ public final class AgentActionExecutor {
     private func validateSupported(_ plan: AgentPlan) throws {
         if let unsupported = plan.steps.first(where: { $0.operation == .unsupported }) {
             // The planner's reason goes to the log, where a support session can read it; the user
-            // reads `AgentExecutionError.unsupported`'s own sentence (SONNY-447).
-            Self.refusalLogger.notice("The planner refused a request: \(unsupported.description, privacy: .public)")
+            // reads `AgentExecutionError.unsupported`'s own sentence (SONNY-447). **Private, not
+            // public** (PR #232's first review): the reason is model-authored in reply to the user's
+            // own command and nothing stops it echoing that command back, so it is redacted in the
+            // unified log unless private logging is on — the same treatment the user's content gets.
+            Self.refusalLogger.notice("The planner refused a request: \(unsupported.description, privacy: .private)")
             throw AgentExecutionError.unsupported(unsupported.description)
         }
     }
