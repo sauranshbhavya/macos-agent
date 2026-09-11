@@ -201,21 +201,32 @@ struct WebResearchServiceTests {
     /// yielded an empty element between every two lines, and an empty line is what closes a
     /// user-agent group — every rule after `User-agent: *` arrived outside any group and was
     /// dropped. This is accounts.google.com's shape; its `Disallow: /ClientLogin` was ignored.
+    ///
+    /// **The CR-only twin is the third of RFC 9309 §2.2's line endings, and it is here because two
+    /// plausible fixes pass without it** (PR #234's fresh review, F2): a split on `"\n"` alone, and
+    /// a split on `"\n"` or `"\r\n"` — both read LF and CRLF files correctly and read a CR-only file
+    /// as one line, in the permissive direction this ticket exists to close. The old parser read a
+    /// CR-only file correctly too, so the twin pins what was never broken rather than what was fixed.
     @Test
     func robotsPolicyReadsACRLFFileAsItReadsAnLFOne() {
         let lf = RobotsTXTPolicy(text: "User-agent: *\nDisallow: /ClientLogin\nAllow: /ClientLogin/help\n")
         let crlf = RobotsTXTPolicy(text: "User-agent: *\r\nDisallow: /ClientLogin\r\nAllow: /ClientLogin/help\r\n")
+        let cr = RobotsTXTPolicy(text: "User-agent: *\rDisallow: /ClientLogin\rAllow: /ClientLogin/help\r")
         let login = URL(string: "https://accounts.google.com/ClientLogin")!
         let help = URL(string: "https://accounts.google.com/ClientLogin/help")!
         let other = URL(string: "https://accounts.google.com/signin")!
 
         #expect(lf.allows(login) == false)
         #expect(crlf.allows(login) == false, "the CRLF file's rules were dropped")
+        #expect(cr.allows(login) == false, "the CR-only file's rules were dropped")
         #expect(lf.allows(help) == true)
         #expect(crlf.allows(help) == true)
+        #expect(cr.allows(help) == true)
         #expect(lf.allows(other) == true)
         #expect(crlf.allows(other) == true)
+        #expect(cr.allows(other) == true)
         #expect(crlf == lf, "the two files hold the same rules")
+        #expect(cr == lf, "the CR-only file holds the same rules as the LF one")
     }
 
     /// Mixed endings inside one file: the group's rule is kept, and the next group's user-agent
