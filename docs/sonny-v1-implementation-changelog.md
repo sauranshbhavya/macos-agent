@@ -175,7 +175,7 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 Status: complete
 Date: 2026-09-11
 Tickets: **SONNY-437** (a CRLF robots.txt was read as a file with no rules: the parser split on newline characters, so the empty element between every two lines closed each user-agent group before its first rule — filed 2026-09-07 from PR #222's review, deferred to this wave). The wave 7 overnight session (run log SONNY-438), ninth branch of its chain, cut from `fix/an-unreadable-store-names-the-way-out` at `cd829d83`.
-Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR). Cycle 1 at `69e314ca` applied both mutants, probed the two primitives on CRLF, a lone CR, U+2028 and U+0085, traced the decoding (a BOM is stripped, CRLF passes through), fetched the live `accounts.google.com/robots.txt` (CRLF, `Disallow: /ClientLogin` on line 6), and asked for the parser's blank-line rule to be recorded as a limitation with a landing spot — taken below, docs only.
 
 Spec sections covered: the research feature's promise to respect a site's robots rules (`PublicWebPageLoader` throws `robotsDisallowed` before a fetch), now true of CRLF sites.
 Files changed:
@@ -195,7 +195,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 **`components(separatedBy: .newlines)` is a split on characters, and CRLF is two of them; `Character.isNewline` is a split on line breaks, and CRLF is one.** The first is right wherever an empty piece is discarded or folded, which is every other site in this tree; it is wrong wherever an empty line carries meaning, which a robots.txt's group boundary does. The general rule for a parser of a line-oriented format from the wild: split on `Character.isNewline` (or on the format's own break rule), never on a character set.
 
-Known limitations / deferred scope: none.
+Known limitations / deferred scope: **the parser's own group rule departs from RFC 9309, and this branch pins it rather than fixes it.** An empty line closes a user-agent group here; the RFC ends a group only at the next user-agent line or the end of the file, so a robots.txt with a blank line inside one agent's block has its later rules dropped, in the permissive direction — the same failure shape as this ticket, on a different trigger. Pre-existing, kept exactly as it was so the CRLF change could be told apart from it, and pinned by `aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings` so a later fix moves it deliberately. Landing spot: SONNY-454 (PR #234's first review named it).
 Open questions (required, write "none" if true): none.
 
 Next branch: fix/three-account-routes-take-the-total-deadline (SONNY-434), cut from this branch's head — the first server-half branch of the chain.
