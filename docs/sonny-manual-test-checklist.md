@@ -4700,7 +4700,7 @@ row still waiting for an answer. Server half only; needs a lane database with th
       The first `UPDATE` prints `UPDATE 1`, the second prints **`UPDATE 0`**, and the `SELECT` reads
       `granted | 500`. The condition is the one the code runs — `server/src/credit/topup.ts`'s
       `settleTopUpAttempt` carries it.
-- [ ] `npm run test:db` at the lane database: `test/topup.db.test.ts`'s three SONNY-435 tests pass
+- [ ] `npm run test:db` at the lane database: `test/topup.db.test.ts`'s four SONNY-435 tests pass
       with the rest of the suite.
 
 ## 8. How to report back
