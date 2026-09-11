@@ -4360,8 +4360,8 @@ struct VisionSessionRunTests {
         // And the same ordering on the widget's side, so "mirrors exactly" is checked on both
         // properties rather than asserted on one and trusted on the other.
         let state = try MacAgentSource.braceBlock(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "var state: WidgetState {"
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
         let statePermission = try #require(state.range(of: "return .permission(approvalRequest)"))
         let stateControlling = try #require(state.range(of: "return .controlling(progress)"))

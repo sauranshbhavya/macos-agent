@@ -286,7 +286,18 @@ struct ClientVersionSurfaceTests {
     /// founder's manual pass.
     @Test
     func bothSurfacesOrderTheSharedAttentionStatesTheSameWay() throws {
-        let shared = [
+        // The widget's precedence lives on the view model since SONNY-450 (`widgetState`, so the
+        // run pill reads the same order), where the conditions read the properties bare; Command
+        // Center's reads them through `viewModel.`. One list per chain, the same five in the same
+        // order, each spelled as its chain's own condition so it matches exactly once.
+        let widgetShared = [
+            "if let approvalRequest",
+            "if let question = clarificationQuestion",
+            "if isTooOldForThisBackend",
+            "if let error = errorMessage",
+            "if showsUpdateAvailablePrompt"
+        ]
+        let commandCenterShared = [
             "viewModel.approvalRequest",
             "viewModel.clarificationQuestion",
             "viewModel.isTooOldForThisBackend",
@@ -294,10 +305,9 @@ struct ClientVersionSurfaceTests {
             "viewModel.showsUpdateAvailablePrompt"
         ]
 
-        let widgetChain = try MacAgentSource.region(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
-            from: "var state: WidgetState {",
-            to: "private var widgetStateKey: Int {"
+        let widgetChain = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
         let commandCenterChain = try MacAgentSource.region(
             of: MacAgentSource.read("CommandCenterView.swift"),
@@ -305,7 +315,7 @@ struct ClientVersionSurfaceTests {
             to: "var body: some View {"
         )
 
-        for chain in [widgetChain, commandCenterChain] {
+        for (chain, shared) in [(widgetChain, widgetShared), (commandCenterChain, commandCenterShared)] {
             let positions = try shared.map { token -> Int in
                 let range = try #require(chain.range(of: token), "no branch reads \(token)")
                 return chain.distance(from: chain.startIndex, to: range.lowerBound)
@@ -330,12 +340,18 @@ struct ClientVersionSurfaceTests {
     @Test
     func bothSurfacesReadTheVersionPromptFromOneOwnerAndNeitherHandWritesIt() throws {
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+        let viewModel = try MacAgentSource.read("AgentViewModel.swift")
+        // The widget's two reads of the owner moved with its precedence onto the view model
+        // (SONNY-450, `widgetState`); the view draws off that and reads the owner nowhere itself.
+        let widgetChain = try MacAgentSource.braceBlock(of: viewModel, openedBy: "var widgetState: WidgetState {")
         let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
 
-        for source in [widget, commandCenter] {
-            // Twice per file, once per branch, and the count is what makes that checkable: a third
-            // reader of this owner arrives at this test rather than joining the population silently.
-            #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: source) == 2)
+        // Twice per chain, once per branch, and the count is what makes that checkable: a third
+        // reader of this owner arrives at this test rather than joining the population silently.
+        #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: widgetChain) == 2)
+        #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: commandCenter) == 2)
+        #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: widget) == 0)
+        for source in [widget, viewModel, commandCenter] {
             for literal in [
                 ClientVersionCopy.tooOldTitle,
                 ClientVersionCopy.tooOldMessage,
