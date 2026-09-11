@@ -1,0 +1,891 @@
+#!/usr/bin/env bash
+#
+# scripts/mutate-all — run every mutation plan in this repository, one after another, and report
+# one summary.
+#
+# WHY THIS EXISTS. Until 2026-09-10 a mutation battery was a per-branch step: written, run before
+# the PR, re-run after a rebase or a fix round. The founders decided that day that batteries stop
+# being a branch's own step. A branch still writes its mutant plan — `mutation/plans/<branch
+# name>.txt`, `scripts/mutate --help` has the format — and names it in its changelog entry, but
+# nothing runs at PR time, after a rebase, or after a fix round. Instead the founders trigger a
+# battery themselves, about once a week, over every plan in the repository at once. This script is
+# that one command. `WORKFLOW.md`'s "Weekly battery" section is the procedure around it: run this
+# on a clean `main`, file a ticket per survivor and per unattributed mutant, record the run on
+# SONNY-106.
+#
+# This changes the workflow and the record, not the tool: `scripts/mutate` itself, its
+# untrusted-failure declarations, its locks and the stop hook are untouched by this branch
+# (`git diff --stat origin/main -- scripts/mutate scripts/mutate-untrusted-failures scripts/lib
+# .claude/hooks` — see the changelog entry for the reading, taken at this branch's own head). This
+# script only walks `mutation/plans/*.txt` and calls `scripts/mutate` on each in turn, reusing the
+# same checkout — it holds no lock of its own and touches no file `scripts/mutate` or
+# `scripts/lib/battery-state.sh` reads. `scripts/mutate` holds the lock per plan it runs, exactly
+# as it does for a single manual invocation, so every refusal that already existed (a dirty tree,
+# another battery already holding the checkout, `scripts/warnings` refusing beside a live one)
+# keeps working unchanged.
+#
+# Usage:
+#   scripts/mutate-all             run every mutation/plans/*.txt plan, report one summary
+#   scripts/mutate-all selftest    re-prove every exit code and every listing against a throwaway
+#                                   git repository — never against this repository
+#   scripts/mutate-all --help
+#
+# Exit codes
+#   0  every plan ran and every mutant in it was killed. Zero plans under mutation/plans/ also
+#      exits 0 — "0 plans, nothing measured" — an empty folder is the state before the first
+#      branch has written one, not a failure.
+#   2  at least one mutant SURVIVED or came back UNATTRIBUTED, in any plan. Both are findings, not
+#      harness errors, exactly as `scripts/mutate` treats them — and both are listed in the summary
+#      by plan file and target file, the shape `WORKFLOW.md`'s Weekly battery section files
+#      tickets from directly.
+#   3  nothing survived or came back unattributed, but at least one plan was SKIPPED because its
+#      `from` block no longer matches the committed tree — the tree has moved since that plan was
+#      written, which is expected and not fatal. Named in the summary, with `scripts/mutate`'s own
+#      refused-mutant lines quoted underneath, so a run that skipped a stale plan can never be read
+#      as a clean one the way a bare 0 would read.
+#   1  the run could not start, or had to stop partway through: not a git checkout, mutation/plans/
+#      missing, `scripts/mutate` missing beside this script, or `scripts/mutate` itself refusing for
+#      a reason that is NOT a stale plan — a dirty tree, another battery already holding the
+#      checkout, a red baseline, or a tree left dirty by the suite it ran. This stops the whole run
+#      immediately rather than moving on to the next plan, and names every plan not attempted —
+#      including the one that triggered the stop — because a fatal reason here describes the
+#      checkout, not the plan, and would repeat identically for every plan left in the list.
+#
+# What this does and does not prevent, because a tool that only states what it catches reads like
+# more coverage than it has:
+#
+#   Prevented: a session hand-running plans one at a time and losing track of which ran, which
+#   were skipped for being stale, and which found something — the exact bookkeeping a weekly run
+#   over a growing `mutation/plans/` needs and a person re-deriving it from N separate
+#   `scripts/mutate` transcripts does not reliably get right.
+#
+#   Not prevented:
+#     * Nothing here proves a plan is still worth running. A plan whose `from` block still matches
+#       the tree byte for byte can still be testing a property the branch no longer has — moving a
+#       killer test's file, or the population it scans, without moving the mutant's own target
+#       file, is exactly the shape `WORKFLOW.md` step 5's four carry-conditions describe, and this
+#       script does not check any of them. It only checks whether the mutant still APPLIES, which
+#       `scripts/mutate --check` already does per plan.
+#     * A red baseline, or any other non-stale refusal, costs the whole run: every plan queued
+#       after the one that hit it is reported not attempted rather than skipped ahead to. That is
+#       deliberate — a red baseline is a fact about the checkout, not about the next plan in line —
+#       not a bug to route around.
+#     * This script does not itself guard the concurrency `scripts/mutate` guards: two
+#       `scripts/mutate-all` runs in one checkout would still collide exactly where two manual
+#       `scripts/mutate` runs would, at the second one's lock acquisition for whichever plan it
+#       reaches first. Nothing new is needed here because nothing new is being shared — the lock is
+#       `scripts/mutate`'s, per plan, same as always.
+#     * `MUTATE_TEST_CMD`, when set, replaces the suite command for every plan this run touches, not
+#       just one — this script does not scope it per plan. Passed through untouched, exactly as
+#       `scripts/mutate` itself reads it; unset, `scripts/mutate`'s own default (the flagged
+#       `swift test`) applies to every plan.
+#     * The scratch build directory (`.build/mutate-scratch`) is `scripts/mutate`'s own and is
+#       reused automatically because it is a fixed path for the whole checkout — this script does
+#       nothing to arrange that, it is simply what happens when the same checkout runs
+#       `scripts/mutate` twice in a row. The first plan in a run pays for a cold build; every plan
+#       after it, in this run or a later one, builds incrementally against what is already there.
+
+set -euo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+readonly SELF
+readonly SCRIPT_NAME="scripts/mutate-all"
+MUTATE="$(dirname "$SELF")/mutate"
+readonly MUTATE
+readonly STALE_MARKER="were refused. Nothing was run and nothing was changed."
+
+die() {
+  printf '%s: %s\n' "$SCRIPT_NAME" "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/mutate-all
+       scripts/mutate-all selftest
+       scripts/mutate-all --help
+
+Runs every mutation plan under mutation/plans/ (every *.txt, folders included) through
+scripts/mutate, one after another,
+against the committed tree, and prints one summary at the end. Founder-triggered, about once a
+week, on a clean main — WORKFLOW.md's "Weekly battery" section is the procedure. A branch does not
+run this: it writes its own mutation/plans/<branch-name>.txt and commits it (scripts/mutate --help
+has the plan format; a slash in the branch name is a folder, so fix/some-name's plan is
+mutation/plans/fix/some-name.txt, and this reads the folder recursively); nothing runs until a
+founder runs this command.
+
+Exit codes
+  0  every plan ran and every mutant was killed. Zero plans under mutation/plans/ also exits 0 —
+     "0 plans, nothing measured".
+  2  at least one mutant SURVIVED or came back UNATTRIBUTED, in any plan — both are listed with
+     their plan file and target file.
+  3  nothing survived or came back unattributed, but at least one plan was SKIPPED because its
+     `from` block no longer matches the tree — named, with scripts/mutate's own refused-mutant
+     lines quoted underneath.
+  1  the run could not start, or had to stop partway: not a git checkout, mutation/plans/ missing,
+     scripts/mutate missing beside this script, or scripts/mutate itself refusing for a reason
+     that is NOT a stale plan (a dirty tree, another battery's lock, a red baseline, a tree left
+     dirty by the suite), or scripts/mutate ending without a summary this script can read whole
+     (an interrupted or killed run, or counts that do not add up). Stops immediately and names
+     every plan not attempted, the one it was on included.
+
+MUTATE_TEST_CMD, when set, is passed through untouched to every plan this run touches — the same
+environment variable scripts/mutate itself reads, and the same replacement for every plan in this
+run, not scoped per plan.
+
+The scratch build directory (.build/mutate-scratch) is scripts/mutate's own and is reused
+automatically between plans in this run, and between separate runs of this checkout — nothing here
+arranges that, it is simply what a fixed scratch path already does.
+
+Concurrency and locking are scripts/mutate's, per plan, unchanged: this script holds no lock of
+its own and does not touch scripts/lib/battery-state.sh. Do not run this beside a manual
+scripts/mutate invocation, or another scripts/mutate-all — the second one to reach a lock is
+refused exactly as two manual invocations would be.
+
+What this does and does not prevent:
+  Prevented: a session hand-running plans one at a time and losing track of which ran, which were
+  skipped as stale, and which found something.
+
+  Not prevented:
+    * A plan whose `from` block still matches the tree can still be testing a property the branch
+      no longer has (WORKFLOW.md step 5's four carry-conditions) — this only checks whether the
+      mutant still applies, not whether its killer still covers what it once did.
+    * A red baseline, or any other non-stale refusal, costs the whole run: every plan queued after
+      the one that hit it is reported not attempted rather than skipped ahead to.
+    * This script cannot itself guard against two of itself (or one of itself and a manual
+      scripts/mutate) running in this checkout at once — the lock each plan takes is
+      scripts/mutate's, and the second run to reach it is refused there, same as always.
+USAGE
+}
+
+# ---------------------------------------------------------------------------------------------
+# Plan discovery. Recursive, because a plan is named after its branch and this repository's
+# branch names carry a slash (fix/, feature/, workflow/): mutation/plans/fix/some-name.txt is
+# fix/some-name's plan, one folder down, and the first draft's non-recursive glob reported
+# "0 plans, nothing measured" over exactly such a committed plan (this branch's review, F2).
+# Sorted bytewise (LC_ALL=C) so a run is reproducible and the same on every Mac.
+# ---------------------------------------------------------------------------------------------
+list_plans() {
+  find mutation/plans -type f -name '*.txt' | LC_ALL=C sort
+}
+
+# ---------------------------------------------------------------------------------------------
+# Report parsing. `scripts/mutate` prints one fixed-shape summary block per run — the lines this
+# reads are documented at `scripts/mutate`'s own pre-flight (:1830-1875) and summary (:2040-2075),
+# both cited in CLAUDE.md. Parsed with sed/awk rather than by importing scripts/mutate's own code,
+# so a wording change there that does not touch these exact prefixes leaves this script working;
+# one that does is exactly what this script's own selftest would catch, since it runs the real
+# scripts/mutate, never a stub of it.
+# ---------------------------------------------------------------------------------------------
+
+# parse_report <output> — sets P_REPORT, P_TOTAL, P_KILLED, P_SURVIVED, P_UNATTRIBUTED,
+# P_SURVIVOR_LINES, P_UNATTR_LINES and P_PARSED. P_PARSED is 1 only when a whole summary block
+# was read: the report path in the header, the counts line, its three counts adding up to its
+# total, and as many listed rows as the counts promise. Anything less leaves it 0 with the counts
+# at 0, and the caller treats that as a run it cannot vouch for rather than a clean one.
+#
+# Only what follows scripts/mutate's `==> Summary at` line is read. The per-mutant status lines
+# above it share the "    UNATTRIBUTED — " prefix with the summary's own section header, and the
+# first draft, reading the whole output, captured an evidence line as a mutant row with no id and
+# no file (this branch's review, F3). And the killed count is its own field: the first number on
+# the counts line is the total selected, which the first draft printed as "killed" (F1), so a
+# one-mutant plan with a survivor read "1 killed, 1 survived".
+parse_report() {
+  local out="$1" summary counts survivor_count unattr_count
+  P_PARSED=0
+  P_REPORT="$(printf '%s\n' "$out" | sed -n 's/^    report     : //p' | head -1)"
+  summary="$(printf '%s\n' "$out" | awk '/^==> Summary at /{found=1} found{print}')"
+  counts="$(printf '%s\n' "$summary" | grep -E '^    [0-9]+ mutant\(s\): [0-9]+ killed, [0-9]+ survived, [0-9]+ unattributed$' | head -1 || true)"
+  P_TOTAL="$(printf '%s\n' "$counts" | sed -E 's/^ *([0-9]+) mutant\(s\):.*/\1/')"
+  P_KILLED="$(printf '%s\n' "$counts" | sed -E 's/.*: ([0-9]+) killed,.*/\1/')"
+  P_SURVIVED="$(printf '%s\n' "$counts" | sed -E 's/.*, ([0-9]+) survived,.*/\1/')"
+  P_UNATTRIBUTED="$(printf '%s\n' "$counts" | sed -E 's/.*, ([0-9]+) unattributed$/\1/')"
+  P_SURVIVOR_LINES="$(printf '%s\n' "$summary" | awk '
+    /^    SURVIVORS — / { state="s"; next }
+    /^    UNATTRIBUTED — / { state="u"; next }
+    /^$/ { state="" }
+    state == "s" && /^      / { print }
+  ')"
+  P_UNATTR_LINES="$(printf '%s\n' "$summary" | awk '
+    /^    SURVIVORS — / { state="s"; next }
+    /^    UNATTRIBUTED — / { state="u"; next }
+    /^$/ { state="" }
+    state == "u" && /^      / { print }
+  ')"
+  survivor_count="$(printf '%s\n' "$P_SURVIVOR_LINES" | grep -c . || true)"
+  unattr_count="$(printf '%s\n' "$P_UNATTR_LINES" | grep -c . || true)"
+  if [[ -n "$counts" && -n "$P_REPORT" \
+        && "$P_TOTAL" =~ ^[0-9]+$ && "$P_KILLED" =~ ^[0-9]+$ \
+        && "$P_SURVIVED" =~ ^[0-9]+$ && "$P_UNATTRIBUTED" =~ ^[0-9]+$ \
+        && $((P_KILLED + P_SURVIVED + P_UNATTRIBUTED)) -eq "$P_TOTAL" \
+        && "$survivor_count" -eq "$P_SURVIVED" && "$unattr_count" -eq "$P_UNATTRIBUTED" ]]; then
+    P_PARSED=1
+  else
+    P_TOTAL=0; P_KILLED=0; P_SURVIVED=0; P_UNATTRIBUTED=0
+    P_SURVIVOR_LINES=""; P_UNATTR_LINES=""
+  fi
+}
+
+# not_attempted <plan>... — the "Stopping" line every fatal path prints, naming the plan the run
+# was on and every plan after it, so a founder reading the summary knows what was never measured.
+not_attempted() {
+  printf '==> Stopping. Not attempted: %s' "$1"
+  shift
+  local rest
+  for rest in "$@"; do
+    printf ', %s' "$rest"
+  done
+  printf '\n'
+}
+
+# ---------------------------------------------------------------------------------------------
+# The run itself, called as the left side of a pipe (see main, at the bottom) so its combined
+# stdout+stderr is both shown to the caller and written to this run's own summary log. Reads the
+# globals ROOT, SHA, LOGDIR, SUMMARY_LOG that main sets up before entering the pipe. Ends every
+# path with an explicit `exit N` — never a bare `return` — because this function runs inside the
+# pipeline's own subshell: `exit` there ends just that subshell and its status is exactly what the
+# pipeline (and PIPESTATUS) reports, which is what main reads. Unlike scripts/mutate, nothing here
+# mutates a tracked file, so there is no tree to restore on a signal and no fifo/trap machinery is
+# owed — a plain pipe is enough because the only thing at risk on an interruption is an incomplete
+# log, not a tree left dirty.
+# ---------------------------------------------------------------------------------------------
+run_all_plans() {
+  local plans=() p
+  while IFS= read -r p; do plans+=("$p"); done < <(list_plans)
+  local plan_total=${#plans[@]}
+
+  printf '==> %s\n' "$SCRIPT_NAME"
+  printf '    repository : %s\n' "$ROOT"
+  printf '    HEAD       : %s\n' "$SHA"
+  printf '    plans      : %d found under mutation/plans/ (its folders included: a slash in a\n' "$plan_total"
+  printf '                 branch name is a folder)\n'
+  printf '    logs       : %s\n' "$LOGDIR"
+  printf '    summary    : %s\n' "$SUMMARY_LOG"
+  printf '                 (this run'"'"'s own copy of everything below)\n'
+  printf '    scratch    : reused automatically between plans — scripts/mutate builds into its own\n'
+  printf '                 .build/mutate-scratch, a fixed path for this checkout, kept between runs\n'
+  printf '                 and never emptied by this script\n'
+  printf '\n'
+
+  if [[ $plan_total -eq 0 ]]; then
+    printf '==> 0 plans, nothing measured\n'
+    exit 0
+  fi
+
+  local ran_total=0
+  local skipped_plans=() survivor_rows=() unattr_rows=() plan_reports=()
+
+  local idx=0
+  for p in "${plans[@]}"; do
+    idx=$((idx + 1))
+    printf '==> [%d/%d] %s\n' "$idx" "$plan_total" "$p"
+
+    local check_out="" check_rc=0
+    check_out="$("$MUTATE" "$p" --check 2>&1)" || check_rc=$?
+
+    if [[ $check_rc -ne 0 ]]; then
+      if [[ "$check_out" == *"$STALE_MARKER"* ]]; then
+        printf '    SKIPPED — stale: the tree has moved since this plan was written\n'
+        printf '%s\n' "$check_out" | sed 's/^/      /'
+        skipped_plans+=("$p")
+        printf '\n'
+        continue
+      fi
+      printf '    FATAL — scripts/mutate --check refused for a reason that is not a stale plan\n'
+      printf '%s\n' "$check_out" | sed 's/^/      /'
+      printf '\n'
+      not_attempted "${plans[@]:$((idx - 1))}"
+      printf '    A refusal here describes the checkout (a dirty tree, another battery'"'"'s lock, a\n'
+      printf '    red baseline), not this one plan, and would repeat identically for every plan left.\n'
+      exit 1
+    fi
+
+    local run_out="" run_rc=0
+    run_out="$("$MUTATE" "$p" 2>&1)" || run_rc=$?
+    printf '%s\n' "$run_out" >"$LOGDIR/$(basename "$p" .txt).log"
+
+    if [[ $run_rc -eq 1 ]]; then
+      printf '    FATAL — scripts/mutate refused or aborted for a reason that is not a stale plan\n'
+      printf '%s\n' "$run_out" | tail -20 | sed 's/^/      /'
+      printf '    (full output: %s/%s.log)\n' "$LOGDIR" "$(basename "$p" .txt)"
+      printf '\n'
+      not_attempted "${plans[@]:$((idx - 1))}"
+      printf '    A refusal here describes the checkout (a dirty tree, another battery'"'"'s lock, a\n'
+      printf '    red baseline, a tree left dirty by the suite), not this one plan, and would\n'
+      printf '    repeat identically for every plan left.\n'
+      exit 1
+    fi
+
+    # A run this script can vouch for exits 0 or 2 AND prints a summary that reads whole AND says
+    # the same thing its exit code does. Anything else — 130 from an interrupted run, a report
+    # cut off before its summary, counts that do not add up — was never measured, and the first
+    # draft counted such a plan as RAN with zeros and could then print a clean verdict over it
+    # (this branch's review, F5 and F4). It stops the run instead: the tree is whatever
+    # scripts/mutate's own trap left it, and the plans after it are named as not attempted.
+    parse_report "$run_out"
+    if [[ ( $run_rc -ne 0 && $run_rc -ne 2 ) || $P_PARSED -ne 1 \
+          || ( $run_rc -eq 0 && $((P_SURVIVED + P_UNATTRIBUTED)) -ne 0 ) \
+          || ( $run_rc -eq 2 && $((P_SURVIVED + P_UNATTRIBUTED)) -eq 0 ) ]]; then
+      printf '    INCOMPLETE — scripts/mutate ended with exit %d and this plan was not measured whole:\n' "$run_rc"
+      printf '    no summary block this script can read, counts that do not add up, or a verdict that\n'
+      printf '    disagrees with the exit code (an interrupted or killed run is the ordinary cause)\n'
+      printf '%s\n' "$run_out" | tail -20 | sed 's/^/      /'
+      printf '    (full output: %s/%s.log)\n' "$LOGDIR" "$(basename "$p" .txt)"
+      printf '\n'
+      not_attempted "${plans[@]:$((idx - 1))}"
+      printf '    Nothing here is a survivor or a stale plan; re-run once the cause is known.\n'
+      exit 1
+    fi
+
+    ran_total=$((ran_total + 1))
+    plan_reports+=("$p -> $P_REPORT")
+    printf '    RAN — %s killed, %s survived, %s unattributed  (report: %s)\n' \
+      "$P_KILLED" "$P_SURVIVED" "$P_UNATTRIBUTED" "$P_REPORT"
+
+    if [[ "$P_SURVIVED" -gt 0 ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        survivor_rows+=("$p	$line")
+      done <<<"$P_SURVIVOR_LINES"
+    fi
+    if [[ "$P_UNATTRIBUTED" -gt 0 ]]; then
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        unattr_rows+=("$p	$line")
+      done <<<"$P_UNATTR_LINES"
+    fi
+    printf '\n'
+  done
+
+  printf '==> Summary at %s\n' "$SHA"
+  printf '    %d plan(s) found, %d ran, %d skipped (stale)\n' \
+    "$plan_total" "$ran_total" "${#skipped_plans[@]}"
+  if [[ ${#plan_reports[@]} -gt 0 ]]; then
+    printf '\n    Reports, one per plan that ran:\n'
+    local pr
+    for pr in "${plan_reports[@]}"; do
+      printf '      %s\n' "$pr"
+    done
+  fi
+  if [[ ${#skipped_plans[@]} -gt 0 ]]; then
+    printf '\n    SKIPPED (stale) — the tree has moved since these were written:\n'
+    local sp
+    for sp in "${skipped_plans[@]}"; do
+      printf '      %s\n' "$sp"
+    done
+  fi
+  if [[ ${#survivor_rows[@]} -gt 0 ]]; then
+    printf '\n    SURVIVORS — each one is a coverage finding, not a harness error:\n'
+    local row plan_file rest
+    for row in "${survivor_rows[@]}"; do
+      plan_file="${row%%$'\t'*}"
+      rest="${row#*$'\t'}"
+      printf '      plan %-40s %s\n' "$plan_file" "$rest"
+    done
+  fi
+  if [[ ${#unattr_rows[@]} -gt 0 ]]; then
+    printf '\n    UNATTRIBUTED — the suite went red and none of it was evidence:\n'
+    local row2 plan_file2 rest2
+    for row2 in "${unattr_rows[@]}"; do
+      plan_file2="${row2%%$'\t'*}"
+      rest2="${row2#*$'\t'}"
+      printf '      plan %-40s %s\n' "$plan_file2" "$rest2"
+    done
+  fi
+  printf '\n'
+
+  if [[ ${#survivor_rows[@]} -gt 0 || ${#unattr_rows[@]} -gt 0 ]]; then
+    printf '    Exiting 2 — at least one mutant survived or came back unattributed. Measured at %s.\n' "$SHA"
+    exit 2
+  fi
+  if [[ ${#skipped_plans[@]} -gt 0 ]]; then
+    printf '    Exiting 3 — nothing survived, but %d plan(s) were skipped as stale. Measured at %s.\n' \
+      "${#skipped_plans[@]}" "$SHA"
+    exit 3
+  fi
+  printf '    Every plan ran and every mutant was killed. Measured at %s.\n' "$SHA"
+  exit 0
+}
+
+# ---------------------------------------------------------------------------------------------
+# selftest — runs the real scripts/mutate against a throwaway git repository, never a stub of it.
+# Same throwaway-repo shape as `scripts/mutate selftest` (sample.swift, .gitignore with .build/,
+# scripts/lib/battery-state.sh copied in) — the difference here is that plan files live INSIDE the
+# repository, tracked and committed, because that is how a real branch's mutation plan lives; an
+# uncommitted plan is an untracked file and `scripts/mutate` refuses that as a dirty tree.
+# ---------------------------------------------------------------------------------------------
+
+SELFTEST_ROOT=""
+SELFTEST_FAILURES=0
+
+selftest_cleanup() {
+  if [[ -n "$SELFTEST_ROOT" && -d "$SELFTEST_ROOT" ]]; then
+    rm -rf -- "$SELFTEST_ROOT"
+  fi
+}
+
+st_pass() { printf '    PASS  %s\n' "$1"; }
+st_fail() { printf '    FAIL  %s\n' "$1" >&2; SELFTEST_FAILURES=$((SELFTEST_FAILURES + 1)); }
+st_eq() {
+  if [[ "$2" == "$3" ]]; then st_pass "$1"; else st_fail "$1 — expected [$3], got [$2]"; fi
+}
+st_contains() {
+  case "$2" in
+    *"$3"*) st_pass "$1" ;;
+    *) st_fail "$1 — output did not contain [$3]" ;;
+  esac
+}
+st_absent() {
+  case "$2" in
+    *"$3"*) st_fail "$1 — output unexpectedly contained [$3]" ;;
+    *) st_pass "$1" ;;
+  esac
+}
+
+# Runs the real scripts/mutate-all (this same file, by absolute path) against the throwaway repo,
+# with the throwaway repo as cwd. ST_OUT / ST_RC are the result.
+st_run() {
+  local cmd="${1:-}"
+  ST_RC=0
+  if [[ -n "$cmd" ]]; then
+    ST_OUT="$(MUTATE_TEST_CMD="$cmd" "$SELF" 2>&1)" || ST_RC=$?
+  else
+    ST_OUT="$("$SELF" 2>&1)" || ST_RC=$?
+  fi
+}
+
+st_require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf '%s: required command not found: %s\n' "$SCRIPT_NAME" "$1" >&2
+    exit 1
+  }
+}
+
+selftest() {
+  st_require_command git
+  st_require_command awk
+  st_require_command sed
+
+  SELFTEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mutate-all-selftest.XXXXXX")"
+  trap 'selftest_cleanup' EXIT
+
+  local root="$SELFTEST_ROOT/repo"
+  mkdir -p "$root"
+  cd "$root"
+
+  git -c init.defaultBranch=main init -q .
+  git config user.email "mutate-all-selftest@example.invalid"
+  git config user.name "mutate-all selftest"
+  git config commit.gpgsign false
+
+  cat >sample.swift <<'SAMPLE'
+enum Period {
+    static func label(hour: Int) -> String {
+        if hour < 12 { return "Morning" }
+        return "Afternoon"
+    }
+
+    static func fallback() -> String {
+        return "Afternoon"
+    }
+}
+SAMPLE
+  mkdir -p scripts/lib mutation/plans
+  local battery_lib
+  battery_lib="$(dirname "$MUTATE")/lib/battery-state.sh"
+  cp "$battery_lib" scripts/lib/battery-state.sh
+  printf '.build/\n' >.gitignore
+  : >mutation/plans/.gitkeep
+  git add sample.swift .gitignore scripts/lib/battery-state.sh mutation/plans/.gitkeep
+  git commit -q -m "seed"
+
+  # Stand-ins, shaped like swift-testing's console output so the report parsing this script relies
+  # on is exercised for real. The leading `# swift test --scratch-path "$MUTATE_SCRATCH"` line is a
+  # comment — inert at run time — that exists only so scripts/mutate's own isolation check
+  # (require_isolated_test_command) reads this as a SwiftPM-shaped command and prints the real
+  # scratch path in its "build dir" line instead of "not a SwiftPM invocation", which is what makes
+  # the scratch-reuse assertion below a real check rather than two copies of one fixed string.
+  local kills='# swift test --scratch-path "$MUTATE_SCRATCH"
+printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+if grep -q "evening" sample.swift; then
+  printf "✘  Test fallbackIsAfternoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  local always_pass='# swift test --scratch-path "$MUTATE_SCRATCH"
+printf "◇  Test run started.\n"
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  # Fails only on a wording scripts/mutate-untrusted-failures declares (the view-model backstop's),
+  # so the mutant comes back UNATTRIBUTED rather than killed — the same fixture shape
+  # `scripts/mutate selftest` uses for that verdict.
+  local untrusted_only='# swift test --scratch-path "$MUTATE_SCRATCH"
+printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  # Red before any mutant: --check passes (it runs no tests) and the real run's baseline fails.
+  local always_fails='# swift test --scratch-path "$MUTATE_SCRATCH"
+printf "◇  Test run started.\n"
+printf "✘  Test somethingAlreadyBroken() failed after 0.001 seconds with 1 issue.\n"
+printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+exit 1'
+
+  # Interrupts scripts/mutate itself once the mutant is in the file ($PPID inside the stand-in is
+  # scripts/mutate, which runs it as `bash -c`), so its INT/TERM trap restores the tree and it
+  # exits 130 before printing a summary — the shape the review's F5 found counted as RAN.
+  local interrupts_the_run='# swift test --scratch-path "$MUTATE_SCRATCH"
+if grep -q "hour < 13" sample.swift; then
+  kill -TERM $PPID
+  sleep 2
+fi
+printf "◇  Test run started.\n"
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '==> %s selftest\n' "$SCRIPT_NAME"
+  printf '    throwaway repository: %s\n\n' "$root"
+
+  # --- Scenario 1: an empty plans folder exits 0, "0 plans" ---
+  printf '==> An empty mutation/plans/ exits 0\n'
+  st_run ""
+  st_eq "empty plans folder exits 0" "$ST_RC" "0"
+  st_contains "the summary says 0 plans" "$ST_OUT" "0 plans, nothing measured"
+
+  # --- Scenario 2: two plans, both killed — also the scratch-reuse check ---
+  printf '\n==> Two plans, both killed, exits 0 — and the second reuses the first'"'"'s scratch\n'
+  cat >mutation/plans/a-kill.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  cat >mutation/plans/b-kill.txt <<'PLAN'
+>>> mutant M2 the fallback made evening
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+>>> to
+    static func fallback() -> String { // evening
+>>> end
+PLAN
+  git add mutation/plans/a-kill.txt mutation/plans/b-kill.txt
+  git commit -q -m "two killed plans"
+  st_run "$kills"
+  st_eq "two killed plans exits 0" "$ST_RC" "0"
+  st_contains "2 plan(s) found, 2 ran, 0 skipped" "$ST_OUT" "2 plan(s) found, 2 ran, 0 skipped"
+  st_contains "every mutant was killed" "$ST_OUT" "Every plan ran and every mutant was killed"
+  local report_a report_b build_dir_a build_dir_b
+  report_a="$(printf '%s\n' "$ST_OUT" | grep 'a-kill.txt ->' | sed 's/.*-> //')"
+  report_b="$(printf '%s\n' "$ST_OUT" | grep 'b-kill.txt ->' | sed 's/.*-> //')"
+  if [[ -n "$report_a" && -n "$report_b" && -f "$report_a" && -f "$report_b" ]]; then
+    build_dir_a="$(sed -n 's/^    build dir  : //p' "$report_a" | head -1)"
+    build_dir_b="$(sed -n 's/^    build dir  : //p' "$report_b" | head -1)"
+    st_eq "both plans' reports name the same build dir" "$build_dir_a" "$build_dir_b"
+    st_contains "the build dir is the real scratch path, not the 'not a SwiftPM invocation' fallback" \
+      "$build_dir_a" ".build/mutate-scratch"
+  else
+    st_fail "could not locate both plans' own scripts/mutate reports to compare build dirs"
+  fi
+  git rm -q mutation/plans/b-kill.txt
+  git commit -q -m "drop b-kill"
+
+  # --- Scenario 3: a survivor exits 2, listed with its plan and target ---
+  printf '\n==> A survivor exits 2, listed with its plan and target\n'
+  cat >mutation/plans/c-survive.txt <<'PLAN'
+>>> mutant M3 a mutant nothing catches
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+        return "Afternoon"
+    }
+>>> to
+    static func fallback() -> String {
+        return "Never"
+    }
+>>> end
+PLAN
+  git add mutation/plans/c-survive.txt
+  git commit -q -m "add a survivor plan"
+  st_run "$always_pass"
+  st_eq "a survivor exits 2" "$ST_RC" "2"
+  st_contains "the summary names SURVIVORS" "$ST_OUT" "SURVIVORS —"
+  st_contains "the survivor names its plan file" "$ST_OUT" "mutation/plans/c-survive.txt"
+  st_contains "the survivor names its target file" "$ST_OUT" "sample.swift"
+  # The counts, not only the section: the first draft printed the total as "killed" and this
+  # one-mutant survivor read "1 killed, 1 survived" (the review's F1).
+  st_contains "the per-plan line counts 0 killed, 1 survived" "$ST_OUT" "RAN — 0 killed, 1 survived, 0 unattributed"
+  git rm -q mutation/plans/c-survive.txt mutation/plans/a-kill.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 3b: one plan, two mutants, one killed and one surviving ---
+  printf '\n==> One plan with a killed mutant and a survivor counts each on its own side\n'
+  cat >mutation/plans/cc-mixed.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+
+>>> mutant M3 a mutant nothing catches
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+        return "Afternoon"
+    }
+>>> to
+    static func fallback() -> String {
+        return "Never"
+    }
+>>> end
+PLAN
+  git add mutation/plans/cc-mixed.txt
+  git commit -q -m "a mixed plan"
+  st_run "$kills"
+  st_eq "a mixed plan exits 2" "$ST_RC" "2"
+  st_contains "the per-plan line counts 1 killed, 1 survived" "$ST_OUT" "RAN — 1 killed, 1 survived, 0 unattributed"
+  st_contains "the survivor row names M3" "$ST_OUT" "M3     sample.swift"
+  st_absent "the killed mutant is not listed as a survivor" "$ST_OUT" "M1     sample.swift"
+  git rm -q mutation/plans/cc-mixed.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 4: a stale plan beside a killed one exits 3, the stale one named ---
+  printf '\n==> A stale plan beside a killed one exits 3, the stale one named\n'
+  cat >mutation/plans/d-kill.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  cat >mutation/plans/e-stale.txt <<'PLAN'
+>>> mutant M9 a mutant whose text is not in the file
+>>> file sample.swift
+>>> from
+        if hour < 999 { return "Nowhere" }
+>>> to
+        if hour < 998 { return "Nowhere" }
+>>> end
+PLAN
+  git add mutation/plans/d-kill.txt mutation/plans/e-stale.txt
+  git commit -q -m "a killed plan and a stale plan"
+  st_run "$kills"
+  st_eq "a stale plan beside a killed one exits 3" "$ST_RC" "3"
+  st_contains "the summary names the stale plan" "$ST_OUT" "mutation/plans/e-stale.txt"
+  st_contains "the stale plan's own refusal is quoted" "$ST_OUT" "$STALE_MARKER"
+  st_contains "1 skipped is reported" "$ST_OUT" "1 skipped (stale)"
+  git rm -q mutation/plans/d-kill.txt mutation/plans/e-stale.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 5: a dirty tree exits 1, naming every plan not attempted ---
+  printf '\n==> A dirty tree exits 1, naming every plan as not attempted\n'
+  cat >mutation/plans/f-kill.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  cat >mutation/plans/g-kill.txt <<'PLAN'
+>>> mutant M2 the fallback made evening
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+>>> to
+    static func fallback() -> String { // evening
+>>> end
+PLAN
+  git add mutation/plans/f-kill.txt mutation/plans/g-kill.txt
+  git commit -q -m "two more killed plans"
+  printf 'let uncommittedWorkInProgress = true\n' >>sample.swift
+  st_run "$kills"
+  st_eq "a dirty tree exits 1" "$ST_RC" "1"
+  st_contains "not attempted names the first plan" "$ST_OUT" "Not attempted: mutation/plans/f-kill.txt"
+  st_contains "not attempted names the second plan too" "$ST_OUT" "mutation/plans/g-kill.txt"
+  git checkout -q -- sample.swift
+  git rm -q mutation/plans/f-kill.txt mutation/plans/g-kill.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 6: the summary log on disk exists and repeats the listing ---
+  printf '\n==> The summary log on disk repeats what stdout printed\n'
+  cat >mutation/plans/h-kill.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  git add mutation/plans/h-kill.txt
+  git commit -q -m "one more killed plan"
+  st_run "$kills"
+  st_eq "one killed plan exits 0" "$ST_RC" "0"
+  local summary_path
+  summary_path="$(printf '%s\n' "$ST_OUT" | sed -n 's/^    summary    : //p' | head -1)"
+  if [[ -n "$summary_path" && -f "$summary_path" ]]; then
+    st_pass "the summary log exists at the path the header printed"
+    if grep -qF "Every plan ran and every mutant was killed" "$summary_path"; then
+      st_pass "the summary log repeats the same listing stdout carried"
+    else
+      st_fail "the summary log does not carry the run's own conclusion"
+    fi
+  else
+    st_fail "no summary log path found in the header, or the file it named does not exist"
+  fi
+
+  git rm -q mutation/plans/h-kill.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 7: an UNATTRIBUTED mutant is listed once, as one well-formed row ---
+  printf '\n==> An unattributed mutant exits 2 and is listed once, with its id, plan and target\n'
+  cat >mutation/plans/i-unattr.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  git add mutation/plans/i-unattr.txt
+  git commit -q -m "a plan whose kill is unattributed"
+  st_run "$untrusted_only"
+  st_eq "an unattributed mutant exits 2" "$ST_RC" "2"
+  st_contains "the per-plan line counts 0 killed, 0 survived, 1 unattributed" "$ST_OUT" "RAN — 0 killed, 0 survived, 1 unattributed"
+  st_contains "the summary names UNATTRIBUTED" "$ST_OUT" "UNATTRIBUTED — the suite went red and none of it was evidence:"
+  local unattr_rows
+  unattr_rows="$(printf '%s\n' "$ST_OUT" | grep -c '^      plan mutation/plans/i-unattr.txt' || true)"
+  st_eq "exactly one row is listed for it" "$unattr_rows" "1"
+  st_contains "the row carries the mutant id and its target" "$ST_OUT" "M1     sample.swift"
+  st_absent "the per-mutant evidence line is not mistaken for a row" "$ST_OUT" "plan mutation/plans/i-unattr.txt                the suite went red"
+  git rm -q mutation/plans/i-unattr.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 8: --check passes but the baseline is red: fatal, the plans named ---
+  printf '\n==> A red baseline after a passing --check exits 1 and names every plan not attempted\n'
+  cat >mutation/plans/j-kill.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  cat >mutation/plans/k-kill.txt <<'PLAN'
+>>> mutant M2 the fallback made evening
+>>> file sample.swift
+>>> from
+    static func fallback() -> String {
+>>> to
+    static func fallback() -> String { // evening
+>>> end
+PLAN
+  git add mutation/plans/j-kill.txt mutation/plans/k-kill.txt
+  git commit -q -m "two plans for the red-baseline scenario"
+  st_run "$always_fails"
+  st_eq "a red baseline exits 1" "$ST_RC" "1"
+  st_contains "the refusal is reported as fatal, not stale" "$ST_OUT" "FATAL — scripts/mutate refused or aborted"
+  st_contains "not attempted names the plan it was on" "$ST_OUT" "Not attempted: mutation/plans/j-kill.txt, mutation/plans/k-kill.txt"
+  st_absent "the red baseline is never counted as a run" "$ST_OUT" "RAN —"
+
+  # --- Scenario 9: an interrupted run is INCOMPLETE, never a clean pass ---
+  printf '\n==> An interrupted scripts/mutate stops the run as INCOMPLETE, exit 1, tree clean\n'
+  st_run "$interrupts_the_run"
+  st_eq "an interrupted run exits 1" "$ST_RC" "1"
+  st_contains "the plan is reported INCOMPLETE" "$ST_OUT" "INCOMPLETE — scripts/mutate ended with exit 130"
+  st_contains "the plan after it is named as not attempted" "$ST_OUT" "Not attempted: mutation/plans/j-kill.txt, mutation/plans/k-kill.txt"
+  st_absent "an interrupted plan is never counted as run" "$ST_OUT" "RAN —"
+  st_absent "no clean verdict over an unmeasured plan" "$ST_OUT" "Every plan ran and every mutant was killed"
+  st_eq "the tree is clean afterwards (scripts/mutate's own trap restored it)" "$(git status --porcelain)" ""
+  git rm -q mutation/plans/j-kill.txt mutation/plans/k-kill.txt
+  git commit -q -m "clear plans for the next scenario"
+
+  # --- Scenario 10: a plan named for a slashed branch lives one folder down and is found ---
+  printf '\n==> A plan under mutation/plans/fix/ (a slashed branch name) is found and run\n'
+  mkdir -p mutation/plans/fix
+  cat >mutation/plans/fix/some-name.txt <<'PLAN'
+>>> mutant M1 the morning boundary widened by an hour
+>>> file sample.swift
+>>> from
+        if hour < 12 { return "Morning" }
+>>> to
+        if hour < 13 { return "Morning" }
+>>> end
+PLAN
+  git add mutation/plans/fix/some-name.txt
+  git commit -q -m "a plan for a slashed branch name"
+  st_run "$kills"
+  st_eq "a plan one folder down exits 0" "$ST_RC" "0"
+  st_contains "it is found" "$ST_OUT" "1 found under mutation/plans/"
+  st_contains "it is run by its full path" "$ST_OUT" "[1/1] mutation/plans/fix/some-name.txt"
+  st_contains "one plan ran" "$ST_OUT" "1 plan(s) found, 1 ran, 0 skipped"
+
+  printf '\n'
+  if [[ $SELFTEST_FAILURES -eq 0 ]]; then
+    printf '==> selftest: all checks passed.\n'
+    exit 0
+  fi
+  printf '==> selftest: %d check(s) FAILED.\n' "$SELFTEST_FAILURES" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------------------------
+case "${1:-}" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  selftest)
+    [[ $# -eq 1 ]] || die "selftest takes no arguments"
+    selftest
+    ;;
+  "")
+    ;;
+  *)
+    die "unknown argument: $1 (try --help)"
+    ;;
+esac
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not a git checkout"
+cd "$ROOT"
+[[ -d mutation/plans ]] || die "mutation/plans/ is missing — nothing to run"
+[[ -x "$MUTATE" ]] || die "scripts/mutate not found (or not executable) beside this script at $MUTATE"
+
+SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+stamp="$(date +%Y%m%dT%H%M%S)"
+if git check-ignore -q ".build/mutate-all" 2>/dev/null; then
+  LOGDIR=".build/mutate-all/${SHA:0:7}-$stamp-$$"
+else
+  LOGDIR="$(mktemp -d "${TMPDIR:-/tmp}/mutate-all-logs.XXXXXX")"
+fi
+mkdir -p "$LOGDIR"
+SUMMARY_LOG="$LOGDIR/summary.log"
+
+rc=0
+{ run_all_plans; } 2>&1 | tee -a "$SUMMARY_LOG" || rc=$?
+exit "$rc"
