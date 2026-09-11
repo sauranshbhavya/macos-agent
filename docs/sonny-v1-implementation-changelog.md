@@ -171,6 +171,41 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/clipboard-history-records-without-a-notice
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-439** (clipboard history recorded nothing on a fresh install: the recording gate waited for a one-time notice no surface shows any more — the founders' pass, test 18, versus test 73 which touches the toggle and passed). The wave 7 overnight session (run log SONNY-438), first branch of its chain, from `main` at `a4b089f7`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR); see the PR thread for the rounds.
+
+Spec sections covered: none new; §6.3A's Memory and Settings surfaces unchanged in shape.
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift` — `refreshClipboardHistoryNotice()` gates monitoring on `settings.isEnabled` alone, with the reason beside it
+- `Sources/MacAgentCore/ClipboardHistoryService.swift` — `ClipboardHistorySettings.noticeDismissed` marked historical; kept so every settings file already written still decodes
+- `Sources/MacAgent/CommandCenterView.swift` — the clipboard toggle's comment no longer describes the dismissed flag as the gate
+- `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — three tests beside the existing control: a fresh install (no settings file) records; the founders' exact file (`noticeDismissed: false, isEnabled: true`) records; the switch off still stops recording with the flag at its fresh value
+- `mutation/plans/fix/clipboard-history-records-without-a-notice.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-439), this entry
+
+Tests: **3149 in 219, exit 0, 8 known issues, at `0256e53f`** — the flagged command from `CLAUDE.md` (`swift test` with `CLANG_MODULE_CACHE_PATH`, `--disable-sandbox`, `-Xswiftc -F` and both `-Xlinker -rpath` pairs), redirected to a file and its exit read from the file; the count line reads `Test run with 3149 tests in 219 suites passed after 63.121 seconds with 8 known issues.` Three tests added, all in `MemoryCommandCenterTests` (the suite alone: `--filter MemoryCommandCenterTests` → 134 in 1, exit 0). The mutant that puts the old gate back (plan C1) was applied by hand at that tree and run through the same filter before this commit: `Test run with 134 tests in 1 suite failed after 3.864 seconds with 2 issues`, the two issues in `aFreshInstallRecordsClipboardHistoryWithoutTheSwitchBeingTouched` and `aSettingsFileWhoseNoticeWasNeverDismissedStillRecords` and nowhere else, then reverted with the editor. **Warnings: 0 at `0256e53f`** (`scripts/warnings`, exit 0, every file compiled, its header reading `measured at : 0256e53f plus 1 uncommitted file(s)`, the one file being this entry). `scripts/no-attribution tree` → exit 0, 0 of 704 tracked files; `scripts/changelog-order` → exit 0. The Swift tree is byte-identical between `0256e53f` and the head this entry commits on (`git diff --stat 0256e53f HEAD -- Sources Tests` prints nothing), so the figures describe the merging tree.
+Mutation plan: mutation/plans/fix/clipboard-history-records-without-a-notice.txt (founder-triggered, not run on this branch) — three mutants: the dismissed-flag gate put back, the switch ignored, the Memory policy guard removed at the start door.
+
+Behavior added: none. Clipboard history now records on a fresh install without the Settings toggle ever being touched, which is what the toggle already said it did.
+Behavior preserved (required, no blanket claims):
+- The Settings toggle off stops the poll timer and on restarts it, through `applyClipboardHistoryNoticeChoice()` as before; it still writes `noticeDismissed: true`, so the file's shape is unchanged.
+- The Memory page's master switch and the clipboard row's own switch still stop the timer rather than only the row (`theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders` unchanged).
+- `ClipboardHistoryMonitor.poll()` still fails closed on an unreadable settings file and still skips concealed and transient pasteboard types.
+- A suppressed run still pauses and resynchronises the monitor (`ClarificationExitTests` unchanged).
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A consent flag outlived the only surface that could set it, and the toggle that replaced the surface reported the flag's default as the truth.** The gate was `noticeDismissed && isEnabled`; the notice went with the menu-bar popover; the toggle that replaced it shows `isEnabled` (default on) and writes both fields only when touched. So the product said on and did nothing until the first touch. The general shape: when a surface is replaced, every flag the old surface wrote has to be re-asked "who sets this now" — a flag with no writer that still gates is a switch that reads one way and acts the other. The founders' test sheet caught it only because one row (18) ran before the toggle was touched and another (73) after.
+
+**The reading chosen, and the one not chosen.** Consent stays on the two switches that exist (Settings' toggle, Memory's recording policy) and recording follows them; the alternative was to make a fresh install's toggle read off until turned on, which would have contradicted the founders' own rows (18 expects capture out of the box; 73 turns it off then on). Recorded on SONNY-439.
+
+Known limitations / deferred scope: none.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/switching-apps-from-the-background (SONNY-440), cut from this branch's head — the wave 7 chain.
+
 ### Branch: ui-ux-claude
 Status: complete on the branch (PR #224, draft); not merged, by the founder's instruction that nothing on it reaches `main` without them
 Date: 2026-09-08 (phase 1 in the morning; phases 2 to 6 the same day under the founder's free hand over the whole frontend, recorded phase by phase in `docs/ui-ux-claude-worklog.md`)
