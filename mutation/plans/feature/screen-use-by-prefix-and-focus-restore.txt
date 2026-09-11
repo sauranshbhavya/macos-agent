@@ -47,7 +47,9 @@
 >>> mutant X4 the restore after a completed open dropped
 >>> file Sources/MacAgentCore/FocusRestorer.swift
 >>> from
-        await restore(before, onRestore: onRestore)
+        if let before, await restored(before) {
+            onRestore(before)
+        }
         return result
 >>> to
         return result

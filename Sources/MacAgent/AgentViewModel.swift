@@ -1181,6 +1181,9 @@ final class AgentViewModel: ObservableObject {
             // default nobody writes is a default nobody can see — SONNY-240's whole argument,
             // applied to a parameter that opens Finder rather than one that writes a file.
             finderRevealer: { NSWorkspace.shared.activateFileViewerSelecting($0) },
+            // Launch Services brings the user's app back after an open (SONNY-451); the parameter's
+            // default is inert so a fixture never reads this Mac's frontmost app by saying nothing.
+            focusRestorer: FocusRestorer.forThisMac(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: ShortcutRunHistoryStore.realFileURL()),
             taskHistoryStore: TaskHistoryStore(fileURL: TaskHistoryStore.realFileURL()),
             taskPlanDetailStore: TaskPlanDetailStore(fileURL: TaskPlanDetailStore.realFileURL()),
@@ -1289,9 +1292,13 @@ final class AgentViewModel: ObservableObject {
         finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
-        // The real restorer, on the switcher's precedent one line up (SONNY-451): the shipping app
-        // says nothing and gets Launch Services; a fixture that cares passes its own.
-        focusRestorer: any FocusRestoring = FocusRestorer.forThisMac(),
+        // Inert by default, unlike the switcher one line up, and the difference is measured
+        // (SONNY-451): a switch step is rare in a fixture, while an open step is common, and the real
+        // restorer reads `NSWorkspace` on every one — under the full parallel suite that read
+        // stalled three resumable-task tests for their whole thirty-second backstop. The shipping
+        // app passes `FocusRestorer.forThisMac()` in `atItsRealStoreLocations()`, and
+        // `FocusRestoreWiringTests` pins that it does.
+        focusRestorer: any FocusRestoring = FocusRestorer.inert(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
         documentConverter: any DocumentConverting = AutoDocumentConverter(),
