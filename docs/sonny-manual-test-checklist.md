@@ -4475,7 +4475,10 @@ seconds now; idle still collapses after six.
       collapses to the capsule after about six to eight seconds, as before.
 - [ ] A failure ("Sonny couldn't finish this one." with the gateway stopped) stays about twenty
       seconds and then clears; a notified outcome (a failure while you work in another app) still
-      holds until you dismiss it (as before).
+      holds until you retry or submit another command, the two doors that clear it (as before —
+      there is no dismiss control on a failure). A persistent failure (the mic denied in System
+      Settings, then a voice command) collapses to the capsule after about twenty seconds, where it
+      was six, and expanding the capsule still shows it.
 
 ## 8. How to report back
 
