@@ -376,6 +376,19 @@ Decision 29 records the call. One commit on the branch, no lane needed.
   42 mutants under the founders' 2026-09-10 decision that a branch writes its plan and does not run it,
   the ones its four batteries ran plus four for the split's arithmetic, and every one matches the tree at `0a6eab1e` (`scripts/mutate mutation/plans/ui-ux-claude.txt --check`, exit 0, 42 lines reading `1 match`); nothing was run, per the decision.
 
+## Main merged in, 2026-09-10
+
+After the founders merged PR #225 (`ff5a76f4`), `main` came into the branch with a merge commit
+(`5c069792`): the founder-triggered batteries, `scripts/mutate-all`, WORKFLOW.md's rewritten step 5
+and its Weekly battery section, CLAUDE.md's battery paragraph and the changelog template's
+`Mutation plan:` line. The one conflict was the changelog, where both sides had added an entry
+under Entries; both are kept, this branch's on top, and `scripts/changelog-order` accepts the order
+(197 entries). `main` touched no Swift file since the branch's base, so the entry's figures at
+`0a6eab1e` still describe this tree; the flagged suite and `scripts/warnings` were run once more at
+`5c069792` anyway and the count line is quoted in the changelog entry. The branch's own plan,
+`mutation/plans/ui-ux-claude.txt`, written under the decision before it merged, now sits beside
+main's `.gitkeep`; the founders' proof run of `scripts/mutate-all` drove that plan (42 killed).
+
 ## The plan
 
 Every phase in the plan has landed and the changelog entry is restated at the head that carries
