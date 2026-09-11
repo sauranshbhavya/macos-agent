@@ -6,15 +6,19 @@
 # (aScheduledRunThatMeetsAnUnreadableStoreNamesTheWayOutInItsNotice); W3 by the five banner tests that pin
 # the sentence by value (MemoryCommandCenterTests.theBannerForAnUnreadableStoreNamesTheWayOut and three
 # siblings, AgentViewModelLocalStorageTests.theLoadFailureBannerExplainsItselfOnceAndStillNamesTheAffectedStore),
-# measured by PR #233's first review.
+# measured by PR #233's first review. W4 by UnreadableStoreWayOutTests
+# (anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut); W5 by StandingWatcherStopTests
+# (aStopAgainstAnUnreadableFileNamesTheWayOut); both from PR #233's second review.
 
 >>> mutant W1 the way out dropped from a task's failure
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-        if case LocalStorageEncryptionError.undecodableLocalData = error {
-            return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+        let sentence = error.localizedDescription
+        guard Self.reportsAnUnreadableStore(error),
+              !sentence.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut) else {
+            return sentence
         }
-        return error.localizedDescription
+        return "\(sentence) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
 >>> to
         return error.localizedDescription
 >>> end
@@ -22,10 +26,12 @@
 >>> mutant W2 every failure told to open Memory, whatever the error
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-        if case LocalStorageEncryptionError.undecodableLocalData = error {
-            return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+        let sentence = error.localizedDescription
+        guard Self.reportsAnUnreadableStore(error),
+              !sentence.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut) else {
+            return sentence
         }
-        return error.localizedDescription
+        return "\(sentence) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
 >>> to
         return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
 >>> end
@@ -36,4 +42,20 @@
             wayOut = " " + LocalStorageEncryptionError.unreadableStoreWayOut
 >>> to
             wayOut = " Open Memory to clear it."
+>>> end
+
+>>> mutant W4 the sentence match dropped: a wrapper that reports the failure by its words loses the way out
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        return error.localizedDescription.contains(Self.unreadableStoreSentence)
+>>> to
+        return false
+>>> end
+
+>>> mutant W5 a watcher stop reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(Self.failureMessage(for: error))")
+>>> to
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(error.localizedDescription)")
 >>> end

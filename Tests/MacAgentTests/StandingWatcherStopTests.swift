@@ -109,6 +109,27 @@ struct StandingWatcherStopTests {
         #expect(fixture.viewModel.watcherNotice == nil)
     }
 
+    /// A Stop against a watcher file that cannot be read ends with the way out the storage banner
+    /// names (SONNY-449, PR #233's second review): the delete loads the file first, so an
+    /// unreadable one throws the decrypt sentence before anything is deleted, and this is the one
+    /// pressed control on the watcher page that could show that sentence with no door.
+    @Test
+    func aStopAgainstAnUnreadableFileNamesTheWayOut() throws {
+        let fixture = try makeStopFixture()
+        defer { fixture.cleanUp() }
+        // The file written under another key than the fixture's, so the load fails to decrypt.
+        let foreign = LocalStorageEncryption(keyManager: ForeignStopKeyManager())
+        let bytes = try foreign.encode(["placeholder": UUID().uuidString])
+        #expect(bytes.starts(with: LocalStorageEncryption.fileHeader))
+        try bytes.write(to: fixture.store.fileURL, options: .atomic)
+
+        fixture.viewModel.stopWatching(watcher(subject: "the order status", url: "https://example.com/a"))
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.hasPrefix("Could not stop watching \u{201C}the order status\u{201D}: A local data file exists but could not be decrypted or decoded."))
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
     /// A Stop that cannot be written says so on `errorMessage` — the channel for a control the user
     /// pressed — and **not** on `localStorageNotice`, which is where a task's own bookkeeping goes.
     ///
@@ -229,5 +250,12 @@ private func makeStopFixture() throws -> StopFixture {
 private struct StopFixtureKeyManager: LocalStorageKeyManaging {
     func keyData() throws -> Data {
         Data(repeating: 0x5E, count: 32)
+    }
+}
+
+/// A key the fixture's store does not hold, for a file it must fail to read.
+private struct ForeignStopKeyManager: LocalStorageKeyManaging {
+    func keyData() throws -> Data {
+        Data(repeating: 0x77, count: 32)
     }
 }

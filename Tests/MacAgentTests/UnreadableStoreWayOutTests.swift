@@ -31,6 +31,42 @@ struct UnreadableStoreWayOutTests {
         )
     }
 
+    /// An item job that could start none of its items reports the first item's failure by its
+    /// sentence and not its type (`PlanItemJobError.everyItemUnavailable`), which is how a snippet
+    /// job against a poisoned `snippets.json` reached the widget with no door (PR #233's second
+    /// review). The way out follows the sentence wherever it travels.
+    @Test
+    func anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut() {
+        let inner = LocalStorageEncryptionError.undecodableLocalData(underlying: "CryptoKitError.authenticationFailure")
+        let wrapped = PlanItemJobError.everyItemUnavailable(inner.localizedDescription)
+
+        let message = AgentViewModel.failureMessage(for: wrapped)
+
+        #expect(message == "A local data file exists but could not be decrypted or decoded. Open Memory in Command Center to clear it.")
+    }
+
+    /// The control: a job that failed for any other reason is still its own sentence.
+    @Test
+    func anItemJobThatFailedForAnotherReasonIsItsOwnSentence() {
+        let wrapped = PlanItemJobError.everyItemUnavailable("No file named report.pdf is on the Desktop.")
+
+        #expect(AgentViewModel.failureMessage(for: wrapped) == "No file named report.pdf is on the Desktop.")
+    }
+
+    /// A sentence that already ends with the way out is not told twice.
+    @Test
+    func aSentenceThatAlreadyNamesTheWayOutIsNotToldTwice() {
+        let already = PlanItemJobError.everyItemUnavailable(
+            "A local data file exists but could not be decrypted or decoded. "
+                + LocalStorageEncryptionError.unreadableStoreWayOut
+        )
+
+        let message = AgentViewModel.failureMessage(for: already)
+
+        #expect(message.components(separatedBy: LocalStorageEncryptionError.unreadableStoreWayOut).count - 1 == 1)
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
     /// The constant is the banner's sentence, held by value so a rewording in one place is a
     /// failing test rather than two surfaces drifting.
     @Test

@@ -2976,11 +2976,30 @@ final class AgentViewModel: ObservableObject {
     /// this on a snippet save (test 19): the decrypt sentence, Retry, and no door. Every store
     /// loads before it writes (SONNY-239), so any task that touches a poisoned file lands here.
     nonisolated static func failureMessage(for error: any Error) -> String {
-        if case LocalStorageEncryptionError.undecodableLocalData = error {
-            return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+        let sentence = error.localizedDescription
+        guard Self.reportsAnUnreadableStore(error),
+              !sentence.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut) else {
+            return sentence
         }
-        return error.localizedDescription
+        return "\(sentence) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
     }
+
+    /// The undecodable error itself, or an error carrying its sentence as text. An item job that
+    /// could start none of its items throws `PlanItemJobError.everyItemUnavailable` with the first
+    /// item's *message* — the type is gone by then and only the sentence says a file could not be
+    /// read — so a snippet job against a poisoned `snippets.json` reached the widget bare through a
+    /// door the type match could not see (PR #233's second review). Matching the sentence covers
+    /// every wrapper that reports a failure by its words, which is what a wrapper is.
+    nonisolated private static func reportsAnUnreadableStore(_ error: any Error) -> Bool {
+        if case LocalStorageEncryptionError.undecodableLocalData = error {
+            return true
+        }
+        return error.localizedDescription.contains(Self.unreadableStoreSentence)
+    }
+
+    /// The decrypt failure's own sentence, read off the type rather than written twice.
+    nonisolated private static let unreadableStoreSentence =
+        LocalStorageEncryptionError.undecodableLocalData(underlying: "").localizedDescription
 
     func setError(_ message: String, persistent: Bool = false) {
         errorMessage = message
@@ -5065,7 +5084,10 @@ final class AgentViewModel: ObservableObject {
         do {
             try resumableTaskStore.deleteWatcher(id: watcher.id)
         } catch {
-            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(error.localizedDescription)")
+            // Through `failureMessage(for:)`, so a watcher file that cannot be read names the way out
+            // here as it does on a run's failure (PR #233's second review): the delete loads the
+            // file first, and an unreadable one throws the decrypt sentence before anything is deleted.
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(Self.failureMessage(for: error))")
             refreshSavedItems()
             return
         }
