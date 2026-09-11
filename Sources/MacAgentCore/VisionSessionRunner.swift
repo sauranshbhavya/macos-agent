@@ -197,9 +197,17 @@ final class VisionSessionRunner {
     }
 
     func run() async throws -> VisionSessionOutcome {
+        // The app the user was in before the session took the target forward (SONNY-451). It comes
+        // back on every exit and at an attention pause — through the synthesizer's own activation,
+        // the Launch Services route — and never while Sonny acts: the controlled app stays in front
+        // for the whole of a session, because a session is exactly the thing that must keep it there.
+        previousFrontmost = await environment.synthesizer.frontmostBundleIdentifier()
         do {
-            return try await runLoop()
+            let outcome = try await runLoop()
+            await restorePreviousFrontmost()
+            return outcome
         } catch {
+            await restorePreviousFrontmost()
             // **A thrown exit still leaves a record, and this is the case that matters most.** A
             // cancelled session — the user pressing stop, or the emergency hotkey — propagates a
             // `CancellationError` straight past every `end(with:)`, so without this the runs someone
@@ -230,6 +238,21 @@ final class VisionSessionRunner {
             }
             throw error
         }
+    }
+
+    /// What was in front before the session; `nil` when nothing was, or it was the target itself.
+    private var previousFrontmost: String?
+
+    /// Brings the app the user was in back in front, if the session moved it. Idempotent: a second
+    /// call after the first restored finds it in front and does nothing.
+    private func restorePreviousFrontmost() async {
+        guard let previous = previousFrontmost, previous != target.bundleIdentifier else {
+            return
+        }
+        guard await environment.synthesizer.frontmostBundleIdentifier() != previous else {
+            return
+        }
+        _ = await environment.synthesizer.activateApp(bundleIdentifier: previous)
     }
 
     private func runLoop() async throws -> VisionSessionOutcome {
@@ -284,6 +307,10 @@ final class VisionSessionRunner {
                     // actually answer — they came back — so the session suspends and waits for them
                     // to say so, rather than ending work they may still want. Every other refusal in
                     // `checkIterationStart` is a fact no answer changes, and those still end.
+                    // The user's app comes back while the session waits for them (SONNY-451), and
+                    // the target is brought forward again once they resume — the check below then
+                    // reads a frontmost target rather than ending the session on the user's own app.
+                    await restorePreviousFrontmost()
                     let resumed = try await interaction.awaitVisionResume(
                         VisionSessionPause(
                             appDisplayName: target.displayName,
@@ -294,6 +321,8 @@ final class VisionSessionRunner {
                     guard resumed else {
                         return end(with: refusal, iteration: iteration)
                     }
+                    _ = await environment.synthesizer.activateApp(bundleIdentifier: target.bundleIdentifier)
+                    try await settle()
                     // Re-check rather than trust the resume: the user pressing Resume is a claim that
                     // they are back, and the OS is the thing that confirms it. A screen still locked
                     // pauses again, which is a loop the user ends by unlocking or by stopping.

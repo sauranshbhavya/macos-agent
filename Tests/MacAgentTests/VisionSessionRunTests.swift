@@ -321,6 +321,99 @@ struct VisionSessionRunTests {
         func canPresentApproval() async -> Bool { presentable }
     }
 
+    // MARK: - Screen use by the [s] prefix, and the app the user was in (SONNY-451)
+
+    /// A prefixed command enters the session by the same door a planned one does — here Normal
+    /// mode's per-app consent, on an app outside `AppControlStarterList` (Safari and Slack are on
+    /// it, so neither would ask; VS Code is not, which is why the direct-door test above uses it
+    /// too) — and never through the planner: this fixture's planner throws if it is reached, so a
+    /// plan that came from anywhere but the resolver ends the test.
+    @Test
+    func aPrefixedCommandAsksForConsentInNormalModeBeforeAnythingIsClicked() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] open the extensions panel in VS Code"
+        fixture.viewModel.start()
+        try await waitUntil("the consent approval") { fixture.viewModel.approvalRequest != nil }
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        let reasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        #expect(reasons.contains("has not been allowed to control VS Code"))
+        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// Safe mode asks before every action for a prefixed session exactly as for a planned one: a
+    /// capture review or an approval is parked before the first click.
+    @Test
+    func aPrefixedCommandInSafeModeAsksBeforeTheFirstAction() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("a parked question") {
+            fixture.viewModel.visionCapturePreview != nil || fixture.viewModel.approvalRequest != nil
+        }
+
+        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// The billing gate stands in front of a prefixed session: refused at the session's start,
+    /// nothing is clicked.
+    @Test
+    func aPrefixedCommandIsRefusedByTheBillingGateBeforeAnythingIsClicked() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#],
+            screenControlGate: ScriptedScreenControlGate(answers: [.refused(.allowanceExhausted)], thereafter: .refused(.allowanceExhausted))
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+        #expect(fixture.viewModel.errorMessage != nil || !fixture.viewModel.finalSummary.isEmpty)
+    }
+
+    /// The session brings the app the user was in back in front when it ends, and never the target:
+    /// the fake screen starts on another app, the session activates Safari to run, and the last
+    /// activation is the other app again.
+    @Test
+    func theSessionBringsThePreviousAppBackWhenItEnds() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"The reading list is tidy."}"#
+            ],
+            frontmost: "com.other.App"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let activations = fixture.synthesizer.events.compactMap { event -> String? in
+            if case .activated(let bundle) = event { return bundle } else { return nil }
+        }
+        #expect(activations.first == "com.apple.Safari")
+        #expect(activations.last == "com.other.App")
+        #expect(fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+    }
+
     private func makeFixture(
         replies: [String],
         mode: AgentInteractionMode = .normal,

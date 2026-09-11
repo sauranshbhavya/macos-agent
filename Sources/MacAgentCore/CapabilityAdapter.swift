@@ -151,6 +151,8 @@ public struct CapabilityExecutionContext {
     public var zipArchiver: any ZipArchiving
     public var documentConverter: any DocumentConverting
     public var browserOpener: any BrowserOpening
+    /// Puts the app the user was in back in front after an open (SONNY-451); see `FocusRestoring`.
+    public var focusRestorer: any FocusRestoring
     public var hackerNewsFetcher: any HackerNewsFetching
     /// The alias table — which names mean the same app. Not a roster of what may be opened; that
     /// question moved to `installedAppResolver` when C12 dissolved the launch allowlist (SONNY-82).
@@ -346,6 +348,11 @@ public struct CapabilityExecutionContext {
         installedAppResolver: any InstalledAppResolving,
         appSearchURLCatalog: AppSearchURLCatalog,
         appOpener: any AppOpening,
+        // Defaulted to the inert restorer, and that is the safe direction here unlike a store's
+        // default (SONNY-240): an inert restorer reads no frontmost app and moves none, so a
+        // fixture that says nothing cannot bring a real app forward on the developer's Mac. The
+        // shipping executor passes `FocusRestorer.forThisMac()` and a scan test pins that it does.
+        focusRestorer: any FocusRestoring = FocusRestorer.inert(),
         fileOpener: any FileOpening,
         mediaOpener: any MediaOpening,
         spotifyPlaybackProvider: any SpotifyPlaybackProviding,
@@ -396,6 +403,7 @@ public struct CapabilityExecutionContext {
         self.zipArchiver = zipArchiver
         self.documentConverter = documentConverter
         self.browserOpener = browserOpener
+        self.focusRestorer = focusRestorer
         self.hackerNewsFetcher = hackerNewsFetcher
         self.appCatalog = appCatalog
         self.installedAppResolver = installedAppResolver

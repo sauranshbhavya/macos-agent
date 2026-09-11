@@ -1,0 +1,74 @@
+# SONNY-451 — [s] at the start of a command routes it to screen use through the resolver, with the
+# app read from the command's words and checked against what is installed or asked for; and an
+# open_app, open_workspace or open_url step, and a screen-control session, bring the app the user
+# was in back in front when they are done. Property: the prefix is the first and only new door,
+# exact and case-insensitive; no app named is a clarification and its answer completes the
+# command; an open that moved the front restores it, on a throw too; a session restores the
+# previous app on every exit and never the target.
+# Killers expected (hand-traced; the founders' weekly battery measures): X1 by every
+# ScreenUsePrefixTests plan test; X2 by ScreenUsePrefixTests (thePrefixIsExactSpellingAndCaseInsensitive);
+# X3 by ScreenUsePrefixTests (noAppNamedAsksWhichAppAndTheAnswerCompletesTheCommand); X4 by
+# FocusRestorerTests (anOpenThatMovedTheFrontmostAppBringsItBack, anOpenThatThrowsStillBringsTheAppBackAndRethrows);
+# X5 by VisionSessionRunTests (theSessionBringsThePreviousAppBackWhenItEnds); X6 by
+# OpenStepsRestoreFocusTests (anAppOpenBringsThePreviousAppBack).
+
+>>> mutant X1 the prefix door removed: [s] falls through to the other doors and the planner
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        if let screenUse = screenUseResolution(in: command) {
+            return screenUse
+        }
+>>> to
+        if false, let screenUse = screenUseResolution(in: command) {
+            return screenUse
+        }
+>>> end
+
+>>> mutant X2 the prefix case-sensitive: [S] takes no door
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        guard command.lowercased().hasPrefix(Self.screenUsePrefix) else {
+>>> to
+        guard command.hasPrefix(Self.screenUsePrefix) else {
+>>> end
+
+>>> mutant X3 a clarification's answer no longer completes the command: the trailing words are not candidates
+>>> file Sources/MacAgentCore/InstantCommandResolver.swift
+>>> from
+        for length in stride(from: 3, through: 1, by: -1) where words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+>>> to
+        for length in stride(from: 3, through: 1, by: -1) where false && words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+>>> end
+
+>>> mutant X4 the restore after a completed open dropped
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        await restore(before, onRestore: onRestore)
+        return result
+>>> to
+        return result
+>>> end
+
+>>> mutant X5 the session restores the target instead of the app the user was in
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+        _ = await environment.synthesizer.activateApp(bundleIdentifier: previous)
+>>> to
+        _ = await environment.synthesizer.activateApp(bundleIdentifier: target.bundleIdentifier)
+>>> end
+
+>>> mutant X6 an app open no longer restores focus
+>>> file Sources/MacAgentCore/OpenAppCapabilityAdapter.swift
+>>> from
+        try await context.focusRestorer.restoringFocus(
+            onRestore: { log(.act, "Brought \($0.displayName) back in front") }
+        ) {
+            try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+        }
+>>> to
+        try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+>>> end

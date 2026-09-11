@@ -40,6 +40,11 @@ public struct InstantCommandResolver: Sendable {
             return nil
         }
 
+        // First, before every other door: the prefix is the user choosing the route (SONNY-451).
+        if let screenUse = screenUseResolution(in: command) {
+            return screenUse
+        }
+
         if let expression = prefixedCalculatorExpression(in: command) {
             guard !expression.isEmpty else {
                 return .clarify(calculatorClarificationPlan())
@@ -1087,4 +1092,158 @@ public struct InstantCommandResolver: Sendable {
         }
         return result
     }
+    // MARK: - Screen use by prefix (SONNY-451)
+
+    /// `[s]` at the start of a command routes it to screen use, whatever its wording (SONNY-451).
+    /// Exact spelling, case-insensitive, trimmed; the rest is the goal.
+    public static let screenUsePrefix = "[s]"
+
+    /// The words that introduce the app a screen-use request means: "archive every newsletter
+    /// **in** Mail", "make a note **on** Notes". The app after one is validated against what is
+    /// installed, so "in the morning" names no app and asks.
+    private static let screenUseAppPrepositions: Set<String> = ["in", "on", "to", "inside", "within", "using"]
+
+    /// The one door a prefixed command takes, first in `resolve`, and the reason it is first: the
+    /// prefix is the user saying which route to take, so `[s] 2 + 2` is a screen-use request about
+    /// a calculator app and not a sum for the calculator.
+    ///
+    /// The plan it builds is the same one-step `vision_session` plan the planner emits, entering
+    /// `VisionSessionCapabilityAdapter` by the same door: per-app consent in Normal mode, Safe mode
+    /// asking for everything, the billing gate, redaction, the tier-3 advisory and Ctrl-Opt-Esc all
+    /// stand in front of it, because nothing here is a gate — it is a route. No planner round trip,
+    /// so the route cannot be decided elsewhere.
+    private func screenUseResolution(in command: String) -> InstantCommandResolution? {
+        guard command.lowercased().hasPrefix(Self.screenUsePrefix) else {
+            return nil
+        }
+        let remainder = String(command.dropFirst(Self.screenUsePrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remainder.isEmpty else {
+            return .clarify(screenUseClarificationPlan(
+                id: "clarify-screen-use",
+                question: "What should Sonny do on screen, and in which app?"
+            ))
+        }
+        guard let app = screenUseApp(in: remainder) else {
+            return .clarify(screenUseClarificationPlan(
+                id: "clarify-screen-use-app",
+                question: "Which app should Sonny control for that?"
+            ))
+        }
+        // A remainder that is only the app's name carries no goal: `[s] Notes` asks what to do.
+        let bareName = remainder.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        guard bareName != app.displayName.lowercased() else {
+            return .clarify(screenUseClarificationPlan(
+                id: "clarify-screen-use-goal",
+                question: "What should Sonny do in \(app.displayName)?"
+            ))
+        }
+        return .plan(screenUsePlan(app: app.displayName, goal: remainder))
+    }
+
+    /// The installed app a screen-use request names, read from its own words in this order: the
+    /// app an `open X and …` opens; a leading `X: …`; the words after the last preposition that
+    /// introduces an app ("in Mail"); and the request's last words on their own, which is how a
+    /// clarification answer arrives — `ClarifiedCommand.completions` appends it. Every candidate is
+    /// checked against what is installed, longest first, and the first that resolves wins; none
+    /// resolving is a clarification, never a guess.
+    private func screenUseApp(in remainder: String) -> InstalledApp? {
+        for candidate in screenUseAppCandidates(in: remainder) {
+            if let app = installedAppResolver.resolve(candidate) {
+                return app
+            }
+        }
+        return nil
+    }
+
+    private func screenUseAppCandidates(in remainder: String) -> [String] {
+        let words = remainder.split(whereSeparator: \.isWhitespace).map(String.init)
+        var candidates: [String] = []
+
+        // `open X and …`, `open X, …`, `open X then …`
+        if words.count > 1, words[0].lowercased() == "open" {
+            var name: [String] = []
+            for word in words.dropFirst() {
+                let lowered = word.lowercased()
+                if lowered == "and" || lowered == "then" {
+                    break
+                }
+                let stripped = word.trimmingCharacters(in: CharacterSet(charactersIn: ",;"))
+                name.append(stripped)
+                if stripped != word {
+                    break
+                }
+            }
+            if !name.isEmpty {
+                candidates.append(name.joined(separator: " "))
+            }
+        }
+
+        // `X: …`
+        if let colon = remainder.firstIndex(of: ":") {
+            let head = remainder[..<colon].trimmingCharacters(in: .whitespaces)
+            if !head.isEmpty, head.split(whereSeparator: \.isWhitespace).count <= 3 {
+                candidates.append(head)
+            }
+        }
+
+        // `… in X`, `… on X, …`: the one to three words after each preposition, longest first,
+        // the last preposition first — "in Mail" at the end of a sentence is the ordinary case.
+        for index in words.indices.reversed() where Self.screenUseAppPrepositions.contains(words[index].lowercased()) {
+            for length in stride(from: 3, through: 1, by: -1) {
+                let end = index + length
+                guard end < words.count + 0, end <= words.count - 1 + 1, index + 1 + length <= words.count else {
+                    continue
+                }
+                let tail = words[(index + 1)..<(index + 1 + length)]
+                candidates.append(Self.screenUseName(from: tail))
+            }
+        }
+
+        // The request's own last words: a clarification answer, or a sentence that simply ends
+        // with the app.
+        for length in stride(from: 3, through: 1, by: -1) where words.count >= length {
+            candidates.append(Self.screenUseName(from: words.suffix(length)))
+        }
+
+        return candidates.filter { !$0.isEmpty }
+    }
+
+    private static func screenUseName(from words: ArraySlice<String>) -> String {
+        words
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ",.;:!?")) }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func screenUsePlan(app: String, goal: String) -> AgentPlan {
+        var step = AgentStep(
+            id: "screen-use",
+            operation: .visionSession,
+            description: "Control \(app) on screen to \(goal).",
+            appName: app
+        )
+        step.visionGoal = goal
+        return AgentPlan(
+            summary: "Control \(app) on screen: \(goal)",
+            requiresConfirmation: false,
+            steps: [step]
+        )
+    }
+
+    private func screenUseClarificationPlan(id: String, question: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Clarification needed.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: id,
+                    operation: .clarify,
+                    description: "Ask what to do on screen.",
+                    question: question
+                )
+            ]
+        )
+    }
+
 }

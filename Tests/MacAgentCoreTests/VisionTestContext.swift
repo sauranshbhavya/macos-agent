@@ -15,19 +15,25 @@ import MacAgentTestSupport
 enum VisionTestContext {
     static func make(
         installed: [InstalledApp],
-        vision: VisionSessionEnvironment? = nil
+        vision: VisionSessionEnvironment? = nil,
+        appOpener: any AppOpening = WorkspaceAppOpener(),
+        browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
+        focusRestorer: any FocusRestoring = FocusRestorer.inert()
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
             whitelist: PathWhitelist(),
             inventory: FileInventory(),
             zipArchiver: ProcessZipArchiver(),
             documentConverter: AutoDocumentConverter(),
-            browserOpener: WorkspaceBrowserOpener(),
+            browserOpener: browserOpener,
             hackerNewsFetcher: HackerNewsAPIClient(),
             appCatalog: .default,
             installedAppResolver: InstalledAppResolver(source: FixedAppSource(installed)),
             appSearchURLCatalog: .default,
-            appOpener: WorkspaceAppOpener(),
+            appOpener: appOpener,
+            // Inert unless a test passes its own (SONNY-451): the real one reads this Mac's frontmost
+            // app and would bring it forward from inside a test.
+            focusRestorer: focusRestorer,
             fileOpener: WorkspaceFileOpener(),
             mediaOpener: NativeMediaOpener(),
             spotifyPlaybackProvider: UnavailableSpotifyPlaybackProvider(),

@@ -4800,6 +4800,38 @@ the app you name; if Sonny asks for that permission first, grant it and carry on
       one cover the other, is the pill still readable and clickable? There is no expected answer
       here; this row exists because no one has looked.
 
+### Screen use by the [s] prefix, and opening apps without stealing focus (new 2026-09-11, SONNY-451)
+
+Typing `[s]` at the start of a command makes screen use the route for that command, whatever its
+wording; the app is read from the command's own words, and Sonny asks which app when none is
+named. Separately, an open (an app, a workspace, a URL) puts the app you were working in back in
+front once it has finished, and a screen-control session does the same when it ends or pauses.
+Signed in, gateway up, screen control allowed for the account.
+
+- [ ] `[s] open Notes and make a note called wave 7`: a screen-control session starts in Notes
+      straight away — no planner round trip (the Tasks page's plan shows one `vision_session`
+      step, appName Notes). In Normal mode with Notes not yet allowed, Sonny asks to control Notes
+      first, exactly as a planned session does; in Safe mode it asks before every action.
+- [ ] The same command without `[s]`: behaves exactly as before this branch (the planner decides).
+- [ ] `[s] make a note called wave 7`: Sonny asks "Which app should Sonny control for that?";
+      answer `Notes`; the session starts in Notes.
+- [ ] `[s] archive every newsletter in Mail` and `[S] Notes: make a note`: both start a session in
+      the named app; `[s]` alone asks what to do and in which app; `[s] Notes` asks what to do in
+      Notes.
+- [ ] With screen control's allowance exhausted (or the account signed out), `[s] …` is refused
+      by the same billing gate a planned session meets, before anything is clicked.
+- [ ] Press Ctrl-Opt-Esc during a `[s]` session: it stops exactly as any session does.
+- [ ] Type in another app (TextEdit, a document open), then run `open workspace test` from the
+      widget: the workspace's apps and pages open, and once they have, TextEdit is back in front
+      with the cursor where it was. The task's trace (Command Center › Tasks) reads "Brought TextEdit
+      back in front".
+- [ ] The same with `open Safari` and with `open https://example.com`: each opens and hands focus
+      back. With Safari already in front, `open https://example.com` moves nothing.
+- [ ] Start a `[s]` session and, while it runs, do not touch the keyboard: the controlled app stays
+      in front for the whole session; when the session ends, the app you were in beforehand comes
+      back. Lock the screen mid-session and unlock: while the session waited, your app was in front;
+      on Resume the controlled app comes forward again and the session continues.
+
 ## 8. How to report back
 
 For each real finding, give me:

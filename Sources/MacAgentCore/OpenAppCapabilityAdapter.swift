@@ -98,7 +98,13 @@ public struct OpenAppCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan, context: context)
         log(.act, "Opening \(spec.app.displayName)")
-        try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+        // The app the user was in comes back in front once the open has completed (SONNY-451):
+        // opening is a background step, not a request to switch.
+        try await context.focusRestorer.restoringFocus(
+            onRestore: { log(.act, "Brought \($0.displayName) back in front") }
+        ) {
+            try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+        }
         log(.summarize, "Opened \(spec.app.displayName)")
         // Says "app" explicitly: a saved workspace can share a name with an app (a workspace called
         // "Slack"), and a bare "Opened Slack." left the user unable to tell which one actually ran.

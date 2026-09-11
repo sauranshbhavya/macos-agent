@@ -591,6 +591,7 @@ final class AgentViewModel: ObservableObject {
     private let fileOpener: any FileOpening
     private let mediaOpener: any MediaOpening
     private let runningAppSwitcher: any RunningAppSwitching
+    private let focusRestorer: any FocusRestoring
     private let shortcutInvoker: any ShortcutInvoking
     private let finderContextReader: any FinderContextReading
     private let documentConverter: any DocumentConverting
@@ -1288,6 +1289,9 @@ final class AgentViewModel: ObservableObject {
         finderRevealer: @escaping @MainActor @Sendable ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
+        // The real restorer, on the switcher's precedent one line up (SONNY-451): the shipping app
+        // says nothing and gets Launch Services; a fixture that cares passes its own.
+        focusRestorer: any FocusRestoring = FocusRestorer.forThisMac(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
         documentConverter: any DocumentConverting = AutoDocumentConverter(),
@@ -1381,6 +1385,7 @@ final class AgentViewModel: ObservableObject {
         self.finderRevealer = finderRevealer
         self.mediaOpener = mediaOpener
         self.runningAppSwitcher = runningAppSwitcher
+        self.focusRestorer = focusRestorer
         self.shortcutInvoker = shortcutInvoker
         self.finderContextReader = finderContextReader
         self.documentConverter = documentConverter
@@ -6316,6 +6321,7 @@ final class AgentViewModel: ObservableObject {
             clipboardHistoryStore: clipboardHistoryMonitor.historyStore,
             snippetStore: snippetStore,
             runningAppSwitcher: runningAppSwitcher,
+            focusRestorer: focusRestorer,
             recentArtifactStore: recentArtifactStore,
             shortcutCatalog: shortcutCatalog,
             shortcutInvoker: shortcutInvoker,

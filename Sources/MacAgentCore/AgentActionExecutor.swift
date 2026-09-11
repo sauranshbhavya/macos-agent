@@ -138,6 +138,7 @@ public final class AgentActionExecutor {
     private let clipboardHistoryStore: ClipboardHistoryStore
     private let snippetStore: SnippetStore
     private let runningAppSwitcher: any RunningAppSwitching
+    private let focusRestorer: any FocusRestoring
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
     private let shortcutInvoker: any ShortcutInvoking
@@ -188,6 +189,9 @@ public final class AgentActionExecutor {
         clipboardHistoryStore: ClipboardHistoryStore,
         snippetStore: SnippetStore,
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
+        // Inert by default (SONNY-451): a fixture that never heard of focus restore neither reads
+        // the developer's frontmost app nor activates one; `AgentViewModel` passes the real one.
+        focusRestorer: any FocusRestoring = FocusRestorer.inert(),
         recentArtifactStore: RecentArtifactStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
@@ -237,6 +241,7 @@ public final class AgentActionExecutor {
         self.clipboardHistoryStore = clipboardHistoryStore
         self.snippetStore = snippetStore
         self.runningAppSwitcher = runningAppSwitcher
+        self.focusRestorer = focusRestorer
         self.recentArtifactStore = recentArtifactStore
         self.shortcutCatalog = shortcutCatalog
         self.shortcutInvoker = shortcutInvoker
@@ -1992,6 +1997,7 @@ public final class AgentActionExecutor {
             installedAppResolver: installedAppResolver,
             appSearchURLCatalog: appSearchURLCatalog,
             appOpener: appOpener,
+            focusRestorer: focusRestorer,
             fileOpener: fileOpener,
             mediaOpener: mediaOpener,
             spotifyPlaybackProvider: spotifyPlaybackProvider,
