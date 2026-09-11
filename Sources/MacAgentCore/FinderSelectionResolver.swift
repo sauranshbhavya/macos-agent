@@ -1,13 +1,42 @@
 import Foundation
 
+/// One selected Finder item, twice: as Finder reported it and as the whitelist resolved it
+/// (SONNY-441, PR #228's F2). The two differ for a symbolic link (Finder names the link, the
+/// whitelist follows it to the target) and for a name with a trailing space (the whitelist trims
+/// the path it checks). What the user reads is the item they selected; what the run acts on is
+/// the whitelisted path, exactly as before.
+public struct FinderSelectedItem: Equatable, Sendable {
+    public let selected: URL
+    public let whitelisted: URL
+
+    public init(selected: URL, whitelisted: URL) {
+        self.selected = selected
+        self.whitelisted = whitelisted
+    }
+
+    /// The name Finder shows for this item.
+    public var name: String {
+        selected.lastPathComponent
+    }
+}
+
 public enum FinderSelectionResolver {
+    /// Every selected item, each checked against the whitelist; a single item outside it throws,
+    /// as `whitelistedSelection` always has.
+    public static func whitelistedItems(
+        whitelist: PathWhitelist,
+        finderContextReader: any FinderContextReading
+    ) throws -> [FinderSelectedItem] {
+        try finderContextReader.selectedItems().map { url in
+            FinderSelectedItem(selected: url, whitelisted: try whitelist.validateInsideWhitelist(url.path))
+        }
+    }
+
     public static func whitelistedSelection(
         whitelist: PathWhitelist,
         finderContextReader: any FinderContextReading
     ) throws -> [URL] {
-        try finderContextReader.selectedItems().map { url in
-            try whitelist.validateInsideWhitelist(url.path)
-        }
+        try whitelistedItems(whitelist: whitelist, finderContextReader: finderContextReader).map(\.whitelisted)
     }
 
     public static func selectedDirectoryPath(

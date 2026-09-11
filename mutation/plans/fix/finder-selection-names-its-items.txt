@@ -1,12 +1,15 @@
 # SONNY-441 — a Finder-selection result names its items. Property: every item up to the limit is
-# named by file name, in order, and past the limit the rest is counted.
-# Killers expected: FinderSelectionSummaryTests (all four), AgentRunnerTests
-# (finderSelectionTierZeroAutoRunsWithoutApprovalDecision, for F1 and F3).
+# named by the name Finder shows, in order, behind the total when there is more than one; past the
+# limit, or past the character budget that keeps the sentence on the widget's three lines, the rest
+# is counted; the first item is always named.
+# Killers expected: FinderSelectionSummaryTests (F1, F2, F3, F5, F6, F7),
+# AgentRunnerTests.finderSelectionTierZeroAutoRunsWithoutApprovalDecision (F1 and F3),
+# FinderSelectionSentenceFitsTheWidgetTests (F5).
 
 >>> mutant F1 the names dropped: the sentence counts again
 >>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
 >>> from
-        return "Selected in Finder: \(shown.joined(separator: ", "))\(remainder)."
+        return opening + shown.joined(separator: ", ") + remainder(names.count - shown.count) + "."
 >>> to
         return "Selected in Finder: \(names.count) item(s)."
 >>> end
@@ -22,7 +25,43 @@
 >>> mutant F3 the whole path named instead of the file name
 >>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
 >>> from
-        let names = items.map(\.lastPathComponent)
+        sentence(naming: items.map(\.lastPathComponent))
 >>> to
-        let names = items.map(\.path)
+        sentence(naming: items.map(\.path))
+>>> end
+
+>>> mutant F4 the condition alone off by one: the sixth item is named and only seven or more are counted (PR #228's F3)
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+        for name in names where shown.count < namedItemLimit {
+>>> to
+        for name in names where shown.count < namedItemLimit + 1 {
+>>> end
+
+>>> mutant F5 the budget ignored: long names run past the widget's three lines (PR #228's F1)
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+            if !shown.isEmpty, whole.count > characterBudget {
+>>> to
+            if false, !shown.isEmpty, whole.count > characterBudget {
+>>> end
+
+>>> mutant F6 the count no longer leads: a clipped panel loses it (PR #228's F1)
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+        let opening = "\(names.count) selected in Finder: "
+>>> to
+        let opening = "Selected in Finder: "
+>>> end
+
+>>> mutant F7 the whitelisted path named instead of the selected item: a link reads as its target (PR #228's F2)
+>>> file Sources/MacAgentCore/FinderSelectionResolver.swift
+>>> from
+    public var name: String {
+        selected.lastPathComponent
+    }
+>>> to
+    public var name: String {
+        whitelisted.lastPathComponent
+    }
 >>> end
