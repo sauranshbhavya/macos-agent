@@ -6,7 +6,8 @@ import { creditBalance, type CreditBalance } from "../credit/balance.js";
 import type { CreditCatalogue } from "../credit/catalogue.js";
 import type { CreditFacts, CreditStore } from "../credit/store.js";
 import { attemptTopUp, type TopUpDeps, type TopUpRefusal } from "../credit/topup.js";
-import { DEADLINE_MS } from "../model/limits.js";
+import { ACCOUNT_DEADLINE_MS, DEADLINE_MS } from "../model/limits.js";
+import { sendUpstreamFailure, underTotalDeadline } from "../model/routing.js";
 
 /**
  * `GET /v1/account/credits` — **the one number a user tracks**, served (SONNY-212) — and the two
@@ -56,6 +57,18 @@ import { DEADLINE_MS } from "../model/limits.js";
  * Mac mints a fresh key per attempt and marks the request not retry-safe, which is
  * `verifyEmailCode`'s pairing and for its reason — a call that spends something the user cannot get
  * back should be made once.
+ *
+ * ## The read and the setting run under §12's last row's total; the charge does not (SONNY-434)
+ *
+ * The `GET` and the `PUT` wait on the database and nothing else, and the store leases its own
+ * connections, so each handler runs its store calls inside `underTotalDeadline`: one budget for the
+ * whole handler, carried to every lease it takes — the `PUT` takes two, its write and the re-read it
+ * answers with. A statement cancelled inside it answers `504 provider.timeout`, retryable, which is
+ * honest for both: the read costs nothing to repeat, and the setting is idempotent — a retry writes
+ * the same value again. The charge below is on §12's own `topUp` row with `withinTotalDeadline`,
+ * and its reads before and after the charge deliberately stay on the pool's per-statement bound,
+ * because its deadline answers `topup.unconfirmed` and a second bound with a different answer on
+ * the same handler would be two promises about one request.
  */
 export interface CreditRouteDeps {
   readonly store: CreditStore;
@@ -350,7 +363,13 @@ export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps
     // One clock read for the whole response, so the period whose draw is counted is the period
     // reported, and the grace window is judged at the same instant both.
     const at = now();
-    const { facts, balance } = await position(caller.accountId, at);
+    let read;
+    try {
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+    } catch (error) {
+      return sendUpstreamFailure(request, reply, error);
+    }
+    const { facts, balance } = read;
     return reply.send(creditsBody(balance, facts, deps.catalogue, topUpConfigured));
   });
 
@@ -367,11 +386,20 @@ export function registerCreditRoutes(app: FastifyInstance, deps: CreditRouteDeps
         );
     }
     const at = now();
-    await deps.store.setAutoTopUp(caller.accountId, parsed.data.enabled, at);
-    // **Answered with the whole position rather than with an acknowledgement**, so the app's toggle
-    // and the number above it can never be one request apart: the surface that shows the setting
-    // shows the allowance beside it, and two reads is two chances for them to disagree.
-    const { facts, balance } = await position(caller.accountId, at);
+    let read;
+    try {
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, async () => {
+        await deps.store.setAutoTopUp(caller.accountId, parsed.data.enabled, at);
+        // **Answered with the whole position rather than with an acknowledgement**, so the app's
+        // toggle and the number above it can never be one request apart: the surface that shows
+        // the setting shows the allowance beside it, and two reads is two chances for them to
+        // disagree. Inside the same budget as the write, so the two leases share §12's total.
+        return position(caller.accountId, at);
+      });
+    } catch (error) {
+      return sendUpstreamFailure(request, reply, error);
+    }
+    const { facts, balance } = read;
     request.log.info(
       { accountId: caller.accountId, optedIn: facts.autoTopUpOptedInAt !== null },
       "auto top-up setting",

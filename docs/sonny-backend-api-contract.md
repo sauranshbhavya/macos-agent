@@ -1993,16 +1993,31 @@ safe to repeat.
 **Two routes the row names are still deliberately not wired, each for its own reason** (SONNY-425).
 `GET /v1/health` and `GET /v1/meta` await nothing at all — no database, no provider, no network — so
 a deadline around either is a timer that cannot fire, and the row's numbers are true of them only in
-the sense that any bound is. **Three of the four `/v1/account/*` routes remain owed**: they wait on
-the database rather than on a provider, and **the pool now bounds every statement they issue** — the
-paragraph below is that bound, and it replaces this sentence's own former claim that this gateway set
-no statement timeout on the pool. What they are still owed is the *total* half of this row, because a
-per-statement bound cannot stop several statements summing past 15 s, and that is **SONNY-434**. What
-SONNY-428 did is narrower and composes with it: a per-statement budget four routes set for their own
-work, on top of a pool-wide default that is restored the moment they clear it — **not the tighter of
-the two winning**, because the innermost `SET` governs in either direction, which the paragraph below
+the sense that any bound is.
+
+**Three of the four `/v1/account/*` routes are wired now, by a third shape** (SONNY-434).
+`GET /v1/account/entitlements`, `GET /v1/account/credits` and `PUT /v1/account/credits/auto-top-up`
+wait on the database rather than on a provider, and the pool bounds every statement they issue — the
+paragraph below is that bound. What they were owed until this ticket was the *total* half of this
+row, because a per-statement bound cannot stop several statements summing past 15 s. They could not
+take the deletion routes' wrapper: their stores lease connections *internally* (SONNY-300's seam), so
+the handler never holds a client to wrap, and the read behind `GET /v1/account/credits` is six
+statements on one lease. So the handler declares §12's total for its request, and every lease its
+stores take inside it reads what is left of that budget and hands it to the same per-statement
+`statement_timeout` the deletion routes use — one budget for the whole handler, across however many
+leases it takes. The consent switch takes two, its write and the re-read it answers with, and a
+budget per lease would have been thirty seconds wearing this row's fifteen. A statement cancelled
+inside it answers `504 provider.timeout`, retryable, and that is honest for all three: the two reads
+cost nothing to repeat, and the setting is idempotent — a retry writes the same value again. **Outside
+a declared budget nothing changed**: the gate's own admit and settle on the same entitlement store,
+and the charge route's reads on the same credit store, stay on the pool's per-statement bound, because
+`POST /v1/account/credits/top-up` has its own row above and its own answer when that elapses, and a
+second bound with a different answer on the same handler would be two promises about one request.
+What SONNY-428 did composes with it: a per-statement budget the routes set for their own work, on top
+of a pool-wide default that is restored the moment they clear it — **not the tighter of the two
+winning**, because the innermost `SET` governs in either direction, which the paragraph below
 measures. **The fourth was `POST /v1/account/credits/top-up`, which is nothing of the kind — it
-charges at the payment provider — and it has its own row above now** (SONNY-430).
+charges at the payment provider — and it has its own row above** (SONNY-430).
 
 **The top-up row, and why its numbers are what they are** (SONNY-430). The charge is a draft order
 and then a finalize, each bounded at twelve seconds inside `server/src/billing/polar.ts`, so the
@@ -2049,7 +2064,8 @@ that other end of the same stall and is not discharged by this.
 
 **What it bounds is a statement, and saying so precisely matters twice.** It cannot bound
 *composition* — a handler issuing several statements can still sum past this row's `total`, which is
-the paragraph above's SONNY-434 — and it cannot bound a transaction sitting *idle* between
+what SONNY-434 closes for the three account routes above and what stays true of every route that
+declares no budget of its own — and it cannot bound a transaction sitting *idle* between
 statements, which is a different setting and a different failure. What it does bound is the one thing
 nothing else could: a single statement, including one queued behind another connection's lock, which
 is where a migration's `ACCESS EXCLUSIVE` puts every reader.

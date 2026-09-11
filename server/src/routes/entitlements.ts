@@ -5,6 +5,8 @@ import {
   type EntitlementSigningKey,
 } from "../entitlement/claim.js";
 import { claimFactsFor, type EntitlementStore } from "../entitlement/store.js";
+import { ACCOUNT_DEADLINE_MS } from "../model/limits.js";
+import { sendUpstreamFailure, underTotalDeadline } from "../model/routing.js";
 
 /**
  * `GET /v1/account/entitlements` — contract §5.3 (SONNY-135).
@@ -23,6 +25,11 @@ import { claimFactsFor, type EntitlementStore } from "../entitlement/store.js";
  * it opens no provider call: charging a user for asking what they are allowed would make the check
  * that keeps them working the thing that runs them out. It *is* rate limited, along with every other
  * authenticated route, because a leaked token hammering it still costs the founder a database.
+ *
+ * **Bounded by §12's last row's total, as a request-scoped budget** (SONNY-434). The store leases
+ * its own connection, so the handler has nothing to wrap; `underTotalDeadline` carries the budget to
+ * that lease, and a read cancelled inside it answers §7.2's `504 provider.timeout`, retryable — it
+ * is a read, and repeating it costs nothing. `model/routing.ts` carries the reasoning.
  */
 export interface EntitlementRouteDeps {
   readonly store: EntitlementStore;
@@ -36,7 +43,16 @@ export function registerEntitlementRoutes(app: FastifyInstance, deps: Entitlemen
 
   app.get("/v1/account/entitlements", async (request, reply) => {
     const caller = callerOf(request);
-    const record = await deps.store.entitlementFor(caller.accountId);
+    let record;
+    try {
+      record = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () =>
+        deps.store.entitlementFor(caller.accountId),
+      );
+    } catch (error) {
+      // §7.2 case 5a through the shared mapper; anything it does not recognise is rethrown to the
+      // root error handler, so a bug here is a logged 500 and never a dressed-up timeout.
+      return sendUpstreamFailure(request, reply, error);
+    }
     // One clock read for the whole response: the instant that decides whether a grace window has
     // closed is the same instant the claim is issued at, so a claim cannot be minted as entitled and
     // stamped a millisecond later as if it were not.

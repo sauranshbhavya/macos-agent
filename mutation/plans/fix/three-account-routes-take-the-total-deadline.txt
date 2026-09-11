@@ -1,0 +1,67 @@
+# SONNY-434 — the three database-bound account routes run under §12's last row's total as one
+# request-scoped budget every lease their stores take reads. Property: a statement cancelled inside
+# the budget answers 504 provider.timeout; the budget handed to Postgres is the row's total minus
+# what elapsed, across every lease in the handler; outside a declared budget a lease is untouched.
+#
+# SERVER HALF. The suite that kills these is vitest, not the flagged swift test, so this plan is run as
+#   MUTATE_TEST_CMD='cd server && npx vitest run test/account-deadline.test.ts' scripts/mutate mutation/plans/fix/three-account-routes-take-the-total-deadline.txt
+# scripts/mutate-all runs every plan under the one suite command it is given, so a weekly battery
+# that runs this plan under the default Swift command reports every mutant here SURVIVED without a
+# test having seen it (SONNY-455 records the gap).
+#
+# Killers expected, all in test/account-deadline.test.ts: M1 by the entitlements route test; M2 by the
+# credits GET route test; M3 by the consent PUT route test's band assertion; M4 by the two-leases
+# test and the per-lease unit test; M5 by the refuses-before-leasing unit test; M6 by the bare-lease
+# unit test and the charge-route decision test.
+
+>>> mutant M1 the entitlement read runs under no budget
+>>> file server/src/routes/entitlements.ts
+>>> from
+      record = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () =>
+        deps.store.entitlementFor(caller.accountId),
+      );
+>>> to
+      record = await deps.store.entitlementFor(caller.accountId);
+>>> end
+
+>>> mutant M2 the credits read runs under no budget
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+>>> to
+      read = await position(caller.accountId, at);
+>>> end
+
+>>> mutant M3 the consent switch takes a minute instead of the row's total
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, async () => {
+>>> to
+      read = await underTotalDeadline({ total: 60_000 }, async () => {
+>>> end
+
+>>> mutant M4 every lease starts the total afresh instead of reading what is left
+>>> file server/src/model/routing.ts
+>>> from
+    const remaining = request.expiresAt - Date.now();
+>>> to
+    const remaining = 15_000;
+>>> end
+
+>>> mutant M5 a budget of exactly nothing still takes a connection
+>>> file server/src/model/routing.ts
+>>> from
+    if (remaining <= 0) throw new ProviderTimedOut("the route's total deadline elapsed");
+>>> to
+    if (remaining < 0) throw new ProviderTimedOut("the route's total deadline elapsed");
+>>> end
+
+>>> mutant M6 a lease outside any declared budget is bounded anyway, widening routes the ticket never named
+>>> file server/src/model/routing.ts
+>>> from
+    if (request === undefined) return withConnection(work);
+>>> to
+    if (request === undefined) {
+      return withConnection((client) => withDatabaseDeadline({ total: 15_000 }, client, work));
+    }
+>>> end

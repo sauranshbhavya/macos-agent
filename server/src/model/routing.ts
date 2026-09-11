@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type pg from "pg";
+import type { WithConnection } from "../db/connection.js";
 import { errorBody } from "../errors.js";
 import { ProviderRejected, ProviderTimedOut, ProviderUnavailable } from "./upstream.js";
 
@@ -226,4 +228,55 @@ export async function withDatabaseDeadline<T>(
       }
     }
   }
+}
+
+/**
+ * §12's total deadline for the request under way, carried to every lease a handler's stores take
+ * (SONNY-434).
+ *
+ * **Why a request scope and not a wrapper at the route, which is what the four content-deletion
+ * routes have.** Those handlers lease a connection themselves and hand the bounded client to store
+ * functions that take one. The three account routes — `GET /v1/account/entitlements`, and the read
+ * and the consent switch in `routes/credits.ts` — never hold a client: `EntitlementStore` and
+ * `CreditStore` lease *internally* by construction, which is SONNY-300's seam and the reason their
+ * transactions cannot be merged with anything. So the handler has no client to wrap, and the
+ * alternative — a store built per request over one leased client — reshapes every store factory and
+ * every fixture that constructs one. This leaves both stores exactly as they are and puts the budget
+ * where the lease is taken: `underTotalDeadline` starts the request's budget, and the `WithConnection`
+ * `leasingUnderTotalDeadline` returns reads what is left of it before each lease and hands that to
+ * `withDatabaseDeadline`, whose per-statement `SET statement_timeout` is the instrument SONNY-428
+ * built and PR #212's F1 requires. One budget for the whole handler, however many leases it takes —
+ * the consent switch takes two, its write and the re-read it answers with, and a per-lease budget
+ * would have been thirty seconds wearing §12's fifteen.
+ *
+ * **Outside a declared deadline nothing changes, and that is the property rather than a fallback.**
+ * A lease taken by anything that did not call `underTotalDeadline` — the gate's admit and settle on
+ * the same `EntitlementStore`, the top-up charge's reads on the same `CreditStore`, which has §12's
+ * own row and its own answer when its deadline elapses — goes through untouched and stays on the
+ * pool's per-statement bound (SONNY-427). A wrapper that widened every lease to fifteen seconds
+ * would have loosened routes this ticket never named.
+ *
+ * **A budget already spent refuses before the lease, not after it.** The wrapper refuses the first
+ * statement of an exhausted budget without a round trip; refusing here as well means an exhausted
+ * request does not take a pooled connection to be told no.
+ */
+const totalDeadlineOfThisRequest = new AsyncLocalStorage<{ readonly expiresAt: number }>();
+
+/** Run `work` as one request under `deadline.total`; every lease inside it shares that budget. */
+export function underTotalDeadline<T>(
+  deadline: { readonly total: number },
+  work: () => Promise<T>,
+): Promise<T> {
+  return totalDeadlineOfThisRequest.run({ expiresAt: Date.now() + deadline.total }, work);
+}
+
+/** `withConnection`, bounding each lease by what is left of the request's budget — if it has one. */
+export function leasingUnderTotalDeadline(withConnection: WithConnection): WithConnection {
+  return async <T>(work: (client: pg.Client) => Promise<T>): Promise<T> => {
+    const request = totalDeadlineOfThisRequest.getStore();
+    if (request === undefined) return withConnection(work);
+    const remaining = request.expiresAt - Date.now();
+    if (remaining <= 0) throw new ProviderTimedOut("the route's total deadline elapsed");
+    return withConnection((client) => withDatabaseDeadline({ total: remaining }, client, work));
+  };
 }

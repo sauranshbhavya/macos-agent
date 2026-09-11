@@ -4588,6 +4588,23 @@ were fetched. Signed in, gateway up.
 - [ ] `summarize https://simonwillison.net/2006/Dec/19/botbouncer/ and save it as Markdown` (an LF
       site that allows the page): a real note, as before.
 
+### Three account routes take §12's total deadline (new 2026-09-11, SONNY-434)
+
+`GET /v1/account/entitlements`, `GET /v1/account/credits` and `PUT /v1/account/credits/auto-top-up`
+now run their database work under §12's last row's 15 s total, carried to every lease their stores
+take. Server half only; nothing on the Mac changes. Needs a lane database (`CLAUDE.md`'s recipe), a
+signed-in access token, and `psql` on that database.
+
+- [ ] In one `psql` session: `BEGIN; LOCK TABLE sonny.entitlement IN ACCESS EXCLUSIVE MODE;` and
+      leave it open. Then `curl -i -H "Authorization: Bearer <token>" http://localhost:<port>/v1/account/entitlements`:
+      a `504` with `"code":"provider.timeout"` and `"retryable":true`, after about 15 s (the route's
+      own budget, not the pool's 10 s — the innermost `SET` governs). `ROLLBACK;` in psql, repeat
+      the curl: `200` with the claim, as before.
+- [ ] The same lock held, `curl -i -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"enabled":true}' http://localhost:<port>/v1/account/credits/auto-top-up`:
+      the same `504`; after `ROLLBACK;`, `200` with the whole position and `"opted_in":true`.
+- [ ] With no lock held, `GET /v1/account/credits` answers `200` in well under a second: the budget
+      costs one extra round trip per statement and nothing a person can notice.
+
 ## 8. How to report back
 
 For each real finding, give me:
