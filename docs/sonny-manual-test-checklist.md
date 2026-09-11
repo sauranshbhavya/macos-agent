@@ -878,7 +878,9 @@ it feels confusing in practice, not just whether it's "technically correct."
       tracker #23).** Force a real, retryable task failure in the widget and then leave it alone for
       ~6+ seconds without touching anything. Confirm the failure banner actually clears itself back to
       idle in one shot (collapse + clear now happen at the same 6s mark — this replaced the earlier
-      two-timer version that needed 2+ compacts to fully clear). Separately, trigger a *configuration*
+      two-timer version that needed 2+ compacts to fully clear). **Note added 2026-09-11 (SONNY-446):**
+      an outcome the widget is showing clears after about twenty seconds now, not six; the six is
+      idle's, and the SONNY-445/446 section is the row for it. Separately, trigger a *configuration*
       error instead and confirm THAT one does **not** auto-clear — it should keep saying so
       indefinitely until you actually fix it. (**The example this row used to give — "something
       producing `OPENAI_API_KEY is not set…`" — is no longer reachable as of 2026-08-27, SONNY-130**:
@@ -4469,10 +4471,17 @@ collapsed, which is to say cleared, a result before it could be read. An outcome
 seconds now; idle still collapses after six.
 
 - [ ] `zip my largest files` (answer `~/Desktop` if asked): the result shows the chip with the
-      zip's real icon, name, size and "Modified" date; compare with Get Info; Open opens the zip.
+      zip's real icon, name, size and "Modified" date; compare with Get Info. Open hands the zip to
+      Archive Utility, which extracts it: an uncompressed copy of the zipped files appears in a
+      folder beside the zip (the founders' decision of 2026-09-11; nothing is overwritten and
+      nothing asks). `show me the zip in Finder` reveals the zip.
 - [ ] Leave that result alone: it is still there at fifteen seconds and gone at about twenty-five.
 - [ ] `calc 2*2`: the same twenty-second stay. Then leave the widget idle with nothing typed: it
       collapses to the capsule after about six to eight seconds, as before.
+- [ ] With the widget open, start a quick run from Command Center (Tasks › Run again on `calc 2*2`,
+      or a routine row): the widget shows only its composer, and it collapses after about six
+      seconds, not twenty — the twenty is for a result the widget is showing (PR #231's fresh
+      review, F2).
 - [ ] A failure ("Sonny couldn't finish this one." with the gateway stopped) stays about twenty
       seconds and then clears; a notified outcome (a failure while you work in another app) still
       holds until you retry or submit another command, the two doors that clear it (as before —

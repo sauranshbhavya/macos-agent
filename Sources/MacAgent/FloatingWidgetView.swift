@@ -389,8 +389,8 @@ struct FloatingWidgetView: View {
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
             // An outcome the user was notified about does not collapse (SONNY-121). They were
-            // working somewhere else when it happened, so the six-second timer measures how long
-            // they have been *away*, not how long they have had to read it. Returning `false` here
+            // working somewhere else when it happened, so the outcome's timer would measure how
+            // long they have been *away*, not how long they have had to read it. Returning `false` here
             // also stops the clear: `scheduleAutoDismissIfNeeded` returns before arming the timer.
             //
             // Only `.failure` can currently be notified — the marker is set when an error
@@ -447,7 +447,7 @@ struct FloatingWidgetView: View {
         // `WidgetAutoCollapseDelay` holds both and their order; `isCollapsible` above has already
         // said this state has a clock, so a `nil` here is a state the two disagree about and the
         // safe answer is to leave it alone.
-        guard let delay = WidgetAutoCollapseDelay.delay(for: state) else {
+        guard let delay = WidgetAutoCollapseDelay.delay(for: state, showsPanel: showsPanel) else {
             isCompact = false
             return
         }
