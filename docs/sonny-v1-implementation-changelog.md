@@ -171,6 +171,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/switching-apps-from-the-background
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-440** (switching to a running app failed whenever Sonny was not the active app: "Could not switch to Google Chrome." with Chrome running — the founders' pass, test 20). The wave 7 overnight session (run log SONNY-438), second branch of its chain, cut from `fix/clipboard-history-records-without-a-notice` at `96465c77`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: none new; the instant `switch to` command and screen control's target activation keep their contracts.
+Files changed:
+- `Sources/MacAgentCore/RunningAppService.swift` — `RunningApp` carries `bundleURL`; `RunningAppActivation.activate(bundleURL:)` brings an app forward through Launch Services; `WorkspaceRunningAppSwitcher` takes its process list and its activation as seams with `forThisMac()` naming the real two, and no defaults
+- `Sources/MacAgentCore/ScreenActionSynthesizer.swift` — `SystemScreenActionSynthesizer.activateApp` takes the same route
+- `Sources/MacAgent/AgentViewModel.swift`, `Sources/MacAgentCore/AgentActionExecutor.swift` — the two shipping construction sites read `WorkspaceRunningAppSwitcher.forThisMac()`
+- `Tests/MacAgentCoreTests/RunningAppSwitcherTests.swift` (new, 4) — running: activated and succeeds; refused: fails by the app's name; not running: fails by name and never activates; the list is the seam's
+- `Tests/MacAgentCoreTests/VisionTestContext.swift` — the vision fixture's switcher is inert rather than the real one
+- `mutation/plans/fix/switching-apps-from-the-background.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-440), this entry
+
+Tests: **3153 in 220, exit 0, 8 known issues, at `2048cd01`** — the flagged command from `CLAUDE.md`, redirected to a file and its exit read from the file; the count line reads `Test run with 3153 tests in 220 suites passed after 65.779 seconds with 8 known issues.` (3149 in 219 at the chain's previous head `96465c77`; the four added are `RunningAppSwitcherTests`, a new suite). The three switcher suites alone (`--filter "RunningAppSwitcherTests|RunningAppAndRecentArtifactsTests|SwitchInWorkspaceRoutingTests"`) → 30 in 3, exit 0. The plan's S1 mutant (the activation's answer ignored) was applied by hand at that tree and run through `--filter RunningAppSwitcherTests`: `Test run with 4 tests in 1 suite failed after 0.001 seconds with 1 issue`, the issue in `aRefusedActivationFailsByTheAppsName` alone, then reverted with the editor. **Warnings: 0 at `2048cd01`** (`scripts/warnings`, exit 0, every file compiled, its header reading `measured at : 2048cd01 plus 1 uncommitted file(s)`, the one file being this entry). `scripts/no-attribution tree` → exit 0, 0 of 706 tracked files. `scripts/changelog-order` → exit 2, naming the chain's previous entry (`fix/clipboard-history-records-without-a-notice`, "only the newest may be unmerged"): the known cost of a chain of unmerged branches each carrying its entry, recorded on SONNY-438 before the chain began, and cleared one merge at a time in chain order. The Swift tree is byte-identical between `2048cd01` and the head this entry commits on (`git diff --stat 2048cd01 HEAD -- Sources Tests` prints nothing).
+Mutation plan: mutation/plans/fix/switching-apps-from-the-background.txt (founder-triggered, not run on this branch) — three mutants: the activation's answer ignored, the running check dropped, the failure naming the bundle identifier.
+
+Behavior added: none. `switch to <app>` and `focus <app>` bring a running app forward from the background, and a screen-control session started from the background brings its target forward before the first capture.
+Behavior preserved (required, no blanket claims):
+- Switching launches nothing: an app that is not running still fails by name (`No running app matched …`), through the same `noMatchingRunningApp`, and `RunningAppMatcher`'s resolution and the adapter's pin-once rule are untouched (`RunningAppAndRecentArtifactsTests`, `SwitchInWorkspaceRoutingTests` unchanged and green).
+- The vision runner's one activation, at iteration 1 when the target is not frontmost, still throws `targetAppNotRunning` when the app cannot be brought forward; the surrounding loop is untouched.
+- `open <app>` and the workspace opener are untouched; they already took this route.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**`NSRunningApplication.activate(options:)` is a call that works only while Sonny is the active app, and Sonny is almost never the active app while a command runs.** Cooperative activation (macOS 14) lets a process activate another only when it is itself active or was yielded to; the widget is a non-activating panel by design, so a command typed there runs with the user's previous app still active and the call answers false. It passed every manual row that happened to run with Command Center in front — which is how the screen-control rows passed while the switch row failed — so a green manual row on this call was a fact about where the founder had clicked last. Launch Services (`NSWorkspace.openApplication(at:configuration:)` with `activates`) has no such rule and is the route `open <app>` always took; both activation sites in the tree now use it, through one helper, so the two cannot disagree again.
+
+**A seam with a real-machine default is a fixture that reaches the machine by saying nothing.** The old class had a bare `init()` and read `NSWorkspace` itself; `VisionTestContext` constructed it in every vision test. The rewrite has no defaults, `forThisMac()` names the real wiring in words, and the fixture is inert — the same rule SONNY-240 and `DefaultAppRelauncher` apply, reaching one more type.
+
+**The alternative recorded, not built.** "switch to Safari" for a Safari that is not running still fails by name, by the tool's own description; offering to open it, or routing to `open_app`, is a design change for the founders (on SONNY-440).
+
+Known limitations / deferred scope: `RunningAppActivation.activate(bundleURL:)` and `forThisMac()` are the AppKit edge and are not under test; the decision above them is.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/finder-selection-names-its-items (SONNY-441), cut from this branch's head.
+
 ### Branch: fix/clipboard-history-records-without-a-notice
 Status: complete
 Date: 2026-09-11
