@@ -2587,14 +2587,24 @@ struct AlwaysActiveHoverTracker: NSViewRepresentable {
         }
 
         /// **One tracking area, registered once and kept** (SONNY-444). This used to remove every
-        /// area and add a fresh one on each call, and AppKit delivers `mouseEntered` for an area
-        /// added under a pointer that is already inside it. The hint row is a real layout row, so
-        /// its arrival and departure resize the window, and a layout pass is when AppKit asks a
-        /// view to update its areas: the reminder expired, the row left, the area was re-added
-        /// under the stationary pointer, a synthetic arrival re-showed the row, and so on every
-        /// three seconds — the founders' "it only blinks and doesn't go away". `.inVisibleRect`
-        /// keeps the one area correct as the view's geometry changes, which the comment on this
-        /// type always said and the code did not do.
+        /// area and add a fresh one on each call. **Why that blinked the hint is a working
+        /// hypothesis, not settled AppKit behaviour** (PR #230's fresh review, F1): the reading
+        /// was that AppKit delivers `mouseEntered` for an area added under a pointer already
+        /// inside it, so the reminder's own expiry — the hint row leaving, the window resizing,
+        /// a layout pass asking this view to update its areas — re-added the area under the
+        /// stationary pointer and a synthetic arrival re-showed the row every three seconds.
+        /// Two records contradict that reading. Apple's `NSTrackingArea.Options.assumeInside`
+        /// documentation says that without that option "the first event is generated when the
+        /// cursor leaves the tracking area if the cursor is initially inside the area", an exit
+        /// and not an arrival; and the founders measured this very code on 2026-08-20 (macOS
+        /// 26.5.2, the SONNY-179 row of the checklist) with the pointer inside the mic while the
+        /// row came and went, and the hint went once and did not come back. What differs between
+        /// that measurement and the founders' pass that saw the blink is unmeasured: this Mac
+        /// moved to macOS 26.6.2 on 2026-08-31, and the ui-ux-claude mic commits of 2026-09-09
+        /// (`643848ab`, `01aa3be3`) landed in between. Whatever sends the extra arrival, keeping
+        /// one area removes the re-registration, and `MicHoverHintModel`'s belt holds whatever
+        /// sends it. `.inVisibleRect` keeps the one area correct as the view's geometry changes,
+        /// which the comment on this type always said and the code did not do.
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
             guard trackingAreas.isEmpty else {

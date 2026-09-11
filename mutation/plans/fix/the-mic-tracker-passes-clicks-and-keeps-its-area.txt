@@ -1,6 +1,12 @@
 # SONNY-443 and SONNY-444 — the mic's hover tracker passes clicks through and keeps one tracking
 # area; the hint model ignores an arrival after its own expiry until the pointer has left.
-# Killers expected: MicHoverTrackerAndExpiryTests; the earlier suites in the same file for M3.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #230, 2026-09-11):
+# M1 by theTrackerAnswersNoHitSoAClickReachesTheButtonBeneath, which since the fresh review's F3
+# hosts the mic's chain in a widget panel and asks AppKit's hit-testing where a click lands, beside
+# a plain-overlay control; M2 by theTrackerRegistersOneAreaAndKeepsItAcrossLayoutPasses; M3 by
+# anArrivalAfterTheReminderExpiredUnderTheSamePointerShowsNothing; M4 by
+# aDepartureAfterTheExpiryMakesTheNextArrivalAFreshHover and
+# theSlotTakenAfterTheExpiryClearsTheBeltSoTheNextArrivalShows.
 
 >>> mutant M1 the tracker claims the click again
 >>> file Sources/MacAgent/FloatingWidgetView.swift

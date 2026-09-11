@@ -378,7 +378,14 @@ compare directly — don't rely on memory of what it's supposed to look like.
       back. Every mouse-entered now re-shows the hint and re-arms the three seconds — that is the
       fix, and it also means the old design's accidental absorbing of a repeat is gone, so this is
       the check that AppKit is not manufacturing extra arrivals when the row appearing and
-      disappearing resizes the window under a moving pointer.
+      disappearing resizes the window under a moving pointer. **Note added 2026-09-11 (SONNY-444,
+      PR #230's fresh review, F1):** the founders' pass saw the hint blink back every three seconds
+      on macOS 26.6.2 (installed 2026-08-31) with this same re-registering code, the opposite of
+      this row's 2026-08-20 reading on 26.5.2. Which of the two the OS upgrade or the 2026-09-09
+      mic commits changed is unmeasured. The tracker registers its area once now, and the sentence
+      above — every mouse-entered re-shows the hint — holds only until the reminder expires under
+      a pointer that has not left; after that the model shows nothing until a departure. Its row is
+      the SONNY-443/SONNY-444 section.
 - [ ] **The pointing-hand cursor survives a teardown under the pointer** (SONNY-178, PR #84 review
       F3). This is the joint the cursor refutation could not verify: `.onDisappear` popping the
       pushed cursor is read from the code, and nothing in a test process can make SwiftUI tear a view
@@ -4438,9 +4445,13 @@ them signs you out), then relaunch Sonny, which is still signed in.
 ### The mic button takes a click, and its hint leaves and stays gone (new 2026-09-11, SONNY-443 and SONNY-444)
 
 Clicking the mic did nothing (the founders' pass, test 13's note): the hover-tracking view laid
-over the button claimed the click. And the hint "only blinks and doesn't go away" (test 7): the
-tracking area was re-registered on every layout pass, which reported a fresh arrival under a
-pointer that never moved, every three seconds.
+over the button claimed the click — although the same chain recorded a click on 2026-08-26 (the
+SONNY-283 row above), and what changed since is unknown: the macOS 26.6.2 install of 2026-08-31 or
+the 2026-09-09 mic commits, neither measured. And the hint "only blinks and doesn't go away" (test
+7): the tracking area was re-registered on every layout pass, and the working hypothesis is that
+this reported a fresh arrival under a pointer that never moved, every three seconds; Apple's
+documentation and the 2026-08-20 row say a re-added area sends an exit, not an arrival, so row 2
+below is the measurement of the outcome, whatever sends the event.
 
 - [ ] Click the mic once: recording starts (the glyph changes and the countdown appears). Click
       again: it stops and transcribes (signed in) or says why not (signed out).
