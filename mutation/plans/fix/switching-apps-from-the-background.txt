@@ -1,13 +1,15 @@
 # SONNY-440 — switching to a running app works from the background. Property: the switcher
 # activates a running app through the injected seam, fails by the app's name when the seam refuses,
-# refuses before asking the seam when the app is not running, and reports a launch as a launch
-# when the process the seam activated is not the one it resolved (PR #227's F1 and F6).
-# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #227, 2026-09-11):
-# S1 and S3 by aRefusedActivationFailsByTheAppsName; S2 by
-# aRunningAppIsHandedToTheActivationAndTheSwitchSucceedsWhenItAnswersYes,
-# anAppThatIsNotRunningIsRefusedBeforeTheActivationIsAsked and
-# anActivationThatAnsweredWithTheResolvedProcessIsASwitch; S4 by
-# anActivationThatAnsweredWithAnotherProcessIsReportedAsALaunchNotASwitch.
+# refuses before asking the seam when the app is not running, reports a launch as a launch when
+# the seam says the app Launch Services activated is none the list held (PR #227's F1 and F6), and
+# the seam tells the two apart by app identity — isEqual: against every held instance — never by
+# process identifier (PR #227's delta review, N1).
+# Killers, each measured by applying the mutant by hand at the second round's tree (PR #227,
+# 2026-09-11): S1 and S3 by aRefusedActivationFailsByTheAppsName; S2 by
+# aRunningAppIsHandedToTheActivationAndTheSwitchSucceedsWhenItAnswersYes and
+# anAppThatIsNotRunningIsRefusedBeforeTheActivationIsAsked; S4 by
+# anActivationThatAnsweredWithAnotherProcessIsReportedAsALaunchNotASwitch; S5 by
+# anActivationMatchingNoInstanceTheListHeldIsALaunch.
 
 >>> mutant S1 the activation's answer ignored: a refused switch reads as a success
 >>> file Sources/MacAgentCore/RunningAppService.swift
@@ -39,12 +41,22 @@
             throw RunningAppSwitchError.failedToActivate(app.bundleIdentifier)
 >>> end
 
->>> mutant S4 the process comparison dropped: a launch reads as a switch (PR #227's F1)
+>>> mutant S4 the seam's launch answer ignored: a launch reads as a switch (PR #227's F1)
 >>> file Sources/MacAgentCore/RunningAppService.swift
 >>> from
-            guard processIdentifier == app.processIdentifier else {
-                throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
-            }
+            throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
+        case .switched:
+            break
 >>> to
-            _ = processIdentifier
+            break
+        case .switched:
+            break
+>>> end
+
+>>> mutant S5 the identity comparison dropped: every activation counts as a switch, a launch included (PR #227's delta review, N1)
+>>> file Sources/MacAgentCore/RunningAppService.swift
+>>> from
+        held.contains { $0.isEqual(activated) } ? .switched : .launched
+>>> to
+        .switched
 >>> end

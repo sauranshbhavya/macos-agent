@@ -22,9 +22,10 @@ public enum RunningAppSwitchError: Error, Equatable, LocalizedError {
     case missingQuery
     case noMatchingRunningApp(String)
     case failedToActivate(String)
-    /// Launch Services answered with a process other than the one the switcher resolved: the app
-    /// had quit between the running check and the open, and was started rather than brought
-    /// forward (SONNY-440, PR #227's F1). Sonny cannot undo the launch, so it says what happened.
+    /// Launch Services answered with an app that is none of the instances the running list held:
+    /// the app had quit between the running check and the open, and was started rather than
+    /// brought forward (SONNY-440, PR #227's F1). Sonny cannot undo the launch, so it says what
+    /// happened.
     case launchedInsteadOfSwitching(String)
 
     public var errorDescription: String? {
@@ -41,10 +42,25 @@ public enum RunningAppSwitchError: Error, Equatable, LocalizedError {
     }
 }
 
-/// What Launch Services answered when asked to bring an app forward: the process it activated,
-/// or a refusal. The process identifier is what tells a switch from a launch (PR #227's F1).
+/// What Launch Services answered when asked to bring an app forward: an instance the running list
+/// already held, an app it started, or a refusal.
+///
+/// **A switch is told from a launch by app identity, never by process identifier** (PR #227's
+/// delta review, N1; the founders' decision of 2026-09-11). The first round compared the pid
+/// Launch Services returned with the pid the switcher resolved, which is the comparison the SDK
+/// header says not to make: `NSRunningApplication.h` on `processIdentifier` reads "Do not rely on
+/// this for comparing processes. Use `-isEqual:` instead", and "an application's pid may change if
+/// it is automatically terminated". Safari opts into automatic termination, so the founders' own
+/// row — Safari with every window closed — could have read "Safari had quit" for an app that
+/// never quit; and two instances started from one bundle, or Launch Services substituting another
+/// running copy of the same app, each answer a different pid without any launch. So the answer is
+/// compared with `isEqual:` against every instance the running list held for that bundle
+/// identifier, read immediately before the open: any match is a switch, and no match is a launch.
 public enum RunningAppActivationOutcome: Equatable, Sendable {
-    case activated(processIdentifier: Int32)
+    /// The app Launch Services activated is one the running list already held.
+    case switched
+    /// The app Launch Services activated is none of them: it was started.
+    case launched
     case refused
 }
 
@@ -87,14 +103,17 @@ public protocol RunningAppSwitching: AnyObject {
 /// starts one. The window cannot be closed on this route; a process-bound activation through
 /// Accessibility could close it and would tie switching to that grant, which is recorded on
 /// SONNY-440 as the alternative not built. What this route can do is notice: the completion hands
-/// back the `NSRunningApplication` it activated, and its process identifier either is the one the
-/// switcher resolved or is a fresh launch. `activate(bundleURL:)` returns it, and the switcher
-/// reports a launch as one rather than as a switch.
+/// back the `NSRunningApplication` it activated, and that app either is one of the instances the
+/// running list held for the bundle identifier — compared with `isEqual:`, the way the SDK header
+/// says, and never by process identifier (`RunningAppActivationOutcome`) — or is a fresh launch.
+/// `activate(bundleURL:amongHeld:)` answers which, and the switcher reports a launch as one rather
+/// than as a switch.
 @MainActor
 public enum RunningAppActivation {
-    /// Brings the app at `bundleURL` to the front, answering with the process Launch Services
-    /// activated, or `.refused` when it refused.
-    public static func activate(bundleURL: URL) async -> RunningAppActivationOutcome {
+    /// Brings the app at `bundleURL` to the front, answering whether the app Launch Services
+    /// activated is one of `held` — the instances the running list holds for that bundle identifier,
+    /// read by the caller immediately before this — or a launch, or `.refused` when it refused.
+    public static func activate(bundleURL: URL, amongHeld held: [NSRunningApplication]) async -> RunningAppActivationOutcome {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         return await withCheckedContinuation { (continuation: CheckedContinuation<RunningAppActivationOutcome, Never>) in
@@ -103,18 +122,26 @@ public enum RunningAppActivation {
                     continuation.resume(returning: .refused)
                     return
                 }
-                continuation.resume(returning: .activated(processIdentifier: application.processIdentifier))
+                continuation.resume(returning: outcome(activated: application, amongHeld: held))
             }
         }
+    }
+
+    /// The comparison itself, apart from the open, so a test can hold it with real
+    /// `NSRunningApplication` objects: `isEqual:` against every held instance, as the header says.
+    /// `nonisolated` because Launch Services runs the completion above on a queue of its own, and
+    /// the comparison touches nothing of this actor's.
+    nonisolated public static func outcome(activated: NSRunningApplication, amongHeld held: [NSRunningApplication]) -> RunningAppActivationOutcome {
+        held.contains { $0.isEqual(activated) } ? .switched : .launched
     }
 }
 
 /// The shipping switcher: the workspace's live process list, activated through Launch Services.
 ///
 /// **Its two collaborators are injected**, so the decision it makes — running: activate; refused:
-/// fail by the app's name; not running: fail by name and never activate — is held by
-/// `RunningAppSwitcherTests` with plain values, and `forThisMac()` is the one place the real two are
-/// named. Neither has a default, for `DefaultAppRelauncher`'s reason: a defaulted activation would
+/// fail by the app's name; not running: fail by name and never activate; launched rather than
+/// switched: say so — is held by `RunningAppSwitcherTests` with plain values, and `forThisMac()`
+/// is the one place the real two are named. Neither has a default, for `DefaultAppRelauncher`'s reason: a defaulted activation would
 /// let a fixture bring a real app forward on the developer's Mac by saying nothing.
 @MainActor
 public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
@@ -154,7 +181,11 @@ public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
                 guard let bundleURL = app.bundleURL else {
                     return .refused
                 }
-                return await RunningAppActivation.activate(bundleURL: bundleURL)
+                // Every instance the running list holds for this bundle identifier, read
+                // immediately before the open: the answer is compared against all of them, so a
+                // second instance or a substituted copy counts as the switch it is.
+                let held = NSRunningApplication.runningApplications(withBundleIdentifier: app.bundleIdentifier)
+                return await RunningAppActivation.activate(bundleURL: bundleURL, amongHeld: held)
             }
         )
     }
@@ -170,14 +201,14 @@ public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
         switch await activation(app) {
         case .refused:
             throw RunningAppSwitchError.failedToActivate(app.displayName)
-        case .activated(let processIdentifier):
-            // The process Launch Services activated is the one resolved above, or the app quit in
+        case .launched:
+            // The app Launch Services activated is none the running list held: the app quit in
             // the window between the running check and the open and this is a fresh launch (PR
             // #227's F1). A launch is reported as one: "Switched to" would be a sentence about a
             // switch that did not happen.
-            guard processIdentifier == app.processIdentifier else {
-                throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
-            }
+            throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
+        case .switched:
+            break
         }
     }
 }

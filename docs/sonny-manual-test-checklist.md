@@ -4348,9 +4348,11 @@ session can measure: until it passes, the premise is unmeasured.
       Safari`: Safari comes forward and opens a new window — Launch Services sends a reopen, which
       is what a Dock click does (kept by the founders' decision of 2026-09-11).
 - [ ] Optional, the race: with Chrome running, press ⌘Q in Chrome and within the same second type
-      `switch to Chrome`. Either "No running app matched Google Chrome." (the check saw it gone), or
-      Chrome relaunches and the widget reads "Google Chrome had quit, so Sonny opened it instead of
-      switching to it." — never "Switched to Google Chrome." over a relaunch.
+      `switch to Chrome`. Either "No running app matched Chrome." (the check saw it gone — the
+      sentence carries the query as typed; "Google Chrome" appears in it only if Chrome disappears
+      between the command resolving and the step running), or Chrome relaunches and the widget reads
+      "Google Chrome had quit, so Sonny opened it instead of switching to it." — never "Switched to
+      Google Chrome." over a relaunch.
 - [ ] Screen control, Normal mode, Safari running behind another app: `in Safari, scroll to the
       bottom of the page`. Safari comes forward before the first capture and the session runs (as
       before, now from the background too).
