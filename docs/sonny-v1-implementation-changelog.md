@@ -171,6 +171,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/the-gate-waits-for-the-check-it-started
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-442** (screen control refused with "Connect once so Sonny can check your plan." on a signed-in Mac while the plan check it had itself started was still in flight — the founders' pass, test 55, marked Blocked). The wave 7 overnight session (run log SONNY-438), fourth branch of its chain, cut from `fix/finder-selection-names-its-items` at `cab7be27`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: §16.3 (the instant feel of everything that is not screen control is untouched: the wait is at screen control's door alone), §16.4's spirit (a signed-in user is not walled by a race).
+Files changed:
+- `Sources/MacAgentCore/ScreenControlGate.swift` — `ScreenControlEntitlementConfirming.awaitPendingRefresh()`; `EntitlementRefusal.isCuredByARefresh`; at `.sessionStart` a curable refusal waits once for the pending refresh and reports the second answer
+- `Sources/MacAgentCore/EntitlementDecision.swift` — `EntitlementRefusal` is `CaseIterable`, so the curable set is held over the whole population
+- `Tests/MacAgentTestSupport/ScriptedScreenControlGate.swift` — `StubEntitlementConfirmation.awaitPendingRefresh()` returns at once
+- `Tests/MacAgentCoreTests/ScreenControlGateTests.swift` — `ScreenControlGateRefreshWaitTests` (new suite, 11 cases over 6 tests): each curable refusal waits once and takes the second answer; a refusal that survives the refresh is reported as the second answer; each non-curable refusal never waits; a step boundary never waits; an entitled first answer neither waits nor asks again; the curable set is exactly the four
+- `mutation/plans/fix/the-gate-waits-for-the-check-it-started.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-442), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/the-gate-waits-for-the-check-it-started.txt (founder-triggered, not run on this branch) — four mutants: the wait dropped, the moment ignored, every refusal treated as curable, the second answer discarded.
+
+Behavior added: at the screen-control door, a refusal a refresh cures (no claim, an unreadable claim, another session's claim, a lapsed claim) waits once for the refresh `EntitlementService.evaluate` already started and reports the second answer, bounded by the client's own request timeout.
+Behavior preserved (required, no blanket claims):
+- `EntitlementService.evaluate` still never waits: `claimConfirmation()` and `decision(for:)` answer at once, and the readiness row and the Account dialog read exactly what they read before.
+- A signed-out Mac, a clock too far off, and a claim that says no are refused at the door at once, with no network round trip (`aRefusalNoRefreshCuresNeverWaits`); the allowance is still never asked for a refused claim (`anUnconfirmableClaimRefusesAtEveryMomentAndSaysWhichNo`, unchanged).
+- A step boundary never waits on the network (`aStepBoundaryNeverWaitsForARefresh`); the allowance half of the gate, the top-up and both moments' exhaustion arithmetic are untouched.
+- Every sentence is `EntitlementCopy`'s, unchanged.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**An answer that never waits is right for a row and wrong for a door.** `EntitlementService` answers from the cache and starts a refresh on its way out, so nothing that reads it blocks on the network — right for the readiness row, the Account dialog and every free capability. The screen-control door is the one reader whose answer is the whole outcome, and for it "refused, refresh started" is a refusal the user meets while the cure is already on the wire; the same press a moment later is admitted, which reads as flakiness. The Account dialog had already met the same shape and reads twice (`refreshSubscription()`); the door now does the same, once, for the refusals a refresh cures, and only at `.sessionStart`. The rule: a never-waits cache is composed with a wait by the caller that needs one, never by the cache.
+
+**The curable set is held by value over `CaseIterable`**, so a new refusal case fails a test until somebody says which side it is on — the same shape as `LocalStore`'s exhaustive switch.
+
+**Recorded, not built**: the step boundary. A lapsed claim mid-session halts the session at the next boundary as before; waiting there would be a mid-session network stall, which the allowance branch of the same gate refuses to be. If the founders want a boundary that waits, it is a separate decision.
+
+Known limitations / deferred scope: the wait's bound is the client's request timeout, the same bound the Account dialog accepts; a gateway that hangs for that long delays the refusal by that long.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/the-mic-tracker-passes-clicks-and-keeps-its-area (SONNY-443 and SONNY-444), cut from this branch's head.
+
 ### Branch: fix/finder-selection-names-its-items
 Status: complete
 Date: 2026-09-11

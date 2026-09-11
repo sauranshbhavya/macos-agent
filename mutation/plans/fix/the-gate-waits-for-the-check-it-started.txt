@@ -1,0 +1,44 @@
+# SONNY-442 — the screen-control door waits once for the refresh a curable refusal started.
+# Property: at sessionStart a refusal a refresh cures waits once and reports the second answer;
+# a refusal no refresh cures, and every stepBoundary refusal, never waits; nothing asks a third time.
+# Killers expected: ScreenControlGateRefreshWaitTests.
+
+>>> mutant G1 the wait dropped: the first refusal is reported as before
+>>> file Sources/MacAgentCore/ScreenControlGate.swift
+>>> from
+        if case .refused(let refusal) = confirmation, moment == .sessionStart, refusal.isCuredByARefresh {
+            await entitlements.awaitPendingRefresh()
+            confirmation = await entitlements.claimConfirmation()
+        }
+>>> to
+>>> end
+
+>>> mutant G2 the moment ignored: a step boundary waits on the network too
+>>> file Sources/MacAgentCore/ScreenControlGate.swift
+>>> from
+        if case .refused(let refusal) = confirmation, moment == .sessionStart, refusal.isCuredByARefresh {
+>>> to
+        if case .refused(let refusal) = confirmation, refusal.isCuredByARefresh {
+>>> end
+
+>>> mutant G3 every refusal treated as curable: a signed-out Mac waits on a refresh that cannot help
+>>> file Sources/MacAgentCore/ScreenControlGate.swift
+>>> from
+        case .noClaim, .unreadableClaim, .claimIsForAnotherSession, .lapsed:
+            return true
+        case .notSignedIn, .clockUnusable, .notEntitled:
+            return false
+>>> to
+        case .noClaim, .unreadableClaim, .claimIsForAnotherSession, .lapsed, .notSignedIn, .clockUnusable, .notEntitled:
+            return true
+>>> end
+
+>>> mutant G4 the second answer discarded: the door waits and then reports the first refusal anyway
+>>> file Sources/MacAgentCore/ScreenControlGate.swift
+>>> from
+            await entitlements.awaitPendingRefresh()
+            confirmation = await entitlements.claimConfirmation()
+>>> to
+            await entitlements.awaitPendingRefresh()
+            _ = await entitlements.claimConfirmation()
+>>> end

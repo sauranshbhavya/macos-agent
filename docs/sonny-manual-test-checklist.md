@@ -4385,6 +4385,22 @@ the rest counted.
       refusal reads as before, "<path> is not one of the folders Sonny can use: <Desktop>,
       <Documents>."; nothing about that sentence changed.
 
+### The screen-control door waits for the plan check it started (new 2026-09-11, SONNY-442)
+
+Test 55 of the founders' pass was refused with "Connect once so Sonny can check your plan." on a
+signed-in Mac with the gateway up: the claim had been cleared (a sign-out), the refresh was on the
+wire, and the door refused instead of waiting for it. It waits once now, at the door only.
+
+- [ ] Signed in, gateway up: sign out, sign in, and within five seconds type `in Safari, open
+      apple.com and scroll to the bottom of the page`. The approval or the session appears, not
+      "Connect once so Sonny can check your plan."
+- [ ] Sign out and sign in with the gateway up, then stop the gateway (`docker rm -f
+      sonny-gateway-local`) before opening Account or running anything, so no claim is cached.
+      Type the same command: it is refused with a plan sentence after a short wait (the request's
+      own timeout), not instantly. Start the gateway again and press Retry: the session starts.
+- [ ] Signed out: the same command is refused at once with "Sign in to Sonny to use this.", with
+      no wait.
+
 ## 8. How to report back
 
 For each real finding, give me:

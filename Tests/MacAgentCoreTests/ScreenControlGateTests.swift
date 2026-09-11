@@ -587,3 +587,107 @@ struct ScreenControlGateFreeCapabilityTests {
 
     private struct InertModelReached: Error {}
 }
+
+// MARK: - The door waits for the refresh a refusal started (SONNY-442)
+
+/// The founders' pass, test 55: signed in, a screen task refused with "Connect once so Sonny can
+/// check your plan." while the check was already on the wire, and the same press a moment later
+/// admitted. `EntitlementService.evaluate` starts a refresh on every refusal a refresh cures and
+/// answers at once; the gate now waits for that refresh once, at the door, and asks again. These
+/// hold what waits, what does not, and that nothing asks a third time.
+@Suite
+struct ScreenControlGateRefreshWaitTests {
+    /// A confirmer whose answers are a script, consumed one per ask, with the waits counted.
+    private final class ScriptedEntitlementConfirmation: ScreenControlEntitlementConfirming, @unchecked Sendable {
+        private var answers: [EntitlementDecision]
+        private(set) var asks = 0
+        private(set) var waits = 0
+
+        init(_ answers: [EntitlementDecision]) {
+            self.answers = answers
+        }
+
+        func claimConfirmation() async -> EntitlementDecision {
+            asks += 1
+            return answers.isEmpty ? .refused(.noClaim) : answers.removeFirst()
+        }
+
+        func awaitPendingRefresh() async {
+            waits += 1
+        }
+    }
+
+    private static func gate(_ scripted: ScriptedEntitlementConfirmation) -> SonnyScreenControlGate {
+        SonnyScreenControlGate(
+            entitlements: scripted,
+            allowance: StubAllowanceReading(.runsLeft(9), autoTopUp: .none),
+            topUp: StubTopUpPurchasing.neverCalled()
+        )
+    }
+
+    /// The founders' case from the other side: the claim was cleared, the refresh is in flight,
+    /// and the door asks once more after waiting for it rather than refusing.
+    @Test(arguments: [EntitlementRefusal.noClaim, .unreadableClaim, .claimIsForAnotherSession, .lapsed])
+    func aRefusalARefreshCuresWaitsOnceAndTakesTheSecondAnswerAtTheDoor(refusal: EntitlementRefusal) async {
+        let scripted = ScriptedEntitlementConfirmation([.refused(refusal), .entitled])
+        let subject = Self.gate(scripted)
+
+        #expect(await subject.decide(at: .sessionStart) == .allowed)
+        #expect(scripted.asks == 2)
+        #expect(scripted.waits == 1)
+    }
+
+    /// Still refused after the wait: the second answer is the one reported, and there is no third.
+    @Test
+    func aRefusalThatSurvivesTheRefreshIsReportedAsTheSecondAnswer() async {
+        let scripted = ScriptedEntitlementConfirmation([.refused(.noClaim), .refused(.lapsed)])
+        let subject = Self.gate(scripted)
+
+        #expect(await subject.decide(at: .sessionStart) == .refused(.entitlementUnconfirmed(.lapsed)))
+        #expect(scripted.asks == 2)
+        #expect(scripted.waits == 1)
+    }
+
+    /// The refusals no refresh can cure are refused at once with no wait — a signed-out Mac is
+    /// told to sign in without a network round trip, exactly as before.
+    @Test(arguments: [EntitlementRefusal.notSignedIn, .clockUnusable, .notEntitled])
+    func aRefusalNoRefreshCuresNeverWaits(refusal: EntitlementRefusal) async {
+        let scripted = ScriptedEntitlementConfirmation([.refused(refusal), .entitled])
+        let subject = Self.gate(scripted)
+
+        #expect(await subject.decide(at: .sessionStart) == .refused(.entitlementUnconfirmed(refusal)))
+        #expect(scripted.asks == 1)
+        #expect(scripted.waits == 0)
+    }
+
+    /// A step boundary never waits on the network, whatever the refusal: the allowance branch of
+    /// the gate refuses to stall a running session on a read, and this one must not either.
+    @Test
+    func aStepBoundaryNeverWaitsForARefresh() async {
+        let scripted = ScriptedEntitlementConfirmation([.refused(.noClaim), .entitled])
+        let subject = Self.gate(scripted)
+
+        #expect(await subject.decide(at: .stepBoundary) == .refused(.entitlementUnconfirmed(.noClaim)))
+        #expect(scripted.asks == 1)
+        #expect(scripted.waits == 0)
+    }
+
+    /// An entitled first answer asks nothing twice — the common case still never waits.
+    @Test
+    func anEntitledFirstAnswerNeitherWaitsNorAsksAgain() async {
+        let scripted = ScriptedEntitlementConfirmation([.entitled])
+        let subject = Self.gate(scripted)
+
+        #expect(await subject.decide(at: .sessionStart) == .allowed)
+        #expect(scripted.asks == 1)
+        #expect(scripted.waits == 0)
+    }
+
+    /// The list of curable refusals is the list `EntitlementService.evaluate` starts a refresh
+    /// on, held by value over the whole population so a new case cannot join either side unread.
+    @Test
+    func theCurableRefusalsAreExactlyTheOnesARefreshIsStartedFor() {
+        let curable = EntitlementRefusal.allCases.filter(\.isCuredByARefresh)
+        #expect(curable == [.noClaim, .unreadableClaim, .claimIsForAnotherSession, .lapsed])
+    }
+}

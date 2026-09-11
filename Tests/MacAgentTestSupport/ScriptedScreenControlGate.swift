@@ -74,6 +74,10 @@ public struct StubEntitlementConfirmation: ScreenControlEntitlementConfirming {
     }
 
     public func claimConfirmation() async -> EntitlementDecision { answer }
+
+    /// Nothing is ever in flight for a fixed answer, so this returns at once — which is exactly what
+    /// `EntitlementService.awaitPendingRefresh()` does when no refresh was started.
+    public func awaitPendingRefresh() async {}
 }
 
 /// A ``ScreenControlAllowanceReading`` that answers a run count, or throws.
