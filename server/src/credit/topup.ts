@@ -535,6 +535,30 @@ export async function readOutstandingTopUp(
     : { topUpId: row.topup_id, orderId: row.provider_order_id };
 }
 
+/**
+ * Writes an answer onto a row that is still waiting for one — **and only onto such a row**
+ * (SONNY-435, from PR #220's O1).
+ *
+ * 0019 splits `outcome` into two resolvable states, `attempted` and `unconfirmed`, and three closed
+ * ones, and a settle is the move from the first set to an answer. The statement used to name the row
+ * by id alone, so a settle arriving *after* the answer moved a closed row again — and the sequence
+ * that does it is ordinary rather than contrived: a first attempt outruns the route's total deadline,
+ * the route answers `topup.unconfirmed` and by design does not cancel the work, so the finalize
+ * completes and settles the row `granted`; a second attempt started inside that window finds the
+ * row outstanding, is told `412` because the order is already paid, fails its read-back, and settles
+ * `unconfirmed` with zero credits over the grant. Between that and the third attempt, which heals
+ * the row, the user has paid and sees no credits. The condition below is what refuses the second
+ * write: a closed row is closed, in either direction, and the two resolvable states are the same two
+ * `readOutstandingTopUp` names.
+ *
+ * **A settle that matched nothing is silent here**, as the matching one is: this module holds no
+ * logger, the store's contract is `Promise<void>`, and the caller that arrives late has already
+ * answered its client `unconfirmed` from the provider's own words. What that costs is one pessimistic
+ * answer — the user is told the charge could not be confirmed while the row already says granted —
+ * and their next read of the balance shows the pack, because `readToppedUpCredits` sums granted rows.
+ * Reporting the refusal to the caller so it can answer `granted` instead is the follow-up SONNY-435's
+ * closing comment names.
+ */
 export async function settleTopUpAttempt(
   client: pg.Client,
   input: Parameters<TopUpAttemptStore["settle"]>[0],
@@ -543,7 +567,8 @@ export async function settleTopUpAttempt(
     `UPDATE sonny.credit_topup
         SET outcome = $2, credits = $3, provider_order_id = coalesce($4, provider_order_id),
             charged_amount = $6, charged_currency = $7, settled_at = $5
-      WHERE topup_id = $1`,
+      WHERE topup_id = $1
+        AND outcome IN ('attempted', 'unconfirmed')`,
     [
       input.topUpId,
       input.outcome,

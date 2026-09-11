@@ -4679,6 +4679,21 @@ says to release it:
       restored and no transaction left open, and the budget costs one extra round trip per statement
       and nothing a person can notice.
 
+### A settle never moves a paid top-up row off granted (new 2026-09-11, SONNY-435)
+
+A top-up row that was already granted could be written back to unconfirmed with zero credits by a
+second attempt that arrived while the first was still finalizing. The settle now writes only onto a
+row still waiting for an answer. Server half only; needs a lane database with the migrations applied.
+
+- [ ] In `psql`: insert a claimed row for any account and period (`attempt_no 1`, `outcome
+      'attempted'`, a `provider_order_id`), then `UPDATE … SET outcome = 'granted', credits = 500
+      WHERE topup_id = …`. Now run the late settle by hand: `UPDATE sonny.credit_topup SET outcome =
+      'unconfirmed', credits = 0 WHERE topup_id = … AND outcome IN ('attempted','unconfirmed')`:
+      `UPDATE 0`, and the row still reads `granted`, `500`. (The condition is the one the code runs;
+      `server/src/credit/topup.ts`'s `settleTopUpAttempt` carries it.)
+- [ ] `npm run test:db` at the lane database: `test/topup.db.test.ts`'s three SONNY-435 tests pass
+      with the rest of the suite.
+
 ## 8. How to report back
 
 For each real finding, give me:

@@ -702,3 +702,135 @@ describeDb("the consent a charge is authorised by", () => {
     expect(await store().setAutoTopUp(ACCOUNT, true, again)).toEqual(again);
   });
 });
+
+describeDb("a settle moves a resolvable row to an answer and never moves a closed one (SONNY-435)", () => {
+  let client: pg.Client;
+  const LATER = new Date("2026-08-15T12:00:20Z");
+
+  beforeAllUnderHangBackstop(async () => {
+    client = new pg.Client({ connectionString: url });
+    await client.connect();
+    await rebuildSchema(client);
+  });
+  afterAllUnderHangBackstop(async () => {
+    await client.end();
+  });
+  beforeEachUnderHangBackstop(async () => {
+    await client.query("TRUNCATE sonny.credit_topup");
+  });
+
+  async function rowOf(topUpId: string) {
+    const { rows } = await client.query<{
+      outcome: string;
+      credits: number;
+      charged_amount: string | null;
+      charged_currency: string | null;
+      settled_at: Date | null;
+    }>(
+      `SELECT outcome, credits, charged_amount, charged_currency, settled_at
+         FROM sonny.credit_topup WHERE topup_id = $1`,
+      [topUpId],
+    );
+    return rows[0]!;
+  }
+
+  /**
+   * PR #220's O1, as the reviewer constructed it: the first attempt outruns the route's deadline and
+   * its finalize grants late; the second attempt found the row outstanding, met the provider's `412`,
+   * failed its read-back, and settles what it saw — `unconfirmed`, zero credits — over the grant.
+   */
+  itUnderHangBackstop("a settle that arrives after the grant leaves the grant standing", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.charged_currency).toBe("USD");
+    expect(row.settled_at).toEqual(AT);
+    // Closed rows are not outstanding, so the account's next attempt buys afresh rather than asking
+    // about an order that is already answered.
+    expect(
+      await readOutstandingTopUp(client, { accountId: ACCOUNT, provider: PROVIDER, periodStart: PERIOD }),
+    ).toBeUndefined();
+  });
+
+  /** The reverse interleaving ends granted too: the pessimistic answer lands first, the grant after. */
+  itUnderHangBackstop("an unconfirmed row still takes the grant that arrives after it", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.settled_at).toEqual(LATER);
+  });
+
+  /** Closed is closed in every direction, not only for a grant. */
+  itUnderHangBackstop("a declined row does not take a later grant either", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("declined");
+    expect(row.credits).toBe(0);
+    expect(row.settled_at).toEqual(AT);
+  });
+});

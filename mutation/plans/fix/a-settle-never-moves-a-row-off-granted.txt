@@ -1,0 +1,29 @@
+# SONNY-435 — a top-up settle writes an answer onto a resolvable row (attempted, unconfirmed) and
+# never onto a closed one, so a settle arriving after the grant cannot move a paid row off granted.
+#
+# SERVER HALF, DATABASE SUITE. The killers need a Postgres; run this plan as
+#   MUTATE_TEST_CMD='cd server && DATABASE_URL="postgres://postgres:postgres@localhost:<lane port>/postgres" npx vitest run test/topup.db.test.ts' scripts/mutate mutation/plans/fix/a-settle-never-moves-a-row-off-granted.txt
+# with a lane database up (CLAUDE.md's recipe). Under scripts/mutate-all's default command every
+# mutant here reports SURVIVED with no test having seen it (SONNY-455).
+#
+# Killers expected, both in test/topup.db.test.ts's SONNY-435 block: T1 by "a settle that arrives
+# after the grant leaves the grant standing" and "a declined row does not take a later grant either";
+# T2 by "an unconfirmed row still takes the grant that arrives after it". Both measured by hand on the
+# branch, at the lane database, before the plan was committed.
+
+>>> mutant T1 the condition dropped: any settle moves any row, the grant included
+>>> file server/src/credit/topup.ts
+>>> from
+      WHERE topup_id = $1
+        AND outcome IN ('attempted', 'unconfirmed')`,
+>>> to
+      WHERE topup_id = $1`,
+>>> end
+
+>>> mutant T2 only a row never answered may settle: an unconfirmed row would refuse its own grant
+>>> file server/src/credit/topup.ts
+>>> from
+        AND outcome IN ('attempted', 'unconfirmed')`,
+>>> to
+        AND outcome = 'attempted'`,
+>>> end
