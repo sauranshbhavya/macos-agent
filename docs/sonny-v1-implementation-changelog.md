@@ -171,6 +171,41 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-refusal-in-sonnys-own-words
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-447** (a planner refusal reached the user in the planner's own words: "Unsupported: there is no registered weather lookup tool available." — the founders' pass, test 16). The wave 7 overnight session (run log SONNY-438), seventh branch of its chain, cut from `fix/a-zip-result-carries-its-chip-and-stays` at `948190c9`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: §7.1's rule for server-authored sentences, applied to a model-authored one; the no-explanatory-copy rule.
+Files changed:
+- `Sources/MacAgentCore/AgentActionExecutor.swift` — `AgentExecutionError.unsupported`'s `errorDescription` is `unsupportedRequestSentence` ("Sonny can't do that yet.") whatever the reason; the reason stays on the error; `validateSupported` logs it (`Logger`, subsystem `com.sonny.macagent`, category `planner`) before throwing
+- `Sources/MacAgentCore/OpenAIPlanner.swift` — the prompt's unsupported line asks for one short reason for the log and says the user never reads it
+- `Tests/MacAgentCoreTests/UnsupportedRefusalTests.swift` (new, 5 cases over 2 tests) — the user's sentence is fixed over four reasons including an injected one, and names no mechanism
+- `Tests/MacAgentCoreTests/AgentRunnerTests.swift` — `aRefusedPlanThrowsSonnysOwnSentenceAndKeepsThePlannersReason`: a refused plan through `prepare` keeps the reason on the error and reads the fixed sentence
+- `Tests/MacAgentCoreTests/PlannerBoundaryTests.swift` — the exact-prompt pin follows the changed line
+- `mutation/plans/fix/a-refusal-in-sonnys-own-words.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-447), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/a-refusal-in-sonnys-own-words.txt (founder-triggered, not run on this branch) — three mutants: the reason rendered again, the reason dropped from the error, the sentence naming the mechanism.
+
+Behavior added: none. A refused request reads "Sonny can't do that yet."; the planner's reason is in the log.
+Behavior preserved (required, no blanket claims):
+- Clarification questions are still the planner's words, shown as the question — the deliberate exception.
+- `validateSupported` still throws at the same gate for the same plans; the instant calculator's own refusals (`CalculatorError`) and the SafeURL scheme refusal are untouched.
+- The prompt's every other line is unchanged (`PlannerBoundaryTests`' exact-string pin holds the whole prompt).
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A model-authored refusal is a server-authored sentence with worse review.** `EntitlementCopy`, `SignInCopy` and `SonnyBackendCopy` each record why the app never displays the gateway's `message`: a sentence authored outside this repository and rendered as Sonny's own is a hole in the no-explanatory-copy rule that nobody here reviews. The planner's `unsupported` step description had been passed straight into `errorDescription` since the executor was written, and the model obliged by describing its own tooling. The reason still has a reader — the log — and the fix is the same shape the three copy types already use: a case maps to words this repository owns.
+
+**The larger ask in the founders' note is SONNY-453**, not this branch: weather, calendar and reminders as capabilities, with the permission and provider decisions that are the founders'.
+
+Known limitations / deferred scope: the sentence is one sentence for every refused request; a refusal that names what Sonny cannot do ("Sonny can't read calendars yet.") would need a vocabulary of refusals this repository owns, which is a copy decision for the founders.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/an-unreadable-store-names-the-way-out (SONNY-449), cut from this branch's head. SONNY-448 (quit under a sheet) is left open with a written blocker and no branch.
+
 ### Branch: fix/a-zip-result-carries-its-chip-and-stays
 Status: complete
 Date: 2026-09-11

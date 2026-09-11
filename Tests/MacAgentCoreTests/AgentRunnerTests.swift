@@ -170,6 +170,32 @@ struct AgentRunnerTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// SONNY-447. A plan the planner refused reaches the runner as one unsupported step whose
+    /// description is the model's reason; `prepare` throws with that reason kept on the error and
+    /// this repository's sentence as what the user reads.
+    @Test
+    func aRefusedPlanThrowsSonnysOwnSentenceAndKeepsThePlannersReason() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reason = "Unsupported: there is no registered weather lookup tool available."
+        let plan = AgentPlan(
+            summary: "Unsupported request.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "unsupported", operation: .unsupported, description: reason)]
+        )
+        let runner = AgentRunner(planner: StaticPlanner(plan: plan), executor: makeExecutor(root: root))
+
+        do {
+            _ = try await runner.prepare(command: "what is the weather today")
+            Issue.record("Expected the refusal to throw.")
+        } catch let error as AgentExecutionError {
+            #expect(error == .unsupported(reason))
+            #expect(error.localizedDescription == "Sonny can't do that yet.")
+        } catch {
+            Issue.record("Expected AgentExecutionError.unsupported, got \(error).")
+        }
+    }
+
     /// SONNY-445. The widget's result panel draws its file chip off the first `.openFile`
     /// suggestion and nothing else, and the zip emitted Reveal alone — so a zipped result showed
     /// its path in a sentence and no chip (the founders' pass, test 9). Open first, at the archive,

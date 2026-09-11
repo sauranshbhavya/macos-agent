@@ -4492,6 +4492,21 @@ seconds now; idle still collapses after six.
       Settings, then a voice command) collapses to the capsule after about twenty seconds, where it
       was six, and expanding the capsule still shows it.
 
+### A refusal in Sonny's own words (new 2026-09-11, SONNY-447)
+
+"what is the weather today" failed with "Unsupported: there is no registered weather lookup tool
+available." — the planner's own sentence, naming tools and registrations (the founders' pass,
+test 16). A refused request reads "Sonny can't do that yet." now, whatever the planner wrote; the
+planner's reason goes to the log.
+
+- [ ] Signed in: `what is the weather today`, `what's on my calendar`, `remind me in 5 minutes`.
+      Each fails with "Sonny can't do that yet." and Retry; no "Unsupported:", no "tool", no
+      "registered" anywhere on screen.
+- [ ] Command Center › Tasks: the three rows are under Failed with the same sentence.
+- [ ] `log show --last 5m --predicate 'subsystem == "com.sonny.macagent" AND category == "planner"'`
+      in Terminal: three lines reading "The planner refused a request: …" with the planner's own
+      reason after the colon.
+
 ## 8. How to report back
 
 For each real finding, give me:

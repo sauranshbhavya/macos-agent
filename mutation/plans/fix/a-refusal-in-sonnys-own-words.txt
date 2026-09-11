@@ -1,0 +1,30 @@
+# SONNY-447 — a refused request shows this repository's sentence, never the planner's. Property:
+# the error's description is the fixed sentence whatever the reason; the reason stays on the error.
+# Killers expected: UnsupportedRefusalTests, AgentRunnerTests.aRefusedPlanThrowsSonnysOwnSentenceAndKeepsThePlannersReason.
+
+>>> mutant U1 the planner's reason rendered again
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+        case .unsupported:
+            // **This repository's words, whatever the planner wrote** (SONNY-447). The reason used
+>>> to
+        case .unsupported(let detail):
+            return detail
+            // **This repository's words, whatever the planner wrote** (SONNY-447). The reason used
+>>> end
+
+>>> mutant U2 the reason dropped from the error, so nothing can log it
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+            throw AgentExecutionError.unsupported(unsupported.description)
+>>> to
+            throw AgentExecutionError.unsupported("")
+>>> end
+
+>>> mutant U3 the sentence names the mechanism
+>>> file Sources/MacAgentCore/AgentActionExecutor.swift
+>>> from
+    public static let unsupportedRequestSentence = "Sonny can't do that yet."
+>>> to
+    public static let unsupportedRequestSentence = "Unsupported: no registered tool can do that yet."
+>>> end
