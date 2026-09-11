@@ -1,0 +1,28 @@
+# SONNY-441 — a Finder-selection result names its items. Property: every item up to the limit is
+# named by file name, in order, and past the limit the rest is counted.
+# Killers expected: FinderSelectionSummaryTests (all four), AgentRunnerTests
+# (finderSelectionTierZeroAutoRunsWithoutApprovalDecision, for F1 and F3).
+
+>>> mutant F1 the names dropped: the sentence counts again
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+        return "Selected in Finder: \(shown.joined(separator: ", "))\(remainder)."
+>>> to
+        return "Selected in Finder: \(names.count) item(s)."
+>>> end
+
+>>> mutant F2 the limit off by one: the sixth item is named and only seven or more are counted
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+    public static let namedItemLimit = 5
+>>> to
+    public static let namedItemLimit = 6
+>>> end
+
+>>> mutant F3 the whole path named instead of the file name
+>>> file Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift
+>>> from
+        let names = items.map(\.lastPathComponent)
+>>> to
+        let names = items.map(\.path)
+>>> end

@@ -171,6 +171,36 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/finder-selection-names-its-items
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-441** ("What is selected in Finder?" answered "Finder selection contains 1 whitelisted item(s)." and never the name — the founders' pass, test 20). The wave 7 overnight session (run log SONNY-438), third branch of its chain, cut from `fix/switching-apps-from-the-background` at `0d0337d0`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: none new.
+Files changed:
+- `Sources/MacAgentCore/FinderSelectionCapabilityAdapter.swift` — the summary is `FinderSelectionSummary.sentence(for:)`: the items by file name, five named then the rest counted, in the executor's own "and N more" shape; "whitelisted" gone from the sentence, the whitelist check untouched
+- `Tests/MacAgentCoreTests/FinderSelectionSummaryTests.swift` (new, 4) — one item, three, a name with spaces, and the limit's boundary (five named; seven → five and 2 more)
+- `Tests/MacAgentCoreTests/AgentRunnerTests.swift` — the one pin on the old sentence follows the change
+- `mutation/plans/fix/finder-selection-names-its-items.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-441), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/finder-selection-names-its-items.txt (founder-triggered, not run on this branch) — three mutants: the names dropped for a count, the limit off by one, the whole path named instead of the file name.
+
+Behavior added: none. The Finder-selection result names what is selected.
+Behavior preserved (required, no blanket claims):
+- The whitelist check and its refusal (`FinderSelectionResolver.whitelistedSelection`) are untouched; a selection outside Desktop and Documents is refused exactly as before.
+- The capability's tier (0), its planner tool description, its preview (the paths as details) and the empty-selection error (`FinderContextError.noSelection`, thrown before the summary is ever built) are unchanged.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A summary that counts is a summary that hides its subject, and the preview's details do not reach the result panel.** The paths were there all along, in `ActionPreview.details`, which the approval panel shows and the result panel does not; a tier-0 capability never shows an approval, so nothing the user saw ever named the item. The general shape: what a result *summary* says is the whole of what a user reads for an auto-run capability, and a summary written for a log ("Found N item(s)") reads as evasive on screen.
+
+Known limitations / deferred scope: none.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/the-gate-waits-for-the-check-it-started (SONNY-442), cut from this branch's head.
+
 ### Branch: fix/switching-apps-from-the-background
 Status: complete
 Date: 2026-09-11

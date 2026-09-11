@@ -4357,6 +4357,18 @@ session can measure: until it passes, the premise is unmeasured.
       bottom of the page`. Safari comes forward before the first capture and the session runs (as
       before, now from the background too).
 
+### The Finder selection is named (new 2026-09-11, SONNY-441)
+
+"What is selected in Finder?" answered "Finder selection contains 1 whitelisted item(s)." (the
+founders' pass, test 20). It names the items now, five by name and the rest counted.
+
+- [ ] Select one file on the Desktop, type `what is selected in Finder?`: "Selected in Finder:
+      <its name>." with the real file name, extension included.
+- [ ] Select three files: all three named, in Finder's order, comma-separated.
+- [ ] Select seven: five named, then ", and 2 more."
+- [ ] Select a file outside Desktop and Documents (for example in ~/Downloads): the whitelist
+      refusal reads as before; nothing about that sentence changed.
+
 ## 8. How to report back
 
 For each real finding, give me:
