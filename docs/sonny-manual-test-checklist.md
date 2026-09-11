@@ -4370,9 +4370,14 @@ the rest counted.
       the order Finder reports them, comma-separated.
 - [ ] Select seven short-named files (`1.txt` to `7.txt`): "7 selected in Finder: 1.txt, 2.txt,
       3.txt, 4.txt, 5.txt, and 2 more."
-- [ ] Select seven screenshots (`Screenshot 2026-09-11 at 09.14.02.png` and the like): the widget
-      shows the whole sentence on three lines or fewer with no ellipsis — "7 selected in Finder: "
-      first, two names, then ", and 5 more." — and hovering the panel shows the same sentence.
+- [ ] Select seven screenshots (`Screenshot 2026-09-11 at 09.14.02.png` and the like, the names a
+      24-hour clock gives): the widget shows the whole sentence on three lines or fewer with no
+      ellipsis — "7 selected in Finder: " first, three names, then ", and 4 more." — exactly the
+      sentence the test pins for that shape, and hovering the panel shows the same sentence. On a
+      Mac set to a 12-hour clock the names read `… at 9.14.02 AM.png` and the sentence names two
+      and counts ", and 5 more." on two lines; either way the count leads and nothing is cut (the
+      delta review of PR #228's fix round, N1: the earlier wording of this row expected the
+      12-hour shape's count for the 24-hour names).
 - [ ] Make a symbolic link on the Desktop (`ln -s ~/Desktop/q3-final-v7.pdf ~/Desktop/"Latest
       report.pdf"`), select the link: "Selected in Finder: Latest report.pdf." — the link's own
       name, not `q3-final-v7.pdf`.
