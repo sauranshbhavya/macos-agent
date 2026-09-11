@@ -659,6 +659,45 @@ struct ScheduledRoutineRunTests {
         #expect(schedule.pausedReason == nil)
     }
 
+    /// SONNY-449, the scheduled path (PR #233's first review): a routine whose snippet step meets
+    /// a snippets file this Mac cannot read fails on its scheduled run with the decrypt sentence,
+    /// and the notice — which renders on the widget and in Command Center — ends with the same way
+    /// out the foreground failure and the storage banner name, from the same constant.
+    @Test
+    func aScheduledRunThatMeetsAnUnreadableStoreNamesTheWayOutInItsNotice() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let foreign = LocalStorageEncryption(keyManager: ForeignKeyManager())
+        let bytes = try foreign.encode(["placeholder": UUID().uuidString])
+        #expect(bytes.starts(with: LocalStorageEncryption.fileHeader))
+        try bytes.write(to: fixture.snippetStore.fileURL, options: .atomic)
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("could not be decrypted or decoded"), Comment(rawValue: notice))
+        #expect(notice.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut), Comment(rawValue: notice))
+    }
+
+    /// A key no store in this file's fixture holds — every store here reads
+    /// `LocalStorageEncryption.shared`'s deterministic test key.
+    private struct ForeignKeyManager: LocalStorageKeyManaging {
+        func keyData() throws -> Data { Data(repeating: 0x77, count: 32) }
+    }
+
     /// The tier-3+ backstop. `AgentRunner` re-assesses at execute time and requires the approved
     /// tier to be at least the effective tier, so the tier-2 unattended approval cannot satisfy a
     /// routine that escalates — the refusal is structural, not a policy check written in the view

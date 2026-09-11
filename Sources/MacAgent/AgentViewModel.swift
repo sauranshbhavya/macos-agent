@@ -8414,7 +8414,7 @@ final class AgentViewModel: ObservableObject {
                 result: .codeAuthored(error.localizedDescription),
                 plan: nil
             )
-            scheduledRunNotice = "“\(name)” failed on its scheduled run: \(error.localizedDescription)"
+            scheduledRunNotice = "“\(name)” failed on its scheduled run: \(Self.failureMessage(for: error))"
         }
     }
 

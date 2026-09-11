@@ -1,8 +1,12 @@
 # SONNY-449 — a task that meets an unreadable local file ends its failure with the way out the
 # storage banner names. Property: for undecodableLocalData the message ends with the shared
 # sentence; for any other error it is the error's own sentence; the banner reads the same constant.
-# Killers expected: MemoryCommandCenterTests (aTaskThatMeetsAnUnreadableStoreNamesTheWayOut,
-# aTaskThatFailsForAnotherReasonNamesNoWayOut), UnreadableStoreWayOutTests.
+# Killers expected: W1 and W2 by MemoryCommandCenterTests (aTaskThatMeetsAnUnreadableStoreNamesTheWayOut,
+# aTaskThatFailsForAnotherReasonNamesNoWayOut), UnreadableStoreWayOutTests and, for W1, ScheduledRoutineRunTests
+# (aScheduledRunThatMeetsAnUnreadableStoreNamesTheWayOutInItsNotice); W3 by the five banner tests that pin
+# the sentence by value (MemoryCommandCenterTests.theBannerForAnUnreadableStoreNamesTheWayOut and three
+# siblings, AgentViewModelLocalStorageTests.theLoadFailureBannerExplainsItselfOnceAndStillNamesTheAffectedStore),
+# measured by PR #233's first review.
 
 >>> mutant W1 the way out dropped from a task's failure
 >>> file Sources/MacAgent/AgentViewModel.swift
