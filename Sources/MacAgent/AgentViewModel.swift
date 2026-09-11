@@ -5644,6 +5644,11 @@ final class AgentViewModel: ObservableObject {
             // function.)
             return false
         }
+        // **This run does not minimise, and that is the one deliberate exception to SONNY-450's
+        // every-run rule** (PR #237's first review, F2): the summon above is an expansion by that
+        // rule, and it is here on purpose — the founders' consequence rule runs a sheet edit without
+        // asking, and the widget's result panel is where that silent run is disclosed, so the widget
+        // is brought forward for it rather than minimised out of the way.
         widgetPresentationRequest += 1
         return true
     }

@@ -289,7 +289,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.$widgetPresentationRequest
             .dropFirst()
             .sink { [weak self] _ in
-                self?.widgetController.show()
+                guard let self else { return }
+                // **The pill goes before the widget comes, in one synchronous step** (PR #237's
+                // first review, F1). A summon is an expansion by the view model's rule, but that
+                // rule lands a main-queue hop later through `observeWidgetMinimisation()`; this
+                // sink fires first, so without these two lines the widget was fronted while the
+                // pill was still ordered front, and the deferred correction then fronted the widget
+                // a second time. Hiding the pill here and recording the applied state makes the
+                // transition atomic and the later apply a no-op. Nothing derived is read here —
+                // `@Published` publishes before the mutation lands, so the flag still reads its
+                // old value inside this sink; only the two window calls happen.
+                self.runPillController.hide()
+                self.appliedWidgetMinimised = false
+                self.widgetController.show()
             }
             .store(in: &cancellables)
     }
