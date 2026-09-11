@@ -7,10 +7,14 @@
 # mutant here reports SURVIVED with no test having seen it (SONNY-455).
 #
 # Killers, each measured by applying the mutant by hand at the fix round's tree (PR #236, 2026-09-11),
-# all in test/topup.db.test.ts: T1 by "a settle that arrives after the grant leaves the grant
-# standing", "a provider_error row does not take a later settle either", "a settle that matched
-# nothing reports the row it found" and the interleavings; T2 by "an unconfirmed row still takes the
-# grant that arrives after it"; T3 by "a provider_error row does not take a later settle either"
+# all in test/topup.db.test.ts: T1 by seven — "a settle that arrives after the grant leaves the grant
+# standing", "a provider_error row does not take a later settle either", "a declined row takes a
+# later grant, because paid beats the provider's own earlier decline", "a settle that matched
+# nothing reports the row it found", "the late caller whose settle matched nothing is answered from
+# the grant, not unconfirmed", "two grants for one order leave one grant and tell both callers
+# granted" and "a late settle that waits on the grant's row lock writes nothing once the grant
+# commits" (the decline-then-grant interleaving passes under T1, since T1 lets the grant land); T2
+# by "an unconfirmed row still takes the grant that arrives after it"; T3 by "a provider_error row does not take a later settle either"
 # alone (PR #236's first review wrote T3 and watched it survive before that test existed); T4 by "a
 # declined row takes a later grant, because paid beats the provider's own earlier decline" and "a
 # grant that arrives after a decline lands, and the row says granted"; T5 by "the late caller whose
