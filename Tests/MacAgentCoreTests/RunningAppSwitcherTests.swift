@@ -33,11 +33,25 @@ struct RunningAppSwitcherTests {
         answering: Bool,
         log: ActivationLog
     ) -> WorkspaceRunningAppSwitcher {
+        switcher(
+            running: running,
+            answering: answering ? { .activated(processIdentifier: $0.processIdentifier) } : { _ in .refused },
+            log: log
+        )
+    }
+
+    /// The activation answers whatever `answering` makes of the app it was handed — the resolved
+    /// process, a fresh one, or a refusal.
+    private static func switcher(
+        running: [RunningApp],
+        answering: @escaping (RunningApp) -> RunningAppActivationOutcome,
+        log: ActivationLog
+    ) -> WorkspaceRunningAppSwitcher {
         WorkspaceRunningAppSwitcher(
             runningApplications: { running },
             activation: { app in
                 log.activated.append(app)
-                return answering
+                return answering(app)
             }
         )
     }
@@ -70,9 +84,12 @@ struct RunningAppSwitcherTests {
     }
 
     /// Switching launches nothing, by the tool's own description: an app that is not running fails
-    /// by name before the activation is ever asked.
+    /// before the activation is ever asked. What the switcher throws names the identifier it was
+    /// handed; the display name the user reads comes from the adapter, which fails first with it
+    /// (`RunningAppSwitchCapabilityAdapter.app(in:)`), so this test's claim is the refusal and the
+    /// untouched log, not the wording (PR #227's F6).
     @Test
-    func anAppThatIsNotRunningFailsByNameAndIsNeverActivated() async {
+    func anAppThatIsNotRunningIsRefusedBeforeTheActivationIsAsked() async {
         let log = ActivationLog()
         let subject = Self.switcher(running: [Self.finder], answering: true, log: log)
 
@@ -80,6 +97,46 @@ struct RunningAppSwitcherTests {
             try await subject.activate(bundleIdentifier: "com.apple.Safari")
         }
         #expect(log.activated.isEmpty)
+    }
+
+    /// **The process Launch Services activated is compared with the one the switcher resolved**
+    /// (PR #227's F1, the founders' decision of 2026-09-11). An app that quit between the running
+    /// check and the open passes the check and is started by the open; the completion's process
+    /// identifier is then a fresh one, and the switch is reported as the launch it was, in Sonny's
+    /// own sentence, rather than as "Switched to". The activation was asked exactly once either
+    /// way — nothing here retries or undoes the launch.
+    @Test
+    func anActivationThatAnsweredWithAnotherProcessIsReportedAsALaunchNotASwitch() async {
+        let log = ActivationLog()
+        let subject = Self.switcher(
+            running: [Self.chrome],
+            answering: { _ in .activated(processIdentifier: Self.chrome.processIdentifier + 1) },
+            log: log
+        )
+
+        await #expect(throws: RunningAppSwitchError.launchedInsteadOfSwitching("Google Chrome")) {
+            try await subject.activate(bundleIdentifier: "com.google.Chrome")
+        }
+        #expect(log.activated == [Self.chrome])
+        #expect(
+            RunningAppSwitchError.launchedInsteadOfSwitching("Google Chrome").errorDescription
+                == "Google Chrome had quit, so Sonny opened it instead of switching to it."
+        )
+    }
+
+    /// The other outcome: the process that answered is the one resolved, and the switch is a switch.
+    @Test
+    func anActivationThatAnsweredWithTheResolvedProcessIsASwitch() async throws {
+        let log = ActivationLog()
+        let subject = Self.switcher(
+            running: [Self.finder, Self.chrome],
+            answering: { .activated(processIdentifier: $0.processIdentifier) },
+            log: log
+        )
+
+        try await subject.activate(bundleIdentifier: "com.google.Chrome")
+
+        #expect(log.activated == [Self.chrome])
     }
 
     @Test

@@ -67,7 +67,11 @@ public struct SystemScreenActionSynthesizer: ScreenActionSynthesizing {
         guard let bundleURL else {
             return false
         }
-        return await RunningAppActivation.activate(bundleURL: bundleURL)
+        // A launch in place of an activation is not told apart here (PR #227's F1 names the
+        // window): the runner re-checks which app is frontmost after it settles and refuses to
+        // continue on the wrong one, which is the check that governs a session; the switcher, whose
+        // whole outcome is the activation, compares the process instead.
+        return await RunningAppActivation.activate(bundleURL: bundleURL) != .refused
     }
 
     public func frontmostBundleIdentifier() async -> String? {

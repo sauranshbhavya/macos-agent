@@ -4334,15 +4334,23 @@ fresh install, or, with Sonny quit, `rm ~/Library/Application\ Support/Sonny/cli
 
 `switch to <app>` and `focus <app>` used to fail with "Could not switch to <app>." whenever Sonny was
 not the active app — which it never is while you type into the widget from somewhere else — because
-the activation call macOS 14 deprecated refuses a background process. Activation goes through Launch
-Services now, the route `open <app>` already took. Screen control's own "bring the app forward" took
-the same route.
+under macOS 14's cooperative activation the process-bound call refuses a background process.
+Activation goes through Launch Services now, the route `open <app>` already took. Screen control's
+own "bring the app forward" took the same route. The first row is the fix's whole premise, which no
+session can measure: until it passes, the premise is unmeasured.
 
 - [ ] With Chrome running and Finder in front, click into the widget and type `switch to Chrome`:
       Chrome comes forward. Repeat from a full-screen app on another Space: it still comes forward.
 - [ ] `focus chrome` (the planner's route for the same ask, as the founders typed it): the same.
 - [ ] Quit Safari, type `switch to Safari`: "No running app matched Safari." and nothing launches
       (the tool launches nothing, by design; `open Safari` is the launch).
+- [ ] Safari running with every window closed (⌘W on each), Finder in front, type `switch to
+      Safari`: Safari comes forward and opens a new window — Launch Services sends a reopen, which
+      is what a Dock click does (kept by the founders' decision of 2026-09-11).
+- [ ] Optional, the race: with Chrome running, press ⌘Q in Chrome and within the same second type
+      `switch to Chrome`. Either "No running app matched Google Chrome." (the check saw it gone), or
+      Chrome relaunches and the widget reads "Google Chrome had quit, so Sonny opened it instead of
+      switching to it." — never "Switched to Google Chrome." over a relaunch.
 - [ ] Screen control, Normal mode, Safari running behind another app: `in Safari, scroll to the
       bottom of the page`. Safari comes forward before the first capture and the session runs (as
       before, now from the background too).

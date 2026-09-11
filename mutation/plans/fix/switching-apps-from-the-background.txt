@@ -1,18 +1,22 @@
 # SONNY-440 — switching to a running app works from the background. Property: the switcher
-# activates a running app through the injected seam and fails by name when the seam refuses or
-# the app is not running; the not-running case never asks the seam.
-# Killers expected: RunningAppSwitcherTests (aRefusedActivationFailsByTheAppsName,
-# anAppThatIsNotRunningFailsByNameAndIsNeverActivated,
-# aRunningAppIsHandedToTheActivationAndTheSwitchSucceedsWhenItAnswersYes).
+# activates a running app through the injected seam, fails by the app's name when the seam refuses,
+# refuses before asking the seam when the app is not running, and reports a launch as a launch
+# when the process the seam activated is not the one it resolved (PR #227's F1 and F6).
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #227, 2026-09-11):
+# S1 and S3 by aRefusedActivationFailsByTheAppsName; S2 by
+# aRunningAppIsHandedToTheActivationAndTheSwitchSucceedsWhenItAnswersYes,
+# anAppThatIsNotRunningIsRefusedBeforeTheActivationIsAsked and
+# anActivationThatAnsweredWithTheResolvedProcessIsASwitch; S4 by
+# anActivationThatAnsweredWithAnotherProcessIsReportedAsALaunchNotASwitch.
 
 >>> mutant S1 the activation's answer ignored: a refused switch reads as a success
 >>> file Sources/MacAgentCore/RunningAppService.swift
 >>> from
-        guard await activation(app) else {
+        case .refused:
             throw RunningAppSwitchError.failedToActivate(app.displayName)
-        }
 >>> to
-        _ = await activation(app)
+        case .refused:
+            break
 >>> end
 
 >>> mutant S2 the running check dropped: any running app is activated in place of the one named
@@ -33,4 +37,14 @@
             throw RunningAppSwitchError.failedToActivate(app.displayName)
 >>> to
             throw RunningAppSwitchError.failedToActivate(app.bundleIdentifier)
+>>> end
+
+>>> mutant S4 the process comparison dropped: a launch reads as a switch (PR #227's F1)
+>>> file Sources/MacAgentCore/RunningAppService.swift
+>>> from
+            guard processIdentifier == app.processIdentifier else {
+                throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
+            }
+>>> to
+            _ = processIdentifier
 >>> end

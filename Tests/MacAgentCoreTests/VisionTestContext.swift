@@ -47,7 +47,7 @@ enum VisionTestContext {
             // honest fixture.
             runningAppSwitcher: WorkspaceRunningAppSwitcher(
                 runningApplications: { [] },
-                activation: { _ in false }
+                activation: { _ in .refused }
             ),
             recentArtifactStore: RecentArtifactStore(fileURL: scratchURL("artifacts.json")),
             shortcutCatalog: ProcessShortcutCatalog(),

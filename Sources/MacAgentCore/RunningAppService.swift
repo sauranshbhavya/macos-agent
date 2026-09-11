@@ -22,6 +22,10 @@ public enum RunningAppSwitchError: Error, Equatable, LocalizedError {
     case missingQuery
     case noMatchingRunningApp(String)
     case failedToActivate(String)
+    /// Launch Services answered with a process other than the one the switcher resolved: the app
+    /// had quit between the running check and the open, and was started rather than brought
+    /// forward (SONNY-440, PR #227's F1). Sonny cannot undo the launch, so it says what happened.
+    case launchedInsteadOfSwitching(String)
 
     public var errorDescription: String? {
         switch self {
@@ -31,8 +35,17 @@ public enum RunningAppSwitchError: Error, Equatable, LocalizedError {
             return "No running app matched \(query)."
         case .failedToActivate(let app):
             return "Could not switch to \(app)."
+        case .launchedInsteadOfSwitching(let app):
+            return "\(app) had quit, so Sonny opened it instead of switching to it."
         }
     }
+}
+
+/// What Launch Services answered when asked to bring an app forward: the process it activated,
+/// or a refusal. The process identifier is what tells a switch from a launch (PR #227's F1).
+public enum RunningAppActivationOutcome: Equatable, Sendable {
+    case activated(processIdentifier: Int32)
+    case refused
 }
 
 @MainActor
@@ -47,7 +60,9 @@ public protocol RunningAppSwitching: AnyObject {
 /// **`activate(options:)` answers false from a background app, and Sonny is a background app while
 /// a command runs.** The founders typed `switch to Chrome` into the widget with Chrome running and
 /// read "Could not switch to Google Chrome." — the switcher had resolved the right app and the
-/// deprecated call had refused it. Since macOS 14 activation is cooperative: a process may
+/// call had refused it (the call itself carries no deprecation marker in the SDK this tree builds
+/// against; what macOS 14 deprecated is the ignoring-other-apps *option*, which neither old call
+/// passed — PR #227's F4). Since macOS 14 activation is cooperative: a process may
 /// activate another only while it is itself the active app or has been yielded activation, and
 /// the widget is a non-activating panel by design (`FloatingWidgetPanel`), so a command typed
 /// there runs with whatever app the user was in still active. The same call sat in
@@ -57,19 +72,38 @@ public protocol RunningAppSwitching: AnyObject {
 /// Launch Services has no such rule. `NSWorkspace.openApplication(at:configuration:)` with
 /// `activates` on brings a running app forward the way `open -a` does, from any process — the
 /// route `WorkspaceAppOpener` already takes for `open Safari`, which the founders' row 21 proved
-/// works from the background. For an app that is already running Launch Services sends it a reopen
-/// and activates it; it starts no second instance (`createsNewApplicationInstance` stays false), so
-/// "switching launches nothing" still holds: every caller checks the app is running before it
-/// reaches this, and an app that is not running fails by name without this ever being asked.
+/// works from the background for an app that was *not* running. That the same call brings an
+/// already-running app forward from the background is the premise of this fix, and it is
+/// unmeasured until the founders' first manual row passes. For an app that is already running
+/// Launch Services sends it a reopen and activates it — which for an app with no window open
+/// creates one, as a Dock click does — and it starts no second instance
+/// (`createsNewApplicationInstance` stays false).
+///
+/// **"Switching launches nothing" is a check followed by an act, and there is a window between
+/// them** (PR #227's F1). Every caller checks the app is running before it reaches this, but the
+/// running list refreshes only when the main run loop runs in a common mode, an app mid-quit stays
+/// listed until it exits, and the open itself is a separate hop — so an app that quit after the
+/// check passes it, and Launch Services, asked to open a bundle with no process behind it,
+/// starts one. The window cannot be closed on this route; a process-bound activation through
+/// Accessibility could close it and would tie switching to that grant, which is recorded on
+/// SONNY-440 as the alternative not built. What this route can do is notice: the completion hands
+/// back the `NSRunningApplication` it activated, and its process identifier either is the one the
+/// switcher resolved or is a fresh launch. `activate(bundleURL:)` returns it, and the switcher
+/// reports a launch as one rather than as a switch.
 @MainActor
 public enum RunningAppActivation {
-    /// Brings the app at `bundleURL` to the front. Answers false when Launch Services refused.
-    public static func activate(bundleURL: URL) async -> Bool {
+    /// Brings the app at `bundleURL` to the front, answering with the process Launch Services
+    /// activated, or `.refused` when it refused.
+    public static func activate(bundleURL: URL) async -> RunningAppActivationOutcome {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
-                continuation.resume(returning: error == nil)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<RunningAppActivationOutcome, Never>) in
+            NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { application, error in
+                guard error == nil, let application else {
+                    continuation.resume(returning: .refused)
+                    return
+                }
+                continuation.resume(returning: .activated(processIdentifier: application.processIdentifier))
             }
         }
     }
@@ -85,7 +119,7 @@ public enum RunningAppActivation {
 @MainActor
 public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
     public typealias RunningApplications = @MainActor () -> [RunningApp]
-    public typealias Activation = @MainActor (RunningApp) async -> Bool
+    public typealias Activation = @MainActor (RunningApp) async -> RunningAppActivationOutcome
 
     private let runningApplications: RunningApplications
     private let activation: Activation
@@ -118,7 +152,7 @@ public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
             },
             activation: { app in
                 guard let bundleURL = app.bundleURL else {
-                    return false
+                    return .refused
                 }
                 return await RunningAppActivation.activate(bundleURL: bundleURL)
             }
@@ -133,8 +167,17 @@ public final class WorkspaceRunningAppSwitcher: RunningAppSwitching {
         guard let app = runningApplications().first(where: { $0.bundleIdentifier == bundleIdentifier }) else {
             throw RunningAppSwitchError.noMatchingRunningApp(bundleIdentifier)
         }
-        guard await activation(app) else {
+        switch await activation(app) {
+        case .refused:
             throw RunningAppSwitchError.failedToActivate(app.displayName)
+        case .activated(let processIdentifier):
+            // The process Launch Services activated is the one resolved above, or the app quit in
+            // the window between the running check and the open and this is a fresh launch (PR
+            // #227's F1). A launch is reported as one: "Switched to" would be a sentence about a
+            // switch that did not happen.
+            guard processIdentifier == app.processIdentifier else {
+                throw RunningAppSwitchError.launchedInsteadOfSwitching(app.displayName)
+            }
         }
     }
 }
