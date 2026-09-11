@@ -691,16 +691,20 @@ struct ScreenControlGateRefreshWaitTests {
     /// has answered, so the refresh cannot finish first: if the door answers at all, the wait ended
     /// on cancellation. The answer is the refusal the store still holds — no claim — which the
     /// adapter turns into the run's "Canceled." (`aStopWhileTheDoorWaitsEndsTheRunAsCanceledNotAsARefusal`
-    /// in `VisionSessionRunTests`). A wait that cannot be cancelled does not hang this test: a
-    /// backstop lets the reply through after a minute, the refresh then writes the claim, and
-    /// the assertion that the store was still empty when the door answered is what goes red.
+    /// in `VisionSessionRunTests`), and exactly one request was sent.
     ///
-    /// The door runs in a detached task: one inheriting this suite's main-actor context needs a
-    /// main-actor slot to start, and under the full parallel suite that slot came more than ten
-    /// seconds late (the first full run at `564922c5` recorded "the refresh never reached the
-    /// wire" for exactly this test, which had passed alone and under three hand-applied mutants).
-    /// Nothing the door does needs the main actor, so nothing here waits on it; the two deadlines
-    /// are backstops against a regression, not timings the correct code has to win.
+    /// **Everything between the press and the answer runs off the main actor.** This suite's
+    /// fixture is main-actor bound, and under the full parallel suite a main-actor slot can come
+    /// tens of seconds late: the first full run at `564922c5` never saw the request within ten
+    /// seconds of polling from the main actor, and the second at `0e20e197` saw it so late that
+    /// URLSession's 20 s idle timeout had failed the held request first, the door re-read and
+    /// started a second refresh, and the test read two requests. So the door, the wait for the
+    /// request to reach the wire and the stop all run in one detached task, resumed by the
+    /// handler itself rather than by a poll, and the main actor is touched once, at the end.
+    ///
+    /// A wait that cannot be cancelled does not hang this test: the held request fails on that
+    /// same 20 s idle timeout, the door re-reads and sends a second request, and the one-request
+    /// assertion is what goes red; a minute's backstop releases the reply in any case.
     @Test
     @MainActor
     func aStopDuringTheDoorsWaitEndsTheWaitBeforeTheRefreshDoes() async throws {
@@ -709,9 +713,11 @@ struct ScreenControlGateRefreshWaitTests {
         defer { fixture.unregister() }
         let body = try JSONSerialization.data(withJSONObject: ["entitlement": signer.claim(subject: "test-user")])
         let onTheWire = RecordedBackendRequests()
+        let (arrivals, arrived) = AsyncStream<Void>.makeStream()
         let release = DispatchSemaphore(value: 0)
         fixture.register { request in
             onTheWire.append(request)
+            arrived.yield(())
             release.wait()
             return .reply(statusCode: 200, headers: ["Content-Type": "application/json"], body: body)
         }
@@ -723,29 +729,41 @@ struct ScreenControlGateRefreshWaitTests {
             topUp: StubTopUpPurchasing.neverCalled()
         )
 
-        let door = Task.detached { await subject.decide(at: .sessionStart) }
-        let deadline = Date(timeIntervalSinceNow: 60)
-        while onTheWire.all.isEmpty {
-            if Date() > deadline {
-                Issue.record("the refresh never reached the wire")
-                release.signal()
-                return
+        let outcome = await Task.detached { () -> (reachedTheWire: Bool, decision: ScreenControlGateDecision?, claimWrittenFirst: Bool) in
+            let door = Task { await subject.decide(at: .sessionStart) }
+            let reachedTheWire = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    for await _ in arrivals { return true }
+                    return false
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(60))
+                    return false
+                }
+                let first = await group.next() ?? false
+                group.cancelAll()
+                return first
             }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let backstop = Task.detached {
-            try? await Task.sleep(for: .seconds(60))
+            guard reachedTheWire else {
+                release.signal()
+                return (false, nil, false)
+            }
+            let backstop = Task {
+                try? await Task.sleep(for: .seconds(60))
+                release.signal()
+            }
+            door.cancel()
+            let decision = await door.value
+            let claimWrittenFirst = store.current != nil
+            backstop.cancel()
             release.signal()
-        }
-        door.cancel()
-        let decision = await door.value
-        let claimWrittenBeforeTheDoorAnswered = store.current != nil
-        backstop.cancel()
-        release.signal()
+            return (true, decision, claimWrittenFirst)
+        }.value
         await service.awaitPendingRefresh()
 
-        #expect(!claimWrittenBeforeTheDoorAnswered, "the door waited for the refresh instead of ending on the stop")
-        #expect(decision == .refused(.entitlementUnconfirmed(.noClaim)))
+        #expect(outcome.reachedTheWire, "the refresh never reached the wire")
+        #expect(!outcome.claimWrittenFirst, "the door waited for the refresh instead of ending on the stop")
+        #expect(outcome.decision == .refused(.entitlementUnconfirmed(.noClaim)))
         #expect(onTheWire.all.map(\.path) == ["/v1/account/entitlements"])
     }
 
