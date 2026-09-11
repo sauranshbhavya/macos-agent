@@ -917,8 +917,8 @@ than only when one of them found something.
 
 This is founder-triggered, never a session's to start. A session that wants a shape measured adds
 it to the relevant branch's `mutation/plans/<branch-name>.txt` (one folder down for a slashed
-branch name) and says so in its changelog entry
-or its review (step 5, step 7) — it does not run `scripts/mutate-all` itself.
+branch name) and says so in its changelog entry or its review (step 5, step 7) — it does not run
+`scripts/mutate-all` itself.
 
 ## 8. Merge strategy, and the history rewrite of 2026-08-24
 

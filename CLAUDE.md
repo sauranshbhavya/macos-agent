@@ -62,9 +62,10 @@ a plan being edited is an uncommitted file, and `scripts/mutate` refuses to star
 tree, so the plan is committed before anything ever runs against it; `scripts/mutate --help`'s
 line about keeping a plan outside the working tree describes the retired per-branch run, where a
 plan was a scratch file, and does not apply to a branch's own committed plan — and names that path
-in its changelog entry's `Mutation plan:` line. Nothing runs at PR time, after a rebase, or after a fix round. `scripts/warnings` still
-refuses to run beside a battery, and the worktree is still frozen for a battery's whole duration,
-exactly as before — none of that changed, only who presses the button and when.
+in its changelog entry's `Mutation plan:` line. Nothing runs at PR time, after a rebase, or after
+a fix round. `scripts/warnings` still refuses to run beside a battery, and the worktree is still
+frozen for a battery's whole duration, exactly as before — none of that changed, only who presses
+the button and when.
 
 Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
 refuses to **start** while `git status --porcelain` prints anything: a hand-rolled battery reverts
