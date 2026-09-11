@@ -4301,15 +4301,27 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 
 The recording gate used to wait for a one-time notice that no surface shows any more, so a fresh
 install read the Settings toggle as on while nothing was recorded (the founders' pass, test 18).
-The toggle's own value is the whole gate now. Do these on a Mac whose Settings › Security & Access
-clipboard toggle has never been touched (a fresh install, or `rm ~/Library/Application\ Support/Sonny/clipboard-history-settings.json` with Sonny quit).
+The toggle's own value is the whole gate now, recording is on from the first launch (the founders'
+decision of 2026-09-11), and what launch records is nothing that was already on the clipboard.
+Do these on a Mac whose Settings › Security & Access clipboard toggle has never been touched: a
+fresh install, or, with Sonny quit, `rm ~/Library/Application\ Support/Sonny/clipboard-history-settings.json ~/Library/Application\ Support/Sonny/clipboard-history.json`
+(both files, so entries from earlier passes do not remain in the list).
 
-- [ ] Launch, copy three different texts from any app, type `clipboard history`: the three are
-      listed newest first, without Settings having been opened at all.
+- [ ] Copy something *before* launching Sonny; launch; copy three different texts from any app;
+      type `clipboard history`: the three are listed newest first, the text copied before launch
+      is not, and Settings was never opened.
 - [ ] Type `clip <a word from one of them>`: only the matching entry is shown.
 - [ ] Settings › Security & Access › Watch clipboard history off; copy something new; `clipboard
-      history`: the new copy is not listed. Toggle it on; copy once more: listed.
-- [ ] Memory › the clipboard row's own switch off: a new copy is not listed; on: it is (as before).
+      history`: the new copy is not listed. Toggle it on; `clipboard history`: still not listed.
+      Copy once more: listed.
+- [ ] Memory › the clipboard row's own switch off; copy; on; `clipboard history`: the copy made
+      while it was off is not listed; copy once more: listed.
+- [ ] Memory › the master switch off; copy; on; the same: the copy made while memory was off is
+      not listed; a new copy is.
+- [ ] Widget › "Don't save this task" on; type `=` so the run parks at Sonny's question; copy
+      something; open Command Center (or close and reopen it), then delete a Memory row that is not
+      clipboard history; answer or cancel the question. `clipboard history`: the copy made during
+      the paused run is not listed; a new copy after the run is.
 
 ## 8. How to report back
 

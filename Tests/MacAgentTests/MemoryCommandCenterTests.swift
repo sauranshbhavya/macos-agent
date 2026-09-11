@@ -1241,8 +1241,10 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.clipboardSettingsStore.load().isEnabled, "the user's own choice was rewritten")
     }
 
-    /// The control for the test below, and it is not optional: without it, "nothing was recorded"
-    /// is equally true of a fixture whose monitor could never have recorded anything.
+    /// The control for the tests below, and it is not optional: without it, "nothing was recorded"
+    /// is equally true of a fixture whose monitor could never have recorded anything. The copy is
+    /// made *after* monitoring starts, because a start marks the pasteboard as already seen
+    /// (SONNY-439's fix round), and the poll is the timer's own tick, called directly.
     @Test
     func theClipboardMonitorRecordsWhileMemoryIsOn() throws {
         let fixture = try makeMemoryFixture()
@@ -1250,34 +1252,45 @@ struct MemoryCommandCenterTests {
         try fixture.clipboardSettingsStore.save(
             ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
         )
-        fixture.pasteboard.text = "something copied"
-        fixture.pasteboard.changeCount = 1
 
         fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(fixture.viewModel.isMonitoringClipboardHistory)
+        fixture.pasteboard.text = "something copied"
+        fixture.pasteboard.changeCount = 1
+        fixture.viewModel.pollClipboardHistory()
 
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["something copied"])
     }
 
-    /// **A fresh install records without anyone touching a switch** (SONNY-439). The founders'
-    /// pass copied text, asked for `clipboard history` and got nothing (test 18), while test 73,
-    /// which flips the Settings toggle off and on, passed: `refreshClipboardHistoryNotice` required
-    /// `noticeDismissed` beside `isEnabled`, and the notice that set it went with the menu-bar
-    /// popover. No settings file at all is what a fresh install has, so this fixture writes none.
-    /// The control one test up writes the dismissed flag `true` and records; this one writes
-    /// nothing and must record just the same.
+    /// **A fresh install records without anyone touching a switch, from the first launch, and
+    /// leaves what was already on the clipboard** (SONNY-439; the founders' decision of
+    /// 2026-09-11 after PR #226's fresh review, F1). The founders' pass copied text, asked for
+    /// `clipboard history` and got nothing (test 18), while test 73, which flips the Settings
+    /// toggle off and on, passed: `refreshClipboardHistoryNotice` required `noticeDismissed` beside
+    /// `isEnabled`, and the notice that set it went with the menu-bar popover. No settings file at
+    /// all is what a fresh install has, so this fixture writes none. The text staged *before* the
+    /// first start is what was on the clipboard before Sonny launched, and it is never swept in;
+    /// the text copied after is recorded. Under C1 (the old gate) the timer never arms, and under
+    /// C4 (the resynchronise dropped) the pre-launch text is recorded — both assertions are there.
     @Test
-    func aFreshInstallRecordsClipboardHistoryWithoutTheSwitchBeingTouched() throws {
+    func aFreshInstallStartsRecordingAndLeavesWhatWasAlreadyOnTheClipboard() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         #expect(!FileManager.default.fileExists(atPath: fixture.clipboardSettingsStore.fileURL.path))
-        fixture.pasteboard.text = "copied on a fresh install"
+        fixture.pasteboard.text = "on the clipboard before Sonny launched"
         fixture.pasteboard.changeCount = 1
 
         fixture.viewModel.refreshClipboardHistoryNotice()
 
         #expect(fixture.viewModel.clipboardHistoryEnabled)
         #expect(fixture.viewModel.isMonitoringClipboardHistory)
-        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied on a fresh install"])
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty, "the text copied before launch was swept in")
+
+        fixture.pasteboard.text = "copied after launch"
+        fixture.pasteboard.changeCount = 2
+        fixture.viewModel.pollClipboardHistory()
+
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied after launch"])
     }
 
     /// The exact file the founders' Mac held: the toggle never touched, so the dismissed flag is
@@ -1289,10 +1302,12 @@ struct MemoryCommandCenterTests {
         try fixture.clipboardSettingsStore.save(
             ClipboardHistorySettings(noticeDismissed: false, isEnabled: true)
         )
-        fixture.pasteboard.text = "copied before any notice"
-        fixture.pasteboard.changeCount = 1
 
         fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(fixture.viewModel.isMonitoringClipboardHistory, "the never-dismissed flag still gates the start")
+        fixture.pasteboard.text = "copied before any notice"
+        fixture.pasteboard.changeCount = 1
+        fixture.viewModel.pollClipboardHistory()
 
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied before any notice"])
     }
@@ -1350,12 +1365,49 @@ struct MemoryCommandCenterTests {
 
         fixture.viewModel.setMemoryEnabled(false)
 
+        // **The timer assertions are the ones that hold the guard now** (PR #226's fresh review's
+        // fix round): a start marks the pasteboard as seen before its first poll, so a start that
+        // the guard should have refused records nothing on that poll either way, and only whether
+        // the timer is armed can see C3.
+        #expect(!fixture.viewModel.isMonitoringClipboardHistory, "memory is off and the poll timer is armed")
         #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
         // Asked again, from the surface that starts monitoring at every other opportunity.
         fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(!fixture.viewModel.isMonitoringClipboardHistory, "memory is off and a refresh armed the poll timer")
         #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
         // And the user's own clipboard setting was not rewritten to achieve any of it.
         #expect(try fixture.clipboardSettingsStore.load().isEnabled)
+    }
+
+    /// **A switch going off and on does not record what was copied while it was off** (SONNY-439,
+    /// PR #226's fresh review, F3, founder decision 2026-09-11) — through each of the three doors
+    /// the review measured: the Settings toggle, the Memory row's own switch, and the master switch.
+    /// Stopping the monitor leaves its last change count behind, so a restart's first poll used to
+    /// see a changed count and record the off-period copy; the start door resynchronises first
+    /// now. The copy made after the restart is recorded, which is the control.
+    @Test(arguments: ClipboardSwitchDoor.allCases)
+    func aSwitchOffAndOnDoesNotRecordWhatWasCopiedWhileItWasOff(door: ClipboardSwitchDoor) throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
+        )
+        fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(fixture.viewModel.isMonitoringClipboardHistory)
+
+        door.turn(fixture.viewModel, on: false)
+        #expect(!fixture.viewModel.isMonitoringClipboardHistory, "\(door) off left the poll timer armed")
+        fixture.pasteboard.text = "copied while \(door) was off"
+        fixture.pasteboard.changeCount = 1
+
+        door.turn(fixture.viewModel, on: true)
+        #expect(fixture.viewModel.isMonitoringClipboardHistory, "\(door) on did not arm the poll timer")
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty, "\(door) recorded the copy made while it was off")
+
+        fixture.pasteboard.text = "copied while on"
+        fixture.pasteboard.changeCount = 2
+        fixture.viewModel.pollClipboardHistory()
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied while on"])
     }
 
     // MARK: - Allowed apps
@@ -4258,4 +4310,32 @@ private final class MemoryFixturePasteboardReader: PasteboardReading {
     func typeIdentifiers() -> [String] { [] }
 
     func stringValue() -> String? { text }
+}
+
+/// The three switches that can stop and restart clipboard recording (SONNY-439's fix round).
+enum ClipboardSwitchDoor: CaseIterable, CustomStringConvertible {
+    case settingsToggle
+    case memoryRowSwitch
+    case masterSwitch
+
+    var description: String {
+        switch self {
+        case .settingsToggle: return "the Settings toggle"
+        case .memoryRowSwitch: return "the Memory row's switch"
+        case .masterSwitch: return "the master switch"
+        }
+    }
+
+    @MainActor
+    func turn(_ viewModel: AgentViewModel, on isOn: Bool) {
+        switch self {
+        case .settingsToggle:
+            viewModel.clipboardHistoryEnabled = isOn
+            viewModel.applyClipboardHistoryNoticeChoice()
+        case .memoryRowSwitch:
+            viewModel.setMemoryCategoryEnabled(.clipboardHistory, to: isOn)
+        case .masterSwitch:
+            viewModel.setMemoryEnabled(isOn)
+        }
+    }
 }

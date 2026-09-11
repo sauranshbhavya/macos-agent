@@ -4634,9 +4634,9 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Clipboard history routes to the setting it already had, for the reason on
     /// `MemoryCategory.clipboardHistory`: a second flag over the same behaviour is how a surface
-    /// ends up saying "on" while nothing is recording. The side effect that carries — the first-run
-    /// notice counts as answered — is correct rather than incidental: choosing here *is* answering
-    /// it.
+    /// ends up saying "on" while nothing is recording. The commit path still writes the historical
+    /// `noticeDismissed` flag `true`, which since SONNY-439 decides nothing; it stays so the file's
+    /// shape does not change (PR #226's F6 retired the sentence that called it a consent step).
     func setMemoryCategoryEnabled(_ category: MemoryCategory, to isEnabled: Bool) {
         guard !memorySettings.isDisabledByPolicy else {
             return
@@ -5718,10 +5718,33 @@ final class AgentViewModel: ObservableObject {
             stopClipboardHistoryMonitoring()
             return
         }
+        // **Never while the run's recording policy suppresses traces** (SONNY-439, PR #226's F4,
+        // founder decision 2026-09-11). A "Don't save this task" run stops monitoring when it
+        // starts, and every door that can start it again while that run is parked — Command
+        // Center's `.onAppear`, a Memory delete's refresh, the master switch — ends here; before
+        // this guard each of them re-armed the poll and the first tick recorded what the user had
+        // copied during the pause. `finishRecordingPolicyIfSettled` puts the policy back to
+        // `.record` before it refreshes, so the resume at the run's end still passes.
+        guard !taskRecordingPolicy.suppressesTraces else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
         guard clipboardHistoryTimer == nil else {
             return
         }
 
+        // **A start marks the pasteboard as already seen before its first poll** (SONNY-439,
+        // PR #226's F1 and F3, founder decision 2026-09-11: clipboard history records on by default
+        // from the first launch, and what it records is what is copied while it is on). `poll()`
+        // records whenever the change count differs from the last one it saw; that counter is
+        // `nil` at launch and is left behind by a stop, so the first poll of a launch swept in
+        // whatever was on the clipboard before Sonny opened, and the first poll after any of the
+        // three switches went off and on recorded what was copied while it was off (the review
+        // measured all three doors). One resynchronise at the one place a stopped monitor starts
+        // covers every case: the first start in a launch, the Settings toggle, the Memory row's
+        // switch, the master switch, a Memory delete's restart, and the suppressed run's resume,
+        // which resynchronises once more itself and loses nothing by it.
+        clipboardHistoryMonitor.resynchronize()
         pollClipboardHistory()
         clipboardHistoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in

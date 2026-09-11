@@ -198,14 +198,61 @@ struct ClarificationExitTests {
         viewModel.cancelCurrentRun()
 
         #expect(viewModel.taskRecordingPolicy == .record)
-        // Read 1: `resynchronize()`. Read 2: the immediate poll inside
+        // Read 1: `finishRecordingPolicyIfSettled`'s own `resynchronize()`. Read 2: the start
+        // door's `resynchronize()`, which every start from stopped makes since SONNY-439's fix
+        // round (the two agree, and the second costs one read). Read 3: the immediate poll inside
         // `startClipboardHistoryMonitoring()`, which is the only thing that polls and only does so
         // when it genuinely restarts the timer.
-        #expect(fixture.pasteboard.changeCountReads - readsBefore == 2)
+        #expect(fixture.pasteboard.changeCountReads - readsBefore == 3)
         // Resynchronising is what makes the pause a real pause: the copy made during it is dropped,
         // not recorded late.
         let recorded = try fixture.clipboardHistoryStore.loadAll().map(\.text)
         #expect(!recorded.contains("8-digit code from my authenticator"))
+    }
+
+    /// **A door opened during a suppressed run does not restart clipboard history** (SONNY-439,
+    /// PR #226's fresh review, F4, founder decision 2026-09-11). "Don't save this task" stops the
+    /// monitor at the run's start; Command Center's `.onAppear` refresh and a Memory delete's
+    /// refresh both reach the start door while the run is parked at its question, and before the
+    /// fix each re-armed the poll and recorded what the user copied during the pause — on a fresh
+    /// install (no settings file) and with the dismissed flag on file alike, which is why both are
+    /// driven. The pause ends with the run: a cancel puts the policy back and monitoring resumes,
+    /// with the copy made during the pause dropped rather than recorded late.
+    @Test(arguments: SuppressedRunDoor.allCases, ClipboardSettingsFile.allCases)
+    func aDoorOpenedDuringASuppressedRunDoesNotRestartClipboardHistory(
+        door: SuppressedRunDoor,
+        file: ClipboardSettingsFile
+    ) async throws {
+        let fixture = try ClarificationExitFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+        if case .dismissedFlagOnFile = file {
+            try fixture.clipboardSettingsStore.save(
+                ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
+            )
+        }
+        viewModel.refreshClipboardHistoryNotice()
+        #expect(viewModel.isMonitoringClipboardHistory, "\(file): monitoring did not start at launch")
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+        #expect(viewModel.clarificationQuestion != nil)
+        #expect(!viewModel.isMonitoringClipboardHistory, "\(file): the suppressed run did not pause monitoring")
+
+        fixture.pasteboard.text = "copied during a suppressed run"
+        fixture.pasteboard.setChangeCount(9)
+        door.open(viewModel)
+
+        #expect(viewModel.taskRecordingPolicy == .suppressTraces)
+        #expect(!viewModel.isMonitoringClipboardHistory, "\(door) on \(file) restarted monitoring during a suppressed run")
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
+
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.taskRecordingPolicy == .record)
+        #expect(viewModel.isMonitoringClipboardHistory, "\(door) on \(file): monitoring did not resume when the run ended")
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty, "the copy made during the pause was recorded late")
     }
 
     /// `submitClarification()` sets "Enter an answer before continuing." when Send is pressed on an
@@ -616,6 +663,45 @@ private final class CountingPasteboardReader: PasteboardReading {
 
     func stringValue() -> String? {
         text
+    }
+}
+
+/// The two doors that can reach the clipboard monitor's start while a run is parked (SONNY-439's
+/// fix round): Command Center's `.onAppear`, which is `refreshClipboardHistoryNotice()`, and a
+/// Memory delete, whose `refreshMemorySurfaces()` calls the same.
+enum SuppressedRunDoor: CaseIterable, CustomStringConvertible {
+    case commandCenterRefresh
+    case memoryDelete
+
+    var description: String {
+        switch self {
+        case .commandCenterRefresh: return "a Command Center refresh"
+        case .memoryDelete: return "a Memory delete"
+        }
+    }
+
+    @MainActor
+    func open(_ viewModel: AgentViewModel) {
+        switch self {
+        case .commandCenterRefresh:
+            viewModel.refreshClipboardHistoryNotice()
+        case .memoryDelete:
+            viewModel.deleteMemory(in: .routines)
+        }
+    }
+}
+
+/// What the clipboard settings file holds before the run: nothing at all (a fresh install), or the
+/// file the Settings toggle writes.
+enum ClipboardSettingsFile: CaseIterable, CustomStringConvertible {
+    case freshInstall
+    case dismissedFlagOnFile
+
+    var description: String {
+        switch self {
+        case .freshInstall: return "a fresh install"
+        case .dismissedFlagOnFile: return "the dismissed flag on file"
+        }
     }
 }
 
