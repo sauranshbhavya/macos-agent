@@ -1,9 +1,11 @@
 # SONNY-439 — clipboard history records on a fresh install. Property: the Settings switch and the
 # Memory recording policy are the whole gate; the historical dismissed-notice flag decides nothing.
-# Killers expected: MemoryCommandCenterTests (aFreshInstallRecordsClipboardHistoryWithoutTheSwitch
-# BeingTouched, aSettingsFileWhoseNoticeWasNeverDismissedStillRecords,
-# theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays,
-# theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders).
+# Killers expected: MemoryCommandCenterTests. C1 by aFreshInstallRecordsClipboardHistoryWithoutThe
+# SwitchBeingTouched and aSettingsFileWhoseNoticeWasNeverDismissedStillRecords; C2 by
+# theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays THROUGH ITS TIMER ASSERTION ONLY —
+# ClipboardHistoryMonitor.poll() re-reads the switch and records nothing either way, so the
+# recorded-nothing assertion cannot see C2 (PR #226's second review); C3 by
+# theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders.
 
 >>> mutant C1 the dismissed-flag gate put back beside the switch
 >>> file Sources/MacAgent/AgentViewModel.swift

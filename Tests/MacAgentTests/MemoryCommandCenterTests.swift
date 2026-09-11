@@ -1276,6 +1276,7 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.refreshClipboardHistoryNotice()
 
         #expect(fixture.viewModel.clipboardHistoryEnabled)
+        #expect(fixture.viewModel.isMonitoringClipboardHistory)
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied on a fresh install"])
     }
 
@@ -1299,6 +1300,13 @@ struct MemoryCommandCenterTests {
     /// The switch off is still the whole of what stops it, with the dismissed flag at its fresh
     /// value — the control for the two above, so a gate that read nothing at all would fail here
     /// rather than pass everywhere.
+    ///
+    /// **The timer assertion is the one that holds the gate; the recorded-nothing assertion cannot
+    /// on its own** (PR #226's second review). `ClipboardHistoryMonitor.poll()` re-reads the same
+    /// switch from the same file on every tick and records nothing when it is off, so a gate that
+    /// armed the timer regardless still recorded nothing and this test stayed green under exactly
+    /// that mutant (the plan's C2). What the gate decides is whether the timer runs at all, and
+    /// only `isMonitoringClipboardHistory` can see that.
     @Test
     func theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays() throws {
         let fixture = try makeMemoryFixture()
@@ -1312,6 +1320,7 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.refreshClipboardHistoryNotice()
 
         #expect(!fixture.viewModel.clipboardHistoryEnabled)
+        #expect(!fixture.viewModel.isMonitoringClipboardHistory, "the switch is off and the poll timer is armed")
         #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
     }
 

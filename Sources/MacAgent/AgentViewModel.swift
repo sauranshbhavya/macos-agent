@@ -668,6 +668,14 @@ final class AgentViewModel: ObservableObject {
     /// `resolveTaskScope` both read it, so the assessment and the scope agree on what a path is.
     private let whitelist: PathWhitelist
     private var clipboardHistoryTimer: Timer?
+    /// Whether the clipboard poll timer is armed — the thing `refreshClipboardHistoryNotice`'s gate
+    /// decides (SONNY-439, PR #226's second review). Internal so a test can hold that the switch
+    /// off leaves the timer unarmed, because nothing else can see it: `ClipboardHistoryMonitor.poll()`
+    /// re-reads the same switch from the same file every tick and records nothing either way, so a
+    /// mutant that armed the timer regardless of the switch read as caught by a test that only
+    /// looked at what was recorded, while in fact costing a settings-file read every second for
+    /// nothing. The recorded-nothing assertion is defence in depth; this is the gate's own answer.
+    var isMonitoringClipboardHistory: Bool { clipboardHistoryTimer != nil }
     private var routineScheduleTimer: Timer?
     /// Label for the currently-running scheduled routine. Separate from `lastCommand` so a
     /// background run can drive the running indicator without becoming the retry or follow-up
