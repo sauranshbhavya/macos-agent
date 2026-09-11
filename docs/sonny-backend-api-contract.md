@@ -2005,8 +2005,12 @@ the handler never holds a client to wrap, and the read behind `GET /v1/account/c
 statements on one lease. So the handler declares §12's total for its request, and every lease its
 stores take inside it reads what is left of that budget and hands it to the same per-statement
 `statement_timeout` the deletion routes use — one budget for the whole handler, across however many
-leases it takes. The consent switch takes two, its write and the re-read it answers with, and a
-budget per lease would have been thirty seconds wearing this row's fifteen. A statement cancelled
+leases it takes, **and the time a lease spends queued for a free pooled connection is inside it**:
+what is left is read once the connection is in hand, because the per-statement wrapper anchors its
+own deadline when it is entered, after that wait (PR #235's first review measured the other order
+as 1401 ms granted against a 1000 ms budget at a 400 ms wait). The consent switch takes two leases,
+its write and the re-read it answers with, and a budget per lease would have been thirty seconds
+wearing this row's fifteen. A statement cancelled
 inside it answers `504 provider.timeout`, retryable, and that is honest for all three: the two reads
 cost nothing to repeat, and the setting is idempotent — a retry writes the same value again. **Outside
 a declared budget nothing changed**: the gate's own admit and settle on the same entitlement store,
