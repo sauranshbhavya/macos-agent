@@ -692,8 +692,15 @@ struct ScreenControlGateRefreshWaitTests {
     /// on cancellation. The answer is the refusal the store still holds — no claim — which the
     /// adapter turns into the run's "Canceled." (`aStopWhileTheDoorWaitsEndsTheRunAsCanceledNotAsARefusal`
     /// in `VisionSessionRunTests`). A wait that cannot be cancelled does not hang this test: a
-    /// backstop lets the reply through after ten seconds, the refresh then writes the claim, and
+    /// backstop lets the reply through after a minute, the refresh then writes the claim, and
     /// the assertion that the store was still empty when the door answered is what goes red.
+    ///
+    /// The door runs in a detached task: one inheriting this suite's main-actor context needs a
+    /// main-actor slot to start, and under the full parallel suite that slot came more than ten
+    /// seconds late (the first full run at `564922c5` recorded "the refresh never reached the
+    /// wire" for exactly this test, which had passed alone and under three hand-applied mutants).
+    /// Nothing the door does needs the main actor, so nothing here waits on it; the two deadlines
+    /// are backstops against a regression, not timings the correct code has to win.
     @Test
     @MainActor
     func aStopDuringTheDoorsWaitEndsTheWaitBeforeTheRefreshDoes() async throws {
@@ -716,8 +723,8 @@ struct ScreenControlGateRefreshWaitTests {
             topUp: StubTopUpPurchasing.neverCalled()
         )
 
-        let door = Task { await subject.decide(at: .sessionStart) }
-        let deadline = Date(timeIntervalSinceNow: 10)
+        let door = Task.detached { await subject.decide(at: .sessionStart) }
+        let deadline = Date(timeIntervalSinceNow: 60)
         while onTheWire.all.isEmpty {
             if Date() > deadline {
                 Issue.record("the refresh never reached the wire")
@@ -726,8 +733,8 @@ struct ScreenControlGateRefreshWaitTests {
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        let backstop = Task {
-            try? await Task.sleep(for: .seconds(10))
+        let backstop = Task.detached {
+            try? await Task.sleep(for: .seconds(60))
             release.signal()
         }
         door.cancel()
