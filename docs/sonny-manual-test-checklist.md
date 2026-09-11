@@ -4538,6 +4538,13 @@ banner's own sentence, "Open Memory in Command Center to clear it."
       watching “…”: A local data file exists but could not be decrypted or decoded. Open Memory in
       Command Center to clear it." (A watcher has to exist first: create one before poisoning the
       file, or read the sentence off any Stop press against the poisoned file.)
+- [ ] With `snippets.json` poisoned, Command Center › Memory › Snippets › a row's Delete (the row
+      reads "Can't be read", so use the row-level Delete rather than a per-entry one if only that is
+      offered): the error ends with "Open Memory in Command Center to clear it." (PR #233's third
+      review: the Memory rows' shared write helper, behind seven Delete and Forget controls).
+- [ ] With `routines.json` poisoned and a routine created beforehand, Routines › the routine › Delete:
+      "Could not delete routine: A local data file exists but could not be decrypted or decoded.
+      Open Memory in Command Center to clear it."
 
 ## 8. How to report back
 
