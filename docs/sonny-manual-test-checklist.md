@@ -4565,6 +4565,18 @@ banner's own sentence, "Open Memory in Command Center to clear it."
       Open Memory in Command Center to clear it." — the way out still there after a task that
       succeeded.
 
+### A CRLF robots.txt keeps its rules (new 2026-09-11, SONNY-437)
+
+The robots.txt parser split on newline characters rather than line breaks, so a file with CRLF
+endings read as one with no rules at all, in the permissive direction: pages such a site disallows
+were fetched. Signed in, gateway up.
+
+- [ ] `summarize https://accounts.google.com/ClientLogin and save it as Markdown`: the research is
+      refused before any fetch because that site's robots.txt (CRLF) disallows the path; no note is
+      written. Before this fix the fetch went ahead.
+- [ ] `summarize https://simonwillison.net/2006/Dec/19/botbouncer/ and save it as Markdown` (an LF
+      site that allows the page): a real note, as before.
+
 ## 8. How to report back
 
 For each real finding, give me:

@@ -1,0 +1,20 @@
+# SONNY-437 — a CRLF robots.txt keeps its rules. Property: the parser yields one element per line
+# whatever the line endings, so a group is closed only by a genuinely empty line.
+# Killers expected: WebResearchServiceTests (robotsPolicyReadsACRLFFileAsItReadsAnLFOne,
+# robotsPolicyReadsMixedLineEndings).
+
+>>> mutant R1 the character split put back: CRLF yields an empty element between every two lines
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+>>> to
+        for rawLine in text.components(separatedBy: .newlines) {
+>>> end
+
+>>> mutant R2 empty lines dropped instead of closing a group: a second group's rules leak into the first
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+>>> to
+        for rawLine in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
+>>> end

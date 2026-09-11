@@ -356,7 +356,15 @@ public struct RobotsTXTPolicy: Equatable, Sendable {
         var sawRuleInCurrentGroup = false
         var rules: [Rule] = []
 
-        for rawLine in text.components(separatedBy: .newlines) {
+        // **Split on line breaks, not on newline characters** (SONNY-437). `components(separatedBy:
+        // .newlines)` splits on CR and LF separately, so a CRLF file yields an empty element between
+        // every two lines — and an empty line is what ends a user-agent group below. So a CRLF
+        // robots.txt closed its group before the first rule, every Allow and Disallow arrived
+        // outside any group and was dropped, and the file read as one with no rules at all, in the
+        // permissive direction; accounts.google.com's is CRLF and its `Disallow: /ClientLogin` was
+        // ignored. A `Character` holds CRLF as one grapheme and `isNewline` is true for it, so this
+        // yields one element per line whatever the file's line endings.
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let withoutComment = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
             let line = withoutComment.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty {

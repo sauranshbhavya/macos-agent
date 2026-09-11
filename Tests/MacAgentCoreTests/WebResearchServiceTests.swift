@@ -196,6 +196,49 @@ struct WebResearchServiceTests {
         #expect(policy.allows(URL(string: "https://example.com/research/public/article")!) == true)
         #expect(policy.allows(URL(string: "https://example.com/blog")!) == true)
     }
+
+    /// SONNY-437. `components(separatedBy: .newlines)` split CR and LF separately, so a CRLF file
+    /// yielded an empty element between every two lines, and an empty line is what closes a
+    /// user-agent group — every rule after `User-agent: *` arrived outside any group and was
+    /// dropped. This is accounts.google.com's shape; its `Disallow: /ClientLogin` was ignored.
+    @Test
+    func robotsPolicyReadsACRLFFileAsItReadsAnLFOne() {
+        let lf = RobotsTXTPolicy(text: "User-agent: *\nDisallow: /ClientLogin\nAllow: /ClientLogin/help\n")
+        let crlf = RobotsTXTPolicy(text: "User-agent: *\r\nDisallow: /ClientLogin\r\nAllow: /ClientLogin/help\r\n")
+        let login = URL(string: "https://accounts.google.com/ClientLogin")!
+        let help = URL(string: "https://accounts.google.com/ClientLogin/help")!
+        let other = URL(string: "https://accounts.google.com/signin")!
+
+        #expect(lf.allows(login) == false)
+        #expect(crlf.allows(login) == false, "the CRLF file's rules were dropped")
+        #expect(lf.allows(help) == true)
+        #expect(crlf.allows(help) == true)
+        #expect(lf.allows(other) == true)
+        #expect(crlf.allows(other) == true)
+        #expect(crlf == lf, "the two files hold the same rules")
+    }
+
+    /// Mixed endings inside one file: the group's rule is kept, and the next group's user-agent
+    /// line still starts a group that is not ours.
+    @Test
+    func robotsPolicyReadsMixedLineEndings() {
+        let policy = RobotsTXTPolicy(text: "User-agent: *\r\nDisallow: /private\n\r\nUser-agent: OtherBot\r\nDisallow: /\r\n")
+
+        #expect(policy.allows(URL(string: "https://example.com/private/x")!) == false, "the CRLF group's rule was dropped")
+        #expect(policy.allows(URL(string: "https://example.com/public")!) == true, "the other agent's Disallow leaked into ours")
+    }
+
+    /// The parser's own group rule, unchanged by SONNY-437 and pinned so the fix cannot be a split
+    /// that drops empty lines: a genuinely empty line closes the group, so a rule after it belongs
+    /// to no group, whatever the endings.
+    @Test
+    func aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings() {
+        let crlf = RobotsTXTPolicy(text: "User-agent: *\r\n\r\nDisallow: /private\r\n")
+        let lf = RobotsTXTPolicy(text: "User-agent: *\n\nDisallow: /private\n")
+
+        #expect(crlf.allows(URL(string: "https://example.com/private/x")!) == true)
+        #expect(lf.allows(URL(string: "https://example.com/private/x")!) == true)
+    }
 }
 
 @MainActor

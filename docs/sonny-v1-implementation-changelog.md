@@ -171,6 +171,35 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/a-crlf-robots-file-keeps-its-rules
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-437** (a CRLF robots.txt was read as a file with no rules: the parser split on newline characters, so the empty element between every two lines closed each user-agent group before its first rule — filed 2026-09-07 from PR #222's review, deferred to this wave). The wave 7 overnight session (run log SONNY-438), ninth branch of its chain, cut from `fix/an-unreadable-store-names-the-way-out` at `cd829d83`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: the research feature's promise to respect a site's robots rules (`PublicWebPageLoader` throws `robotsDisallowed` before a fetch), now true of CRLF sites.
+Files changed:
+- `Sources/MacAgentCore/WebResearchService.swift` — the robots parser splits on `Character.isNewline`, which holds CRLF as one grapheme, so one element per line whatever the endings; the reason beside it
+- `Tests/MacAgentCoreTests/WebResearchServiceTests.swift` — a CRLF file reads as its LF twin (the real `accounts.google.com` shape, `Disallow: /ClientLogin`); mixed endings inside one file; a genuinely empty line still closes a group
+- `mutation/plans/fix/a-crlf-robots-file-keeps-its-rules.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-437), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/a-crlf-robots-file-keeps-its-rules.txt (founder-triggered, not run on this branch) — two mutants: the character split put back, empty lines dropped instead of closing a group.
+
+Behavior added: none. A site whose robots.txt uses CRLF has its rules respected, which the feature always promised.
+Behavior preserved (required, no blanket claims):
+- LF files parse exactly as before (`robotsPolicyPrefersLongestMatchingRuleAndAllowTie`, unchanged and green); an empty line still ends a group; comments, the longest-match rule and the allow tie are untouched.
+- The other four `components(separatedBy: .newlines)` sites in the tree were read and left: `CommandCenterView.singleLine`, `AgentActivityPresentation.truncatedCommand` and `ClarifiedCommand`'s fold all drop empty pieces, and `UntrustedContentBoundary.foldingLineBreaks` folds the CRLF gap deliberately (its own comment says so) — none treats an empty element as meaning, so none shares the defect.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**`components(separatedBy: .newlines)` is a split on characters, and CRLF is two of them; `Character.isNewline` is a split on line breaks, and CRLF is one.** The first is right wherever an empty piece is discarded or folded, which is every other site in this tree; it is wrong wherever an empty line carries meaning, which a robots.txt's group boundary does. The general rule for a parser of a line-oriented format from the wild: split on `Character.isNewline` (or on the format's own break rule), never on a character set.
+
+Known limitations / deferred scope: none.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/three-account-routes-take-the-total-deadline (SONNY-434), cut from this branch's head — the first server-half branch of the chain.
+
 ### Branch: fix/an-unreadable-store-names-the-way-out
 Status: complete
 Date: 2026-09-11
