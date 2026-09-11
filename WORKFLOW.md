@@ -151,8 +151,8 @@ has documented consequences:
   checkout: budget a cold `swift build`, and don't share `.build/` between worktrees.
 - **Cap: about five concurrent heavy threads, reviewers counted.** The constraint this
   expresses is the machine's, not a human's. A heavy thread is anything holding a build — an
-  implementing lane, and equally a reviewing session running the full suite,
-  `scripts/warnings`, or a mutation battery. Reviewers are not free, and a wave that counts
+  implementing lane, and equally a reviewing session running the full suite or
+  `scripts/warnings`, and a founder's `scripts/mutate-all` while it runs. Reviewers are not free, and a wave that counts
   only implementers is already over the cap. Past roughly five, every lane slows every other
   one: during the 2026-08-27/28 wave the flagged suite went from about 40s to about 200s and
   `scripts/warnings` from about 120s to about 460s. **Those four figures are that wave's own
@@ -185,9 +185,9 @@ has documented consequences:
   verification untrue of the tree it is about to land on. **This bullet said the opposite
   until 2026-08-29** — "After each merge, other in-flight worktrees rebase onto the new
   `main` before continuing" — and one lane followed it for five hops, paying a full
-  re-verification at each, which is hours of work nobody read. Each hop also re-opens step
-  5's mutant question and re-stamps every figure the changelog entry carries, so the cost
-  compounds rather than adding up. **The cost of holding instead, stated rather than left to
+  re-verification at each, which is hours of work nobody read. Each hop also re-stamps every
+  figure the changelog entry carries, so the cost compounds rather than adding up. **The cost of
+  holding instead, stated rather than left to
   be found:** a branch that sits through a long wave meets a bigger conflict at its one hop
   than it would have met at any single earlier one. That is one conflict resolved once
   against N resolved N times, and it is the trade the instruction makes. (Founder
@@ -208,8 +208,9 @@ has documented consequences:
 
 **A long lane is a coordination failure before it is a session's.** The five levers that keep
 lanes short are all the coordinator's, and they sit in three different steps because that is
-where each one bites: the concurrency cap and the rebase-timing rule above, step 5's scoped
-battery re-runs, and step 7's right-sizing and its limit on what one round
+where each one bites: the concurrency cap and the rebase-timing rule above, step 5's mutation
+batteries moving off the branch entirely (2026-09-10 — see the Weekly battery section below), and
+step 7's right-sizing and its limit on what one round
 carries. Step 5's ninety-minute stop is the one a session owns, and it is a backstop for when
 the five were got wrong rather than a substitute for them. (Founder
 instruction 2026-08-28, at the tail of the 2026-08-27/28 wave, after three lanes ran one to
@@ -287,8 +288,10 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
 
 **Verification economy: keep every check, cut the repeated work around it.** Nothing below
 removes a check — the flagged suite, `scripts/warnings`, the mutation battery and the
-fresh-session review all stay, and the battery stays in particular because it is where most
-of the 2026-08-27/28 wave's real findings came from. What these rules remove is work a
+fresh-session review all stay: **plans stay, runs move to the founders' weekly battery**
+(`## Weekly battery`, below — decided 2026-09-10), and the battery is named in particular
+because it is where most of the 2026-08-27/28 wave's real findings came from. What these rules
+remove is work a
 session has already proved unnecessary. (Founder instruction 2026-08-28, widened later the
 same day and again on 2026-08-29. Written here by SONNY-340 on 2026-08-29; until then it
 lived only in the coordinator's kickoff prompts, which is a place no session can look
@@ -321,16 +324,29 @@ something up.)
   whether the SHA did", and the proof is what answers it. So a carried figure carries the
   proof, not merely the new SHA. (Several sessions in the 2026-08-27/28 wave held the proof
   and re-ran anyway. That re-run is the waste this removes — the rule is untouched.)
-- **Mutate the property, not the diff.** A battery covers the behaviour the ticket claims to
-  protect and every test whose name claims a guarantee — not one mutant per changed file. A
-  reviewer runs the shapes its own findings are about, plus any the implementer's plan
-  missed, and reads the implementer's killers by name rather than re-running the whole plan.
-- **After a rebase or a fix round, a mutant is carried only when four things hold; otherwise it
-  is re-run.** The range is whatever moved — the merged commits after a rebase, the round's own
-  edits after a fix round. Its target file did not move in that range; its killing test's file
-  did not move; the killer does not scan a population the range changed; and the killer does not
-  drive a helper or fixture the range changed. If all four cannot be established cheaply, re-run
-  it.
+- **Write the plan; do not run it.** Every branch that adds or changes behaviour writes its
+  mutant plan into `mutation/plans/<branch-name>.txt` (`scripts/mutate --help` has the format;
+  a slash in the branch name is a folder, so `fix/some-name`'s plan is
+  `mutation/plans/fix/some-name.txt`, and `scripts/mutate-all` reads the folder recursively),
+  commits it, and names that path in its changelog entry's `Mutation plan:` line. `scripts/mutate
+  --help` still says to keep a plan outside the working tree; that describes the retired
+  per-branch run, where a plan was a scratch file, and does not apply here — a branch's plan is
+  committed, which is exactly what keeps the tree clean for the run. Nothing runs at PR time,
+  after a rebase, or after a fix round — the founders run every plan in the repository together,
+  about weekly (`## Weekly battery`, below). **Mutate the property, not the diff**, still governs
+  what goes into the plan: it covers the behaviour the ticket claims to protect and every test
+  whose name claims a guarantee, not one mutant per changed file. A reviewer who wants a shape
+  measured adds it to the branch's plan file and says so in the review, rather than running it.
+- **Reading an old battery result: a verdict still describes the tree only when four things
+  hold.** Nothing here triggers a re-run any more — no branch runs a battery (`## Weekly
+  battery`, below) — but this is still the test for whether a mutation verdict already sitting in
+  the changelog, or from a plan's last real run, still says anything about the tree in front of
+  you. The range is whatever moved since that verdict was measured — the merged commits after a
+  rebase, a fix round's own edits. Its target file did not move in that range; its killing test's
+  file did not move; the killer does not scan a population the range changed; and the killer does
+  not drive a helper or fixture the range changed. If all four cannot be established cheaply, the
+  old verdict says nothing about the tree in front of you, and the mutant waits for the next
+  weekly battery to be re-measured.
   **The fail-safe wording is the rule rather than decoration.** This was first written as file
   identity alone, and SONNY-137's lane computed both versions against a real merged range the
   same day: the sole killer of three mutants drove `HermeticBackendClient.swift`, which had
@@ -356,7 +372,9 @@ something up.)
   it produces an unmeasured number, wrong in whichever direction the tree moved. A carry you
   have argued is worth less than a number you have measured. (SONNY-391.)
 - **Long runs go to a file in the background and are read once**, when the result is next
-  needed. No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
+  needed — the suite and any other long verification command a branch still runs. (This used to
+  cover mutation batteries too; a branch runs none now, so that half of it moved to `## Weekly
+  battery`, below.) No chains of sleep-and-poll waiters: they cost wall-clock, produce stale
   notifications, and twice in the 2026-08-27/28 wave reported results that had already been
   collected.
 - **Run the whole flagged suite once, before you push, and iterate under `--filter`.** The
@@ -863,6 +881,44 @@ GitHub's control with "Create a merge commit", never the squash the page may off
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
 tickets' final states.
+
+## Weekly battery
+
+Mutation batteries are founder-triggered (decided 2026-09-10), not a branch's own step — step 5
+above has what changed and why, and `CLAUDE.md`'s mutation-battery paragraph is the tool's own
+record, unchanged. This section is the procedure for the founder side of that split.
+
+About once a week, on a clean `main` checkout — `git status --porcelain` empty, and no other
+battery already holding the checkout — run `scripts/mutate-all`. It walks every plan under
+`mutation/plans/` through `scripts/mutate` in turn, one after another, and prints one summary at
+the end (`scripts/mutate-all --help` has the format and the exit codes in full). The worktree is
+frozen for the whole run exactly as for a single battery — `scripts/mutate` re-checks the tree
+after every mutant it applies — and `scripts/warnings` refuses to run beside it, the same mutual
+refusal that already existed.
+
+Read the exit code with nothing between the command and `$?`:
+
+- **0** — every plan ran and every mutant was killed. Nothing to file.
+- **2** — at least one mutant SURVIVED or came back UNATTRIBUTED. File one ticket per such mutant
+  (`scripts/plane create`), naming the mutant id, the plan file it came from, and the target file
+  it mutates, with the run's SHA.
+- **3** — nothing survived or came back unattributed, but at least one plan was SKIPPED because
+  its `from` block no longer matches the tree. That is a ticket for the branch that owns the plan
+  to re-anchor it against the current tree — it is not a survivor, and it is filed the same way,
+  naming the plan file and the run's SHA.
+- **1** — the run did not start, or had to stop partway through. Not filed as tickets;
+  `scripts/mutate-all --help` has what to do (a dirty tree, another battery's lock, and a red
+  baseline are the ordinary causes).
+
+Record the run's SHA, its summary line and the summary log's path on SONNY-106, the living
+definition-of-done — every time the command runs, a clean run as much as one that found
+something, so the record shows when the repository's plans were last actually measured rather
+than only when one of them found something.
+
+This is founder-triggered, never a session's to start. A session that wants a shape measured adds
+it to the relevant branch's `mutation/plans/<branch-name>.txt` (one folder down for a slashed
+branch name) and says so in its changelog entry or its review (step 5, step 7) — it does not run
+`scripts/mutate-all` itself.
 
 ## 8. Merge strategy, and the history rewrite of 2026-08-24
 
