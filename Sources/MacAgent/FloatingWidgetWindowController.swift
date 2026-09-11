@@ -126,6 +126,9 @@ final class FloatingWidgetWindowController: NSObject {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // System B is dark by design (a dark HUD material and white-literal tokens), so the panel
+        // keeps its own appearance whatever `SonnyAppearanceModel` sets on the application.
+        panel.appearance = NSAppearance(named: .darkAqua)
         // SwiftUI already draws the glass panel's own shadow (§3.2); a system window shadow on
         // top would draw a plain rectangle behind the mostly-transparent padding around it.
         panel.hasShadow = false

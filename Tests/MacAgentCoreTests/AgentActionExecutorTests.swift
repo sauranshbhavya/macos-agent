@@ -4863,7 +4863,7 @@ struct AgentActionExecutorTests {
 
         let details = previews.flatMap(\.details)
         #expect(details.contains { $0.contains("Voice hotkey") && $0.contains("Needs action") })
-        #expect(details.contains { $0.contains("Another app is using Control-Option-Space") })
+        #expect(details.contains { $0.contains("Another app is using \u{2303}\u{2325}Space") })
     }
 
     /// **The screen-permission seam is injected, and load-bearing** (SONNY-123).

@@ -207,48 +207,27 @@ struct ScreenAccessOnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close Screen Access setup")
+            SonnyDialogHeader(
+                title: "Screen access",
+                subtitle: model.allGranted
+                    ? "Sonny is set up to see your screen."
+                    : "Sonny's screen-aware tools need two macOS grants, both in System Settings.",
+                closeLabel: "Close screen access"
+            ) {
+                isPresented = false
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
+
+            SettingsDivider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Screen access")
-                            .font(SonnyType.settingsContentTitle)
-                            .foregroundStyle(SonnyTheme.text)
-                        Text(model.allGranted
-                            ? "Sonny is set up to see your screen."
-                            : "Sonny's screen-aware tools need two macOS grants. Both live in System Settings — Sonny can only take you there.")
-                            .font(SonnyType.body)
-                            .foregroundStyle(SonnyTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.bottom, 20)
-
-                    SettingsDivider()
-
                     permissionBlock(
                         title: "Screen Recording",
                         granted: model.screenRecordingGranted,
                         grantedDetail: "Granted. Sonny can capture the window of an app you target.",
-                        neededDetail: "Lets Sonny capture the window of an app you target, so screen-aware tools can see it. Takes effect after Sonny relaunches."
+                        neededDetail: "Lets Sonny capture the window of an app you target, so screen-aware tools can see it."
                     ) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: SonnySpacing.sm) {
                             Button("Request access") {
                                 model.requestScreenRecording()
                             }
@@ -273,9 +252,9 @@ struct ScreenAccessOnboardingView: View {
                         title: "Accessibility",
                         granted: model.accessibilityTrusted,
                         grantedDetail: "Granted. Sonny can act inside apps you specifically allow.",
-                        neededDetail: "Lets Sonny act inside apps you specifically allow, once screen-acting tools arrive. Takes effect immediately — no relaunch."
+                        neededDetail: "Lets Sonny act inside apps you specifically allow, once screen-acting tools arrive."
                     ) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: SonnySpacing.sm) {
                             Button("Request access") {
                                 model.requestAccessibility()
                             }
@@ -298,25 +277,19 @@ struct ScreenAccessOnboardingView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-                .padding(.bottom, 36)
+                .padding(.horizontal, SonnySpacing.xxxl)
+                .padding(.top, SonnySpacing.sm)
+                .padding(.bottom, SonnySpacing.xxxl)
             }
         }
-        .frame(width: 620, height: 480)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
         .onAppear {
             model.refresh()
         }
     }
 
     private var relaunchGuidance: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
             Label {
                 Text("Two steps left")
                     .font(SonnyType.bodyEmphasis)
@@ -326,7 +299,7 @@ struct ScreenAccessOnboardingView: View {
                     .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.warning)
             }
-            Text("1. In System Settings › Privacy & Security › Screen Recording, switch Sonny on.\n2. Relaunch Sonny — macOS only applies the grant to a fresh launch, so this page can't show it as granted until then.")
+            Text("1. In System Settings › Privacy & Security › Screen Recording, switch Sonny on.\n2. Relaunch Sonny.")
                 .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.muted)
                 .lineSpacing(3)
@@ -347,17 +320,10 @@ struct ScreenAccessOnboardingView: View {
                     .foregroundStyle(SonnyTheme.warning)
             }
         }
-        .padding(14)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .fill(SonnyTheme.surfaceRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .padding(.bottom, 20)
+        .sonnyCard()
+        .padding(.bottom, SonnySpacing.xl)
     }
 
     private func permissionBlock<Actions: View>(
@@ -367,22 +333,15 @@ struct ScreenAccessOnboardingView: View {
         neededDetail: String,
         @ViewBuilder actions: () -> Actions
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
+            HStack(spacing: SonnySpacing.sm) {
                 Image(systemName: granted ? "checkmark.circle" : "exclamationmark.triangle")
                     .font(SonnyType.caption)
-                    .foregroundStyle(granted ? SonnyTheme.accent : SonnyTheme.warning)
+                    .foregroundStyle(granted ? SonnyTheme.success : SonnyTheme.warning)
                 Text(title)
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
-                Text(granted ? "Granted" : "Not granted")
-                    .font(SonnyType.micro)
-                    .foregroundStyle(granted ? SonnyTheme.accent : SonnyTheme.warning)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule().fill((granted ? SonnyTheme.accent : SonnyTheme.warning).opacity(0.14))
-                    )
+                SonnyBadge(text: granted ? "Granted" : "Not granted", tone: granted ? .success : .warning)
             }
 
             Text(granted ? grantedDetail : neededDetail)
@@ -394,6 +353,6 @@ struct ScreenAccessOnboardingView: View {
                 actions()
             }
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, SonnySpacing.xl)
     }
 }

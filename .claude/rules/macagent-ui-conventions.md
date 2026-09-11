@@ -12,6 +12,20 @@ The floating widget (`FloatingWidgetView.swift`) and the Command Center (`Comman
 
 Because both surfaces render off the same state, a task submitted from either one is visible to both. `AgentViewModel.TaskOrigin` (`.commandCenter` / `.widget` / `.scheduled`) tracks what actually submitted the currently-active task, so the widget can tell its own task apart from one a Command Center row action submitted (`runRoutineWidget`/`openWorkspaceWidget`, both default to `.commandCenter` origin despite the "Widget" in their names) and avoid rendering a second, duplicate *progress* panel for the latter (`FloatingWidgetView.showsPanel`). Any new task-submitting entry point needs to pass its own real `origin` explicitly — it does not get inferred, and `dispatch`'s default is `.commandCenter`. (Corrected by SONNY-56: this used to read "progress/result". Only the progress half is live — `CommandCenterRunningIndicator` really does render progress for a Command-Center-originated run, so a widget progress panel would genuinely be a second one. There is no Command Center *result* panel for a widget result to duplicate, and a successful Command-Center-originated run's summary reaches no surface at all; it now posts a notification instead. Do not delete this paragraph, and do not "fix" the gap by passing `origin: .widget` from a row action — that would move progress into the widget while Command Center keeps showing its own.) `.scheduled` is the case a new entry point is likeliest to miss: the routine scheduler starts runs with nobody watching, and it is its own case so that the widget shows no progress panel for them while their permission/clarification/failure states still do surface, and so the task-history trigger keeps automated runs out of the Insights streak. (SONNY-175: this sentence listed two cases when there were three, and the one it left out was the unattended one.)
 
+## Visual direction since 2026-09-08 (branch `ui-ux-claude`)
+
+Every `SonnyTheme` token resolves against the window's appearance (a dark and a light reading each), and `SonnyAppearanceModel` sets the application's appearance from the Settings picker. So a view never asks which appearance it is in and never writes `Color.white` or `Color.black` for a surface or a text colour: it names a token, or `SonnyTheme.onSurface(dark:light:)` for a step the tokens lack. The floating widget's panel is pinned `.darkAqua` and its `WidgetTheme` literals stay white on purpose.
+
+`SonnyTheme` / `SonnyType` / `SonnyRadius` are the system font on one cool-neutral ramp with a
+three-value radius rule, plus `SonnySpacing`, `SonnyMetrics`, `SonnyMotion` and the shared controls
+(`SonnyButtonStyle` with four tones and three sizes, `SonnyBadge`, `SonnyDialogHeader`,
+`sonnyDialogFrame`, `sonnyPanel`, `sonnyCard`, `sonnyTextField`). A view writes no literal colour,
+font size, radius or spacing; it names a token. `docs/sonny-ui-modernization-2026-09-08.md` is the
+decision record. Where the section below says Inter, or names the routine detail sheet as a System
+B copy inside System A, it is describing the state before that branch: the sheet is System A now and
+`SonnyWidgetTheme.swift` is the only System B token set. Everything else in the section, the
+two-system split above all, still holds.
+
 ## Design tokens — two separate systems, both in active use
 
 `SonnyTheme` / `SonnyType` / `SonnyRadius` (defined in `ContentView.swift`) are System A: flat, opaque, Inter, zero shadows anywhere — used throughout Command Center. `WidgetTheme` / `WidgetType` (`SonnyWidgetTheme.swift`) are System B: translucent "Liquid Glass" material (a real `NSVisualEffectView` blur, not a blend-mode approximation of one), SF Pro/SF Pro Display, distinct per-action accent colors — used by the floating widget (`FloatingWidgetView.swift`) and system notifications (`SonnyNotificationService.swift`, though macOS renders that chrome itself). These are deliberately separate token sets, not variants of one another — don't extend `SonnyTheme` with glass/shadow properties, and don't reuse `WidgetTheme`/`WidgetType` outside the floating widget. See `docs/sonny-design-system-reference.md` for the full split, and `docs/sonny-founder-design-decisions.md` for at least one confirmed case (the routine detail view) that needs System B's material embedded inside a System A surface — a deliberate special case, not precedent for mixing the two generally. (`RoutineDetailView.swift` also keeps its own independent copy of the System B tokens for that case, rather than sharing `SonnyWidgetTheme.swift`'s — also deliberate, not an oversight.)
@@ -57,7 +71,7 @@ The floating widget is unchanged and still shows all three states for **every** 
 
 ## Preferences
 
-A cosmetic, non-privacy-sensitive preference (e.g. pointer cursor behavior) goes through plain injected `UserDefaults`, not `LocalStorageEncryption` — don't add a new encrypted store for something with no privacy sensitivity. Read booleans with `object(forKey:) as? Bool ?? true`, not `.bool(forKey:)` — the latter silently defaults a missing key to `false`, which is wrong for any preference that should default to *on* for new users.
+A cosmetic, non-privacy-sensitive preference (e.g. pointer cursor behavior, the interface theme in `SonnyAppearanceModel`) goes through plain injected `UserDefaults`, not `LocalStorageEncryption` — don't add a new encrypted store for something with no privacy sensitivity. Read booleans with `object(forKey:) as? Bool ?? true`, not `.bool(forKey:)` — the latter silently defaults a missing key to `false`, which is wrong for any preference that should default to *on* for new users.
 
 ## Wireframe fidelity
 

@@ -108,6 +108,10 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// happen to agree today. Command Center is where a watcher is listed and where its Stop control
     /// will be; the widget has nothing to do about one.
     private let onOpenWatcherNotice: () -> Void
+    /// Whether a given kind of notification should post at all, read from Settings › Notifications
+    /// (`SonnyNotificationPreferences`). Defaulted to always-on so every existing call site and
+    /// fixture keeps its old behaviour without naming the preference.
+    private let isEnabled: (SonnyNotificationKind) -> Bool
 
     /// Fails when the current process has no real app-bundle identity — e.g. `swift run`'s bare
     /// executable (no `Info.plist`/`CFBundleIdentifier`), as opposed to a packaged `.app`.
@@ -121,7 +125,8 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         onOpenTask: @escaping (String?) -> Void = { _ in },
         onOpenScheduledRun: @escaping () -> Void = {},
         onOpenStorageNotice: @escaping () -> Void = {},
-        onOpenWatcherNotice: @escaping () -> Void = {}
+        onOpenWatcherNotice: @escaping () -> Void = {},
+        isEnabled: @escaping (SonnyNotificationKind) -> Bool = { _ in true }
     ) {
         guard Bundle.main.bundleIdentifier != nil else {
             return nil
@@ -134,6 +139,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         self.onOpenScheduledRun = onOpenScheduledRun
         self.onOpenStorageNotice = onOpenStorageNotice
         self.onOpenWatcherNotice = onOpenWatcherNotice
+        self.isEnabled = isEnabled
         super.init()
         center.delegate = self
         registerCategories()
@@ -215,16 +221,18 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     }
 
     func postPermissionNotification(resource: String) {
+        guard isEnabled(.approvalNeeded) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Approval needed"
         content.body = "Requesting access to \(resource)"
         content.categoryIdentifier = SonnyNotificationCategory.permission
         deliver(content)
     }
 
     func postErrorNotification(message: String) {
+        guard isEnabled(.taskFailed) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Task failed"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.error
         deliver(content)
@@ -232,8 +240,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
 
     /// A finished run's summary, for a user who was working somewhere else while it ran.
     func postOutcomeNotification(summary: String, taskID: String?) {
+        guard isEnabled(.taskFinished) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Task finished"
         content.body = summary
         content.categoryIdentifier = SonnyNotificationCategory.outcome
         // The task travels with the notification rather than being looked up when the click
@@ -253,8 +262,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// not post through `postErrorNotification`: a routine that ran fine would arrive in the
     /// notification category Sonny reserves for failures, wearing a Retry button.
     func postScheduledRunNotification(message: String) {
+        guard isEnabled(.routineRan) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Routine ran"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.scheduled
         deliver(content)
@@ -267,8 +277,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// problem is not the task the user ran failing, and the failure category's Retry button acts on
     /// a command that has nothing to do with it.
     func postStorageNoticeNotification(message: String) {
+        guard isEnabled(.storageProblem) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Storage problem"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.storage
         deliver(content)
@@ -281,8 +292,9 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// gave up in silence leaves them believing Sonny is still watching. `StandingWatcherNoticeCopy`
     /// decides which sentence; this only delivers it.
     func postWatcherNotification(message: String) {
+        guard isEnabled(.watcherFired) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Sonny"
+        content.title = "Watcher fired"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.watcher
         deliver(content)

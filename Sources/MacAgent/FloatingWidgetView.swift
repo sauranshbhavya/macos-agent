@@ -115,6 +115,7 @@ enum WidgetState {
 
 struct FloatingWidgetView: View {
     @ObservedObject var viewModel: AgentViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Which of the widget's two text fields has the caret, or `nil` (SONNY-283).
     ///
     /// **Owned here, for both fields, rather than one `Bool` per field.** The composer used to own
@@ -228,14 +229,15 @@ struct FloatingWidgetView: View {
                     composerPill
                     HStack(spacing: 12) {
                         dontSaveButton
+                        voiceRecordingCountdownLabel
                         micButton
                     }
                     .frame(height: 40)
                 }
             }
         }
-        .animation(.easeOut(duration: 0.18), value: widgetStateKey)
-        .animation(.easeOut(duration: 0.18), value: isCompact)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: widgetStateKey)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isCompact)
         // Real headroom for the (now much smaller, border-led) shadow plus a little breathing
         // room around the glass edge — not shadow-bleed-driven the way the old, larger padding
         // was, since there's no more large drop shadow needing room to fade out.
@@ -512,7 +514,7 @@ struct FloatingWidgetView: View {
             }
         }
         .padding(18)
-        .frame(width: 472, alignment: .leading)
+        .frame(width: WidgetTheme.panelWidth, alignment: .leading)
         .widgetGlassPanel()
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
@@ -530,8 +532,8 @@ struct FloatingWidgetView: View {
     private var compactCapsule: some View {
         Button(action: expandFromCompact) {
             Image(systemName: "wand.and.stars.inverse")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(WidgetType.iconLarge)
+                .foregroundStyle(WidgetTheme.textStrong)
         }
         .buttonStyle(.plain)
         .frame(width: 40, height: 40)
@@ -736,10 +738,12 @@ struct FloatingWidgetView: View {
                         viewModel.clearPendingWorkspaceBinding()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(
                         AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: name)
                     )
@@ -775,10 +779,12 @@ struct FloatingWidgetView: View {
                         viewModel.taskRecordingPolicy = .record
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(TaskRecordingPresentation.clearAccessibilityLabel)
                 }
             }
@@ -815,10 +821,12 @@ struct FloatingWidgetView: View {
                         viewModel.clearArmedFollowUp()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(WidgetTheme.textMuted)
                     }
                     .buttonStyle(.plain)
+                    .frame(width: Self.composerChipRowHeight, height: Self.composerChipRowHeight)
+                    .contentShape(Rectangle())
                     .accessibilityLabel(
                         FollowUpPresentation.clearAccessibilityLabel(command: context.previousCommand)
                     )
@@ -876,7 +884,7 @@ struct FloatingWidgetView: View {
         }
         .padding(.leading, 14)
         .padding(.trailing, isTaskInFlight ? 14 : 8)
-        .frame(width: 472, height: composerPillHeight)
+        .frame(width: WidgetTheme.panelWidth, height: composerPillHeight)
         .widgetGlassPill()
     }
 
@@ -888,7 +896,7 @@ struct FloatingWidgetView: View {
             // that the one thing able to explain a dead click is the one thing not dimmed.
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
-                .foregroundStyle(.white.opacity(isTaskInFlight ? 0.28 : 0.61))
+                .foregroundStyle(isTaskInFlight ? WidgetTheme.textFaint : WidgetTheme.textMuted)
 
             TextField(
                 "",
@@ -905,21 +913,22 @@ struct FloatingWidgetView: View {
             .onSubmit(submit)
 
             if !isTaskInFlight {
+                let isCommandEmpty = viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button(action: submit) {
                     HStack(spacing: 3) {
                         Text("Start")
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(WidgetType.headlineChip)
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(WidgetTheme.textStrong)
                 .font(WidgetType.headlineChip)
                 .padding(.horizontal, 12)
                 .frame(height: 24)
                 .widgetCapsuleBackground(tint: WidgetTheme.primaryAction)
-                .disabled(viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+                .disabled(isCommandEmpty)
+                .opacity(isCommandEmpty ? 0.5 : 1)
             }
         }
         // The field row is always 40 tall, whether or not a chip row sits above it. That is what
@@ -1017,7 +1026,7 @@ struct FloatingWidgetView: View {
                 viewModel.taskRecordingPolicy = isOn ? .record : .suppressTraces
             } label: {
                 Image(systemName: isOn ? "eye.slash.fill" : "eye.slash")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(WidgetType.captionMedium)
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
@@ -1029,17 +1038,81 @@ struct FloatingWidgetView: View {
         }
     }
 
+    /// How long Sonny will keep listening — the founders' ask on 2026-09-09: "so user knows how
+    /// long Sonny will listen to you." Leads `micButton` in the composer row, and only while a
+    /// recording is actually running; nothing renders (nor reserves space) otherwise.
+    ///
+    /// `TimelineView` rather than a stored `@State` something has to poll or update, for the same
+    /// reason `MicHoverHintModel`'s countdown is a `Task` and not a `Timer` written into a view: the
+    /// tick belongs to a mechanism a test can reason about, and here `VoiceRecordingCountdown`'s
+    /// pure functions are that mechanism — this view only asks them what to draw.
+    ///
+    /// No `.help()`: the founders' rule against explanatory copy rules out "max 3:00" as a tooltip
+    /// as much as it rules out a sentence, and the digits already say everything there is to say.
+    /// `.accessibilityHidden(true)` for the same reason — the words a screen reader needs are on
+    /// `micButton`'s own `.accessibilityValue`, so VoiceOver is not asked to read this digit-only
+    /// label as if it were prose.
+    @ViewBuilder
+    private var voiceRecordingCountdownLabel: some View {
+        if viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: context.date)
+                Text(VoiceRecordingCountdown.label(remaining: remaining))
+                    .font(WidgetType.captionMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(
+                        VoiceRecordingCountdown.isWarning(remaining: remaining)
+                            ? WidgetTheme.attention
+                            : WidgetTheme.textFaint
+                    )
+                    // "9:59" is the widest this ever renders; reserved so the field beside it never
+                    // shifts width as the digits themselves change width.
+                    .frame(minWidth: VoiceRecordingCountdown.labelReservedWidth, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    /// `voiceButtonTitle` alone once a recording ends; while one runs, the countdown's own words
+    /// ride along so VoiceOver hears the same thing `voiceRecordingCountdownLabel` shows.
+    private func micButtonAccessibilityValue(now: Date) -> String {
+        guard viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt else {
+            return viewModel.voiceButtonTitle
+        }
+        let remaining = VoiceRecordingCountdown.remaining(startedAt: startedAt, now: now)
+        return "\(viewModel.voiceButtonTitle), \(VoiceRecordingCountdown.accessibilityValue(remaining: remaining))"
+    }
+
+    /// The same four states the glyph reads, so a screen reader and a sighted user hear and see
+    /// one answer while a recording starts or a transcription runs. While one is running, the
+    /// countdown's own words ride along ("Stop, 2 minutes 57 seconds left"), read off the same
+    /// one-second `TimelineView` tick that drives `voiceRecordingCountdownLabel`, so VoiceOver never
+    /// hears a remaining time the label has already moved past (phase 11 review, F1 and F3).
+    @ViewBuilder
     private var micButton: some View {
+        if viewModel.isRecordingVoice, let startedAt = viewModel.voiceRecordingStartedAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                micButtonBody
+                    .accessibilityValue(micButtonAccessibilityValue(now: context.date))
+            }
+        } else {
+            micButtonBody
+                .accessibilityValue(viewModel.voiceButtonTitle)
+        }
+    }
+
+    private var micButtonBody: some View {
         Button {
             viewModel.toggleVoiceRecording(origin: .widget)
         } label: {
             Image(systemName: viewModel.voiceButtonIcon)
-                .font(.system(size: 13, weight: .medium))
+                .font(WidgetType.captionMedium)
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
         .frame(width: 36, height: 36)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
+        .accessibilityLabel("Voice input")
         // **Transient reasons only** — the rule and its whole predicate live on
         // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
         // so every term folded in here is a press the user makes and never hears back about. The
@@ -1106,7 +1179,7 @@ struct FloatingWidgetView: View {
     /// **The frame is unchanged by SONNY-179, and that was measured rather than assumed.** Both
     /// sentences this row can carry were laid out at the row's real font (SF Pro Medium 10, via
     /// `WidgetType.captionSmall`) against the 444pt the 472pt frame leaves after its 14pt padding:
-    /// the shortcut reminder is 189.6pt and the configuration message 254.1pt, so each stays a
+    /// both the shortcut reminder and the configuration message fit with room, so each stays a
     /// single line with room to spare and nothing about the window controller's fitted-size
     /// positioning has to be revisited. (SONNY-177 measured the same two at 285.4pt and 254.1pt;
     /// the reminder is the one whose wording SONNY-179 replaced, and it got shorter.)
@@ -1115,7 +1188,7 @@ struct FloatingWidgetView: View {
             .font(WidgetType.captionSmall)
             .foregroundStyle(WidgetTheme.textFull)
             .padding(.horizontal, 14)
-            .frame(width: 472, height: 40, alignment: .leading)
+            .frame(width: WidgetTheme.panelWidth, height: 40, alignment: .leading)
             .widgetGlassPill()
             .transition(.opacity)
     }
@@ -1242,14 +1315,20 @@ private struct WidgetStepRow: View {
     let step: AgentStep
     let status: AgentStepStatus
 
+    private var title: String {
+        AgentActivityPresentation.planStepTitle(step)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             iconSlot
-            Text(AgentActivityPresentation.planStepTitle(step))
+            Text(title)
                 .font(WidgetType.caption)
                 .foregroundStyle(isEmphasized ? WidgetTheme.textFull : WidgetTheme.textMuted)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .accessibilityLabel(title)
+                .help(title)
             Spacer(minLength: 8)
         }
     }
@@ -1273,7 +1352,7 @@ private struct WidgetStepRow: View {
                 WidgetSpinner()
             case .failed:
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .font(WidgetType.icon)
                     .foregroundStyle(WidgetTheme.errorGlyph)
             default:
                 if let resolvedIcon {
@@ -1283,12 +1362,12 @@ private struct WidgetStepRow: View {
                         .opacity(status == .complete ? 1 : 0.6)
                 } else {
                     Image(systemName: status == .complete ? "checkmark" : AgentActivityPresentation.eventIcon(.act))
-                        .font(.system(size: status == .complete ? 10 : 11, weight: .semibold))
+                        .font(WidgetType.iconSmall)
                         .foregroundStyle(WidgetTheme.textMuted)
                 }
             }
         }
-        .frame(width: 13, height: 13)
+        .frame(width: 16, height: 16)
     }
 }
 
@@ -1307,9 +1386,9 @@ private struct WidgetItemJobRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(WidgetType.iconSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
-                    .frame(width: 13, height: 13)
+                    .frame(width: 16, height: 16)
                 Text(title)
                     .font(WidgetType.caption)
                     .foregroundStyle(WidgetTheme.textFull)
@@ -1323,7 +1402,7 @@ private struct WidgetItemJobRow: View {
                     .foregroundStyle(WidgetTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .padding(.leading, 21)
+                    .padding(.leading, 24)
             }
         }
     }
@@ -1518,7 +1597,7 @@ private struct WidgetPermissionPanel: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 11))
+                    .font(WidgetType.icon)
                     .foregroundStyle(WidgetTheme.textMuted)
 
                 (Text("Allow access to ").font(WidgetType.caption)
@@ -1546,22 +1625,26 @@ private struct WidgetPermissionPanel: View {
                 if sessionProgress == nil {
                     Button(action: onDeny) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(WidgetTheme.textFull)
                     }
                     .buttonStyle(.plain)
-                    .frame(width: 23, height: 23)
+                    .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .widgetCircularBackground()
+                    .accessibilityLabel("Deny")
+                    .keyboardShortcut(.cancelAction)
                 }
 
                 Button(action: onAllow) {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(WidgetType.headlineChip)
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .frame(width: 23, height: 23)
+                .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
+                .accessibilityLabel("Allow")
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -1609,7 +1692,7 @@ private struct WidgetCaptureReviewPanel: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: 160)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: WidgetTheme.thumbnailRadius, style: .continuous))
                     .accessibilityLabel("Screenshot of \(preview.appDisplayName) that Sonny is about to send")
             }
 
@@ -1648,8 +1731,9 @@ private struct WidgetCaptureReviewPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground()
+                .keyboardShortcut(.cancelAction)
 
                 Button(action: onSend) {
                     Text("Send")
@@ -1658,8 +1742,9 @@ private struct WidgetCaptureReviewPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -1714,8 +1799,9 @@ private struct WidgetDelegationReviewPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground()
+                .keyboardShortcut(.cancelAction)
 
                 Button(action: onAllow) {
                     Text("Use tools")
@@ -1724,8 +1810,9 @@ private struct WidgetDelegationReviewPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -1762,8 +1849,9 @@ private struct WidgetSessionPausedPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground()
+                .keyboardShortcut(.cancelAction)
 
                 Button(action: onResume) {
                     Text("Resume")
@@ -1772,8 +1860,9 @@ private struct WidgetSessionPausedPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -1796,7 +1885,7 @@ private struct WidgetSessionIdentityLine: View {
             // Amber, not the failure red: this is Sonny doing something unusual, not something
             // going wrong — the same distinction the approval panel's escalation line draws.
             Image(systemName: "cursorarrow.rays")
-                .font(.system(size: 12))
+                .font(WidgetType.icon)
                 .foregroundStyle(WidgetTheme.secondaryCircular)
 
             (Text(ScreenControlSessionPresentation.controllingPrefix).font(WidgetType.caption)
@@ -1826,7 +1915,7 @@ private struct WidgetSessionStopButton: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 10)
-        .frame(height: 23)
+        .frame(height: WidgetTheme.controlSize)
         .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
         .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(appDisplayName: appDisplayName))
     }
@@ -1885,7 +1974,7 @@ private struct WidgetControllingPanel: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(height: WidgetTheme.controlSize)
                 .widgetCircularBackground()
                 .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(
                     appDisplayName: progress.appDisplayName
@@ -1920,9 +2009,10 @@ private struct WidgetControllingPanel: View {
 /// shape and copy and answered before any of it was written, per the repo's standing rule that a
 /// deliberate departure is a stated, reasoned one.
 ///
-/// The shape is borrowed rather than designed: a 23x23 circular `xmark` on the neutral fill is
-/// `WidgetPermissionPanel`'s Deny button, reused verbatim. No new component and no new token, so the
-/// one thing this adds to System B is a button that already exists two panels away.
+/// The shape is borrowed rather than designed: a `WidgetTheme.controlSize` circular `xmark` on the
+/// neutral fill is `WidgetPermissionPanel`'s Deny button, reused verbatim. No new component, so the
+/// one thing this adds to System B is a button that already exists two panels away. (Was a bare
+/// 23pt literal until the 2026-09-08 modernization pass routed it through the shared token.)
 private struct WidgetClarificationPanel: View {
     let plan: AgentPlan?
     let stepStatuses: [String: AgentStepStatus]
@@ -1959,7 +2049,7 @@ private struct WidgetClarificationPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "questionmark.circle")
-                        .font(.system(size: 12))
+                        .font(WidgetType.icon)
                         .foregroundStyle(WidgetTheme.textMuted)
                     Text(question)
                         .font(WidgetType.caption)
@@ -1977,11 +2067,12 @@ private struct WidgetClarificationPanel: View {
                     // shows on its own button.
                     Button(action: onCancel) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(WidgetTheme.textFull)
                     }
                     .buttonStyle(.plain)
-                    .frame(width: 23, height: 23)
+                    .keyboardShortcut(.cancelAction)
+                    .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .widgetCircularBackground()
                     .accessibilityLabel(ClarificationPresentation.cancelLabel)
                     .help(ClarificationPresentation.cancelLabel)
@@ -2001,13 +2092,15 @@ private struct WidgetClarificationPanel: View {
 
                     Button(action: onSubmit) {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
-                    .frame(width: 23, height: 23)
+                    .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .widgetCircularBackground(tint: WidgetTheme.primaryAction)
                     .disabled(!canSend)
+                    .accessibilityLabel("Send answer")
+                    .keyboardShortcut(.defaultAction)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -2046,6 +2139,8 @@ private struct WidgetResultPanel: View {
                 .foregroundStyle(WidgetTheme.textFull)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(summary)
+                .help(summary)
 
             if let ranWithoutAskingTrace {
                 Text(ranWithoutAskingTrace)
@@ -2156,42 +2251,40 @@ private struct WidgetResumeOfferPanel: View {
             HStack(spacing: 8) {
                 Spacer(minLength: 8)
 
-                // 23x23 on the neutral circular fill, and a 10pt bold `xmark`: this is
-                // `WidgetClarificationPanel`'s own cancel control, glyph for glyph, which is itself
-                // `WidgetPermissionPanel`'s Deny. No new component and no new System B token.
+                // `WidgetTheme.controlSize` on the neutral circular fill, and a `WidgetType.headlineChip`
+                // `xmark`: this is `WidgetClarificationPanel`'s own cancel control, glyph for glyph,
+                // which is itself `WidgetPermissionPanel`'s Deny. No new component.
                 Button(action: onDecline) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(WidgetType.headlineChip)
                         .foregroundStyle(WidgetTheme.textFull)
                 }
                 .buttonStyle(.plain)
-                .frame(width: 23, height: 23)
+                .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                 .widgetCircularBackground()
                 .accessibilityLabel(ResumeOfferPresentation.declineAccessibilityLabel(command: command))
                 .help(ResumeOfferPresentation.declineLabel)
+                .keyboardShortcut(.cancelAction)
 
                 // The affirmative stays the tinted one, which is the whole of what tells "carry on"
                 // apart from "leave it" now that neither carries a word.
                 //
-                // **The 11pt is borrowed from a submit arrow, not from a checkmark** (PR #107, F4).
-                // `WidgetClarificationPanel`'s tinted control is an `arrow.up` that sends the answer
-                // — this comment used to call it a "Send", which is a text button in
-                // `WidgetCaptureReviewPanel` and a different thing — so what was copied is a size
-                // and a treatment, 11pt bold white on `primaryAction`, rather than a matching glyph.
-                // The file's only existing `xmark`/`checkmark` pair is `WidgetPermissionPanel`'s
-                // Deny and Allow, and that pair is 10pt for **both**. Whether these two read as the
-                // same size is a founder call at manual-test time, not a session's, so the sizes
-                // stand and the manual row asks the question.
+                // **Both glyphs now share `WidgetType.headlineChip`** (2026-09-08 modernization
+                // pass) — the same token `WidgetPermissionPanel`'s Deny/Allow pair and
+                // `WidgetClarificationPanel`'s cancel/send pair use, so the founder's open question
+                // about whether an 11pt checkmark read the same size as a 10pt one is moot: every
+                // icon-only glyph in these panels is the one size now.
                 Button(action: onContinue) {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(WidgetType.headlineChip)
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .frame(width: 23, height: 23)
+                .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                 .widgetCircularBackground(tint: WidgetTheme.primaryAction)
                 .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))
                 .help(ResumeOfferPresentation.continueLabel)
+                .keyboardShortcut(.defaultAction)
             }
         }
     }
@@ -2257,11 +2350,11 @@ private struct WidgetFilePreviewChip: View {
                 HStack(spacing: 4) {
                     Text("Open")
                     Image(systemName: "arrow.up.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(WidgetType.headlineChip)
                 }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(WidgetTheme.textStrong)
             .font(WidgetType.headlineChip)
             .padding(.horizontal, 14)
             .frame(height: 36)
@@ -2308,13 +2401,13 @@ private struct WidgetNoticeStrip: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .frame(width: 472, alignment: .leading)
+        .frame(width: WidgetTheme.panelWidth, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: WidgetTheme.noticeRadius, style: .continuous)
                 .fill(WidgetTheme.panelBase.opacity(0.92))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: WidgetTheme.noticeRadius, style: .continuous)
                 .strokeBorder(WidgetTheme.hairline.opacity(0.25), lineWidth: 1)
         )
     }
@@ -2332,8 +2425,9 @@ private struct WidgetNoticeStrip: View {
 /// state carries a link this app will open. The founder's decision of 2026-09-04: an Update Sonny
 /// button that opens the URL, or the message with no button, and never a visible URL or a Copy.
 ///
-/// The two controls are `WidgetCaptureReviewPanel`'s text buttons, token for token — 23 high on the
-/// circular fill, `captionMedium`, the affirmative tinted and the other neutral. No new component and
+/// The two controls are `WidgetCaptureReviewPanel`'s text buttons, token for token —
+/// `WidgetTheme.controlSize` high on the circular fill, `captionMedium`, the affirmative tinted and
+/// the other neutral. No new component and
 /// no new System B token.
 private struct WidgetVersionPanel: View {
     let prompt: ClientVersionPrompt
@@ -2344,7 +2438,7 @@ private struct WidgetVersionPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 12))
+                    .font(WidgetType.icon)
                     .foregroundStyle(WidgetTheme.primaryAction)
 
                 Text(prompt.title)
@@ -2370,8 +2464,9 @@ private struct WidgetVersionPanel: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 10)
-                    .frame(height: 23)
+                    .frame(height: WidgetTheme.controlSize)
                     .widgetCircularBackground()
+                    .keyboardShortcut(.cancelAction)
                 }
 
                 if let updateLabel = prompt.updateLabel {
@@ -2382,8 +2477,9 @@ private struct WidgetVersionPanel: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 10)
-                    .frame(height: 23)
+                    .frame(height: WidgetTheme.controlSize)
                     .widgetCircularBackground(tint: WidgetTheme.primaryAction)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -2407,7 +2503,7 @@ private struct WidgetFailurePanel: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 12))
+                    .font(WidgetType.icon)
                     .foregroundStyle(WidgetTheme.taskFailureRetry)
 
                 // Shows AgentViewModel's real error text rather than the wireframe's fixed
@@ -2419,18 +2515,21 @@ private struct WidgetFailurePanel: View {
                     .foregroundStyle(WidgetTheme.textFull)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(message)
+                    .help(message)
 
                 Spacer(minLength: 8)
 
                 if canRetry {
                     Button(action: onRetry) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(WidgetType.headlineChip)
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
-                    .frame(width: 23, height: 23)
+                    .frame(width: WidgetTheme.controlSize, height: WidgetTheme.controlSize)
                     .widgetCircularBackground(tint: WidgetTheme.taskFailureRetry)
+                    .accessibilityLabel("Retry task")
                 }
             }
         }

@@ -25,7 +25,19 @@ final class AgentViewModel: ObservableObject {
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
-    @Published var voiceHotKeyStatus: String = "Hold Ctrl-Opt-Space"
+    /// When the recording that is currently `isRecordingVoice` began, `nil` otherwise — set beside
+    /// `isRecordingVoice = true` and cleared everywhere that becomes `false` again (a clean stop, or
+    /// `audioRecorder.stop()` throwing). The widget's countdown label reads it directly; nothing
+    /// else needs to.
+    @Published var voiceRecordingStartedAt: Date?
+    /// How long a recording runs before `scheduleVoiceRecordingAutoStop` stops it itself.
+    ///
+    /// An instance `var`, not a constant and not an `init` parameter: it is not a store and nothing
+    /// about it needs the injection discipline `LocalStoreInjectionScanTests` holds those to, so a
+    /// test sets it directly on a fixture the way `voiceConfigurationBlockerOverride` is set,
+    /// shrinking a three-minute wait to a fraction of a second.
+    var voiceRecordingListeningWindow: TimeInterval = VoiceRecordingCountdown.listeningSeconds
+    @Published var voiceHotKeyStatus: String = "Hold " + PushToTalkHotKey.displayName
     @Published var voiceHotKeyReady: Bool = true
     @Published var permissionItems: [PermissionReadinessItem] = []
     /// Whether a Sonny session is held on this Mac, as the readiness row reads it (SONNY-136).
@@ -318,9 +330,9 @@ final class AgentViewModel: ObservableObject {
     /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
     @Published var completedRunNotice: CompletedRunNotice?
 
-    /// A request to open one task's detail dialog, set when the user clicks a finished-run
-    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and presents
-    /// the same sheet a click on a history row opens.
+    /// A request to show one task's detail, set when the user clicks a finished-run
+    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and selects
+    /// that task into the pane beside the list, the same selection a click on a history row makes.
     ///
     /// Published state rather than a direct call because the sheet is driven by view-local state the
     /// app delegate cannot reach, and `.claude/rules/macagent-ui-conventions.md`'s shared-state rule
@@ -498,6 +510,12 @@ final class AgentViewModel: ObservableObject {
     /// outlived an iteration would defer that to the next launch.
     private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)?
     private let audioRecorder: AudioCommandRecorder
+    /// The scheduled auto-stop for the recording currently running, `nil` when none is scheduled.
+    ///
+    /// `private(set)` rather than fully private, for the reason `MicHoverHintModel.dismissCountdown`
+    /// is: a test awaits the real task instead of sleeping and hoping a wall-clock window has
+    /// elapsed (CLAUDE.md's own gotcha on exactly that pattern).
+    private(set) var voiceRecordingAutoStopTask: Task<Void, Never>?
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
     private let workspaceStore: WorkspaceStore
@@ -787,7 +805,11 @@ final class AgentViewModel: ObservableObject {
     /// synchronously right after capturing it, so the live property is empty by the time any caller
     /// returns — this is the only observable record of the text a run was started with.
     private(set) var lastCommand = ""
-    private var isPushToTalkHotKeyDown = false
+    /// Not `private`, for the reason `scheduleVoiceRecordingAutoStop` gives its own visibility: the
+    /// only real path that sets it (`beginPushToTalkVoice`) reaches `AVCaptureDevice.requestAccess`,
+    /// which a test cannot cross, so a test that needs the physical key still held while a
+    /// recording ends on its own (the auto-stop) sets this directly instead.
+    var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
     /// The unfinished-run record this task is checkpointing into, or `nil` when it has none —
@@ -1576,7 +1598,7 @@ final class AgentViewModel: ObservableObject {
     /// your command — or hold Ctrl-Opt-Space anywhere". The em dash goes, and no comma takes its
     /// place: two clauses this short do not need one. Copy is his, so this string is not a sentence
     /// to improve on session judgment.
-    static let micHoverShortcutReminder = "Click to speak or hold Ctrl-Opt-Space."
+    static let micHoverShortcutReminder = "Click to speak or hold \u{2303}\u{2325}Space."
 
     /// How long the shortcut reminder stays, and nothing else. The configuration message has no
     /// delay at all rather than a longer one, which is why this is not a general "hint duration".
@@ -3040,6 +3062,44 @@ final class AgentViewModel: ObservableObject {
         return true
     }
 
+    /// Reopens a past task into the widget with its exact command ready to change, rather than
+    /// re-running it verbatim (row 11, the founders' ask of 2026-09-09: "a new 'Edit and run' opens
+    /// the widget with the command filled in"). A sibling of `runTaskAgain` at the compose end
+    /// rather than the dispatch end — this never reaches `dispatch`, `start` or the planner; it
+    /// only fills the composer, exactly as `composeCommand` does for the "Create a workspace
+    /// called " and "Create a routine called " prefills.
+    ///
+    /// **Refused while a clarification is open, checked first so the refusal is `composeCommand`'s
+    /// own** rather than a second copy of the same message: calling it here lets the one guard that
+    /// already exists answer for both callers. **Refused while any other task is in flight**, the
+    /// same `isTaskInFlight` superset `followUpOnTask` refuses on — running, awaiting approval, or
+    /// (again) an open clarification, which the first guard has already ruled out by the time this
+    /// one runs.
+    ///
+    /// **The workspace binding travels with the edit**, the same as `runTaskAgain`'s: the user is
+    /// changing the words, not the boundary the task ran inside. Unlike `runTaskAgain`, nothing is
+    /// armed and no prior-task context is recorded — this is a new command about to be typed, not a
+    /// continuation of the old one.
+    ///
+    /// - Returns: whether the composer was filled, so the caller can tell a real edit-and-run from
+    ///   a refusal that changed nothing.
+    @discardableResult
+    func editTaskAndRunAgain(_ record: CompletedTaskRecord) -> Bool {
+        guard clarificationQuestion == nil else {
+            // `composeCommand`'s own guard refuses and logs this case; reached here so the message
+            // is written in the one place rather than copied.
+            composeCommand(record.command)
+            return false
+        }
+        guard !isTaskInFlight else {
+            logStore.append(.observe, "Edit and run ignored while a task is in flight.")
+            return false
+        }
+        pendingWorkspaceBinding = record.workspaceName
+        composeCommand(record.command)
+        return true
+    }
+
     /// Reopens a past task into the widget so the user can say the next thing about it (row E,
     /// SONNY-150) — "use the other folder instead", "do that again but for March" — without
     /// restating the whole command.
@@ -3135,7 +3195,10 @@ final class AgentViewModel: ObservableObject {
     /// side store would not decode would trade a degraded feature for no feature, and the founder's
     /// objection to a shorter-lived detail store was precisely that follow-ups must not quietly get
     /// weaker — a visible banner is the opposite of quietly.
-    private func storedPlanDetail(for record: CompletedTaskRecord) -> StoredTaskPlanDetail? {
+    ///
+    /// **Not `private` since row 11** (the founders' ask of 2026-09-09): the Tasks pane's receipt
+    /// reads this too, to show what Sonny planned, read only — it never writes through this door.
+    func storedPlanDetail(for record: CompletedTaskRecord) -> StoredTaskPlanDetail? {
         guard let id = record.id else {
             return nil
         }
@@ -6080,6 +6143,9 @@ final class AgentViewModel: ObservableObject {
 
                 isPreparingVoiceRecording = false
                 isRecordingVoice = true
+                let recordingStartedAt = Date()
+                voiceRecordingStartedAt = recordingStartedAt
+                scheduleVoiceRecordingAutoStop(startedAt: recordingStartedAt)
                 errorMessage = nil
                 switch voiceRecordingPurpose {
                 case .command:
@@ -6123,13 +6189,49 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Arms the recording's own end, so a hotkey nobody releases or a mic nobody presses again ends
+    /// on its own rather than running until `AudioCommandRecorder`'s file ceiling five seconds
+    /// later — the widget's own countdown promises Sonny stops listening then, and this is what
+    /// keeps that promise. Cancels whatever the previous recording had scheduled first, so two
+    /// recordings never have two auto-stops racing.
+    ///
+    /// `startedAt` is compared against `voiceRecordingStartedAt` rather than trusted blindly:
+    /// `voiceRecordingStartedAt` may belong to a *different* recording by the time this fires — a
+    /// stop and a fresh press can both land inside the sleep — and a task scheduled for the
+    /// recording that already ended must never stop the one that followed it.
+    ///
+    /// **Not `private`, for the same reason `deliverTranscript`/`deliverTranscriptionError` are
+    /// not**: the only path that would exercise it end-to-end goes through
+    /// `AVCaptureDevice.requestAccess`, which a `swift test` process cannot survive (see
+    /// `WidgetVoiceEntryTests`'s own suite-level note). Driven directly by tests instead.
+    func scheduleVoiceRecordingAutoStop(startedAt: Date) {
+        voiceRecordingAutoStopTask?.cancel()
+        let window = voiceRecordingListeningWindow
+        voiceRecordingAutoStopTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(window))
+            guard !Task.isCancelled else { return }
+            guard let self, self.voiceRecordingStartedAt == startedAt else { return }
+            self.stopVoiceRecordingAndTranscribe()
+        }
+    }
+
     private func stopVoiceRecordingAndTranscribe() {
+        // Cancelled unconditionally and first, whatever called this — the mic's own Stop, the
+        // hotkey release, or the auto-stop task above firing on itself. A `Task` cancelling itself
+        // mid-body is a harmless no-op, and clearing the property here (rather than leaving it for
+        // whichever branch below runs) is what makes "cancel it on every stop" true of every caller
+        // rather than of most of them.
+        voiceRecordingAutoStopTask?.cancel()
+        voiceRecordingAutoStopTask = nil
+
         let recording: FinishedRecording
         do {
             recording = try audioRecorder.stop()
             isRecordingVoice = false
+            voiceRecordingStartedAt = nil
         } catch {
             isRecordingVoice = false
+            voiceRecordingStartedAt = nil
             isPushToTalkHotKeyDown = false
             setError(error.localizedDescription)
             return
@@ -7732,7 +7834,7 @@ final class AgentViewModel: ObservableObject {
             return
         case .missed:
             resolveOccurrence(for: next.routine.name, at: occurrence)
-            scheduledRunNotice = "“\(next.routine.name)” did not run at its scheduled time — too much time had passed by the time Sonny was available again."
+            scheduledRunNotice = "“\(next.routine.name)” did not run at its scheduled time. Too much time had passed by the time Sonny was available again."
         case .due:
             guard next.routine.schedule?.unattendedTrusted == true else {
                 // An enabled schedule without unattended trust cannot run: the outer run-routine

@@ -625,22 +625,28 @@ struct ApprovedAppRevocationTests {
         #expect(flat.contains("two answers to one question about one store"))
     }
 
-    /// The section is System A: the row action is `CommandCenterRowActionStyle(tone: .danger)`, the
-    /// same danger treatment every other in-place remove in Command Center uses, and nothing from
-    /// System B's glass/shadow set appears.
+    /// The section is System A: the row action is `SonnyButtonStyle(tone: .danger, size: .small)`,
+    /// the same danger treatment every other in-place remove in Command Center uses, and nothing
+    /// from System B's glass/shadow set appears.
     ///
     /// **The forbidden set is only the tokens the tree actually holds** (PR #175 review, F6). It
     /// included `.ultraThinMaterial`, which appears nowhere in `Sources/` and never has — a negative
     /// assertion over a string that cannot occur is a clean zero that reads like a guard. Every entry
     /// below is checked against a positive control first, in this test, so the set cannot go vacuous
     /// again without failing.
+    ///
+    /// **Pin updated from `CommandCenterRowActionStyle(tone: .danger)` to
+    /// `SonnyButtonStyle(tone: .danger, size: .small)`** (the ui-ux-claude memory-settings lane):
+    /// `CommandCenterRowActionStyle` is a retired shim onto `SonnyButtonStyle` and this list/row pair
+    /// is one of its call sites being migrated directly onto the shared button style, per the lane's
+    /// brief.
     @Test
     func theListUsesSystemATokensAndBorrowsNothingFromTheWidgetsSet() throws {
         let list = try Self.revocationListSource()
         let row = try Self.revocationRowSource()
 
-        #expect(list.components(separatedBy: "CommandCenterRowActionStyle(tone: .danger)").count - 1 == 1)
-        #expect(row.components(separatedBy: "CommandCenterRowActionStyle(tone: .danger)").count - 1 == 1)
+        #expect(list.components(separatedBy: "SonnyButtonStyle(tone: .danger, size: .small)").count - 1 == 1)
+        #expect(row.components(separatedBy: "SonnyButtonStyle(tone: .danger, size: .small)").count - 1 == 1)
         for widgetToken in ["WidgetTheme", "WidgetType", "shadow(", "NSVisualEffectView"] {
             // The positive control: a token the tree has never held is a guard about nothing.
             #expect(

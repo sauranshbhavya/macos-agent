@@ -10,13 +10,13 @@ enum PushToTalkHotKeyError: Error, LocalizedError {
         case let .installHandlerFailed(status):
             return "Could not install the push-to-talk hotkey handler. macOS returned \(status)."
         case let .registerFailed(status):
-            return "Could not register Control-Option-Space for push-to-talk. macOS returned \(status)."
+            return "Could not register \u{2303}\u{2325}Space for push-to-talk. macOS returned \(status)."
         }
     }
 }
 
 final class PushToTalkHotKey: @unchecked Sendable {
-    static let displayName = "Ctrl-Opt-Space"
+    static let displayName = "\u{2303}\u{2325}Space"
 
     private let signature = OSType(0x534F4E59) // SONY
     private let identifier = UInt32(1)

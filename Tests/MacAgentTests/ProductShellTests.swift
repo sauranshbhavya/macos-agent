@@ -69,16 +69,20 @@ struct ProductShellTests {
             firstRunCoordinator: firstRunSuite.makeCoordinator()
         )
 
+        // The first item is "Ask Sonny" since the ui-ux-claude modernization: the sidebar's ⌘N
+        // button and this item are one action, named once. The function keeps its historical name
+        // because the changelog and `WidgetControlNamingTests` cite it.
         let menu = delegate.makeStatusMenu()
-        #expect(menu.items.map(\.title) == ["New Task", "", "Open Command Center", "", "Quit Sonny"])
+        #expect(menu.items.map(\.title) == ["Ask Sonny", "", "Open Command Center", "Settings…", "", "Quit Sonny"])
 
         // Titles alone pin nothing about wiring: an item rewired to a different selector keeps its
         // title and a title-only assertion stays green. Every item gets its target, selector, and
         // key equivalent asserted — ⌘Q in particular, since app-wide Quit was menu-routed and
         // silently broken once already (see `makeMainMenu()`'s comment).
         let expectedItems: [(title: String, action: Selector, keyEquivalent: String)] = [
-            ("New Task", #selector(AppDelegate.requestWidgetPresentation), ""),
+            ("Ask Sonny", #selector(AppDelegate.requestWidgetPresentation), ""),
             ("Open Command Center", #selector(AppDelegate.openCommandCenter), ""),
+            ("Settings…", #selector(AppDelegate.openSettings), ""),
             ("Quit Sonny", #selector(AppDelegate.quit), "q")
         ]
         for expected in expectedItems {
@@ -88,7 +92,7 @@ struct ProductShellTests {
             #expect(item.keyEquivalent == expected.keyEquivalent)
         }
 
-        let newTask = try #require(menu.items.first { $0.title == "New Task" })
+        let newTask = try #require(menu.items.first { $0.title == "Ask Sonny" })
         let action = try #require(newTask.action)
         #expect(viewModel.widgetPresentationRequest == 0)
 
@@ -101,6 +105,113 @@ struct ProductShellTests {
 
         _ = (newTask.target as? NSObject)?.perform(action)
         #expect(viewModel.widgetPresentationRequest == 2)
+    }
+
+    /// The real app menu, pinned the way the status menu is: titles alone leave a rewired item
+    /// green. About and Settings target the delegate, whose doors bump `CommandCenterCommands`; the
+    /// three Hide items carry nil targets so AppKit's own responder-chain selectors answer them,
+    /// and ⌘H / ⌥⌘H are the equivalents every Mac app gives them.
+    @Test
+    func theAppMenuCarriesAboutSettingsTheHideItemsAndQuit() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let delegate = AppDelegate(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
+
+        let mainMenu = delegate.makeMainMenu()
+        #expect(mainMenu.items.map { $0.submenu?.title ?? "" } == ["", "Edit", "Window", "Help"])
+        // `applicationDidFinishLaunching` installs the Window submenu as `NSApp.windowsMenu` by
+        // looking the item up by this title, so the title is wiring rather than decoration.
+        #expect(mainMenu.item(withTitle: "Window")?.submenu === mainMenu.items[2].submenu)
+        let appMenu = try #require(mainMenu.items.first?.submenu)
+        #expect(appMenu.items.map(\.title) == [
+            "About Sonny", "", "Settings…", "", "Hide Sonny", "Hide Others", "Show All", "", "Quit Sonny"
+        ])
+
+        let delegateItems: [(title: String, action: Selector, keyEquivalent: String)] = [
+            ("About Sonny", #selector(AppDelegate.openAbout), ""),
+            ("Settings…", #selector(AppDelegate.openSettings), ","),
+            ("Quit Sonny", #selector(AppDelegate.quit), "q")
+        ]
+        for expected in delegateItems {
+            let item = try #require(appMenu.items.first { $0.title == expected.title })
+            #expect(item.target === delegate)
+            #expect(item.action == expected.action)
+            #expect(item.keyEquivalent == expected.keyEquivalent)
+        }
+
+        let hide = try #require(appMenu.items.first { $0.title == "Hide Sonny" })
+        #expect(hide.target == nil)
+        #expect(hide.action == #selector(NSApplication.hide(_:)))
+        #expect(hide.keyEquivalent == "h")
+        #expect(hide.keyEquivalentModifierMask == [.command])
+        let hideOthers = try #require(appMenu.items.first { $0.title == "Hide Others" })
+        #expect(hideOthers.target == nil)
+        #expect(hideOthers.action == #selector(NSApplication.hideOtherApplications(_:)))
+        #expect(hideOthers.keyEquivalent == "h")
+        #expect(hideOthers.keyEquivalentModifierMask == [.command, .option])
+        let showAll = try #require(appMenu.items.first { $0.title == "Show All" })
+        #expect(showAll.target == nil)
+        #expect(showAll.action == #selector(NSApplication.unhideAllApplications(_:)))
+
+        // The Help menu: found by title to become `NSApp.helpMenu`, one item, ⌘/, the delegate.
+        let helpMenu = try #require(mainMenu.item(withTitle: "Help")?.submenu)
+        #expect(helpMenu === mainMenu.items[3].submenu)
+        #expect(helpMenu.items.map(\.title) == ["Keyboard shortcuts"])
+        let shortcuts = try #require(helpMenu.items.first)
+        #expect(shortcuts.target === delegate)
+        #expect(shortcuts.action == #selector(AppDelegate.openKeyboardShortcuts))
+        #expect(shortcuts.keyEquivalent == "/")
+        #expect(shortcuts.keyEquivalentModifierMask == [.command])
+    }
+
+    /// Opening the app while it already runs (a Dock click, Spotlight, Launchpad, a Finder
+    /// double-click) shows Command Center when it is not on screen and leaves it alone when it is.
+    /// The same activation-policy dance as `coordinatorCreatesReusableCommandCenterWindowAndChangesActivationPolicy`,
+    /// because showing the window switches the app to `.regular`.
+    @Test
+    func reopeningTheAppShowsCommandCenterOnlyWhenItIsNotOnScreen() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let application = NSApplication.shared
+        let originalActivationPolicy = application.activationPolicy()
+        defer { _ = application.setActivationPolicy(originalActivationPolicy) }
+        let firstRunSuite = FirstRunDefaultsSuite()
+        defer { firstRunSuite.removeAtEndOfTest() }
+        let coordinator = AppWindowCoordinator(
+            viewModel: fixture.viewModel,
+            accountModel: makeHermeticAccountModel(),
+            screenAccessModel: makeHermeticScreenAccessModel(),
+            firstRunCoordinator: firstRunSuite.makeCoordinator()
+        )
+
+        #expect(coordinator.commandCenterWindow == nil)
+        #expect(!coordinator.isCommandCenterVisible)
+
+        coordinator.handleReopen()
+        let window = try #require(coordinator.commandCenterWindow)
+        #expect(window.isVisible)
+        #expect(coordinator.isCommandCenterVisible)
+
+        // On screen already: the same window, nothing new made.
+        coordinator.handleReopen()
+        #expect(coordinator.commandCenterWindow === window)
+
+        // Closed and reopened: the same window comes back rather than a second one.
+        window.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(!coordinator.isCommandCenterVisible)
+        coordinator.handleReopen()
+        #expect(coordinator.commandCenterWindow === window)
+        #expect(window.isVisible)
+        window.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
     }
 
     @Test
@@ -473,6 +584,15 @@ struct ProductShellTests {
         let viewModel = fixture.viewModel
         let firstRunSuite = FirstRunDefaultsSuite()
         defer { firstRunSuite.removeAtEndOfTest() }
+        // `NSWindow`'s frame autosave writes to the real, un-sandboxed `UserDefaults.standard` under
+        // "NSWindow Frame <name>" — there is no hermetic seam for it, unlike every other preference
+        // this suite touches. A window this smoke test (or a manual `SONNY_UI_SMOKE=1` run) already
+        // showed once would have saved a real frame under this exact key, and the content-size
+        // assertion below is specifically about the *no-saved-frame* default — so it is cleared
+        // first, deliberately, rather than assumed absent.
+        let autosaveDefaultsKey = "NSWindow Frame SonnyCommandCenterWindow.v2"
+        UserDefaults.standard.removeObject(forKey: autosaveDefaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: autosaveDefaultsKey) }
         let coordinator = AppWindowCoordinator(
             viewModel: viewModel,
             accountModel: makeHermeticAccountModel(),
@@ -487,6 +607,17 @@ struct ProductShellTests {
         #expect(commandCenterWindow.styleMask.contains(.resizable))
         #expect(commandCenterWindow.isVisible)
         #expect(application.activationPolicy() == .regular)
+        // Phase 14 (founder ask): the default content size, raised from 1180×780, and the renamed
+        // autosave key — `commandCenterWindow.contentView` is the hosting controller's view, which
+        // fills the content rect exactly, so this reads the size `NSWindow(contentRect:)` was given
+        // rather than the outer frame, which also carries the (zero-height, transparent) title bar.
+        #expect(commandCenterWindow.contentView?.frame.size == NSSize(width: 1_280, height: 840))
+        // Read on the window itself, and correct only because `makeCommandCenterWindowController`
+        // also sets `windowFrameAutosaveName` on the *controller* — `NSWindowController.showWindow`
+        // resyncs the window's own autosave name from that controller property (empty by default),
+        // clearing anything set directly on the window beforehand; see that method's own comment on
+        // the fix, found and corrected in this same phase.
+        #expect(commandCenterWindow.frameAutosaveName == "SonnyCommandCenterWindow.v2")
 
         coordinator.showCommandCenter()
         #expect(coordinator.commandCenterWindow === commandCenterWindow)
@@ -495,8 +626,26 @@ struct ProductShellTests {
             try render(window: commandCenterWindow, to: URL(fileURLWithPath: snapshotPath))
         }
 
+        // Phase 14: the hold-⌘ hint monitor lives exactly as long as the window is on screen.
+        #expect(coordinator.isCommandKeyHintMonitorInstalled, "installed with the window")
+
         commandCenterWindow.close()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(application.activationPolicy() == .accessory)
+        #expect(coordinator.isCommandKeyHintMonitorInstalled == false, "removed when the window closes")
+
+        // Phase 14's review, F2: the window controller is kept and reused after a close, so an
+        // install tied to its making ran once per process while the removal ran on every close,
+        // and the hints were gone for good after the first close. Showing again reinstalls it — on
+        // the same window, so nothing here comes from making a new one.
+        coordinator.showCommandCenter()
+        #expect(coordinator.commandCenterWindow === commandCenterWindow)
+        #expect(commandCenterWindow.isVisible)
+        #expect(coordinator.isCommandKeyHintMonitorInstalled, "shown again, the monitor is back")
+
+        commandCenterWindow.close()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        #expect(coordinator.isCommandKeyHintMonitorInstalled == false)
         #expect(application.activationPolicy() == .accessory)
     }
 
@@ -1018,6 +1167,13 @@ struct ProductShellTests {
             // `taskUsageRecorder` through their own APIs; the properties themselves are the
             // collaborators, not the state.) A new dependency belongs here.
             "logStore", "currentTask", "audioRecorder", "permissionReadinessService",
+            // `voiceRecordingAutoStopTask` is a task handle beside `currentTask` above and for the
+            // same reason (phase 11, the voice lane): it holds no local data, and the wipe guards on
+            // `!isRunning` with nothing about a recording able to outlive one (SONNY-283's reasoning
+            // for `voiceRecordingPurpose`, applied to this handle). `voiceRecordingListeningWindow`
+            // sits with it as the same kind of thing `whitelist` below is: a configuration constant
+            // a test shrinks, not data any wipe could find.
+            "voiceRecordingAutoStopTask", "voiceRecordingListeningWindow",
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
@@ -1157,6 +1313,11 @@ struct ProductShellTests {
             // the wipe guards on `!isRunning` with no recording able to outlive a task (SONNY-283).
             "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "voiceRecordingPurpose", "clarificationOrigin",
             "scheduledRunDisplayCommand",
+            // `voiceRecordingStartedAt` travels with `isRecordingVoice` for the same reason those
+            // sit in this group (phase 11, the voice lane): it is the timestamp of the same
+            // in-flight recording, cleared everywhere `isRecordingVoice` becomes `false` again, so
+            // nothing about it can outlive the run.
+            "voiceRecordingStartedAt",
 
             // 5. Row I's vision-session state, all four slots of it. Same reasoning as the
             // in-flight voice flags above, and it holds harder here: `deleteLocalData` guards on
@@ -3619,6 +3780,9 @@ struct ProductShellTests {
         #expect(workspacePresentation.taskCountText == "2 tasks")
         #expect(workspacePresentation.appIcons.map(\.appName) == ["Safari", "Notes"])
         #expect(workspacePresentation.urlsText == "example.com")
+        // The overflow lane's more-actions label names the workspace, not a bare "More actions"
+        // (founder ask 2026-09-09).
+        #expect(workspacePresentation.moreActionsAccessibilityLabel == "More actions for Research")
 
         let teamWorkspace = StoredWorkspace(name: "Client Work", apps: [], urls: [], teamType: .team)
         let teamPresentation = WorkspaceCardPresentation(
@@ -3628,6 +3792,7 @@ struct ProductShellTests {
         )
         #expect(teamPresentation.effectiveTeamType == .team)
         #expect(teamPresentation.isDefaultTeamType == false)
+        #expect(teamPresentation.moreActionsAccessibilityLabel == "More actions for Client Work")
         #expect(teamPresentation.appIcons.isEmpty)
         #expect(teamPresentation.taskCount == 0)
         #expect(teamPresentation.taskCountText == "0 tasks")

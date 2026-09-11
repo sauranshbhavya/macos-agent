@@ -10,11 +10,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let accountModel: SonnyAccountModel
     private let screenAccessModel: ScreenAccessOnboardingModel
     private let firstRunCoordinator: FirstRunCoordinator
+    /// The interface-theme preference, applied to `NSApp` at launch and on every change; Settings
+    /// binds its picker to this one instance through the Command Center's environment.
+    private let appearanceModel = SonnyAppearanceModel()
+    /// Per-kind on/off for native notifications, read by `notificationService`'s gate below and
+    /// bound to by Settings › Notifications through the Command Center's environment — the same
+    /// path `appearanceModel` takes.
+    private let notificationPreferences = SonnyNotificationPreferences()
+    /// The information-density preference (founder ask, 2026-09-09), bound to by Settings ›
+    /// Preferences through the Command Center's environment — the same path `appearanceModel` takes.
+    private let densityModel = SonnyDensityModel()
     private lazy var windowCoordinator = AppWindowCoordinator(
         viewModel: viewModel,
         accountModel: accountModel,
         screenAccessModel: screenAccessModel,
-        firstRunCoordinator: firstRunCoordinator
+        firstRunCoordinator: firstRunCoordinator,
+        appearanceModel: appearanceModel,
+        notificationPreferences: notificationPreferences,
+        densityModel: densityModel
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -62,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // notices, which is the reason `onOpenStorageNotice` gives for not sharing the third.
         onOpenWatcherNotice: { [weak self] in
             self?.windowCoordinator.showCommandCenter()
-        }
+        },
+        isEnabled: { [notificationPreferences] kind in notificationPreferences.isEnabled(kind) }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
@@ -104,6 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before any window exists, so the first frame is drawn in the chosen appearance.
+        appearanceModel.apply()
         registerBundledFonts()
 
         // The app shipped with no main menu at all until 2026-07-30 — `main.swift` is a bare
@@ -114,7 +130,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // even though an accessory-policy app displays no menu bar — visibility and key-equivalent
         // routing are separate — and the bar *is* visible whenever Command Center has the app in
         // `.regular` policy.
-        NSApp.mainMenu = makeMainMenu()
+        let mainMenu = makeMainMenu()
+        NSApp.mainMenu = mainMenu
+        // Installed here rather than inside the builder: `NSApp` is nil in a test process, and the
+        // builder is what `ProductShellTests` calls to assert the wiring.
+        NSApp.windowsMenu = mainMenu.item(withTitle: "Window")?.submenu
+        // The Help menu gets the system's own search field once it is `NSApp.helpMenu`, which
+        // searches every menu item's title, so the shortcuts sheet is one way to find a command
+        // and the Help menu is the other.
+        NSApp.helpMenu = mainMenu.item(withTitle: "Help")?.submenu
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
@@ -126,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // SONNY-338) and "Quit Sonny" read as missing entirely.
         item.menu = makeStatusMenu()
         statusItem = item
+        observeStatusItemState()
 
         do {
             pushToTalkHotKey = try PushToTalkHotKey(
@@ -193,8 +218,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is shown, and it's now shown unconditionally on every launch, not on demand.
         windowCoordinator.showCommandCenter()
         widgetController.show()
-
-        print("Sonny is running. Click the Sonny item in the macOS menu bar to open it.")
     }
 
     /// Reads the Keychain, then decides first run on what it found. **One method because the two
@@ -451,19 +474,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// **Placed after the notification subscriptions on purpose.** `StandingWatcherRunTests` finds the
+    /// notification channels by the *first* `viewModel.$errorMessage` in this file and reads the
+    /// region up to its `.store`, expecting the `!isUserWorkingInSonny` gate; this observer reads the
+    /// same publisher with no gate (it is not a notification), so it has to come later in the file.
+    /// The menu-bar glyph follows Sonny's state, so a user in another app can see whether Sonny is
+    /// working, waiting for them, or stopped on a failure without opening anything. The mapping
+    /// lives in `StatusItemPresentation`; this only applies it. Template images take
+    /// `contentTintColor` on a status-bar button, so the idle state hands the tint back to the bar.
+    private func observeStatusItemState() {
+        Publishers.CombineLatest3(
+            viewModel.$isRunning,
+            viewModel.$approvalRequest.map { $0 != nil },
+            viewModel.$errorMessage.map { $0 != nil }
+        )
+        .map { isRunning, isAwaitingApproval, hasFailure in
+            StatusItemPresentation.forState(
+                isRunning: isRunning,
+                isAwaitingApproval: isAwaitingApproval,
+                hasFailure: hasFailure
+            )
+        }
+        .removeDuplicates()
+        .receive(on: RunLoop.main)
+        .sink { [weak self] presentation in
+            self?.applyStatusItemPresentation(presentation)
+        }
+        .store(in: &cancellables)
+    }
+
+    private func applyStatusItemPresentation(_ presentation: StatusItemPresentation) {
+        guard let button = statusItem?.button else { return }
+        button.image = NSImage(
+            systemSymbolName: presentation.systemImageName,
+            accessibilityDescription: presentation.accessibilityLabel
+        )
+        switch presentation.tint {
+        case .plain:
+            button.contentTintColor = nil
+        case .accent:
+            button.contentTintColor = NSColor(SonnyTheme.accent)
+        case .attention:
+            button.contentTintColor = NSColor(SonnyTheme.warning)
+        case .failure:
+            button.contentTintColor = NSColor(SonnyTheme.danger)
+        }
+        button.toolTip = presentation.accessibilityLabel
+    }
+
+
     /// The real `NSApp.mainMenu`, distinct from `makeStatusMenu()`'s status-item dropdown. Two
-    /// menus only, deliberately: an Edit menu because that is what routes the standard editing
+    /// menus, deliberately: an Edit menu because that is what routes the standard editing
     /// key equivalents to the first responder (nil targets → responder chain), and an app menu
-    /// carrying just Quit — the first top-level item renders as the bold app menu whenever the
-    /// bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
+    /// carrying About, Settings, the standard Hide items and Quit — the first top-level item renders as the bold app menu whenever
+    /// the bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
     /// app-name slot, and ⌘Q was equally menu-routed and equally broken (the status menu's own
-    /// "q" equivalent only dispatches while that dropdown is open). No File/View/Window/Help:
-    /// nothing in the app needs them.
-    private func makeMainMenu() -> NSMenu {
+    /// "q" equivalent only dispatches while that dropdown is open). No File or View menu: nothing
+    /// in the app needs them; a Help menu (phase 10) carries the Keyboard shortcuts sheet and the
+    /// system's search field. "Settings…" is here too (phase 3) because a Mac app's own
+    /// app menu is where a user expects to find it, ⌘, included, beside the account menu's own row;
+    /// "About Sonny" and the Hide items (phase 9) for the same reason, the latter with nil targets
+    /// so AppKit's own `hide:`, `hideOtherApplications:` and `unhideAllApplications:` answer them.
+    /// Internal, like `makeStatusMenu()`, so `ProductShellTests` can assert the wiring by selector.
+    func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "About Sonny",
+            action: #selector(openAbout),
+            keyEquivalent: ""
+        ).target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        ).target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Sonny", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(
+            withTitle: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit Sonny",
             action: #selector(quit),
@@ -494,16 +592,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
+        // A Window menu, so ⌘W and ⌘M route the way they do in every Mac app: to the key window
+        // through the responder chain, with nil targets. The Keyboard shortcuts sheet lists both.
+        // Titled "Window" because `applicationDidFinishLaunching` finds it by that title to make
+        // it `NSApp.windowsMenu`.
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenuItem.title = "Window"
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+
+        // Titled "Help" for the same lookup, which makes it `NSApp.helpMenu`. Its one item targets
+        // the delegate like About and Settings do, so ⌘/ opens the sheet from anywhere in the app,
+        // the widget included; the window's own hidden ⌘/ button still answers first while it is key.
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(
+            withTitle: "Keyboard shortcuts",
+            action: #selector(openKeyboardShortcuts),
+            keyEquivalent: "/"
+        ).target = self
+        helpMenuItem.title = "Help"
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+
         return mainMenu
     }
 
-    /// Just the two unambiguous actions for now — no "Recent"/usage section, since Sonny has no
+    /// The unambiguous actions and nothing else — no "Recent"/usage section, since Sonny has no
     /// real equivalent to a chat-app's usage percentage and its actual analog (recent tasks) is a
-    /// deliberate follow-up, not silently fabricated here.
+    /// deliberate follow-up, not silently fabricated here. The first item is named as the sidebar
+    /// names the same action ("Ask Sonny", the founder's ⌘N wording), because one action with two
+    /// names on two surfaces is the inconsistency the modernization removes; Settings… sits here
+    /// as it does in every menu-bar app's dropdown.
     func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(
-            withTitle: "New Task",
+            withTitle: "Ask Sonny",
             action: #selector(requestWidgetPresentation),
             keyEquivalent: ""
         ).target = self
@@ -511,6 +638,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(
             withTitle: "Open Command Center",
             action: #selector(openCommandCenter),
+            keyEquivalent: ""
+        ).target = self
+        menu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettings),
             keyEquivalent: ""
         ).target = self
         menu.addItem(.separator())
@@ -528,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `@FocusState`. The bump drives both halves at once: `observeWidgetPresentationRequests()`
     /// turns it into the `show()` call, and `FloatingWidgetView`'s `onChange` puts the cursor in
     /// the composer (expanding the compact capsule first, if it had collapsed). Calling `show()`
-    /// straight from the menu item is exactly why "New Task" read as doing nothing when the widget
+    /// straight from the menu item is exactly why the status menu's first item read as doing nothing when the widget
     /// was already on screen: the panel was re-fronted, and nothing else happened.
     ///
     /// `@objc` because the status menu item targets it by selector; Command Center's own row
@@ -559,6 +691,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// caught on this branch.
     @objc func openCommandCenter() {
         windowCoordinator.showCommandCenter()
+    }
+
+    /// The app menu's "Settings…" item. `internal` rather than `private`, matching
+    /// `openCommandCenter()`'s own reason: it targets `self` by selector, and a rewired selector is
+    /// exactly the class of bug a title-only assertion cannot catch.
+    @objc func openSettings() {
+        windowCoordinator.showSettings()
+    }
+
+    /// The app menu's "About Sonny" item, internal for the same reason as `openSettings()`.
+    @objc func openAbout() {
+        windowCoordinator.showAbout()
+    }
+
+    /// The Help menu's "Keyboard shortcuts" item, likewise.
+    @objc func openKeyboardShortcuts() {
+        windowCoordinator.showKeyboardShortcuts()
+    }
+
+    /// A Dock click, a second launch from Spotlight or Launchpad, a Finder double-click while the
+    /// app already runs. `hasVisibleWindows` counts the widget's panel, so the coordinator decides
+    /// on Command Center's own visibility instead; `true` keeps AppKit's default reopen behaviour
+    /// (activation, and deminiaturizing) on top.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        windowCoordinator.handleReopen()
+        return true
     }
 
     @objc func quit() {

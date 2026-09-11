@@ -715,6 +715,17 @@ struct ScreenControlUsageSurfaceTests {
     /// surviving reflection of a decision recorded elsewhere, so retiring one can retire a founder
     /// decision without anybody naming it.** The ruling of 2026-09-02 moved the line to the Account
     /// section and left the decision standing. This is the guard it never had.
+    ///
+    /// **Updated by the settings-pages lane of the phase-3 UI modernization (`ui-ux-claude`,
+    /// 2026-09-08): Settings' own Usage page is now a second authorized door for this figure.** The
+    /// ruling this test guards is about *Insights* specifically, never about every other page in the
+    /// file, and Settings' Usage page — "what your plan includes" — is exactly the place somebody
+    /// already looking at their plan would expect the number, which is the same reasoning
+    /// `screenControlUsageRow`'s own doc comment gives for the Account section. The two
+    /// Insights-region checks below are unchanged and still `== 0`; what changed is the whole-file
+    /// total, which is now the sum of the two authorized doors rather than the one door there used
+    /// to be — so a third, unauthorized site anywhere else in the file still moves this total without
+    /// moving either named region.
     @Test
     func insightsCarriesNoUsageMetricOfAnyKind() throws {
         let source = try MacAgentSource.read("CommandCenterView.swift")
@@ -727,15 +738,27 @@ struct ScreenControlUsageSurfaceTests {
             #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: region) == 0)
             #expect(MacAgentSource.count(of: "screenControlAllowance", inText: region) == 0)
         }
-        // **The whole page rather than only those two regions**, because the row could come back
-        // anywhere on it. The one surviving mention of the figure in this file is the Account
-        // dialog's argument, which is the door the ruling put it behind.
-        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: source) == 0)
-        #expect(MacAgentSource.count(of: "screenControlAllowance", inText: source) == 2)
+
+        // Settings' Usage page, the second authorized door (SONNY phase-3 settings-pages lane).
+        #expect(MacAgentSource.count(of: "private struct SettingsUsagePage: View {", inText: source) == 1)
+        let usagePage = try MacAgentSource.braceBlock(of: source, openedBy: "private struct SettingsUsagePage: View {")
+        let presentationOnUsagePage = MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: usagePage)
+        let allowanceOnUsagePage = MacAgentSource.count(of: "screenControlAllowance", inText: usagePage)
+        #expect(presentationOnUsagePage > 0)
+        #expect(allowanceOnUsagePage > 0)
+
+        // **The whole page rather than only the named regions**, because the row could come back
+        // anywhere on it. The whole-file total is the two authorized doors' own counts added
+        // together — the Account dialog's argument (2, unchanged) and Settings' Usage page (measured
+        // just above) — so a third site appearing anywhere else in the file would move this total
+        // without moving any of the three region-scoped counts.
+        #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: source) == presentationOnUsagePage)
+        #expect(MacAgentSource.count(of: "screenControlAllowance", inText: source) == 2 + allowanceOnUsagePage)
 
         // **The controls, without which every zero above is also what a broken scan answers.** Both
-        // tokens are findable where the figure does live, and the two surviving mentions in this
-        // file are the two arguments handed to the Account dialog and nothing else.
+        // tokens are findable where the figure does live: the Account dialog's argument, Settings'
+        // Usage page, and (checked directly below) the `SignInView.swift` surface the Account dialog
+        // itself renders.
         let account = try MacAgentSource.read("SignInView.swift")
         #expect(MacAgentSource.count(of: "ScreenControlUsagePresentation", inText: account) > 0)
         #expect(MacAgentSource.count(of: "screenControlAllowance", inText: account) > 0)

@@ -4187,6 +4187,116 @@ formality.
       finding:** it starting and serving — because an ignored signing secret means every token signed
       with it is refused, which is the sign-out this work removes, arriving silently.
 
+### The modernized Command Center and widget (new 2026-09-08, branch `ui-ux-claude`)
+
+Every row here is visual or interaction fidelity on the packaged app; nothing behavioural changed
+on this branch, so a press that does something different from before is a defect, not a design
+choice. Compare against `main` at `6d7bf058` where a row says "as before".
+
+**Window and sidebar**
+- [ ] At the default size and at 900x620: the sidebar is 220pt on a darker level than the canvas, "Ask Sonny" sits under the wordmark as the one filled accent button, five nav rows read at 30pt with a flat fill (no border) on the selected one, and the account row sits at the bottom with an up/down chevron.
+- [ ] ⌘N opens the widget focused with any draft kept; ⌘1 to ⌘5 switch pages in sidebar order; the selected row's icon and label read brighter than the rest.
+- [ ] Hovering any nav row, the account row or a button shows a faint lift; pressing a button darkens it; a disabled button reads at 40% with no hover.
+- [ ] Tab through a page with full keyboard access on: the focus ring follows each button's rounded shape.
+
+**Tasks**
+- [ ] The greeting is still the page title; the search field is 220pt with a magnifying glass, ⌘F focuses it, typing does not shift the field, Escape clears a non-empty query, and the clear control vanishes without moving anything.
+- [ ] Group headers show the count in a chip and the chevron turns as sections fold (and does not animate with Reduce Motion on); rows are 36pt with a status glyph (green filled check for done, hollow cross for canceled, red filled cross for failed), a hairline between rows and none after the last, and a hover pill inset from the edges.
+- [ ] Right-click delete on a row still asks first (as before). The task detail sheet opens at the shared size with a close control that Escape also triggers; a very short receipt and a very long one both read well inside it (the long one scrolls). Its buttons: Run again and Follow up neutral, the two deletes red.
+- [ ] Empty history and a no-results search both show the icon, title and message state, not a bare line.
+
+**Insights**
+- [ ] The page is a bento: a wide first stat spanning two columns, two single stats, the chart and the workspace breakdown side by side, recent activity full width, no empty cell at 900x620. Numbers line up (monospaced digits). Hovering a chart column swaps its label to the count and resting shows a tooltip with the same words.
+- [ ] Titles read "Tasks completed this week", "Breakdown by workspace", "Recently completed".
+
+**Routines**
+- [ ] Rows carry a real glyph tile (repeat for a routine, eye for a watcher), the streak in a chip, the next-run time in an accent chip, "Paused" in an amber chip, and a native switch for the schedule that still flips the schedule (as before). The Watching card reads as a card inside the panel with Stop in red.
+- [ ] Routine detail: the sheet opens on the shared chrome with the routine name as title and its cadence as subtitle; steps read as a log (icon slot, title, trailing text); Run now is the one filled button and shows a spinner while a task is running; Save schedule, Remove schedule and Delete routine are neutral, quiet and red respectively; the confirmation reads "Delete routine"; native pickers for cadence, weekday, day of month and time are tinted blue and dark.
+
+**Workspaces**
+- [ ] Cards fill adaptive columns (no fixed 356pt width), lift on hover, show real app icons bare with the fallback tile the only one outlined, and carry Open (filled), New task (neutral), Delete (red, text only). The delete dialog title has no curly quotes and its button reads "Delete workspace".
+- [ ] The detail sheet and the scope-add sheet open on the shared chrome and size; a workspace with many scope entries scrolls rather than clips; Remove on an entry is quiet, Add is neutral.
+
+**Memory and Settings**
+- [ ] Memory: the master switch and Preferences row sit in one card with native switches; rows are 44pt with a tinted icon tile, count, View and Delete; a damaged store still says "Can't be read" with Delete live (as before).
+- [ ] Settings: the sheet is 860x600 with its own darker sidebar, Escape closes it, rows separate with hairlines, toggles are native switches, the theme control is a native menu offering Dark with Light and System disabled (no "(Soon)"), Refresh is quiet, Set up is neutral, "Delete local data" and "Delete set-aside files" are red and say what they delete, and Remove on an approved app stays live during a run (as before).
+
+**Widget**
+- [ ] Nothing about the material, colours or state order changed. Every circular control is larger (28pt) with the same glyph; Return accepts and Escape declines on the permission, capture review, delegation, paused, resume and update panels; Return sends a clarification answer.
+- [ ] With VoiceOver: Allow and Deny are named, the mic is named and reports whether it is recording, the send arrow says "Send answer", the retry says "Retry task". Long results, long errors and long step titles show the full text on hover.
+- [ ] The notice strip (a scheduled run or a storage problem) renders on the same glass as the panel beside it. With Reduce Motion on, panel transitions do not animate.
+
+**Sign-in and screen access**
+- [ ] Both sheets open on the shared chrome; fields have the raised fill with a blue hairline when focused; Send code, Verify and Sign out show a spinner while busy; Sign out is red; the plan name is an accent chip.
+- [ ] Screen access: each grant reads as a green "Granted" or amber "Not granted" chip beside its glyph; the relaunch guidance panel still appears after a Screen Recording request and "Couldn't restart Sonny." still appears only when the restart failed (as before).
+
+**Appearance**
+- [ ] Settings › Preferences › Interface theme offers Dark, Light and System, all selectable. Choosing Light repaints Command Center, the Settings sheet, the account menu popover and every dialog at once with no relaunch; choosing System follows a change made in System Settings › Appearance while Sonny is running; the choice survives a relaunch.
+- [ ] In Light: text is dark on paper, the sidebar is a shade darker than the canvas, cards and buttons keep their hairlines, the accent reads a step darker than in Dark, the mode segmented control's track and dividers read as greys rather than vanishing, and no white-on-white text or invisible control appears on any page or sheet.
+- [ ] The floating widget stays dark in Light and in System-on-light, its glass and its buttons unchanged.
+
+**Account menu, shortcuts and About**
+- [ ] The account row's menu reads Account (or Sign in), Settings, a divider, Keyboard shortcuts, About Sonny, and nothing is disabled. ⌘, opens Settings from anywhere in the window and from the app menu's "Settings…" item; ⌘/ opens the shortcuts sheet; both close on Escape.
+- [ ] The Keyboard shortcuts sheet lists three groups (Command Center, Widget, Anywhere); every chord it names works as listed, the key caps read as keys, and the Anywhere chords match the widget's mic hint.
+- [ ] About Sonny shows the mark, "Sonny", "Version 1.0 (1)" from the packaged bundle (or "development build" under `swift run`), and the copyright line; nothing else.
+
+**Settings: Notifications and Usage**
+- [ ] Notifications lists six switches (Approval needed, Task finished, Task failed, Routine ran, Watcher fired, Storage problem), all on by default. Switch "Task finished" off, run a task from the widget while another app is in front: no banner; switch it back on: the banner returns. The choice survives a relaunch.
+- [ ] Usage: signed out, Plan reads "Signed out" and the screen-control and top-up rows are absent; signed in, the plan chip, the screen-control line and the last top-up match the Account dialog. With nothing running the This-task section shows its empty state; run a task and it shows requests and tokens (an estimate is labelled "estimated"); a voice command adds a Voice row.
+
+**Jump to and the sidebar**
+- [ ] ⌘K opens the palette with the field focused. Empty, it lists the five pages then recent routines, workspaces and tasks; typing filters across all groups; ↑ and ↓ move one selection across groups; Return on a page switches to it, on a routine opens its detail on the Routines page, on a workspace its detail on the Workspaces page, on a task its receipt on the Tasks page; a query with no match shows "Nothing matches"; Escape closes.
+- [ ] ⌘⌥S and the toggle above the account row collapse the sidebar to icons with tooltips (mark, plus, five pages, avatar) and back, animating unless Reduce Motion is on; the state survives a relaunch; every icon still navigates and ⌘1 to ⌘5 still work collapsed.
+- [ ] Insights: clicking a recently-completed row opens that task's receipt on the Tasks page; clicking a workspace row in the breakdown opens that workspace's detail on the Workspaces page.
+
+**Empty states**
+- [ ] With no task history, the Tasks page's empty state offers "Ask Sonny" and pressing it opens the widget focused; with a search that matches nothing, or an unreadable task store, it offers no button. With no routines, Routines offers "New routine"; with no workspaces, Workspaces offers "Create workspace"; each opens the widget with the same draft its toolbar button does.
+
+**Menu bar and window**
+- [ ] The menu-bar glyph is the untinted inverse wand when idle, the filled wand in blue while a task runs, in amber while Sonny waits for an approval, and in red after a failure until it is dismissed; its tooltip says which. The status menu reads Ask Sonny, Open Command Center, Settings…, Quit Sonny; Ask Sonny opens the widget focused and Settings… opens Settings over Command Center.
+- [ ] The Command Center window shows no centred title; the sidebar's wordmark is the only "Sonny"; the traffic lights sit clear of it; the Window menu still names the window.
+- [ ] The app menu reads About Sonny, Settings… (⌘,), Hide Sonny (⌘H), Hide Others (⌥⌘H), Show All, Quit Sonny (⌘Q); About Sonny opens the About sheet over Command Center; ⌘H hides the app and Show All brings it back; the Keyboard shortcuts sheet lists ⌘H.
+- [ ] The menu bar ends with Help: it carries Keyboard shortcuts (⌘/) and the system's search field; typing "hide" in that field finds Hide Sonny; with the widget key and Command Center closed, ⌘/ brings Command Center forward with the shortcuts sheet open.
+- [ ] With Command Center closed and Sonny still running, opening Sonny again from Spotlight or Launchpad shows Command Center; with it already on screen, the same brings it forward without a second window.
+
+**Copy and system**
+- [ ] Settings › Screen control: the "Terminals, never" detail reads "...outside every permission Sonny has, so this is not something you can turn on." with a comma; in Memory, a row whose file is partly unreadable confirms with "Part of this can't be read. Sonny keeps that file instead of deleting it." as two sentences; a screen session paused by the lock screen summarises as "Sonny paused: your Mac was locked." with a colon.
+- [ ] The push-to-talk chord reads ⌃⌥Space in the widget's mic hint, the voice status line, the readiness rows and the registration error, never spelled out; the emergency stop reads ⌃⌥⎋.
+- [ ] Notifications are titled by kind ("Approval needed", "Task finished", "Task failed", "Routine ran", "Watcher fired", "Storage problem") with bodies as before.
+- [ ] No button anywhere reads in Title Case except proper nouns ("Open System Settings"); no user-visible string carries an em dash.
+
+**The founders' first round (2026-09-09)**
+- [ ] Widget: press the mic (or hold ⌃⌥Space). A countdown appears leading the mic, starting at 2:57, in faint text; the text field does not shift as the digits change. At 0:30 it turns amber. At 0:00 Sonny stops listening on its own and transcribes what it heard, with no refusal. Stopping early cancels the countdown; VoiceOver on the mic reads "Stop, 2 minutes 57 seconds left".
+- [ ] Tasks: the page is a list beside a pane. A row press selects it (the row fills, the receipt fills the pane); ↑ and ↓ move through every open section as one list and stop at the ends; ⌫ on a selected row asks before deleting; Esc clears the selection; with nothing selected the pane says "No task selected".
+- [ ] Tasks: the receipt shows the command, a status badge (green done, red failed, grey cancelled), when it started, how long it took, the workspace and "Scheduled" where they apply; Run again (blue), Edit and run, Follow up; the … menu holds Delete task with the same confirmation as before. Result is the full text and can be selected; "What Sonny planned" shows the plan's summary; "What Sonny did on screen" reads as it did in the old sheet, with its delete in the section's … menu.
+- [ ] Tasks: Edit and run opens the widget with the command already in the field and, if the task ran in a workspace, runs the edited command there; Run again re-runs at once; both are greyed out while a task is running. Right-click a row: Run again, Edit and run, Follow up, then Delete task.
+- [ ] Tasks: ⌘K to a task, an Insights row, and clicking a finished-run notification each select that task in the pane, opening its section if it was collapsed. Shrink the window to 900 wide with the sidebar open: list and pane both stay usable.
+- [ ] Workspaces: each card shows Open and New task, and a … menu at the trailing edge with Mark as team (solo cards only) and Delete workspace in red; the delete still asks with the same sentence. Memory: each row shows View, the toggle and a … menu with Delete; the entries sheet's rows show Continue and a … menu with Delete. Hovering a … shows the highlight; VoiceOver names it "More actions for <name>".
+- [ ] Settings › Preferences: a Density slider sits under the interface theme with Compact, Default and Comfortable beneath it. Dragging it changes row heights, list gaps and card insets on every page, in the sidebar, in the ⌘K palette, in the shortcuts sheet and in the Settings sidebar itself, live, without closing Settings or changing the page; text and buttons keep their size; the widget does not change. Default looks exactly as before. The choice survives a relaunch.
+
+**The founders' second round (2026-09-09)**
+- [ ] Tasks: on arrival nothing is selected and the list fills the page; pressing a row opens the pane beside it; the × at the receipt's top right (or Esc) closes it and the list is full width again; ⌘K to a task, an Insights row and a finished-run notification still open the pane on that task.
+- [ ] Tasks: a "Show" menu leads the search field with 10, 25, 50, 100 and All (25 to begin with); the sections and the ↑↓ walk cover only the shown rows; under the last section a line reads "25 of 69 shown" with a Show all beside it, absent when nothing is hidden; the choice survives a relaunch; opening a task from ⌘K that is beyond the shown rows still shows it, and the next change of the menu or leaving the page goes back to the chosen size.
+- [ ] Insights: the chart card and the "Breakdown by workspace" card share one top edge and one height, with the same gap between them as between the stat cards, at the window minimum and wide. Hovering a day keeps the day name in place and shows "30 tasks" (or "1 task") in a small pill above that bar, on one line, never covering the bar.
+- [ ] Memory: each row reads icon, name and detail, the toggle, then the … menu at the end; the menu holds View then Delete, both naming the row for VoiceOver; the entries sheet's rows keep Continue as their one button and their menu last.
+- [ ] Workspaces: each card shows New task as its one button (blue); the card's face opens the detail; the … menu holds Open (which opens the widget for that workspace), Mark as team on solo cards, then Delete workspace in red with the same confirmation.
+- [ ] Settings › Preferences: Density is a two-way choice, Default and Comfortable, with no Compact; a Mac that had chosen Compact opens on Default; Comfortable still spreads rows, gaps and card insets everywhere and Default is unchanged.
+- [ ] Tasks, after the rework: with a task selected the list is a narrow column and the receipt takes the rest; the title reads whole on up to three lines; the badge, date, duration and workspace sit on one line, or the badge on its own line when the pane is narrow, never a phrase split across lines; Run again, Edit and run and Follow up read whole, on one row or two; drag the divider to its limit and shrink the window to 900 wide: nothing truncates or overlaps.
+
+**The founders' third round (2026-09-10)**
+- [ ] Sidebar: on a Mac that never touched the toggle, Sonny opens with the sidebar collapsed to its rail. The toggle sits at the top: expanded, at the right end of the "Sonny" row, tooltip "Close sidebar (⌘⌥S)"; collapsed, directly under the mark, tooltip "Open sidebar (⌘⌥S)"; there is no toggle at the bottom any more; ⌘⌥S still works both ways; the choice survives a relaunch.
+- [ ] Tasks, with a task open: each row reads the title on the first line with the date alone at the right, and "Completed in 8s · hehe" on the second; hovering a truncated title shows the whole command; shrink the window to 900 wide with the sidebar expanded: the Show picker sits on its own row and the search field takes the full width beneath it, its prompt whole.
+
+**The founders' fourth round (2026-09-10)**
+- [ ] Tasks: each row has visible air above and below its two lines (48pt rows at Default, 56 at Comfortable); with the receipt open, the Show picker sits as far from the panel's top as the rows sit from its sides, aligned with the section headers, and the search field a clear step beneath it.
+- [ ] Hover a routine, a watcher, an Insights row, a ⌘K result, a section header and a Settings sidebar row: the grey fill extends a little past the text on both sides rather than hugging it, and the row's own inset is unchanged.
+- [ ] Quit Sonny, open it again: the window opens at 1280×840 on a Mac that had a smaller saved frame from before this build; resize it, relaunch, and it keeps the new size; it still cannot go under 900×620.
+- [ ] Hold ⌘ alone for a moment: a key cap appears on each of the five nav rows (⌘1 to ⌘5), on Ask Sonny (⌘N) and on the sidebar toggle (⌘⌥S). Expanded, each sits at the control's trailing edge, and the Tasks row's count (if any) gives way to it; collapsed, each hangs just beneath its icon, covering neither that icon nor the next. Release ⌘, or press ⌘1, and they vanish at once; ⌘⇧ shows nothing.
+- [ ] Turn Caps Lock on and hold ⌘ again: the caps still appear. Close the Command Center window, reopen it from the Dock, hold ⌘: they still appear. Hold ⌘ until they show, then click the floating widget or another app: they vanish.
+
+**The founders' fifth round (2026-09-10)**
+- [ ] Tasks: select a task. The list is 60% of the panel and the receipt 40% at the default window, and still 60/40 at full screen, in both sidebar states; at the 900-wide minimum the receipt holds its width and the list gives (the list about 434pt with the sidebar collapsed, 270 with it expanded), and the receipt's title, metadata, buttons and sections read whole (the buttons may fall to two rows); the Show picker and the search field share one row in the list; a thin rule separates the two and there is no drag handle.
+
 ## 8. How to report back
 
 For each real finding, give me:

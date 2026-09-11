@@ -50,19 +50,37 @@ struct CommandCenterView: View {
     // opens Settings as its own dialog) — this drives that dialog's presentation instead of
     // `selection`.
     @State private var isSettingsPresented = false
-    // Profile is a real, separate dialog from Settings (2026-07-18) — its actual content is
-    // deliberately undecided ("I will need to plan what it does later"), so it ships as an honest
-    // placeholder rather than guessed-at content.
-    @State private var isProfilePresented = false
     // Drives the bottom account row's own popover (see `profileRow`'s doc comment for why this
     // is a custom `Button`/`.popover()` pair instead of a native `Menu`).
     @State private var isAccountMenuPresented = false
-    // Drives "Learn more"'s side flyout within the account menu popover.
-    @State private var isLearnMoreExpanded = false
-    // Debounces the open/close of that flyout — see `handleLearnMoreHoverChange`.
-    @State private var learnMoreHoverTask: Task<Void, Never>?
     // Drives the sign-in dialog, opened from the account menu's first row (SONNY-128).
     @State private var isSignInPresented = false
+    // Drive the account menu's two reference sheets (phase 3: the "Profile" placeholder and the
+    // disabled "Get help"/"Learn more" rows are gone — the menu now opens only real surfaces).
+    @State private var isShortcutsPresented = false
+    @State private var isAboutPresented = false
+    // Drives the ⌘K jump-to palette (phase 5): a Mac app people live in has one key that goes
+    // anywhere. See `JumpToPaletteView.swift`.
+    @State private var isJumpToPresented = false
+    // The main-menu "Settings…" item has no SwiftUI view of its own to set this directly — it
+    // bumps `CommandCenterCommands.settingsRequests` instead, and the `onChange` below turns that
+    // into the same presentation this menu's own "Settings" row drives.
+    @EnvironmentObject private var commands: CommandCenterCommands
+    // The information-density preference (founder ask, 2026-09-09). Read here, at the window's
+    // root, and republished into `\.sonnyDensity` below so every row-height site in the tree reads
+    // one value without each needing its own `@EnvironmentObject`.
+    @EnvironmentObject private var densityModel: SonnyDensityModel
+    // Whether to show a glimpse of each ⌘-shortcut while ⌘ is held alone (phase 14, founder ask).
+    // Fed by `AppWindowCoordinator`'s local event monitor; this view only reads the flag.
+    @EnvironmentObject private var commandKeyHints: CommandKeyHintModel
+    // Collapsed-sidebar preference (phase 5; defaulted to collapsed in phase 13, 2026-09-10, per
+    // the founders' ask — a Mac that has never touched the toggle now opens on the rail, and one
+    // that already expanded it keeps reading that choice back). A cosmetic, per-Mac preference
+    // like the appearance and notification models beside it, so a plain `UserDefaults` read is
+    // fine rather than routing it through the view model — seeded once here, at view-identity
+    // creation, and written back on every toggle by `toggleSidebarCollapsed()`.
+    private static let sidebarCollapsedDefaultsKey = "com.sonny.preferences.sidebarCollapsed"
+    @State private var isSidebarCollapsed: Bool
 
     init(
         viewModel: AgentViewModel,
@@ -76,6 +94,9 @@ struct CommandCenterView: View {
         self.screenAccessModel = screenAccessModel
         self.firstRunCoordinator = firstRunCoordinator
         _selection = State(initialValue: initialSelection)
+        _isSidebarCollapsed = State(
+            initialValue: UserDefaults.standard.object(forKey: Self.sidebarCollapsedDefaultsKey) as? Bool ?? true
+        )
     }
 
     var body: some View {
@@ -88,27 +109,73 @@ struct CommandCenterView: View {
 
             destinationContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Invisible: give Settings and Keyboard shortcuts a window-wide shortcut the same way
+            // `TasksToolbarRow` gives ⌘F one, since neither has a visible on-screen control of its
+            // own outside the account menu. The app menu's Settings… and the Help menu's Keyboard
+            // shortcuts carry the same keys for when this window is not the key one; a view gets
+            // the key equivalent before the menu bar does, so while it is key these answer first.
+            Button(action: { isSettingsPresented = true }) { EmptyView() }
+                .keyboardShortcut(",", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            Button(action: { isShortcutsPresented = true }) { EmptyView() }
+                .keyboardShortcut("/", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            // The jump-to palette's ⌘K, the same shape as the two shortcuts above: no on-screen
+            // control of its own outside the sidebar's collapsed "Ask Sonny" hint.
+            Button(action: { isJumpToPresented = true }) { EmptyView() }
+                .keyboardShortcut("k", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(SonnyTheme.ink)
         .foregroundStyle(SonnyTheme.text)
         .tint(SonnyTheme.accent)
         .environment(\.sonnyPointerCursorsEnabled, viewModel.usePointerCursors)
+        // Re-evaluated whenever `densityModel` publishes, since this view observes it above — every
+        // sheet this file presents (Settings included) inherits the same value, the way it already
+        // inherits `appearanceModel`'s.
+        .environment(\.sonnyDensity, densityModel.density)
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
             viewModel.refreshTaskHistory()
             viewModel.refreshClipboardHistoryNotice()
         }
+        // The main menu's "Settings…" item has no view reference to set `isSettingsPresented`
+        // directly, so it bumps this counter instead; this is the one place that turns the bump
+        // into the same presentation the account menu's own "Settings" row drives.
+        .onChange(of: commands.settingsRequests) { _, _ in
+            isSettingsPresented = true
+        }
+        .onChange(of: commands.aboutRequests) { _, _ in
+            isAboutPresented = true
+        }
+        .onChange(of: commands.shortcutsRequests) { _, _ in
+            isShortcutsPresented = true
+        }
         .sheet(isPresented: $isSettingsPresented) {
             SettingsDialogView(
                 viewModel: viewModel,
                 screenAccessModel: screenAccessModel,
+                accountModel: accountModel,
                 isPresented: $isSettingsPresented
             )
         }
-        .sheet(isPresented: $isProfilePresented) {
-            ProfileDialogView(isPresented: $isProfilePresented)
+        .sheet(isPresented: $isShortcutsPresented) {
+            KeyboardShortcutsSheet(isPresented: $isShortcutsPresented)
+        }
+        .sheet(isPresented: $isAboutPresented) {
+            AboutSonnySheet(isPresented: $isAboutPresented)
+        }
+        .sheet(isPresented: $isJumpToPresented) {
+            JumpToPaletteSheet(viewModel: viewModel, isPresented: $isJumpToPresented, select: select)
         }
         .sheet(isPresented: $isSignInPresented) {
             SignInDialogView(
@@ -165,28 +232,14 @@ struct CommandCenterView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 11) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .fill(SonnyTheme.accent.opacity(0.16))
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
-                    Image(systemName: "wand.and.stars")
-                        .font(SonnyType.icon(10, weight: .medium))
-                        .foregroundStyle(SonnyTheme.accent)
-                }
-                .frame(width: 20, height: 20)
-                .sonnyLogoGlow()
+        VStack(alignment: isSidebarCollapsed ? .center : .leading, spacing: SonnySpacing.lg) {
+            sidebarWordmark
 
-                Text("Sonny")
-                    .font(SonnyType.sidebarWordmark)
-                    .foregroundStyle(SonnyTheme.text)
-            }
+            askSonnyButton
 
             VStack(spacing: 2) {
-                ForEach(CommandCenterDestination.allCases) { destination in
-                    sidebarButton(destination)
+                ForEach(Array(CommandCenterDestination.allCases.enumerated()), id: \.element) { index, destination in
+                    sidebarButton(destination, ordinal: index + 1)
                 }
             }
 
@@ -194,19 +247,139 @@ struct CommandCenterView: View {
 
             profileRow
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 18)
-        .padding(.bottom, 18)
-        .frame(width: 275)
+        .padding(.horizontal, isSidebarCollapsed ? SonnySpacing.sm : SonnySpacing.md)
+        .padding(.vertical, SonnySpacing.lg)
+        .frame(width: isSidebarCollapsed ? SonnyMetrics.sidebarWidthCollapsed : SonnyMetrics.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .background(SonnyTheme.sidebar)
+        .sonnyAnimation(SonnyMotion.standard, value: isSidebarCollapsed)
+    }
+
+    /// Expanded: the mark, "Sonny", a spacer, and the collapse toggle at the trailing edge —
+    /// ChatGPT's own sidebar keeps its toggle here, and the founders pointed at it by name
+    /// (2026-09-10). Collapsed: the mark stays centred at the rail's top with the toggle directly
+    /// beneath it, the first control above `askSonnyButton` — the toggle no longer sits above
+    /// `profileRow` at the bottom.
+    @ViewBuilder
+    private var sidebarWordmark: some View {
+        if isSidebarCollapsed {
+            VStack(spacing: SonnySpacing.sm) {
+                sidebarMark
+                sidebarToggleButton
+                    .commandKeyHintBelow("⌘⌥S", isShowing: commandKeyHints.isShowingHints)
+            }
+        } else {
+            HStack(spacing: SonnySpacing.sm) {
+                sidebarMark
+
+                Text("Sonny")
+                    .font(SonnyType.sidebarWordmark)
+                    .foregroundStyle(SonnyTheme.text)
+
+                Spacer(minLength: 0)
+
+                // Expanded, the cap sits inline beside the toggle rather than over it: a three-key
+                // chord is wider than the 28pt button, and an overlay spilled it across the icon.
+                if commandKeyHints.isShowingHints {
+                    CommandKeyHintBadge(chord: "⌘⌥S")
+                }
+                sidebarToggleButton
+            }
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.controlLarge)
+        }
+    }
+
+    private var sidebarMark: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                .fill(SonnyTheme.accentSubtle)
+            Image(systemName: "wand.and.stars")
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                .foregroundStyle(SonnyTheme.accent)
+        }
+        .frame(width: 22, height: 22)
+    }
+
+    /// The one primary action in the window. It raises the same presentation request the menu-bar
+    /// item and the push-to-talk hotkey raise, so the widget opens focused with whatever draft it
+    /// already holds; nothing here submits anything. Collapsed, the label and the ⌘N hint both go
+    /// (there is no room for either), replaced by a `.help()` tooltip carrying the same words.
+    @ViewBuilder
+    private var askSonnyButton: some View {
+        if isSidebarCollapsed {
+            Button {
+                viewModel.widgetPresentationRequest += 1
+            } label: {
+                Image(systemName: "plus")
+                    .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textOnAccent)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .primary, width: SonnyMetrics.controlRegular))
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("Ask Sonny")
+            .help("Ask Sonny (⌘N)")
+            // Collapsed, there is no permanent ⌘N text to swap out — the icon alone, so the cap
+            // hangs beneath the button, the same treatment as the collapsed nav rows.
+            .commandKeyHintBelow("⌘N", isShowing: commandKeyHints.isShowingHints)
+        } else {
+            Button {
+                viewModel.widgetPresentationRequest += 1
+            } label: {
+                HStack(spacing: SonnySpacing.sm) {
+                    Image(systemName: "plus")
+                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    Text("Ask Sonny")
+                    Spacer(minLength: 0)
+                    // Expanded, the ⌘N hint is already on screen permanently as plain text; while
+                    // ⌘ is held it reads as the shared badge instead of reprinting a second one.
+                    if commandKeyHints.isShowingHints {
+                        CommandKeyHintBadge(chord: "⌘N")
+                    } else {
+                        Text("⌘N")
+                            .font(SonnyType.mono)
+                            .foregroundStyle(SonnyTheme.textOnAccent.opacity(0.7))
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .primary))
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("Ask Sonny")
+        }
+    }
+
+    /// Flips the collapsed preference and writes it straight back, the same "seeded once, written
+    /// on change" shape every other cosmetic `UserDefaults` preference in this file follows.
+    private func toggleSidebarCollapsed() {
+        isSidebarCollapsed.toggle()
+        UserDefaults.standard.set(isSidebarCollapsed, forKey: Self.sidebarCollapsedDefaultsKey)
+    }
+
+    /// Lives inside `sidebarWordmark` now, at the top of the sidebar in both states, rather than
+    /// above the account row at the bottom (2026-09-10: ChatGPT's own placement, by founder ask).
+    /// The one `sidebar.left` glyph in the sidebar. Its ⌘⌥S cap is placed by `sidebarWordmark`, the
+    /// only view that knows which state the toggle is in: inline beside it when expanded, hanging
+    /// beneath it in the collapsed rail.
+    private var sidebarToggleButton: some View {
+        Button(action: toggleSidebarCollapsed) {
+            Image(systemName: "sidebar.left")
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+        }
+        .buttonStyle(SonnyButtonStyle(tone: .tertiary, width: SonnyMetrics.controlRegular))
+        .keyboardShortcut("s", modifiers: [.command, .option])
+        .accessibilityLabel(isSidebarCollapsed ? "Open sidebar" : "Close sidebar")
+        .help(isSidebarCollapsed ? "Open sidebar (⌘⌥S)" : "Close sidebar (⌘⌥S)")
     }
 
     /// Bottom-left account row (Claude desktop app's pattern, 2026-07-18 direction) — opens a menu
-    /// whose only real item today is "Settings"; everything else Claude's own menu shows (Language,
-    /// Get help, Upgrade plan, Log out, ...) has no backend behind it in Sonny yet. No real accounts
-    /// system exists either — this shows the same macOS account name as the Tasks-page greeting,
-    /// not a real signed-in identity.
+    /// with the account surface, Settings, and the two reference sheets below. Phase 3 removed the
+    /// "Profile" placeholder (the Account row above it is the real account surface), the disabled
+    /// "Get help" row and the "Learn more" flyout — a menu of permanently disabled rows pointing at
+    /// destinations that do not exist yet, per the founders' free hand over this surface this phase.
+    /// No real accounts system exists either — this shows the same macOS account name as the
+    /// Tasks-page greeting, not a real signed-in identity.
     ///
     /// Built with a plain `Button` + `.popover()`, not `Menu` — a native macOS `Menu` whose custom
     /// label's first element is a composite icon-like view (a `ZStack` combining a filled shape and
@@ -219,85 +392,65 @@ struct CommandCenterView: View {
         Button {
             isAccountMenuPresented = true
         } label: {
-            HStack(spacing: 10) {
+            if isSidebarCollapsed {
                 profileAvatar
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(height: densityModel.density.listRowHeight)
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            } else {
+                HStack(spacing: SonnySpacing.sm) {
+                    profileAvatar
 
-                Text(profileName)
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
-                    .lineLimit(1)
+                    Text(profileName)
+                        .font(SonnyType.body)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
 
-                Image(systemName: "chevron.down")
-                    .font(SonnyType.icon(9, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.muted)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SonnySpacing.sm)
+                .frame(height: densityModel.density.listRowHeight)
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 11)
-            .frame(height: 40)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
         .accessibilityLabel("Account: \(profileName)")
+        .help(isSidebarCollapsed ? profileName : "")
         .popover(isPresented: $isAccountMenuPresented, arrowEdge: .top) {
             accountMenuContent
-        }
-        // **The Learn-more dwell timer does not outlive the menu that owns it (PR #84 review, F2).**
-        //
-        // `isLearnMoreExpanded` and `learnMoreHoverTask` are `@State` on `CommandCenterView` — the
-        // window root — while the views their hover tracks live inside the popover above, which is
-        // torn down independently of this view. That is structurally the case SONNY-179 fixed on the
-        // mic, and it was reachable: rest the pointer on the Learn-more row, and inside the 100ms
-        // dwell dismiss the menu with Escape. The row goes without AppKit delivering an exit, so
-        // nothing cancels the task, and it then sets the flag with no hover anywhere. Nothing
-        // presents at the time — the row that carries the flyout's `.popover` is gone — but the flag
-        // survives on the root, so the *next* time the user opens the account menu the flyout
-        // springs open unbidden.
-        //
-        // **Keyed on the menu closing, not on a teardown callback.** `isAccountMenuPresented` going
-        // false is the event that means "the row and the flyout are gone"; responding to it is
-        // SONNY-179's shape rather than teaching a flag to notice its own destruction. The flyout
-        // state is not a copy of where the pointer is — it is real UI state — so what is wrong here
-        // is a pending timer writing it after its trigger died, and cancelling that timer is the fix.
-        .onChange(of: isAccountMenuPresented) { _, isPresented in
-            guard !isPresented else { return }
-            learnMoreHoverTask?.cancel()
-            learnMoreHoverTask = nil
-            isLearnMoreExpanded = false
         }
     }
 
     private var profileAvatar: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .fill(SonnyTheme.accent.opacity(0.18))
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                .fill(SonnyTheme.accentSubtle)
             Text(WorkspaceAvatarInitial.from(name: profileName))
                 .font(SonnyType.microEmphasis)
                 .foregroundStyle(SonnyTheme.accent)
         }
-        .frame(width: 24, height: 24)
+        .frame(width: 22, height: 22)
     }
 
+    /// Top to bottom: the account surface (Sign in when signed out), Settings, a divider, then the
+    /// two reference sheets. Phase 3's whole menu — no placeholder, no permanently disabled row.
     private var accountMenuContent: some View {
         VStack(alignment: .leading, spacing: 2) {
             // The sign-in entry point (SONNY-128). One row whichever way round it is: signed out it
-            // opens the address step, signed in it opens the account step with Sign out on it. The
-            // row above Profile because signing in is the thing a first-run user needs from this
-            // menu and Profile is still a placeholder.
+            // opens the address step, signed in it opens the account step with Sign out on it.
             accountMenuRow(
                 title: accountModel.isSignedIn ? "Account" : SignInCopy.signInLabel,
                 systemImage: accountModel.isSignedIn ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.plus"
             ) {
                 isAccountMenuPresented = false
                 isSignInPresented = true
-            }
-
-            accountMenuRow(title: "Profile", systemImage: "person.crop.circle") {
-                isAccountMenuPresented = false
-                isProfilePresented = true
             }
 
             accountMenuRow(title: "Settings", systemImage: "gearshape") {
@@ -308,100 +461,47 @@ struct CommandCenterView: View {
             Rectangle()
                 .fill(SonnyTheme.border)
                 .frame(height: 1)
-                .padding(.vertical, 4)
+                .padding(.vertical, SonnySpacing.xs)
 
-            // Disabled, not a no-op — signals "this exists, isn't wired up yet" the same way the
-            // Settings theme dropdown's Light/System options already do, rather than a silent dead
-            // click. Real destination (docs/sonny-ui-backend-gaps.md): Sonny's own website help
-            // page, once one exists.
-            accountMenuRow(title: "Get help", systemImage: "questionmark.circle", isEnabled: false) {}
-
-            // "Learn more" itself is enabled — hovering it opens the flyout, matching native
-            // NSMenu submenu behavior and the Claude reference, but only after a short dwell delay
-            // (2026-07-18: a bare cursor flick across the row was opening it instantly, which read
-            // as accidental/twitchy — Claude's own menu waits for a deliberate pause first, so this
-            // does too). A click still works too as a harmless, accessibility-friendly fallback.
-            // The 4 sub-items inside stay disabled since none has a real URL yet.
-            accountMenuRow(title: "Learn more", systemImage: "info.circle", showsDisclosure: true) {
-                isLearnMoreExpanded = true
+            accountMenuRow(title: "Keyboard shortcuts", systemImage: "keyboard") {
+                isAccountMenuPresented = false
+                isShortcutsPresented = true
             }
-            .onHover(perform: handleLearnMoreHoverChange)
-            .popover(isPresented: $isLearnMoreExpanded, arrowEdge: .trailing) {
-                learnMoreFlyoutContent
-                    .onHover(perform: handleLearnMoreHoverChange)
+
+            accountMenuRow(title: "About Sonny", systemImage: "info.circle") {
+                isAccountMenuPresented = false
+                isAboutPresented = true
             }
         }
-        .padding(6)
-        .frame(width: 210)
-        .background(SonnyTheme.surfaceRaised)
+        .padding(SonnySpacing.xs + 2)
+        .frame(width: 220)
+        .background(SonnyTheme.surfaceRaised2)
     }
 
-    /// Shared by the "Learn more" trigger row and its flyout content — opens after a short
-    /// deliberate-pause delay (not instantly, so a mouse just passing over the row doesn't pop it
-    /// open) and closes after a short grace delay once hover leaves both, canceled if hover
-    /// resumes on either one before the grace period elapses (so crossing the small gap between
-    /// the row and the flyout doesn't slam it shut mid-move).
-    private func handleLearnMoreHoverChange(isHovering: Bool) {
-        learnMoreHoverTask?.cancel()
-        if isHovering {
-            guard !isLearnMoreExpanded else { return }
-            learnMoreHoverTask = Task {
-                try? await Task.sleep(for: .milliseconds(100))
-                if !Task.isCancelled {
-                    isLearnMoreExpanded = true
-                }
-            }
-        } else {
-            learnMoreHoverTask = Task {
-                try? await Task.sleep(for: .milliseconds(100))
-                if !Task.isCancelled {
-                    isLearnMoreExpanded = false
-                }
-            }
-        }
-    }
-
-    private var learnMoreFlyoutContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // All 4 named per direct instruction ("docs, usage policy, privacy policy, etc.") —
-            // each disabled since none has a real URL yet; see docs/sonny-ui-backend-gaps.md.
-            accountMenuRow(title: "Documentation", systemImage: "doc.text", isEnabled: false) {}
-            accountMenuRow(title: "Usage policy", systemImage: "doc.plaintext", isEnabled: false) {}
-            accountMenuRow(title: "Privacy policy", systemImage: "hand.raised", isEnabled: false) {}
-            accountMenuRow(title: "Terms of service", systemImage: "doc.badge.gearshape", isEnabled: false) {}
-        }
-        .padding(6)
-        .frame(width: 200)
-        .background(SonnyTheme.surfaceRaised)
-    }
-
+    // `isEnabled`/`showsDisclosure` parameters were dropped with the "Get help" and "Learn more"
+    // rows they existed for (phase 3): every row this menu shows now is a real, enabled destination,
+    // and a parameter no call site exercises is dead code the next reader has to rule out by hand.
     private func accountMenuRow(
         title: String,
         systemImage: String,
-        isEnabled: Bool = true,
-        showsDisclosure: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: SonnySpacing.sm) {
                 Image(systemName: systemImage)
-                    .font(SonnyType.icon(12, weight: .medium))
-                    .frame(width: 16)
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.muted)
+                    .frame(width: 18)
                 Text(title)
                     .font(SonnyType.body)
-                Spacer(minLength: 8)
-                if showsDisclosure {
-                    Image(systemName: "chevron.right")
-                        .font(SonnyType.icon(9, weight: .semibold))
-                }
+                Spacer(minLength: SonnySpacing.sm)
             }
-            .foregroundStyle(isEnabled ? SonnyTheme.sidebarNavText : SonnyTheme.muted)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .contentShape(Rectangle())
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: densityModel.density.compactRowHeight)
+            .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
         }
         .buttonStyle(.plain)
-        .disabled(!isEnabled)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
     }
@@ -424,48 +524,65 @@ struct CommandCenterView: View {
         selection = destination
     }
 
-    private func sidebarButton(_ destination: CommandCenterDestination) -> some View {
-        Button {
+    /// One sidebar row. Selection is a fill with no stroke, the way Finder and Notes draw theirs;
+    /// the icon and the label both step up from muted to text when selected so the state reads
+    /// without colour. `ordinal` is the row's ⌘-number, which is the same order the sidebar shows.
+    /// Collapsed, the row is the icon alone, centred in a 36x30 selection fill, with a `.help()`
+    /// tooltip carrying the title the row no longer has room to print. The ⌘-number cap has one
+    /// site per state: expanded, it takes the row's trailing slot — the one the Tasks row's count
+    /// uses, so the two swap rather than overlap — and collapsed, it hangs beneath the tile.
+    private func sidebarButton(_ destination: CommandCenterDestination, ordinal: Int) -> some View {
+        let selected = isSelected(destination)
+        return Button {
             select(destination)
         } label: {
-            HStack(spacing: 10) {
+            if isSidebarCollapsed {
                 Image(systemName: destination.systemImage)
-                    .font(SonnyType.icon(14, weight: .medium))
-                    .foregroundStyle(SonnyTheme.muted)
-                    .frame(width: 18)
-                Text(destination.title)
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
-                Spacer(minLength: 8)
-                if destination == .tasks, viewModel.activeTaskCount > 0 {
-                    // Shape/fill match the wireframe's rounded-rect badge (`rx=4`, `#151619`) —
-                    // its "22" count itself doesn't map to anything Sonny has (likely a Linear
-                    // inbox-unread placeholder), so the conditional active-task display stays.
-                    Text("\(viewModel.activeTaskCount)")
-                        .font(SonnyType.micro)
+                    .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
+                    .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
+                    .frame(width: SonnyMetrics.sidebarCollapsedRowWidth, height: densityModel.density.navRowHeight)
+                    .background(
+                        RoundedRectangle(cornerRadius: SonnyRadius.control)
+                            .fill(selected ? SonnyTheme.fillSelected : Color.clear)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+                    .commandKeyHintBelow("⌘\(ordinal)", isShowing: commandKeyHints.isShowingHints)
+            } else {
+                HStack(spacing: SonnySpacing.sm) {
+                    Image(systemName: destination.systemImage)
+                        .font(SonnyType.icon(SonnyMetrics.iconSidebar, weight: .medium))
+                        .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
+                        .frame(width: 20)
+                    Text(destination.title)
+                        .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
                         .foregroundStyle(SonnyTheme.text)
-                        .frame(minWidth: 20, minHeight: 20)
-                        .background(SonnyTheme.surfaceRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-                        .accessibilityLabel("One active task")
+                    Spacer(minLength: SonnySpacing.sm)
+                    if commandKeyHints.isShowingHints {
+                        CommandKeyHintBadge(chord: "⌘\(ordinal)")
+                    } else if destination == .tasks, viewModel.activeTaskCount > 0 {
+                        // The wireframe's "22" count is a Linear inbox placeholder; what is shown is
+                        // the one number Sonny has, the active-task count, and only while it is
+                        // non-zero.
+                        SonnyBadge(text: "\(viewModel.activeTaskCount)", tone: .accent)
+                            .accessibilityLabel("One active task")
+                    }
                 }
+                .padding(.horizontal, SonnySpacing.sm)
+                .frame(height: densityModel.density.navRowHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .fill(selected ? SonnyTheme.fillSelected : Color.clear)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
             }
-            .padding(.horizontal, 11)
-            .frame(height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .fill(isSelected(destination) ? SonnyTheme.surfaceRaised : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(isSelected(destination) ? SonnyTheme.border : Color.clear, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(KeyEquivalent(Character("\(ordinal)")), modifiers: .command)
         .sonnyPointerCursor()
         .sonnyHoverHighlight()
         .accessibilityLabel(destination.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(destination.title)
     }
 
     private func isSelected(_ destination: CommandCenterDestination) -> Bool {
@@ -478,7 +595,7 @@ struct CommandCenterView: View {
         case .tasks:
             TasksFoundationView(viewModel: viewModel)
         case .insights:
-            InsightsView(viewModel: viewModel)
+            InsightsView(viewModel: viewModel, select: select)
         case .routines:
             RoutinesView(viewModel: viewModel)
         case .workspaces:
@@ -499,7 +616,23 @@ struct CommandCenterView: View {
 
 private struct TasksFoundationView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @State private var selectedLogEntry: TaskLogEntry?
+    /// The pane's selection — a task's own `taskRowIdentity`, not an index or a stored
+    /// `CompletedTaskRecord`, so it survives a history refresh that reorders, filters or drops the
+    /// record it names (row 11, the founders' ask of 2026-09-09: the sheet becomes a pane beside
+    /// the list, Mail-style).
+    @State private var selectedTaskID: String?
+    /// The search field's focus, owned here so the list's key handlers can stand aside while the
+    /// field has it: a ⌫ meant for the query must never open a delete confirmation, and the arrows
+    /// are the field's own while it is editing. Two review skeptics read SwiftUI's key routing
+    /// two ways; the guard is right under either reading.
+    @FocusState private var isSearchFocused: Bool
+    /// Resolved once per selection change rather than read as a computed property inside the pane —
+    /// the same reasoning `TaskScreenRecordState`'s own doc comment gives for the sheet this
+    /// replaced: a decrypt-and-scan of the journal on every render would make merely looking at a
+    /// task cost a file read it has no use for.
+    @State private var selectedScreenRecord: TaskScreenRecordState = .none
+    /// Driven by both the pane's own overflow menu and this page's ⌫ shortcut.
+    @State private var showDeleteConfirmationForSelectedTask = false
     /// Collapse state is seeded once, at view-identity creation, from the persisted preference —
     /// not reloaded in `onAppear`, which fires again every time the user switches back to this
     /// page and would throw away an in-session collapse if the write ever lagged.
@@ -526,31 +659,186 @@ private struct TasksFoundationView: View {
     /// user, not a ticket-level one.
     @State private var collapseState: TaskSectionCollapseState
     private let collapseStore: TaskSectionCollapseStore
+    /// How many rows the list shows at once (the founders' ask of 2026-09-09, Gmail's "first 50 /
+    /// 100 / 500" idiom) — seeded once from the store, the same shape `collapseState` uses, and
+    /// written back on every change by `.onChange(of: pageSize)` below.
+    @State private var pageSize: TaskListPageSize
+    private let pageSizeStore: TaskListPageSizeStore
+    /// Set when a task requested from elsewhere (`consumeTaskDetailRequest`) falls outside the
+    /// current page-size window — so that visit shows every record rather than stranding a
+    /// selection the list would not otherwise draw. Cleared the moment the user changes the picker
+    /// (a size they chose should not be silently overridden by a stale request) or leaves the page,
+    /// never persisted. Read only through `effectivePageSize` below; pinned by
+    /// `TasksPaneSourceScanTests` since a view has no unit test to drive it.
+    @State private var showsAllForRequest = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sonnyDensity) private var density
 
-    init(viewModel: AgentViewModel, collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore()) {
+    init(
+        viewModel: AgentViewModel,
+        collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore(),
+        pageSizeStore: TaskListPageSizeStore = TaskListPageSizeStore()
+    ) {
         self.viewModel = viewModel
         self.collapseStore = collapseStore
+        self.pageSizeStore = pageSizeStore
         _collapseState = State(initialValue: collapseStore.load())
+        _pageSize = State(initialValue: pageSizeStore.load())
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: greeting)
+
+            // Above both the list and the pane rather than inside the list's own scroll area (row
+            // 11's list/pane split): a corrupt store is a fact both sides of the split need, not
+            // one scrolled away with the list underneath it.
+            CommandCenterStorageNotice(viewModel: viewModel, insets: .tasksPage)
+
+            // The pane exists only once a task is chosen (the founders' ask of 2026-09-09: "when
+            // no task is selected, the side panel should not be shown"). With nothing selected the
+            // list alone fills the width — no pane, and no "No task selected" placeholder, which
+            // `TaskReceiptView` used to show in its place.
+            Group {
+                if selectedTaskID != nil {
+                    // A fixed share rather than a draggable split (founder, 2026-09-10, fifth
+                    // round: the list "occupy 60% of the box" and the detail view 40% when it
+                    // opens). An `HSplitView` keeps its divider where it was last dragged and
+                    // hands a resize to both sides, so no pair of ideal widths reads as 60/40 at
+                    // more than one window size; the share is measured off the panel on every
+                    // layout instead and holds at every width that can hold both, the receipt's
+                    // floor taking from the list below that (`TasksSplitPresentation` has the
+                    // arithmetic and the reason). The rule between the two is the divider the
+                    // split used to draw.
+                    GeometryReader { proxy in
+                        let listWidth = TasksSplitPresentation.listWidth(panelWidth: proxy.size.width)
+                        HStack(spacing: 0) {
+                            listPane
+                                .frame(width: listWidth)
+                                .frame(maxHeight: .infinity)
+
+                            Rectangle()
+                                .fill(SonnyTheme.border)
+                                .frame(width: SonnyMetrics.tasksSplitRuleWidth)
+
+                            TaskReceiptView(
+                                viewModel: viewModel,
+                                record: selectedRecord,
+                                screenRecord: selectedScreenRecord,
+                                showDeleteConfirmation: $showDeleteConfirmationForSelectedTask,
+                                onClose: { selectedTaskID = nil },
+                                onDeleteTask: {
+                                    guard let selectedRecord else { return }
+                                    // The selection is not cleared here. `deleteTask` refreshes the
+                                    // history only when it removed the record, and the `onChange` on
+                                    // `taskHistoryRecords` then clears a selection whose record is
+                                    // gone; a refused delete, which says why in the attention panel,
+                                    // keeps the task selected and its receipt on screen rather than
+                                    // dropping to "No task selected" over a row that is still in the
+                                    // list (phase 11 review, F1).
+                                    viewModel.deleteTask(selectedRecord)
+                                },
+                                onDeleteScreenRecord: {
+                                    guard let selectedRecord else { return }
+                                    viewModel.deleteScreenRecord(for: selectedRecord)
+                                    // Re-resolve rather than clear: the task itself is still here, and
+                                    // the whole point of this action is that its receipt survives.
+                                    // Re-resolving moves the pane to the state a task with no screen
+                                    // record has always had, which is also the state a task that never
+                                    // ran one has — the equality this ticket owes, carried over from
+                                    // the sheet the pane replaced.
+                                    refreshSelectedScreenRecord()
+                                }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    listPane
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .sonnyAnimation(SonnyMotion.standard, value: selectedTaskID != nil)
+            .commandCenterPanel()
+
+            // Pinned below the split rather than placed in the list flow like the storage notice
+            // above: an approval the user has to act on must not be scrollable out of sight.
+            // Self-gates on its own state, so an idle page renders nothing here.
+            CommandCenterAttentionPanel(viewModel: viewModel)
+        }
+        .commandCenterPageFrame()
+        .onAppear {
+            viewModel.refreshTaskHistory()
+            // Both entry points are needed and neither is redundant: `onAppear` catches a request
+            // that arrived while this page was not mounted (the notification click from another
+            // page, which selects Tasks and mounts this view *after* the request was set), and
+            // `onChange` below catches one that arrives while it already is.
+            //
+            // Nothing selects a task on appearance any more (the founders' ask of 2026-09-09): the
+            // page opens on the plain list, and the pane exists only once the user chooses a row or
+            // a request from elsewhere names one.
+            consumeTaskDetailRequest()
+        }
+        .onDisappear {
+            showsAllForRequest = false
+        }
+        // A finished-run notification selects that task here rather than expanding the widget
+        // (PR #67 review, F4 — the founder's decision of 2026-08-17, carried over from the sheet
+        // this pane replaced). The request carries a fresh identity per click, so two
+        // notifications about the same task each reselect it.
+        .onChange(of: viewModel.taskDetailRequest) { _, _ in
+            consumeTaskDetailRequest()
+        }
+        .onChange(of: viewModel.taskHistoryRecords) { _, records in
+            selectTask(id: TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: records))
+        }
+        .onChange(of: pageSize) { _, newValue in
+            pageSizeStore.save(newValue)
+            showsAllForRequest = false
+            // A selection the new window no longer shows is cleared, the rule a deleted record
+            // already follows: a pane open on a row the list does not draw is an orphan, and the
+            // next arrow press would jump from nowhere (phase 12 review, F1).
+            selectTask(id: TasksSelectionPresentation.selectionAfterRefresh(current: selectedTaskID, records: displayedRecords))
+        }
+        .onKeyPress(.upArrow) {
+            guard !isSearchFocused else { return .ignored }
+            guard let previous = TasksSelectionPresentation.previous(before: selectedTaskID, in: sections) else {
+                return .ignored
+            }
+            selectTask(id: previous)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard !isSearchFocused else { return .ignored }
+            guard let next = TasksSelectionPresentation.next(after: selectedTaskID, in: sections) else {
+                return .ignored
+            }
+            selectTask(id: next)
+            return .handled
+        }
+        .onKeyPress(.delete) {
+            guard !isSearchFocused else { return .ignored }
+            guard selectedTaskID != nil else { return .ignored }
+            showDeleteConfirmationForSelectedTask = true
+            return .handled
+        }
+        .onExitCommand {
+            selectedTaskID = nil
+        }
+    }
+
+    private var listPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Wireframe "Frame 6" toolbar row (`9-MainAppHomeScreen.svg`) — the
+            // "Personal" scope pill on its leading edge is a deliberately rejected
+            // persistent-active-workspace affordance (see the task-to-workspace
+            // association decision in the changelog), so only the trailing
+            // filter/search icons are built here.
+            TasksToolbarRow(viewModel: viewModel, isFocused: $isSearchFocused, pageSize: $pageSize)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Wireframe "Frame 6" toolbar row (`9-MainAppHomeScreen.svg`) — the
-                    // "Personal" scope pill on its leading edge is a deliberately rejected
-                    // persistent-active-workspace affordance (see the task-to-workspace
-                    // association decision in the changelog), so only the trailing
-                    // filter/search icons are built here.
-                    TasksToolbarRow(viewModel: viewModel)
-
-                    // Outside the In Progress group on purpose: that group only exists while a
-                    // task is active, so nesting the storage notice inside it would hide a
-                    // corrupt store whenever nothing happens to be running.
-                    CommandCenterStorageNotice(viewModel: viewModel, insets: .tasksPage)
-
                     // Wireframe has exactly three status groups (In Progress / Done /
                     // Canceled, `9-MainAppHomeScreen.svg`) — per direct feedback (2026-07-18),
                     // the live-running task now renders as this list's own "In Progress"
@@ -570,78 +858,106 @@ private struct TasksFoundationView: View {
                     TaskHistoryGroupedPanel(
                         records: displayedRecords,
                         collapseState: collapseState,
+                        selectedTaskID: selectedTaskID,
+                        isTaskInFlight: viewModel.isTaskInFlight,
                         onToggleSection: toggleSection,
-                        onSelect: { selectedLogEntry = logEntry(for: $0) },
+                        onSelect: { selectTask(id: $0.taskRowIdentity) },
+                        onRunAgain: { viewModel.runTaskAgain($0) },
+                        onEditAndRun: { viewModel.editTaskAndRunAgain($0) },
+                        onFollowUp: { viewModel.followUpOnTask($0) },
                         onDelete: { viewModel.deleteTask($0) },
                         emptyState: TaskSearchPresentation.emptyState(
                             query: viewModel.taskHistoryQuery,
-                            readability: MemoryRowReadability.of(.taskHistory, viewModel: viewModel)
-                        )
+                            readability: taskHistoryReadability
+                        ),
+                        emptyStateIcon: taskHistoryReadability == .readable
+                            ? "checklist"
+                            : MemoryDeletionCopy.emptyStateSystemImage(for: taskHistoryReadability),
+                        // The sidebar's own primary, offered again where the first task's row
+                        // will be: the same presentation request, nothing submitted.
+                        emptyStateAction: taskHistoryReadability == .readable && viewModel.taskHistoryQuery.isEmpty
+                            ? CollectionEmptyState.Action(title: "Ask Sonny") { viewModel.widgetPresentationRequest += 1 }
+                            : nil
                     )
-                    .padding(.bottom, 24)
+
+                    // Under the last section rather than inside `TaskHistoryGroupedPanel` — the
+                    // panel does not know the page-size cap exists, and this footer names it
+                    // (the founders' ask of 2026-09-09, Gmail's "first 50 / 100" idiom). `nil`
+                    // when the size is already showing everything the search turned up.
+                    if let footerText = TaskListPageSize.footer(
+                        shown: displayedRecords.count,
+                        total: searchFilteredRecords.count
+                    ) {
+                        pageSizeFooter(text: footerText)
+                    }
                 }
+                .padding(.bottom, SonnySpacing.xxl)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-
-            // Pinned below the scroll area rather than placed in the list flow like the storage
-            // notice above: an approval the user has to act on must not be scrollable out of
-            // sight. Self-gates on its own state, so an idle page renders nothing here.
-            CommandCenterAttentionPanel(viewModel: viewModel)
-        }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
-        .onAppear {
-            viewModel.refreshTaskHistory()
-            // Both entry points are needed and neither is redundant: `onAppear` catches a request
-            // that arrived while this page was not mounted (the notification click from another
-            // page, which selects Tasks and mounts this view *after* the request was set), and
-            // `onChange` below catches one that arrives while it already is.
-            consumeTaskDetailRequest()
-        }
-        // A finished-run notification opens that task's detail here rather than expanding the
-        // widget (PR #67 review, F4 — the founder's decision of 2026-08-17). The request carries a
-        // fresh identity per click, so two notifications about the same task each reopen the sheet.
-        .onChange(of: viewModel.taskDetailRequest) { _, _ in
-            consumeTaskDetailRequest()
-        }
-        .sheet(item: $selectedLogEntry) { entry in
-            TaskLogDetailDialog(
-                viewModel: viewModel,
-                record: entry.record,
-                screenRecord: entry.screenRecord,
-                onDeleteTask: {
-                    viewModel.deleteTask(entry.record)
-                    selectedLogEntry = nil
-                },
-                onDeleteScreenRecord: {
-                    viewModel.deleteScreenRecord(for: entry.record)
-                    // Re-resolve rather than dismiss: the task itself is still here, and the whole
-                    // point of this action is that its receipt survives. Rebuilding the entry moves
-                    // the sheet to the state a task with no screen record has always had, which is
-                    // also the state a task that never ran one has — the equality this ticket owes.
-                    selectedLogEntry = logEntry(for: entry.record)
-                }
-            )
         }
     }
 
-    /// Resolves the screen record once, for the one row the user clicked, before the sheet exists.
-    /// See `TaskScreenRecordState` for why this is not done inside the sheet.
+    /// "25 of 69 shown", with a one-press way past the cap — Gmail's own idiom for this rather than
+    /// a real sort or filter, which the founders' ask names explicitly ("no sort control", per the
+    /// build note this page's brief carries).
+    private func pageSizeFooter(text: String) -> some View {
+        HStack(spacing: SonnySpacing.sm) {
+            Text(text)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
+
+            Spacer(minLength: SonnySpacing.md)
+
+            Button("Show all") {
+                pageSize = .all
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
+            .sonnyPointerCursor()
+        }
+        .padding(.horizontal, SonnySpacing.xl)
+        .padding(.top, SonnySpacing.sm)
+    }
+
+    private var selectedRecord: CompletedTaskRecord? {
+        guard let selectedTaskID else { return nil }
+        return viewModel.taskHistoryRecords.first { $0.taskRowIdentity == selectedTaskID }
+    }
+
+    /// The single door every selection change goes through: sets the id and resolves the screen
+    /// record for it in the same step, so the two can never fall out of step with each other. `nil`
+    /// clears the selection, which is also how the pane's empty state gets reached.
+    private func selectTask(id: String?) {
+        selectedTaskID = id
+        refreshSelectedScreenRecord()
+    }
+
+    private func refreshSelectedScreenRecord() {
+        guard let selectedRecord else {
+            selectedScreenRecord = .none
+            return
+        }
+        selectedScreenRecord = TaskDeletePresentation.resolveScreenRecord(
+            for: selectedRecord,
+            journalStore: viewModel.visionSessionJournalStore
+        )
+    }
+
+    /// Every expanded section's visible rows, in the order ↑/↓ and "select the first visible
+    /// record" walk them — the same computation `TaskHistoryGroupedPanel` renders from, so keyboard
+    /// navigation never disagrees with what is actually on screen.
+    private var sections: [TaskSectionPresentation] {
+        TaskSectionPresentation.sections(
+            for: TaskHistoryGrouping.groupedByOutcome(records: displayedRecords),
+            collapse: collapseState
+        )
+    }
+
     /// Answers a pending task-detail request, if there is one.
     ///
     /// The record is looked up from `taskHistoryRecords` at open time rather than carried in the
-    /// request: the id is what the notification holds, and the row is what the sheet needs, so
-    /// resolving late means a task deleted in between opens nothing instead of a stale copy.
+    /// request: the id is what the notification holds, and the row is what the pane needs, so
+    /// resolving late means a task deleted in between selects nothing instead of a stale copy.
     ///
     /// The request is cleared either way. A request naming a row that no longer exists has still
     /// been answered — leaving it set would strand a value that nothing else clears until the next
@@ -649,19 +965,31 @@ private struct TasksFoundationView: View {
     private func consumeTaskDetailRequest() {
         guard let request = viewModel.taskDetailRequest else { return }
         if let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID }) {
-            selectedLogEntry = logEntry(for: record)
+            // A request naming a task outside the current page-size window still has to open it —
+            // treat the size as "All" for this one visit rather than leaving the pane pointed at a
+            // row the list would not otherwise draw. `showsAllForRequest` carries that, and clears
+            // on the next picker change or when the user leaves the page.
+            let shownAtCurrentSize = TaskListPageSize.visible(searchFilteredRecords, size: pageSize)
+            if !shownAtCurrentSize.contains(where: { $0.taskRowIdentity == record.taskRowIdentity }) {
+                showsAllForRequest = true
+            }
+            selectTask(id: record.taskRowIdentity)
+            expandSectionIfNeeded(containing: record.taskRowIdentity)
         }
         viewModel.taskDetailRequest = nil
     }
 
-    private func logEntry(for record: CompletedTaskRecord) -> TaskLogEntry {
-        TaskLogEntry(
-            record: record,
-            screenRecord: TaskDeletePresentation.resolveScreenRecord(
-                for: record,
-                journalStore: viewModel.visionSessionJournalStore
-            )
-        )
+    /// A task selected from outside this list (the ⌘K palette, Insights, a notification) may live
+    /// inside a section the user had folded away — this expands it so the selection is not left
+    /// pointing at a row nothing on screen shows.
+    private func expandSectionIfNeeded(containing taskRowID: String) {
+        guard let sectionID = TasksSelectionPresentation.sectionContaining(
+            taskID: taskRowID,
+            sections: TaskHistoryGrouping.groupedByOutcome(records: viewModel.taskHistoryRecords)
+        ) else { return }
+        if !collapseState.isExpanded(sectionID) {
+            toggleSection(sectionID)
+        }
     }
 
     /// Wireframe shows a time-of-day greeting ("Good Afternoon, User") in this exact slot
@@ -690,12 +1018,29 @@ private struct TasksFoundationView: View {
     /// That was false and predates row D: `TaskHistoryStore` evicts oldest-first at its cap, so the
     /// whole *store* is not the whole history. The true statement is the one above — every other
     /// consumer sees the store rather than this slice. (SONNY-118.)
-    private var displayedRecords: [CompletedTaskRecord] {
+    private var searchFilteredRecords: [CompletedTaskRecord] {
         TaskHistorySearch.visibleRecords(
             viewModel.taskHistoryRecords,
             query: viewModel.taskHistoryQuery,
             now: Date()
         )
+    }
+
+    /// `pageSize`, unless a request from elsewhere named a task outside it — see
+    /// `showsAllForRequest`'s doc comment.
+    private var effectivePageSize: TaskListPageSize {
+        showsAllForRequest ? .all : pageSize
+    }
+
+    /// What the list actually draws: the search/window rule above, then the page-size cap (the
+    /// founders' ask of 2026-09-09) — applied here, before grouping into sections, so the sections,
+    /// their counts and the ↑/↓ walk all agree with what is on screen.
+    private var displayedRecords: [CompletedTaskRecord] {
+        TaskListPageSize.visible(searchFilteredRecords, size: effectivePageSize)
+    }
+
+    private var taskHistoryReadability: MemoryRowReadability {
+        MemoryRowReadability.of(.taskHistory, viewModel: viewModel)
     }
 
     /// The write is unconditional and immediate rather than debounced or deferred to `onDisappear`:
@@ -704,7 +1049,7 @@ private struct TasksFoundationView: View {
     /// four enumerated on `collapseState` above — removing it leaves the suite green and the
     /// preference permanently unwritten.
     private func toggleSection(_ sectionID: String) {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : SonnyMotion.standard) {
             collapseState.toggle(sectionID)
         }
         collapseStore.save(collapseState)
@@ -713,54 +1058,128 @@ private struct TasksFoundationView: View {
 
 private struct TasksToolbarRow: View {
     @ObservedObject var viewModel: AgentViewModel
-    @FocusState private var isFocused: Bool
+    /// Owned by `TasksFoundationView`, which reads it to keep its own key handlers off the field.
+    var isFocused: FocusState<Bool>.Binding
+    /// How many rows the list shows at once (the founders' ask of 2026-09-09) — owned by
+    /// `TasksFoundationView`, written here.
+    @Binding var pageSize: TaskListPageSize
+    @Environment(\.sonnyDensity) private var density
 
+    /// With the receipt pane open the list is `SonnyMetrics.tasksListShare` of the panel, less what
+    /// the receipt's floor needs at a narrow one (`TasksSplitPresentation`): at the 900-wide minimum
+    /// window that is 434pt with the sidebar collapsed (its default) and 270pt with it expanded, and
+    /// the Show picker and the search field at its 220pt ideal fit on one row in the first. The
+    /// two-row candidate stays for the second and for any narrower list: when the list
+    /// was a 260pt column (phases 12 and 13) the field's 120pt floor left the prompt reading
+    /// "Search task" (founder, 2026-09-10), and rather than clip the field the narrow candidate
+    /// drops to two rows, the picker alone on the first and the field at its full width on the
+    /// second. The one-row candidate leads so it wins whenever there is room for it.
     var body: some View {
-        HStack(spacing: 8) {
-            Spacer()
-            // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no
-            // matching behind it. The filter icon beside it stays deliberately dropped (2026-07-18
-            // review): no filter feature exists or is planned.
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(SonnyType.icon(12, weight: .medium))
-                    .foregroundStyle(SonnyTheme.muted)
-
-                TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
-                    .textFieldStyle(.plain)
-                    .font(SonnyType.micro)
-                    .foregroundStyle(SonnyTheme.text)
-                    .focused($isFocused)
-                    .frame(width: 150)
-                    .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
-
-                if !viewModel.taskHistoryQuery.isEmpty {
-                    Button {
-                        viewModel.taskHistoryQuery = ""
-                        isFocused = true
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(SonnyType.icon(11, weight: .medium))
-                            .foregroundStyle(SonnyTheme.muted)
-                    }
-                    .buttonStyle(.plain)
-                    .sonnyPointerCursor()
-                    .accessibilityLabel("Clear search")
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                showPicker
+                Spacer()
+                searchField(minWidth: 120, idealWidth: 220, maxWidth: 220)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(isFocused ? SonnyTheme.accent : SonnyTheme.border, lineWidth: 1)
-            )
+            // `SonnySpacing.md` between the picker row and the search row (founder, 2026-09-10) —
+            // was `.sm`, tight enough to read as one cramped block once the toolbar dropped to two
+            // rows; `TasksPaneSourceScanTests` pins this literal, updated in the same commit.
+            VStack(alignment: .leading, spacing: SonnySpacing.md) {
+                HStack {
+                    showPicker
+                    Spacer(minLength: 0)
+                }
+                // No floor needed: the row's own width is the field's only constraint now.
+                searchField(minWidth: nil, idealWidth: nil, maxWidth: .infinity)
+            }
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 24)
-        .frame(height: 40)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(SonnyTheme.cardBorder).frame(height: 0.5)
+        // Built once, outside the two candidates: `ViewThatFits` renders one candidate at a time,
+        // so a shortcut inside each would still be one live control, but a shortcut-bearing button
+        // that exists in two places is the shape a reader has to reason about every time; here it
+        // exists in one, and the scan pins that (phase 13 review).
+        .overlay(alignment: .topLeading) {
+            focusShortcutButton
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        // The picker used to sit centered inside a `toolbarHeight`-tall box, which read as pressed
+        // up against the panel's own top edge (founder, 2026-09-10: "forced up against the edge of
+        // the margin"). Explicit top/bottom padding replaces that centering: `SonnySpacing.md`
+        // above the content, so it never sits nearer the panel's top edge than the rows' own inset
+        // reads, and `SonnySpacing.sm` below it, so the first section header keeps a visible gap
+        // rather than butting against the toolbar. `minHeight` is now a floor under that padding
+        // rather than the value the one-row candidate renders at exactly — both candidates grow
+        // past it once their content plus this padding needs more room.
+        .padding(.top, SonnySpacing.md)
+        .padding(.bottom, SonnySpacing.sm)
+        .frame(minHeight: density.toolbarHeight)
+    }
+
+    /// Leads the search field rather than trailing it — Gmail's own placement for the same idiom.
+    /// No "sort" beside it: the list is newest first, and the founders asked for a count, not an
+    /// order.
+    private var showPicker: some View {
+        Picker("Show", selection: $pageSize) {
+            ForEach(TaskListPageSize.allCases) { size in
+                Text(size.title).tag(size)
+            }
+        }
+        .pickerStyle(.menu)
+        .tint(SonnyTheme.accent)
+        .fixedSize()
+        .accessibilityLabel("Show, \(pageSize.title) selected")
+    }
+
+    // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no matching
+    // behind it. The filter icon beside it stays deliberately dropped (2026-07-18 review): no
+    // filter feature exists or is planned. Built once per `ViewThatFits` candidate — the same
+    // shape `TaskReceiptView.moreActionsMenu`'s doc comment gives for a small, stateless control.
+    @ViewBuilder
+    private func searchField(minWidth: CGFloat?, idealWidth: CGFloat?, maxWidth: CGFloat?) -> some View {
+        TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
+            .padding(.leading, SonnySpacing.xl)
+            .padding(.trailing, SonnySpacing.lg)
+            .sonnyTextField(size: .regular)
+            .focused(isFocused)
+            .frame(minWidth: minWidth, idealWidth: idealWidth, maxWidth: maxWidth)
+            .overlay(alignment: .leading) {
+                Image(systemName: "magnifyingglass")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .padding(.leading, SonnySpacing.sm)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .trailing) {
+                // Always mounted rather than conditionally inserted (opacity 0 and disabled when
+                // the query is empty), so clearing the query never shifts the field's width.
+                Button {
+                    viewModel.taskHistoryQuery = ""
+                    isFocused.wrappedValue = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .padding(.trailing, SonnySpacing.sm)
+                .opacity(viewModel.taskHistoryQuery.isEmpty ? 0 : 1)
+                .disabled(viewModel.taskHistoryQuery.isEmpty)
+                .accessibilityLabel("Clear search")
+            }
+            .onExitCommand {
+                guard !viewModel.taskHistoryQuery.isEmpty else { return }
+                viewModel.taskHistoryQuery = ""
+            }
+            .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
+    }
+
+    /// Invisible: gives the search field a ⌘F shortcut from anywhere on this page.
+    private var focusShortcutButton: some View {
+        Button(action: { isFocused.wrappedValue = true }) { EmptyView() }
+            .keyboardShortcut("f", modifiers: .command)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
     }
 }
 
@@ -783,15 +1202,15 @@ private struct CommandCenterRunningIndicator: View {
     @ObservedObject var viewModel: AgentViewModel
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SonnySpacing.sm + 2) {
             ProgressView()
                 .controlSize(.small)
                 .tint(SonnyTheme.accent)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(statusText)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -811,23 +1230,17 @@ private struct CommandCenterRunningIndicator: View {
                 }
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             if viewModel.canCancel {
                 Button("Cancel") {
                     viewModel.cancelCurrentRun()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(SonnySpacing.md)
+        .sonnyCard()
     }
 
     // `viewModel.command` is not what's shown here on purpose — it's cleared the instant `start()`
@@ -854,7 +1267,7 @@ private struct CommandCenterStorageNotice: View {
     /// genuinely absent from its parent stack's layout when there is nothing to say.
     struct Insets {
         static let none = Insets(horizontal: 0, bottom: 0)
-        static let tasksPage = Insets(horizontal: 30, bottom: 12)
+        static let tasksPage = Insets(horizontal: SonnySpacing.xl, bottom: SonnySpacing.md)
 
         var horizontal: CGFloat
         var bottom: CGFloat
@@ -895,29 +1308,28 @@ private struct CommandCenterStorageNotice: View {
         message: String,
         dismiss: @escaping () -> Void
     ) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: SonnySpacing.sm + 2) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(tint)
 
             Text(message)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             Button("Dismiss", action: dismiss)
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CommandCenterPalette.cardSurface)
+        .padding(SonnySpacing.md)
+        .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.card))
         .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(tint.opacity(0.4), lineWidth: 1)
+            RoundedRectangle(cornerRadius: SonnyRadius.card)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+                .allowsHitTesting(false)
         )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
         .padding(.horizontal, insets.horizontal)
         .padding(.bottom, insets.bottom)
     }
@@ -942,19 +1354,19 @@ private struct CommandCenterSessionContextRow: View {
     let progress: VisionSessionProgress
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             // Amber, matching the widget's own session glyph: Sonny doing something unusual, not
             // something going wrong.
             Image(systemName: "cursorarrow.rays")
-                .font(.system(size: 11))
+                .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .medium))
                 .foregroundStyle(SonnyTheme.warning)
 
             (Text(ScreenControlSessionPresentation.controllingPrefix).font(SonnyType.micro)
                 + Text(progress.appDisplayName).font(SonnyType.microEmphasis))
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: SonnySpacing.sm)
 
             Text(ScreenControlSessionPresentation.stepLine(
                 iteration: progress.iteration,
@@ -1058,7 +1470,7 @@ private struct CommandCenterAttentionPanel: View {
 
     var body: some View {
         if let state {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: SonnySpacing.sm + 2) {
                 switch state {
                 case .permission(let request):
                     permissionContent(request)
@@ -1070,15 +1482,14 @@ private struct CommandCenterAttentionPanel: View {
                     versionContent(prompt)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(SonnySpacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(CommandCenterPalette.cardSurface)
+            .background(SonnyTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: SonnyRadius.card))
             .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                    .stroke(accentColor.opacity(0.4), lineWidth: 1)
+                RoundedRectangle(cornerRadius: SonnyRadius.card)
+                    .strokeBorder(accentColor.opacity(0.35), lineWidth: 1)
+                    .allowsHitTesting(false)
             )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
         } else {
             EmptyView()
         }
@@ -1106,7 +1517,7 @@ private struct CommandCenterAttentionPanel: View {
         // time Sonny asks shouldn't decide whether they get the explanation.
         if !viewModel.hasCompletedFirstApproval {
             Text("Sonny always asks first for actions like this — you decide, every time.")
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         }
 
@@ -1120,8 +1531,8 @@ private struct CommandCenterAttentionPanel: View {
             safeMode: viewModel.interactionMode == .safe
         ).enumerated()), id: \.offset) { _, line in
             Text(line)
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
@@ -1131,7 +1542,7 @@ private struct CommandCenterAttentionPanel: View {
         let escalationReasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
         if !escalationReasons.isEmpty {
             Text(escalationReasons)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1144,7 +1555,7 @@ private struct CommandCenterAttentionPanel: View {
             CommandCenterSessionContextRow(progress: sessionProgress)
         }
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Spacer(minLength: 0)
 
             // Same entry points the widget's own permission panel uses — `start()` routes to the
@@ -1166,7 +1577,7 @@ private struct CommandCenterAttentionPanel: View {
                 Button(ScreenControlSessionPresentation.stopLabel) {
                     viewModel.emergencyStopVisionSession()
                 }
-                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                 .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(
                     appDisplayName: sessionProgress.appDisplayName
                 ))
@@ -1174,13 +1585,13 @@ private struct CommandCenterAttentionPanel: View {
                 Button("Deny") {
                     viewModel.cancelCurrentRun()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
 
             Button("Allow") {
                 viewModel.start()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
         }
     }
 
@@ -1189,27 +1600,17 @@ private struct CommandCenterAttentionPanel: View {
         header(icon: "questionmark.circle", title: "Clarification needed")
 
         Text(question)
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.text)
             .fixedSize(horizontal: false, vertical: true)
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             TextField(
                 "",
                 text: $viewModel.clarificationAnswer,
-                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.muted)
+                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.textTertiary)
             )
-            .textFieldStyle(.plain)
-            .font(SonnyType.caption)
-            .foregroundStyle(SonnyTheme.text)
-            .padding(.horizontal, 10)
-            .frame(height: 23)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .sonnyTextField(size: .small)
             .onSubmit { viewModel.submitClarification() }
 
             // The widget's Cancel, mirrored (SONNY-166). Declining-then-answering order matches the
@@ -1226,12 +1627,12 @@ private struct CommandCenterAttentionPanel: View {
             Button(ClarificationPresentation.cancelLabel) {
                 viewModel.cancelCurrentRun()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
 
             Button("Send") {
                 viewModel.submitClarification()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
             .disabled(!viewModel.canSendClarificationAnswer)
         }
     }
@@ -1252,42 +1653,42 @@ private struct CommandCenterAttentionPanel: View {
         header(icon: "arrow.down.circle", title: prompt.title)
 
         Text(prompt.message)
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.text)
             .fixedSize(horizontal: false, vertical: true)
 
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Spacer(minLength: 0)
 
             if let dismissLabel = prompt.dismissLabel {
                 Button(dismissLabel) {
                     viewModel.dismissUpdateAvailablePrompt()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
             }
 
             if let updateLabel = prompt.updateLabel {
                 Button(updateLabel) {
                     viewModel.openClientVersionLink()
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
             }
         }
     }
 
     @ViewBuilder
     private func failureContent(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: SonnySpacing.sm + 2) {
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(SonnyTheme.danger)
 
             Text(message)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             // `errorMessage` also carries pre-flight errors (empty-command validation, voice
             // transcription failures) that never reached a real submission, and `retryLastCommand`
@@ -1297,13 +1698,13 @@ private struct CommandCenterAttentionPanel: View {
                 Button("Retry") {
                     viewModel.retryLastCommand(origin: .commandCenter)
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
 
             Button("Dismiss") {
                 viewModel.errorMessage = nil
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
         }
     }
 
@@ -1311,22 +1712,28 @@ private struct CommandCenterAttentionPanel: View {
     /// the message inline, so it deliberately does not use this.
     @ViewBuilder
     private func header(icon: String, title: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SonnySpacing.sm) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .semibold))
                 .foregroundStyle(SonnyTheme.warning)
 
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
         }
     }
 }
 
 private struct InsightsView: View {
     @ObservedObject var viewModel: AgentViewModel
+    /// `CommandCenterView.select`, handed down as Memory's is: this page opens a workspace by
+    /// selecting the Workspaces page and leaving the name in `commands.workspaceToOpen`, the same
+    /// door the ⌘K palette uses, so there is one way a workspace detail opens from elsewhere.
+    let select: (CommandCenterDestination) -> Void
+    @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var summary: TaskHistoryInsightsSummary {
         TaskHistoryInsights.summarize(records: viewModel.taskHistoryRecords, now: Date())
@@ -1337,7 +1744,7 @@ private struct InsightsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Insights")
 
             CommandCenterAttentionPanel(viewModel: viewModel)
@@ -1356,43 +1763,45 @@ private struct InsightsView: View {
                 // No "Overview" (or other) section-group label — neither the wireframe nor
                 // founder-decisions doc calls for one, and it was previously applied to only
                 // one of these four sections rather than consistently to all of them.
-                VStack(alignment: .leading, spacing: 16) {
-                    InsightsOverviewBento(summary: summary)
-
-                    WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
-
-                    WorkspaceBreakdownPanel(entries: workspaceBreakdown)
-
-                    TaskHistoryListPanel(
-                        records: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3),
-                        title: "Recently Completed",
-                        emptyTitle: "No activity yet",
-                        emptyMessage: "Completed Sonny tasks will appear here."
-                    )
-                }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 24)
+                InsightsOverviewBento(
+                    summary: summary,
+                    workspaceBreakdown: workspaceBreakdown,
+                    recentRecords: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 3),
+                    // The same door a finished-run notification uses: the request selects Tasks
+                    // at the window root and the page opens the detail on appear. A record with
+                    // no id predates SONNY-115's backfill and has no sheet to open.
+                    openTask: { record in
+                        guard let id = record.id else { return }
+                        _ = viewModel.requestTaskDetail(taskID: id)
+                    },
+                    // A breakdown entry comes from history and may name a workspace that has since
+                    // been deleted; only a name that still exists gets a row that opens.
+                    openableWorkspaceNames: Set(viewModel.savedWorkspaces.map(\.name)),
+                    openWorkspace: { name in
+                        commands.workspaceToOpen = name
+                        select(.workspaces)
+                    }
+                )
+                .padding(.horizontal, SonnySpacing.xxxl)
+                .padding(.vertical, SonnySpacing.xxl)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .onAppear {
             viewModel.refreshTaskHistory()
         }
     }
 }
 
+/// The asymmetric bento the founders asked for (recorded as an open item in
+/// `docs/sonny-founder-design-decisions.md`): a three-row `Grid` over a four-column frame. Row 1 is
+/// the three stats, the first spanning two columns as the hero tile; row 2 is the weekly chart
+/// spanning two columns beside the workspace breakdown; row 3 is recent activity at full width. Six
+/// tiles, no empty cells.
+///
 /// Literal wireframe layout (`14-MainAppInsights.svg`) originally had 4 equal-width stat cards;
 /// "Avg. cycle time" was dropped per direct instruction (2026-07-18) as not adding much value,
 /// leaving 3.
@@ -1407,21 +1816,62 @@ private struct InsightsView: View {
 /// visible trace was a single manual-checklist row.
 private struct InsightsOverviewBento: View {
     let summary: TaskHistoryInsightsSummary
+    let workspaceBreakdown: [WorkspaceTaskBreakdownEntry]
+    let recentRecords: [CompletedTaskRecord]
+    let openTask: (CompletedTaskRecord) -> Void
+    let openableWorkspaceNames: Set<String>
+    let openWorkspace: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            InsightStatCard(stat: .completedThisWeek(summary))
-            InsightStatCard(stat: .completionRate(summary))
-            InsightStatCard(stat: .currentStreak(summary))
+        Grid(horizontalSpacing: SonnySpacing.md, verticalSpacing: SonnySpacing.md) {
+            GridRow {
+                InsightStatCard(stat: .completedThisWeek(summary), isWide: true)
+                    .gridCellColumns(2)
+                InsightStatCard(stat: .completionRate(summary))
+                InsightStatCard(stat: .currentStreak(summary))
+            }
+            GridRow {
+                // A plain two-cell `GridRow` here centred whichever cell was shorter — `Grid`'s
+                // default cross-axis alignment for a row — so whenever the chart and the breakdown
+                // panel's natural heights differed, the panel's card started below the chart's top
+                // edge and ended above its bottom, and the blank space above it read as a bigger gap
+                // than the one between the stat cards even though every row shares one
+                // `verticalSpacing` (founder report, 2026-09-09). An `HStack(alignment: .top)` with
+                // one flexible side is the deterministic fix: both cells now share the row's top
+                // edge, and `WorkspaceBreakdownPanel`'s own `maxHeight: .infinity` (below) grows its
+                // card to whatever height the chart sets, without touching the chart at all.
+                HStack(alignment: .top, spacing: SonnySpacing.md) {
+                    WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+                    WorkspaceBreakdownPanel(
+                        entries: workspaceBreakdown,
+                        openableWorkspaceNames: openableWorkspaceNames,
+                        openWorkspace: openWorkspace
+                    )
+                }
+                .gridCellColumns(4)
+            }
+            GridRow {
+                TaskHistoryListPanel(
+                    records: recentRecords,
+                    title: "Recently completed",
+                    emptyTitle: "No activity yet",
+                    emptyMessage: "Completed Sonny tasks will appear here.",
+                    openTask: openTask
+                )
+                .gridCellColumns(4)
+            }
         }
     }
 }
 
 private struct InsightStatCard: View {
     let stat: InsightStatPresentation
+    /// The hero tile (row 1's first, two-column span) reads its delta as a full sentence at
+    /// `caption` size, where the room is; the two single-column stats keep it at `micro`.
+    var isWide: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(stat.label)
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
@@ -1434,20 +1884,16 @@ private struct InsightStatCard: View {
                 .minimumScaleFactor(0.72)
 
             Text(stat.delta)
-                .font(SonnyType.micro)
-                .foregroundStyle(stat.isPositiveDelta ? SonnyTheme.success : SonnyTheme.muted)
+                .font(isWide ? SonnyType.caption : SonnyType.micro)
+                .foregroundStyle(stat.isPositiveDelta ? SonnyTheme.success : SonnyTheme.textTertiary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.74)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(stat.label): \(stat.value), \(stat.delta)")
     }
 }
 
@@ -1464,38 +1910,73 @@ private struct WeeklyCompletionChart: View {
         return counts.firstIndex(of: maxCount)
     }
 
+    /// The pill is centred on its column, except at the two ends of the week, where a centred
+    /// pill on a column about 28pt wide at the window minimum would spill past the card's edge;
+    /// those lean inward instead (phase 12 review, F4).
+    private func pillAlignment(for index: Int) -> Alignment {
+        if index == 0 { return .topLeading }
+        if index == days.count - 1 { return .topTrailing }
+        return .top
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Tasks Completed This Week")
+        VStack(alignment: .leading, spacing: SonnySpacing.lg) {
+            Text("Tasks completed this week")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
-            HStack(alignment: .bottom, spacing: 14) {
+            HStack(alignment: .bottom, spacing: SonnySpacing.md) {
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    VStack(spacing: 9) {
+                    VStack(spacing: SonnySpacing.sm) {
                         GeometryReader { proxy in
                             VStack {
                                 Spacer(minLength: 0)
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(index == peakIndex ? SonnyTheme.accent : SonnyTheme.chartBarMuted)
-                                    .frame(
-                                        width: 24,
-                                        height: barHeight(for: counts[safe: index] ?? 0, availableHeight: proxy.size.height)
-                                    )
-                                    .opacity((counts[safe: index] ?? 0) == 0 ? 0 : 1)
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: SonnyRadius.control,
+                                    bottomLeadingRadius: 0,
+                                    bottomTrailingRadius: 0,
+                                    topTrailingRadius: SonnyRadius.control
+                                )
+                                .fill(index == peakIndex ? SonnyTheme.accent : SonnyTheme.chartBarMuted)
+                                .frame(
+                                    width: 24,
+                                    height: barHeight(for: counts[safe: index] ?? 0, availableHeight: proxy.size.height)
+                                )
+                                .opacity((counts[safe: index] ?? 0) == 0 ? 0 : 1)
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                        .frame(height: 112)
+                        .frame(height: 120)
+                        .help(dayTaskCountDescription(day: day, index: index))
+                        // Swapping the day label's own text for the count (2026-07-18) put the
+                        // replacement inside the label's own narrow column, so "N tasks" wrapped to
+                        // three lines and the row's baseline jumped (founder report, 2026-09-09).
+                        // The day label now never changes; the count floats in its own pill above
+                        // the bar instead, sized to its own text with `.fixedSize()` so it can never
+                        // wrap, and positioned entirely above this 120pt column (not just above
+                        // today's bar) so it can never cover any bar regardless of that day's height.
+                        .overlay(alignment: pillAlignment(for: index)) {
+                            if hoveredDayIndex == index {
+                                Text(WeeklyCompletionChartPresentation.countLabel(for: counts[safe: index] ?? 0))
+                                    .font(SonnyType.caption)
+                                    .foregroundStyle(SonnyTheme.text)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                    .padding(.horizontal, SonnySpacing.sm)
+                                    .padding(.vertical, SonnySpacing.xs)
+                                    .background(SonnyTheme.surfaceRaised2, in: RoundedRectangle(cornerRadius: SonnyRadius.control))
+                                    // Declares this pill's own bottom edge as its "top" alignment
+                                    // guide (plus a small gap), so aligning that guide to the
+                                    // column's top puts the whole pill above the column with no
+                                    // magic-number offset to keep in sync with the pill's own size.
+                                    .alignmentGuide(.top) { dimensions in dimensions[.bottom] + SonnySpacing.xs }
+                            }
+                        }
+                        .sonnyAnimation(SonnyMotion.quick, value: hoveredDayIndex)
 
-                        // Swaps to the exact count on hover (2026-07-18) — a native `.help()`
-                        // tooltip was tried first here and didn't render at all in the real app,
-                        // so this replaces it with a plain state-driven label change: no floating
-                        // overlay to mis-position, guaranteed to render exactly where the day
-                        // label already sits.
-                        Text(hoveredDayIndex == index ? "\(counts[safe: index] ?? 0) task\((counts[safe: index] ?? 0) == 1 ? "" : "s")" : day)
+                        Text(day)
                             .font(SonnyType.micro)
-                            .foregroundStyle(hoveredDayIndex == index ? SonnyTheme.text : SonnyTheme.muted)
+                            .foregroundStyle(hoveredDayIndex == index ? SonnyTheme.text : SonnyTheme.textTertiary)
                     }
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
@@ -1504,19 +1985,22 @@ private struct WeeklyCompletionChart: View {
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(dayTaskCountDescription(day: day, index: index))
+                    .accessibilityValue(WeeklyCompletionChartPresentation.countLabel(for: counts[safe: index] ?? 0))
                 }
             }
             .frame(maxWidth: .infinity)
+            // Headroom for the hover pill: it sits above this row by its own height plus a
+            // 4pt gap, about 27pt, and the title is 16pt above the row. Reserved here rather than
+            // hoped for, so the pill never lands on the title (phase 12 review, F1, F2, F9).
+            .padding(.top, SonnyMetrics.controlRegular)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(SonnySpacing.lg)
+        // `maxHeight: .infinity` on this card as well as on the breakdown panel beside it: the
+        // `HStack` they share sizes to the taller of the two and both fill it, whichever that is.
+        // With only the panel flexible, a panel with more workspaces than the chart is tall left
+        // the chart short and the gap back under it (phase 12 review, F2).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sonnyCard()
     }
 
     private func barHeight(for count: Int, availableHeight: CGFloat) -> CGFloat {
@@ -1534,6 +2018,8 @@ private struct WeeklyCompletionChart: View {
 
 private struct WorkspaceBreakdownPanel: View {
     let entries: [WorkspaceTaskBreakdownEntry]
+    let openableWorkspaceNames: Set<String>
+    let openWorkspace: (String) -> Void
 
     private static let swatchColors: [Color] = [
         SonnyTheme.accent,
@@ -1544,66 +2030,90 @@ private struct WorkspaceBreakdownPanel: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Breakdown by Workspace")
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
+            Text("Breakdown by workspace")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
             if entries.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("No workspace activity yet")
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                    Text("Tasks completed in a saved workspace over the last 30 days will appear here.")
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 6)
+                CollectionEmptyState(
+                    systemImage: "rectangle.3.group",
+                    title: "No workspace activity yet",
+                    message: "Tasks completed in a saved workspace over the last 30 days will appear here.",
+                    minHeight: 96
+                )
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: SonnySpacing.sm) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         WorkspaceBreakdownRow(
                             entry: entry,
-                            swatchColor: Self.swatchColors[index % Self.swatchColors.count]
-                        )
+                            swatchColor: Self.swatchColors[index % Self.swatchColors.count],
+                            isOpenable: openableWorkspaceNames.contains(entry.workspaceName)
+                        ) {
+                            openWorkspace(entry.workspaceName)
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(SonnySpacing.lg)
+        // `maxHeight: .infinity` on both cards in the row: the `HStack` above sizes to the taller
+        // and each fills it, so the two share a height whichever one has more to show (see the
+        // comment on that `HStack`, and the chart's own frame).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sonnyCard()
     }
 }
 
+/// One workspace's share of the period, and the way into that workspace: the row is a button
+/// that opens its detail the way the ⌘K palette does.
 private struct WorkspaceBreakdownRow: View {
     let entry: WorkspaceTaskBreakdownEntry
     let swatchColor: Color
+    /// False for a workspace that only history remembers: the row then reads as a figure, with
+    /// no chevron, no hover and no hint, rather than a door that opens onto nothing.
+    let isOpenable: Bool
+    let open: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
+        if isOpenable {
+            Button(action: open) {
+                rowContent
+                    .padding(.horizontal, SonnySpacing.sm)
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -SonnySpacing.sm)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+            .accessibilityHint("Opens the workspace")
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: SonnySpacing.sm) {
+            Circle()
                 .fill(swatchColor)
                 .frame(width: 8, height: 8)
 
             Text(entry.workspaceName)
-                .font(SonnyType.caption)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
-                .frame(width: 120, alignment: .leading)
+                // Flexible rather than a fixed 120: in the bento this row shares half the panel
+                // width, and at the window's minimum a fixed name column left the bar no room.
+                .frame(minWidth: 64, maxWidth: 140, alignment: .leading)
+                .help(entry.workspaceName)
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(SonnyTheme.cardBorder)
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
+                        .fill(SonnyTheme.fillSelected)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
                         .fill(swatchColor)
                         .frame(width: proxy.size.width * entry.fractionOfTotal)
                 }
@@ -1611,10 +2121,17 @@ private struct WorkspaceBreakdownRow: View {
             .frame(height: 6)
 
             Text(percentageText)
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.caption.monospacedDigit())
+                .foregroundStyle(SonnyTheme.textTertiary)
                 .frame(width: 40, alignment: .trailing)
+
+            if isOpenable {
+                Image(systemName: "chevron.right")
+                    .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textTertiary)
+            }
         }
+        .frame(height: density.scaled(32))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.workspaceName): \(percentageText)")
     }
@@ -1629,77 +2146,104 @@ private struct TaskHistoryListPanel: View {
     let title: String
     let emptyTitle: String
     let emptyMessage: String
+    let openTask: (CompletedTaskRecord) -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
             if records.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(emptyTitle)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                    Text(emptyMessage)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 6)
+                CollectionEmptyState(
+                    systemImage: "checkmark.circle",
+                    title: emptyTitle,
+                    message: emptyMessage,
+                    minHeight: 96
+                )
             } else {
-                VStack(spacing: 0) {
+                VStack(spacing: density.rowGap) {
                     ForEach(Array(records.enumerated()), id: \.offset) { _, record in
-                        InsightsRecentActivityRow(record: record)
+                        InsightsRecentActivityRow(record: record, isOpenable: record.id != nil) {
+                            openTask(record)
+                        }
                     }
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
+        .padding(SonnySpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .sonnyCard()
     }
 }
 
-/// Insights' own "Recently completed" row (`14-MainAppInsights.svg`) — a plain solid-color
-/// status dot, no icon cutout, distinct from the Tasks page's richer ring/checkmark treatment
-/// in `TaskHistoryRow`. `RecentCompletedTasks.recent` already filters to `.completed` only, so
-/// this only ever needs the one, green, dot.
+/// Insights' own "Recently completed" row (`14-MainAppInsights.svg`). `RecentCompletedTasks.recent`
+/// already filters to `.completed` only, so every row here is the same outcome and the leading dot
+/// carried no state — it was one fixed color on every row, so it told the reader nothing a plain
+/// list didn't already say. Dropped rather than kept as decoration, per the same rule the Tasks
+/// page's rows follow (`CLAUDE.md`'s "drop any decorative dot that carries no state").
+/// A recently completed task, and the way into its receipt: the row is a button that raises the
+/// same task-detail request a notification click raises, so Insights and Tasks share one door.
 private struct InsightsRecentActivityRow: View {
     let record: CompletedTaskRecord
+    /// False for a record with no id (one that predates the id backfill): there is no receipt to
+    /// open, so the row is a line rather than a button that does nothing.
+    let isOpenable: Bool
+    let open: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(SonnyTheme.success)
-                .frame(width: 14, height: 14)
-
-            Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 12)
-
-            Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+        if isOpenable {
+            Button(action: open) {
+                rowContent
+                    .padding(.horizontal, SonnySpacing.sm)
+                    .frame(height: density.scaled(32))
+                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -SonnySpacing.sm)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityText)
+            .accessibilityHint("Opens the task")
+        } else {
+            rowContent
+                .frame(height: density.scaled(32))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityText)
         }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(record.command), " +
-            "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
-        )
+    }
+
+    private var accessibilityText: String {
+        "\(record.command), " +
+        "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
+    }
+
+    private var rowContent: some View {
+            HStack(spacing: SonnySpacing.sm) {
+                Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: SonnySpacing.md)
+
+                Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                if isOpenable {
+                    Image(systemName: "chevron.right")
+                        .font(SonnyType.icon(SonnyMetrics.iconChevron, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.textTertiary)
+                }
+            }
     }
 }
 
@@ -1723,6 +2267,7 @@ private struct CommandCenterGroupHeader: View {
     /// wireframe's title/count position is untouched, and because both System A chevrons that
     /// already exist (the sidebar profile row, the account menu's disclosure rows) are trailing.
     var disclosure: Disclosure? = nil
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         if let disclosure {
@@ -1743,35 +2288,31 @@ private struct CommandCenterGroupHeader: View {
     }
 
     private func band(disclosure: Disclosure?) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: SonnySpacing.sm) {
             Text(title)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.sidebarNavText)
-            Text("\(count)")
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.headline)
+                .foregroundStyle(SonnyTheme.text)
+            SonnyBadge(text: "\(count)", tone: .neutral)
 
             if let disclosure {
                 // The `Spacer` is what makes the HStack greedy; without a disclosure the row stays
                 // content-sized and the outer `.frame(alignment: .leading)` left-aligns it exactly
                 // as before. One `chevron.right` rotated to point down when expanded, rather than
                 // swapping to `chevron.down`, so the transition is a rotation and not a glyph pop.
-                Spacer(minLength: 8)
+                Spacer(minLength: SonnySpacing.sm)
                 Image(systemName: "chevron.right")
-                    .font(SonnyType.icon(9, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.muted)
+                    .font(SonnyType.icon(SonnyMetrics.iconButton, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.textTertiary)
                     .rotationEffect(.degrees(disclosure.isExpanded ? 90 : 0))
+                    .sonnyAnimation(SonnyMotion.quick, value: disclosure.isExpanded)
                     .accessibilityHidden(true)
             }
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 24)
+        .padding(.horizontal, SonnySpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 36)
+        .frame(height: density.listRowHeight)
         .background(SonnyTheme.surfaceRaised)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(SonnyTheme.cardBorder).frame(height: 1)
-        }
+        .sonnyDivider()
     }
 }
 
@@ -1828,8 +2369,8 @@ private struct InProgressTaskGroup: View {
             // sits outside the scroll area and self-gates, so approvals were never affected by
             // this either way.
             CommandCenterRunningIndicator(viewModel: viewModel)
-                .padding(.horizontal, 30)
-                .padding(.vertical, 12)
+                .padding(.horizontal, SonnySpacing.xl)
+                .padding(.vertical, SonnySpacing.md)
         }
     }
 }
@@ -1837,12 +2378,27 @@ private struct InProgressTaskGroup: View {
 private struct TaskHistoryGroupedPanel: View {
     let records: [CompletedTaskRecord]
     let collapseState: TaskSectionCollapseState
+    /// The pane's current selection, so a row can draw the shared selected look — `nil` when
+    /// nothing is selected, and never true for a row in a section this panel is not the one
+    /// rendering (row 11, the founders' ask of 2026-09-09).
+    let selectedTaskID: String?
+    let isTaskInFlight: Bool
     let onToggleSection: (String) -> Void
     let onSelect: (CompletedTaskRecord) -> Void
+    let onRunAgain: (CompletedTaskRecord) -> Void
+    let onEditAndRun: (CompletedTaskRecord) -> Void
+    let onFollowUp: (CompletedTaskRecord) -> Void
     let onDelete: (CompletedTaskRecord) -> Void
     /// Passed in rather than derived here, because "no results" and "nothing has ever run" are the
     /// same empty array and only the caller knows which one it is holding.
     let emptyState: TaskSearchPresentation.EmptyState
+    /// Same reasoning as `emptyState`: the readability check that picks this lives with the caller,
+    /// which already computes it to choose between `emptyState`'s two copies.
+    let emptyStateIcon: String
+    /// Offered only when nothing has ever run: a search with no result or an unreadable store
+    /// keeps the plain sentence.
+    let emptyStateAction: CollectionEmptyState.Action?
+    @Environment(\.sonnyDensity) private var density
 
     private var sections: [TaskSectionPresentation] {
         TaskSectionPresentation.sections(
@@ -1853,17 +2409,12 @@ private struct TaskHistoryGroupedPanel: View {
 
     var body: some View {
         if records.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(emptyState.title)
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text)
-                Text(emptyState.detail)
-                    .font(SonnyType.micro)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 30)
-            .padding(.vertical, 18)
+            CollectionEmptyState(
+                systemImage: emptyStateIcon,
+                title: emptyState.title,
+                message: emptyState.detail,
+                action: emptyStateAction
+            )
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(sections) { section in
@@ -1884,15 +2435,21 @@ private struct TaskHistoryGroupedPanel: View {
                             )
                         )
 
-                        VStack(spacing: 0) {
+                        VStack(spacing: density.rowGap) {
                             // Keyed on the record's own id, not `\.startedAt`. Whole-second
                             // timestamps mean two runs of one command inside the same second share
                             // a `startedAt`, and SwiftUI collapses rows that share an id — so the
                             // list silently showed one row where there were two.
-                            ForEach(section.visibleRecords, id: \.taskRowIdentity) { record in
+                            ForEach(Array(section.visibleRecords.enumerated()), id: \.element.taskRowIdentity) { index, record in
                                 TaskHistoryRow(
                                     record: record,
+                                    isLast: index == section.visibleRecords.count - 1,
+                                    isSelected: record.taskRowIdentity == selectedTaskID,
+                                    isTaskInFlight: isTaskInFlight,
                                     onSelect: { onSelect(record) },
+                                    onRunAgain: { onRunAgain(record) },
+                                    onEditAndRun: { onEditAndRun(record) },
+                                    onFollowUp: { onFollowUp(record) },
                                     onDelete: { onDelete(record) }
                                 )
                             }
@@ -1904,40 +2461,39 @@ private struct TaskHistoryGroupedPanel: View {
     }
 }
 
-/// Shared by `TaskHistoryRow` and `TaskLogDetailDialog` so the row and its detail dialog always
-/// agree on what a given outcome looks like.
+/// The status glyph for one row of task history. A plain SF Symbol at the shared row-icon size
+/// rather than the wireframe's hand-built colored-circle cutout — the done/canceled semantics
+/// survive as filled-vs-outline (a terminal outcome reads as filled, a user-chosen cancel stays an
+/// outline), and failure gets its own filled danger glyph rather than reusing canceled's shape in a
+/// different color.
+/// Not `private` since row 11 (the founders' ask of 2026-09-09): `TaskReceiptView.swift`, the
+/// Tasks pane, uses this and `taskStatusText(for:)` below too, so both are drawn identically on the
+/// row and in the pane that opens from it.
 @ViewBuilder
-private func taskStatusIcon(for status: PriorTaskOutcomeStatus) -> some View {
+func taskStatusIcon(for status: PriorTaskOutcomeStatus) -> some View {
     switch status {
     case .completed:
-        // Wireframe "Done": filled indigo circle with a dark checkmark cutout.
-        ZStack {
-            Circle().fill(SonnyTheme.taskDone)
-            Image(systemName: "checkmark")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(SonnyTheme.ink)
-        }
+        Image(systemName: "checkmark.circle.fill")
+            .font(SonnyType.icon(SonnyMetrics.iconRow))
+            .foregroundStyle(SonnyTheme.success)
     case .canceled:
-        // Wireframe "Canceled": filled blue-gray circle with a dark X cutout.
-        ZStack {
-            Circle().fill(SonnyTheme.taskCanceled)
-            Image(systemName: "xmark")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(SonnyTheme.ink)
-        }
+        Image(systemName: "xmark.circle")
+            .font(SonnyType.icon(SonnyMetrics.iconRow))
+            .foregroundStyle(SonnyTheme.textTertiary)
     case .failed:
-        // No wireframe evidence for a failure treatment — this screen only shows
-        // In Progress/Done/Canceled. Reusing In Progress's stroked-ring shape, recolored to
-        // the established danger token, as the most defensible reading absent a direct source.
-        Circle()
-            .strokeBorder(SonnyTheme.danger, lineWidth: 1.5)
+        Image(systemName: "xmark.circle.fill")
+            .font(SonnyType.icon(SonnyMetrics.iconRow))
+            .foregroundStyle(SonnyTheme.danger)
     default:
-        Circle()
-            .fill(SonnyTheme.muted)
+        // No decorative dot for a status this page never actually shows (a completed run is always
+        // done/failed/canceled) — a hollow ring claims no state rather than inventing one.
+        Image(systemName: "circle")
+            .font(SonnyType.icon(SonnyMetrics.iconRow))
+            .foregroundStyle(SonnyTheme.textTertiary)
     }
 }
 
-private func taskStatusText(for record: CompletedTaskRecord) -> String {
+func taskStatusText(for record: CompletedTaskRecord) -> String {
     let duration = TaskHistoryDurationFormatter.short(record.completedAt.timeIntervalSince(record.startedAt))
     switch record.outcomeStatus {
     case .completed:
@@ -1951,83 +2507,109 @@ private func taskStatusText(for record: CompletedTaskRecord) -> String {
     }
 }
 
-/// A row now opens `TaskLogDetailDialog` on click/tap (2026-07-18 direction: the rich live
-/// Plan/Preview/step-log surface that used to render inline on Tasks/Routines/Workspaces was
-/// "not at all" what was wanted — that detail now only lives behind a click, and only shows a
-/// static receipt of what already happened, not a live replay).
+/// A row selects into the pane beside this list now, rather than opening a sheet (row 11, the
+/// founders' ask of 2026-09-09: "Mail-style"). The pane's receipt is still the static one
+/// `TaskLogDetailDialog` used to show — command, outcome, what it produced — not a live replay of
+/// what happened step by step (that 2026-07-18 direction is unchanged).
 private struct TaskHistoryRow: View {
     let record: CompletedTaskRecord
+    /// The last row in its section gets no trailing rule — the section that follows (or the panel's
+    /// own edge) already draws one, and a divider immediately before another would double it.
+    let isLast: Bool
+    /// Drives the shared selected-row look and the `.isSelected` accessibility trait — the pane
+    /// beside this list is what a press opens now, so the row that opened it says so.
+    let isSelected: Bool
+    let isTaskInFlight: Bool
     let onSelect: () -> Void
+    let onRunAgain: () -> Void
+    let onEditAndRun: () -> Void
+    let onFollowUp: () -> Void
     let onDelete: () -> Void
     @State private var showDeleteConfirmation = false
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        HStack(spacing: 10) {
+        // The workspace name no longer holds its own trailing column (founder, 2026-09-10): it
+        // joins the status on the second line instead, so the title and the date keep the row's
+        // whole width between them. See `TaskHistoryRowPresentation`'s doc comment.
+        let detailLine = TaskHistoryRowPresentation.detailLine(
+            status: taskStatusText(for: record),
+            workspaceName: record.workspaceName
+        )
+
+        HStack(spacing: SonnySpacing.sm + 2) {
             taskStatusIcon(for: record.outcomeStatus)
-                .frame(width: 14, height: 14)
+                .frame(width: 16, height: 16)
                 .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized.truncatedForRowDisplay())
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .help(record.command.isEmpty ? "Untitled task" : record.command)
 
-                Text(taskStatusText(for: record))
-                    .font(SonnyType.micro)
-                    .foregroundStyle(SonnyTheme.muted)
+                Text(detailLine)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
                     .lineLimit(1)
+                    .help(detailLine)
             }
 
-            Spacer(minLength: 12)
-
-            if let workspaceName = record.workspaceName {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(SonnyTheme.sidebarNavText)
-                    Text(workspaceName)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .overlay(
-                    Capsule().stroke(SonnyTheme.border, lineWidth: 1)
-                )
-            }
+            Spacer(minLength: SonnySpacing.md)
 
             Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.textTertiary)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 30)
+        // `twoLineRowHeight`, not `listRowHeight` — this row shows a title and a detail line, and
+        // the single-line height left almost no air above or below either (founder, 2026-09-10).
+        // The texts keep their own sizes; the extra height is air the HStack's default vertical
+        // centering puts above and below them.
+        .frame(height: density.twoLineRowHeight)
+        // Text sits at the page's usual `xl` inset; the highlight itself is inset only `sm` from
+        // the row's true edge, so it reads as a floating rounded rect rather than a full-bleed fill.
+        .padding(.horizontal, SonnySpacing.xl - SonnySpacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                .fill(isSelected ? SonnyTheme.fillSelected : Color.clear)
+        )
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .padding(.horizontal, SonnySpacing.sm)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(SonnyTheme.border).frame(height: 0.5)
+            if !isLast {
+                Rectangle().fill(SonnyTheme.cardBorder).frame(height: 1)
+            }
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: 0)
         .accessibilityElement(children: .combine)
+        // The same detail line the eye reads, so an empty workspace name is silent for both
+        // (phase 13 review, F4).
         .accessibilityLabel(
-            "\(record.command), \(taskStatusText(for: record))\(record.workspaceName.map { ", \($0)" } ?? ""), " +
+            "\(record.command.isEmpty ? "Untitled task" : record.command), \(detailLine), " +
             "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
         )
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Opens task details")
-        // A context menu rather than a trailing button, and this is a judgment call with no
-        // wireframe to defer to. The Tasks list is dense flat rows whose whole visual language is
-        // "nothing but the task"; a permanent trash icon on every row would be the single loudest
-        // element on the page, and a hover-revealed one is an affordance nothing else here uses. The
-        // detail sheet carries the discoverable, labelled version of the same action, so this is the
-        // shortcut rather than the only route. Proposed, not settled — SONNY-109 owns the pass.
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint("Opens this task in the pane")
+        // Every row action lives here now, the destructive one set apart by a divider — "Run
+        // again" and its siblings are what you can do *with* the task, "Delete task" is what you
+        // can do *to* it, the same separation the pane's own actions row keeps (row 11's founder
+        // ask of 2026-09-09: these three now live on the row as well as in the pane).
         .contextMenu {
+            if TaskDetailPresentation.showsTaskActions(for: record) {
+                Button(TaskDetailPresentation.runAgainActionLabel, action: onRunAgain)
+                    .disabled(isTaskInFlight)
+                Button(TaskDetailPresentation.editAndRunActionLabel, action: onEditAndRun)
+                    .disabled(isTaskInFlight)
+                Button(FollowUpPresentation.actionLabel, action: onFollowUp)
+                    .disabled(isTaskInFlight)
+                Divider()
+            }
             Button(TaskDeletePresentation.taskActionLabel, role: .destructive) {
                 showDeleteConfirmation = true
             }
@@ -2041,396 +2623,11 @@ private struct TaskHistoryRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             // Keyed on the link alone — a row that decrypted the journal to write a confirmation
-            // message would be the file read the detail sheet's own comment exists to avoid.
+            // message would be the file read the pane's own comment exists to avoid.
             if let message = TaskDeletePresentation.taskConfirmationMessage(for: record) {
                 Text(message)
             }
         }
-    }
-}
-
-/// Identifiable wrapper so `CompletedTaskRecord` (a plain `MacAgentCore` model with no UI-layer
-/// concerns baked in) can drive `.sheet(item:)` without adding an `Identifiable` conformance to
-/// the persisted model itself.
-///
-/// **The identity is the record's own id now, not a compound key.** This used to be
-/// `"\(startedAt.timeIntervalSince1970)-\(command)"`, and the comment here used to say that was
-/// "unique enough — real collisions would need two records with the exact same command starting in
-/// the same instant." That was wrong about the unit: the store persists whole-second timestamps, so
-/// the collision needs the same *second*, not the same instant, and
-/// `TaskHistoryDeletionTests.deletingOneOfTwoTwinsThatCollideOnTheOldKeyLeavesTheOther` constructs
-/// it. With a delete attached to this sheet, opening the wrong twin stopped being cosmetic.
-///
-/// `screenRecord` is resolved before presentation rather than looked up inside the sheet — see
-/// `TaskScreenRecordState` for why that is what makes "gone" and "never ran one" render alike.
-private struct TaskLogEntry: Identifiable {
-    let record: CompletedTaskRecord
-    let screenRecord: TaskScreenRecordState
-    var id: String { record.taskRowIdentity }
-}
-
-/// A static "receipt" of one completed run — command, outcome, timestamps, workspace, what it
-/// produced — not a live replay of what happened step by step (2026-07-18 direction: "logs +
-/// summary + activity should just be a flow as to how that thing worked under the hood,"
-/// deliberately less detailed than the old inline Plan/Preview/step-log surface).
-///
-/// **Since row E the receipt says what the task produced** (SONNY-147/148). What it deliberately
-/// still does not say is *how*: the plan's steps are persisted for a follow-up to correct against
-/// and are never rendered here, because a list of internal step descriptions on a user-facing
-/// receipt is the surface the 2026-07-18 direction rejected.
-private struct TaskLogDetailDialog: View {
-    /// **Observed, not passed as resolved values** (row E, SONNY-149). The two delete actions arrive
-    /// as closures because they are one-shot commands the presenting view has to follow with its own
-    /// bookkeeping. "Run again" is different: its control has to disable itself the moment another
-    /// task starts, from anywhere, while this sheet is open — and a `Bool` handed in at presentation
-    /// time is a snapshot of a world that moves.
-    @ObservedObject var viewModel: AgentViewModel
-    let record: CompletedTaskRecord
-    /// Resolved once, before this sheet was presented, for the one row the user clicked — so the
-    /// lazy-read property the old `.task` block existed for is kept, without the state settling a
-    /// frame after the sheet opens. See `TaskScreenRecordState`.
-    let screenRecord: TaskScreenRecordState
-    let onDeleteTask: () -> Void
-    let onDeleteScreenRecord: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var showTaskDeleteConfirmation = false
-    @State private var showScreenRecordDeleteConfirmation = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close")
-                // Standard macOS escape-hatch for a close button, and an independent way to
-                // dismiss if the click itself is ever the thing not registering.
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-
-            HStack(spacing: 10) {
-                taskStatusIcon(for: record.outcomeStatus)
-                    .frame(width: 16, height: 16)
-                Text(record.command.isEmpty ? "Untitled task" : record.command.sentenceCapitalized)
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                    .lineLimit(2)
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 4)
-            .padding(.bottom, 20)
-
-            SettingsDivider()
-                .padding(.horizontal, 28)
-
-            VStack(alignment: .leading, spacing: 0) {
-                detailRow(label: "Status", value: taskStatusText(for: record))
-                SettingsDivider()
-                detailRow(label: "Started", value: TaskHistoryDateFormatter.relativeTimestamp(for: record.startedAt, now: Date()))
-                SettingsDivider()
-                detailRow(label: "Completed", value: TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
-                if let workspaceName = record.workspaceName {
-                    SettingsDivider()
-                    detailRow(label: "Workspace", value: workspaceName)
-                }
-            }
-            .padding(.horizontal, 28)
-
-            resultSection
-
-            visionSessionSection
-
-            Spacer(minLength: 20)
-
-            deleteTaskFooter
-        }
-        .frame(
-            width: 420,
-            height: TaskDetailPresentation.sheetHeight(for: record, screenRecord: screenRecord),
-            alignment: .top
-        )
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-    }
-
-    /// What this task produced (row E, SONNY-148) — the answer to "what did this actually do", which
-    /// this dialog has never been able to give.
-    ///
-    /// **Not a `detailRow`.** That helper is a fixed 90pt label column with `.lineLimit(1)` on its
-    /// value: right for a timestamp, wrong for a sentence. This takes the shape the screen-record
-    /// section beside it already uses — a divider, a section label, then content that wraps.
-    ///
-    /// **A record with nothing to show here renders nothing at all** — no header, no empty state.
-    /// The same rule row I chose for the section below and for the same reason, which holds harder
-    /// here: every record written before row E has no stored result, so this is the common path on
-    /// day one rather than an edge, and an empty state would tell every one of those users that
-    /// their task produced nothing. `TaskDetailPresentation.resultText(for:)` is where both
-    /// histories — no result kept, and a result that was empty — become one `nil`, so there is no
-    /// branch here that could drift apart.
-    ///
-    /// The text scrolls rather than clips past the height the sheet reserved for it. See
-    /// `TaskDetailPresentation.resultLineCount(for:)` for why that height is an estimate and why
-    /// both ways of being wrong are mild.
-    @ViewBuilder
-    private var resultSection: some View {
-        if let resultText = TaskDetailPresentation.resultText(for: record) {
-            SettingsDivider()
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(TaskDetailPresentation.resultSectionTitle)
-                    .font(SonnyType.settingsSectionLabel)
-                    .foregroundStyle(SonnyTheme.text)
-
-                ScrollView {
-                    Text(resultText)
-                        .font(SonnyType.body)
-                        .foregroundStyle(SonnyTheme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(height: TaskDetailPresentation.resultTextHeight(for: resultText))
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 14)
-        }
-    }
-
-    /// The action journal for this task, when it ran a screen-control session (row I, SONNY-96).
-    ///
-    /// **Read-only, and only what actually happened.** Row I made the records exist and render;
-    /// row D adds the delete beside them.
-    ///
-    /// **A task with nothing to show here renders nothing at all — no header, no empty state.** Row
-    /// I's version of this comment already argued that for one case: an empty state would imply a
-    /// session that did nothing rather than no session. Row D widens it, and the reason is
-    /// different and stronger. There are now three ways to arrive with nothing to show — the task
-    /// never ran a session, its session was deleted, or its session aged out at the journal's cap —
-    /// and **they must be one rendering, not three.** The product cannot honestly tell the last two
-    /// apart, the no-explanatory-copy rule forbids a sentence explaining the difference, and a
-    /// tombstone would tell the user something they already know. `TaskScreenRecordState.none` is
-    /// where all three land, so there is no branch here that could drift apart.
-    ///
-    /// A load failure is deliberately *not* one of them: an unreadable journal is a real problem
-    /// the user is entitled to see, and it keeps the load-failure wording it has always had.
-    @ViewBuilder
-    private var visionSessionSection: some View {
-        if TaskDeletePresentation.showsScreenRecordSection(screenRecord) {
-            SettingsDivider()
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(TaskDeletePresentation.screenRecordSectionTitle)
-                        .font(SonnyType.settingsSectionLabel)
-                        .foregroundStyle(SonnyTheme.text)
-
-                    Spacer(minLength: 12)
-
-                    if TaskDeletePresentation.showsScreenRecordDeleteAction(screenRecord) {
-                        Button(TaskDeletePresentation.screenRecordActionLabel) {
-                            showScreenRecordDeleteConfirmation = true
-                        }
-                        .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                        .sonnyPointerCursor()
-                        .accessibilityLabel(TaskDeletePresentation.screenRecordActionLabel)
-                        .help(TaskDeletePresentation.screenRecordActionLabel)
-                        .confirmationDialog(
-                            TaskDeletePresentation.screenRecordConfirmationTitle,
-                            isPresented: $showScreenRecordDeleteConfirmation,
-                            titleVisibility: .visible
-                        ) {
-                            Button(
-                                TaskDeletePresentation.screenRecordConfirmButtonLabel,
-                                role: .destructive,
-                                action: onDeleteScreenRecord
-                            )
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text(TaskDeletePresentation.screenRecordConfirmationMessage)
-                        }
-                    }
-                }
-
-                if case .unreadable(let journalLoadFailure) = screenRecord {
-                    // A load failure is a real, visible problem and gets the load-failure wording,
-                    // never silently-empty state — the repo's own rule, and the difference matters
-                    // more here than most places: an empty journal and an unreadable one are very
-                    // different things to tell someone about their own screen.
-                    Text(journalLoadFailure)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if case .present(let session) = screenRecord {
-                    Text("\(session.appDisplayName) — \(session.entries.count) action\(session.entries.count == 1 ? "" : "s")")
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(session.entries.enumerated()), id: \.offset) { _, entry in
-                                visionEntryRow(entry)
-                                SettingsDivider()
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 180)
-                }
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 14)
-        }
-    }
-
-    /// The sheet's footer: what you can do with this task.
-    ///
-    /// **"Delete task" sits here rather than beside the screen-record action**, so the two are never
-    /// mistaken for a pair of similar buttons: one acts on the whole receipt and lives at its foot,
-    /// the other acts on the section it sits inside.
-    ///
-    /// **"Run again" is at the leading edge and the delete at the trailing one, with the whole
-    /// footer between them** (row E, SONNY-149). Same reasoning one level up: an ordinary action and
-    /// a destructive one adjacent to each other, in the same row-action shape, differing only in
-    /// tint, is a misclick waiting to happen. The separation is what makes them read as two
-    /// different kinds of thing rather than two options.
-    private var deleteTaskFooter: some View {
-        HStack {
-            if TaskDetailPresentation.showsTaskActions(for: record) {
-                Button(TaskDetailPresentation.runAgainActionLabel) {
-                    // Closed only on a real start. A refused dispatch leaves the sheet open, because
-                    // closing it would hide the fact that nothing happened — and the refusal's own
-                    // trace lives at the dispatch choke point, not here.
-                    if viewModel.runTaskAgain(record) {
-                        dismiss()
-                    }
-                }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .sonnyPointerCursor()
-                // Hidden-versus-disabled goes the other way from the composer's chips: this control
-                // is the reason a user opened the sheet, and a control that vanishes while another
-                // task runs reads as a feature that broke. The workspace card's own
-                // `.disabled(isTaskInFlight)` is the precedent being followed.
-                .disabled(viewModel.isTaskInFlight)
-                .accessibilityLabel(TaskDetailPresentation.runAgainActionLabel)
-                .help(TaskDetailPresentation.runAgainActionLabel)
-
-                // Beside "Run again", not beside the delete: the two are what you can do *with*
-                // this task, and the delete is what you can do *to* it (row E, SONNY-150).
-                Button(FollowUpPresentation.actionLabel) {
-                    if viewModel.followUpOnTask(record) {
-                        dismiss()
-                    }
-                }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .sonnyPointerCursor()
-                .disabled(viewModel.isTaskInFlight)
-                .accessibilityLabel(FollowUpPresentation.actionLabel)
-                .help(FollowUpPresentation.actionLabel)
-            }
-
-            Spacer()
-
-            Button(TaskDeletePresentation.taskActionLabel) {
-                showTaskDeleteConfirmation = true
-            }
-            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-            .sonnyPointerCursor()
-            .accessibilityLabel(TaskDeletePresentation.taskActionLabel)
-            .help(TaskDeletePresentation.taskActionLabel)
-            .confirmationDialog(
-                TaskDeletePresentation.taskConfirmationTitle(for: record),
-                isPresented: $showTaskDeleteConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button(
-                    TaskDeletePresentation.taskConfirmButtonLabel,
-                    role: .destructive,
-                    action: onDeleteTask
-                )
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                // The sheet has already resolved the state, so unlike the row it can name the
-                // screen record only when there really is one.
-                if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
-                    Text(message)
-                }
-            }
-        }
-        .padding(.horizontal, 28)
-        .padding(.bottom, 20)
-    }
-
-    private func visionEntryRow(_ entry: VisionActionJournalEntry) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                Text(entry.actionType.capitalized)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                if !entry.targetDescription.isEmpty {
-                    Text(entry.targetDescription)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                // The tier and how it was authorized, together — "tier 3, you approved it" is the
-                // pair that makes the row answerable, and either alone is half a fact.
-                Text("\(entry.riskTier.displayName) · \(approvalText(entry.approvalState))")
-                    .font(SonnyType.micro)
-                    .foregroundStyle(entry.consequence == .advisory ? SonnyTheme.muted : SonnyTheme.warning)
-                    .lineLimit(1)
-            }
-            Text(entry.observationAfter)
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func approvalText(_ state: VisionActionJournalEntry.ApprovalState) -> String {
-        switch state {
-        case .ranWithoutAsking:
-            return "ran without asking"
-        case .approved:
-            return "you approved it"
-        case .coveredByEarlierApproval:
-            return "covered by your earlier approval"
-        }
-    }
-
-    private func detailRow(label: String, value: String) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(label)
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.muted)
-                .frame(width: 90, alignment: .leading)
-            Text(value)
-                .font(SonnyType.itemTitle)
-                .foregroundStyle(SonnyTheme.text)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 11)
     }
 }
 
@@ -2445,7 +2642,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         let difference = summary.completedThisWeek - summary.previousWeekCompleted
         return Self(
             id: "completed-this-week",
-            label: "Completed This Week",
+            label: "Completed this week",
             value: "\(summary.completedThisWeek)",
             delta: deltaCountText(difference),
             isPositiveDelta: difference > 0
@@ -2458,7 +2655,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         let difference = currentPercent - previousPercent
         return Self(
             id: "completion-rate",
-            label: "Completion Rate",
+            label: "Completion rate",
             value: "\(currentPercent)%",
             delta: deltaPercentText(difference),
             isPositiveDelta: difference > 0
@@ -2477,7 +2674,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         }
         return Self(
             id: "current-streak",
-            label: "Current Streak",
+            label: "Current streak",
             value: "\(days) day\(days == 1 ? "" : "s")",
             delta: delta,
             // Always neutral, never green — unlike the other 2 cards, this delta isn't a
@@ -2593,7 +2790,9 @@ private extension Array {
     }
 }
 
-private extension String {
+/// Not `private` since row 11 (the founders' ask of 2026-09-09): `TaskReceiptView.swift`'s receipt
+/// title reads a command the same way the row beside it does.
+extension String {
     /// Capitalizes only the first character, leaving the rest of the string untouched — unlike
     /// `.capitalized`, which would incorrectly title-case every word of a typed command sentence.
     /// Applied only where a raw command is displayed as a row title; the stored value itself is
@@ -2602,7 +2801,9 @@ private extension String {
         guard let first else { return self }
         return first.uppercased() + dropFirst()
     }
+}
 
+private extension String {
     /// Simple word-boundary truncation for row display — an interim measure (2026-07-18) while
     /// real AI-based command summarization (the way a chat app auto-titles a conversation) is
     /// tracked as a backend gap in docs/sonny-ui-backend-gaps.md. Breaks at the last space before
@@ -2756,6 +2957,12 @@ struct WorkspaceCardPresentation: Equatable {
     let taskCountText: String
     let appIcons: [WorkspaceAppIconPresentation]
     let urlsText: String?
+
+    /// The label the card's more-actions menu carries, so it names its subject rather than reading
+    /// as a bare "More actions" everywhere (overflow lane, founder ask 2026-09-09). A computed
+    /// property rather than a literal in the view body for the same reason `markAsTeamAccessibilityLabel`
+    /// exists on `WorkspaceDetailPresentation`: it is assertable without a SwiftUI inspection harness.
+    var moreActionsAccessibilityLabel: String { "More actions for \(name)" }
 
     @MainActor
     init(
@@ -3031,13 +3238,17 @@ struct WorkspaceDetailPresentation: Equatable {
 private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var selectedRoutine: StoredRoutine?
+    // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
+    // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
+    @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var sections: [RoutineCadenceSection] {
         RoutineGrouping.groupedByCadence(routines: viewModel.savedRoutines)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Routines")
 
             VStack(spacing: 0) {
@@ -3046,10 +3257,7 @@ private struct RoutinesView: View {
                     actionTitle: "New routine",
                     action: beginNewRoutine
                 )
-
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
                 if viewModel.savedRoutines.isEmpty {
                     // **The unreadable case reaches this page too** (PR #110 fix-round review).
@@ -3066,11 +3274,14 @@ private struct RoutinesView: View {
                             ? "repeat"
                             : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
                         title: MemoryDeletionCopy.emptyStateTitle(for: .routines, readability: readability),
-                        message: MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: readability)
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: readability),
+                        action: readability == .readable
+                            ? CollectionEmptyState.Action(title: "New routine", run: beginNewRoutine)
+                            : nil
                     )
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: density.rowGap) {
                             // Cadence-grouped per `11-MainAppRoutines.svg`, which has Daily /
                             // Weekly / Monthly headings with counts rather than one flat list.
                             ForEach(sections) { section in
@@ -3090,12 +3301,7 @@ private struct RoutinesView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
 
             // **Watchers live here rather than in Memory** (founder decision, recorded on
             // SONNY-236 and SONNY-109): Memory is what Sonny remembers, a live watcher is what
@@ -3130,14 +3336,28 @@ private struct RoutinesView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .sheet(item: $selectedRoutine) { routine in
             RoutineDetailView(routine: routine, viewModel: viewModel)
         }
+        .onAppear {
+            // Catches a request that arrived while this page was not mounted, the same reason
+            // `TasksFoundationView`'s own `onAppear` calls its consumer.
+            consumeRoutineOpenRequest()
+        }
+        .onChange(of: commands.routineToOpen) { _, _ in
+            // Catches a request that arrives while this page already is mounted.
+            consumeRoutineOpenRequest()
+        }
+    }
+
+    /// Answers a pending jump-to request for a routine, if there is one. Cleared either way, for
+    /// `consumeTaskDetailRequest`'s reason: a request naming a routine that no longer exists has
+    /// still been answered, and leaving it set would strand a value nothing else clears.
+    private func consumeRoutineOpenRequest() {
+        guard let requestedID = commands.routineToOpen else { return }
+        selectedRoutine = viewModel.savedRoutines.first { $0.id == requestedID }
+        commands.routineToOpen = nil
     }
 
     // Command Center has no composer of its own — pre-fill the command and bring the widget
@@ -3154,18 +3374,16 @@ private struct RoutinesView: View {
 /// per-row action of its own.
 private struct WatchingCollection: View {
     @ObservedObject var viewModel: AgentViewModel
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: density.rowGap) {
             // No action title: there is no "New watcher" button, because Command Center has no
             // composer — a watcher is started by asking, the same way a routine's own New button
             // pre-fills the widget rather than creating anything here. Offering a button that only
             // pre-fills a sentence would suggest this page can start one.
             CollectionHeader(title: "Watching")
-
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
             ForEach(Array(viewModel.standingWatchers.enumerated()), id: \.element.id) { index, watcher in
                 StandingWatcherRow(
@@ -3176,12 +3394,8 @@ private struct WatchingCollection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
+        .sonnyCard()
     }
 }
 
@@ -3189,50 +3403,44 @@ private struct StandingWatcherRow: View {
     let presentation: StandingWatcherRowPresentation
     let isLast: Bool
     let stop: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    // A glyph rather than the routine row's blank square, so the two rows on this
-                    // page are told apart at a glance without a second colour token.
-                    Image(systemName: "eye")
-                        .font(SonnyType.icon(13, weight: .medium))
-                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.subject)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                Button("Stop", action: stop)
-                    .buttonStyle(CommandCenterRowActionStyle())
-                    // **Named, not bare** — a list of identical "Stop" buttons is a list a screen
-                    // reader cannot tell apart, which is the property SONNY-378 records for the
-                    // Remove buttons on the approved-apps list.
-                    .accessibilityLabel("Stop watching \(presentation.subject)")
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                // A glyph rather than the routine row's blank square, so the two rows on this
+                // page are told apart at a glance without a second colour token.
+                Image(systemName: "eye")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
+            .frame(width: 30, height: 30)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.subject)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            Button("Stop", action: stop)
+                .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
+                // **Named, not bare** — a list of identical "Stop" buttons is a list a screen
+                // reader cannot tell apart, which is the property SONNY-378 records for the
+                // Remove buttons on the approved-apps list.
+                .accessibilityLabel("Stop watching \(presentation.subject)")
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: density.scaled(44))
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -3241,99 +3449,84 @@ private struct RoutineRow: View {
     let isLast: Bool
     let setEnabled: (Bool) -> Void
     let openDetail: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(CommandCenterPalette.routineIconForeground)
-                        .frame(width: 12, height: 12)
-                }
-                .frame(width: 30, height: 30)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.name)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 14)
-
-                // The wireframe's `streak` layer: a 10pt #F2BE00 dot and the count beside it.
-                // Wired to real per-occurrence run history, never to `steps.count` — a step count
-                // does not decay the way a streak does, which is the documented prior mistake here.
-                if let streak = presentation.streak {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(SonnyTheme.warning)
-                            .frame(width: 10, height: 10)
-                        Text("\(streak)")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.warning)
-                    }
-                    .accessibilityLabel("\(streak) run streak")
-                }
-
-                // One slot, two mutually exclusive occupants. `nextRunText` returns nil for a
-                // disabled schedule, and a paused schedule is disabled — so this fills a slot the
-                // wireframe leaves empty in exactly that state rather than adding a line to a row
-                // whose 56pt height has room for neither. Warning colour is the row's existing
-                // one, already carried by the streak badge; no new token.
-                if presentation.isPaused {
-                    Text("Paused")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.warning)
-                        .lineLimit(1)
-                        .accessibilityLabel("Paused — needs your attention")
-                } else if let nextRun = presentation.nextRunText {
-                    Text(nextRun)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
-
-                // Replaces the old Run button, which was an original addition never in the
-                // wireframe — this slot is the toggle's. Running a routine by hand now lives in
-                // the detail view, which the row opens on tap.
-                if presentation.isScheduleable {
-                    // `set:` takes the closure inline rather than passing `setEnabled` directly:
-                    // the bare function reference converts to a `@Sendable` parameter and trips
-                    // Swift 6's data-race check, since the closure captures the main-actor view
-                    // model. Both this view and the handler are already main-actor isolated.
-                    Toggle("", isOn: Binding(
-                        get: { presentation.isEnabled },
-                        set: { isOn in setEnabled(isOn) }
-                    ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .tint(SonnyTheme.accent)
-                        .accessibilityLabel("Run \(presentation.name) on schedule")
-                }
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                Image(systemName: "repeat")
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
             }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: openDetail)
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight(cornerRadius: 0)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint("Opens routine details")
+            .frame(width: 30, height: 30)
 
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.name)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: SonnySpacing.md)
+
+            // The wireframe's `streak` layer, drawn with the shared badge component rather than a
+            // hand-rolled dot. Still wired to real per-occurrence run history, never to
+            // `steps.count` — a step count does not decay the way a streak does, which is the
+            // documented prior mistake here.
+            if let streak = presentation.streak {
+                SonnyBadge(text: "\(streak)", tone: .warning)
+                    .accessibilityLabel("\(streak) run streak")
+            }
+
+            // One slot, two mutually exclusive occupants. `nextRunText` returns nil for a
+            // disabled schedule, and a paused schedule is disabled — so this fills a slot the
+            // wireframe leaves empty in exactly that state rather than adding a line to a row
+            // whose 56pt height has room for neither.
+            if presentation.isPaused {
+                SonnyBadge(text: "Paused", tone: .warning)
+                    .accessibilityLabel("Paused, needs your attention")
+            } else if let nextRun = presentation.nextRunText {
+                SonnyBadge(text: nextRun, tone: .accent)
+            }
+
+            // Replaces the old Run button, which was an original addition never in the
+            // wireframe — this slot is the toggle's. Running a routine by hand now lives in
+            // the detail view, which the row opens on tap.
+            if presentation.isScheduleable {
+                // `set:` takes the closure inline rather than passing `setEnabled` directly:
+                // the bare function reference converts to a `@Sendable` parameter and trips
+                // Swift 6's data-race check, since the closure captures the main-actor view
+                // model. Both this view and the handler are already main-actor isolated.
+                Toggle("", isOn: Binding(
+                    get: { presentation.isEnabled },
+                    set: { isOn in setEnabled(isOn) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(SonnyTheme.accent)
+                    .accessibilityLabel("Run \(presentation.name) on schedule")
             }
         }
+        // Text sits at the page's usual `xl` inset; the highlight itself is inset only `sm` from
+        // the row's true edge, so the fill floats clear of the text on each side instead of
+        // hugging it (founder, 2026-09-10 — the same `TaskHistoryRow` shape this file already uses).
+        .padding(.horizontal, SonnySpacing.xl - SonnySpacing.sm)
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.control)
+        .padding(.horizontal, SonnySpacing.sm)
+        .frame(height: density.scaled(56))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: openDetail)
+        .sonnyPointerCursor()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens routine details")
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -3344,6 +3537,10 @@ private struct WorkspacesView: View {
     /// sheet's whole job is showing a boundary the user is editing, so it has to re-render when the
     /// edit lands. Looking the name up in `savedWorkspaces` on every render is what keeps it live.
     @State private var selectedWorkspaceName: SelectedWorkspaceName?
+    // The ⌘K jump-to palette's door into this page (phase 5), read the same two-door way
+    // `TasksFoundationView.consumeTaskDetailRequest` reads `taskDetailRequest`.
+    @EnvironmentObject private var commands: CommandCenterCommands
+    @Environment(\.sonnyDensity) private var density
 
     private var selectedWorkspace: StoredWorkspace? {
         guard let selectedWorkspaceName else {
@@ -3353,11 +3550,11 @@ private struct WorkspacesView: View {
     }
 
     private let columns = [
-        GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 14, alignment: .top)
+        GridItem(.adaptive(minimum: 300), spacing: SonnySpacing.md, alignment: .top)
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Workspaces")
 
             VStack(spacing: 0) {
@@ -3379,11 +3576,14 @@ private struct WorkspacesView: View {
                             ? "rectangle.3.group"
                             : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
                         title: MemoryDeletionCopy.emptyStateTitle(for: .workspaces, readability: readability),
-                        message: MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: readability)
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: readability),
+                        action: readability == .readable
+                            ? CollectionEmptyState.Action(title: "Create workspace", run: beginNewWorkspace)
+                            : nil
                     )
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: SonnySpacing.md) {
                             ForEach(Array(viewModel.savedWorkspaces.enumerated()), id: \.element.name) { index, workspace in
                                 WorkspaceCard(
                                     presentation: WorkspaceCardPresentation(
@@ -3404,17 +3604,14 @@ private struct WorkspacesView: View {
                                 )
                             }
                         }
-                        .padding(30)
+                        // No token in `SonnySpacing` sits at 30; `xxxl` (32) is the nearest and is
+                        // what this scroll inset now routes through.
+                        .padding(SonnySpacing.xxxl)
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(CommandCenterPalette.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .commandCenterPanel()
 
             CommandCenterAttentionPanel(viewModel: viewModel)
 
@@ -3428,11 +3625,7 @@ private struct WorkspacesView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .sheet(item: $selectedWorkspaceName) { selected in
             // Resolved from the live list, and dismissed rather than shown stale if the workspace
             // is gone — deleting from underneath an open sheet is reachable, since delete is on the
@@ -3463,6 +3656,13 @@ private struct WorkspacesView: View {
         }
         .onAppear {
             viewModel.refreshTaskHistory()
+            // Catches a jump-to request that arrived while this page was not mounted, the same
+            // reason `TasksFoundationView`'s own `onAppear` calls its consumer.
+            consumeWorkspaceOpenRequest()
+        }
+        .onChange(of: commands.workspaceToOpen) { _, _ in
+            // Catches a jump-to request that arrives while this page already is mounted.
+            consumeWorkspaceOpenRequest()
         }
     }
 
@@ -3474,6 +3674,17 @@ private struct WorkspacesView: View {
         return position % CommandCenterPalette.workspaceAvatarColors.count
     }
 
+    /// Answers a pending jump-to request for a workspace, if there is one. Cleared either way, for
+    /// `consumeTaskDetailRequest`'s reason: a request naming a workspace that no longer exists has
+    /// still been answered, and leaving it set would strand a value nothing else clears.
+    private func consumeWorkspaceOpenRequest() {
+        guard let requestedName = commands.workspaceToOpen else { return }
+        if viewModel.savedWorkspaces.contains(where: { $0.name == requestedName }) {
+            selectedWorkspaceName = SelectedWorkspaceName(name: requestedName)
+        }
+        commands.workspaceToOpen = nil
+    }
+
     // Command Center has no composer of its own — pre-fill the command and bring the widget
     // forward so the user finishes typing the workspace name there.
     private func beginNewWorkspace() {
@@ -3481,8 +3692,8 @@ private struct WorkspacesView: View {
     }
 }
 
-/// Identifiable wrapper so a workspace *name* can drive `.sheet(item:)`, for the same reason
-/// `TaskLogEntry` exists: the persisted model stays free of UI-layer conformances.
+/// Identifiable wrapper so a workspace *name* can drive `.sheet(item:)` without adding a UI-layer
+/// conformance to the persisted model itself.
 private struct SelectedWorkspaceName: Identifiable {
     let name: String
     var id: String { name }
@@ -3495,22 +3706,25 @@ private struct WorkspaceDetailUnavailableView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: SonnySpacing.md) {
+            Spacer(minLength: 0)
             Text(WorkspaceDetailPresentation.unavailableText(name: name))
-                .font(SonnyType.itemTitle)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.text)
                 .multilineTextAlignment(.center)
 
             Button("Close") {
                 dismiss()
             }
-            .buttonStyle(CommandCenterRowActionStyle())
+            .buttonStyle(SonnyButtonStyle(tone: .secondary))
             .keyboardShortcut(.cancelAction)
+            Spacer(minLength: 0)
         }
-        .padding(28)
-        .frame(width: 460, height: 200)
-        .background(SonnyTheme.ink)
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .padding(SonnySpacing.xxl)
+        // `sonnyDialogFrame` only offers three sizes (480×360 / 560×520 / 860×600); `.compact` is
+        // the nearest to this view's old hand-rolled 460×200 and is what it now routes through,
+        // rather than a fourth size for one rarely-reached fallback.
+        .sonnyDialogFrame(.compact)
     }
 }
 
@@ -3524,61 +3738,99 @@ private struct WorkspaceCard: View {
     let delete: () -> Void
     let openDetail: () -> Void
     @State private var showDeleteConfirmation = false
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceAvatar(name: presentation.name, color: accent)
 
             Text(presentation.name)
-                .font(SonnyType.avatar)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
-                .padding(.top, 14)
+                // No token sits at 14; `md` (12) is the nearest and reads the same as the old gap.
+                .padding(.top, SonnySpacing.md)
 
             teamTypeRow
-                .padding(.top, 2)
+                .padding(.top, SonnySpacing.xs)
 
             Text(presentation.taskCountText)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
-                .padding(.top, 3)
+                .padding(.top, SonnySpacing.xs)
 
             if let urlsText = presentation.urlsText {
                 Label(urlsText, systemImage: "link")
-                    .font(SonnyType.micro)
+                    .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.muted)
                     .lineLimit(1)
-                    .padding(.top, 12)
+                    .padding(.top, SonnySpacing.md)
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: SonnySpacing.md)
 
             HStack {
                 WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
-                // Labeled like the card's other controls, not icon-only. Delete stays *here* rather
-                // than moving into the detail sheet SONNY-41 added: the original reasoning was that
-                // building a detail view purely to host a delete button would invent a surface to
-                // solve a placement problem, and that argument survives its own premise changing. A
-                // detail view now exists — but it exists because a workspace's *boundary* is
-                // materially more content than a card can show, which is a reason delete never had.
-                // Moving delete into it would be the same invention in reverse: hiding a
-                // one-click destructive action one level deeper for symmetry alone.
-                Button {
-                    showDeleteConfirmation = true
-                } label: {
-                    Label("Delete", systemImage: "trash")
+
+                // The "started from its card" half of the founder binding decision. Now the card's
+                // one visible button and the surface's one primary — Open moved into the overflow
+                // menu below (founder ask, 2026-09-09: "remove the open button from each workspace
+                // sheet because, upon clicking anywhere inside a particular workspace sheet, it
+                // opens up the detailed view. Having an open button is pretty redundant."). New task
+                // starts nothing itself and hands the user a bound composer; it is not the same
+                // action as Open and stays reachable on its own. Deliberately *not* an Open-vs-Switch
+                // branch or an "Active" badge: those are the rejected persistent-active-workspace
+                // wireframe elements and stay unbuilt.
+                Button(action: beginTaskHere) {
+                    Text("New task")
                 }
-                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .buttonStyle(SonnyButtonStyle(tone: .primary, size: .small))
                 .disabled(isTaskInFlight)
-                .accessibilityLabel("Delete \(presentation.name)")
-                .help("Delete \(presentation.name)")
+                .accessibilityLabel(
+                    AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
+                )
+
+                // Open, Mark as team and Delete all live in the more-actions menu (founder ask,
+                // 2026-09-09: "Hamburger menu for all the extra fields in workspaces and memory
+                // especially for destructive actions like delete", extended the same day to Open
+                // itself). Open is not redundant with the card's tap-to-open-detail gesture — it
+                // launches the workspace's widget, the detail sheet does not — so it stays reachable
+                // rather than being dropped; it keeps the disabled predicate and the accessibility
+                // label the button on the face used to carry. Mark as team joins it: `teamTypeRow`
+                // below keeps only its label text for a solo workspace now that the affordance
+                // beside it lives in this menu instead.
+                SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
+                    Button(action: open) {
+                        Text("Open")
+                    }
+                    .disabled(isTaskInFlight)
+                    .accessibilityLabel("Open \(presentation.name)")
+
+                    if presentation.isDefaultTeamType {
+                        Button(action: markAsTeam) {
+                            Text("Mark as team")
+                        }
+                        .disabled(isTaskInFlight)
+                        .accessibilityLabel("Mark \(presentation.name) as a team workspace")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        showDeleteConfirmation = true
+                    } label: {
+                        Text("Delete workspace")
+                    }
+                    .disabled(isTaskInFlight)
+                    .accessibilityLabel("Delete \(presentation.name)")
+                }
                 .confirmationDialog(
-                    "Delete “\(presentation.name)”?",
+                    "Delete \(presentation.name)?",
                     isPresented: $showDeleteConfirmation,
                     titleVisibility: .visible
                 ) {
-                    Button("Delete Workspace", role: .destructive) {
+                    Button("Delete workspace", role: .destructive) {
                         delete()
                     }
                     Button("Cancel", role: .cancel) {}
@@ -3587,50 +3839,23 @@ private struct WorkspaceCard: View {
                     // readable (manual pass, 2026-07-30).
                     Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
                 }
-
-                // The "started from its card" half of the founder binding decision. Sits beside
-                // Open rather than replacing or branching it — Open still runs the workspace in one
-                // click, this one starts nothing and hands the user a bound composer. Deliberately
-                // *not* an Open-vs-Switch branch or an "Active" badge: those are the rejected
-                // persistent-active-workspace wireframe elements and stay unbuilt.
-                Button(action: beginTaskHere) {
-                    Text("New task")
-                }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isTaskInFlight)
-                .accessibilityLabel(
-                    AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
-                )
-
-                Button(action: open) {
-                    Text("Open")
-                }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isTaskInFlight)
-                .accessibilityLabel("Open \(presentation.name)")
             }
         }
-        .padding(18)
-        // Wireframe's measured 190pt fits the no-saved-URL case; the 36pt avatar (replacing an
-        // 18pt icon stack in this slot) plus a populated `urlsText` row together exceed that
-        // budget, which `.clipShape` below would silently cut off the footer instead of growing
-        // the card. Worst case (empty icon-stack fallback + urlsText + full teamTypeRow) measures
-        // ~209pt via actual Inter line-height metrics — 216 leaves real margin, not a ~1pt one.
-        .frame(maxWidth: 356, minHeight: 190, maxHeight: 216, alignment: .topLeading)
-        .background(CommandCenterPalette.cardSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
-                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        .padding(density.cardInset)
+        // Wireframe's measured 190pt fits the no-saved-URL case; kept as the card's floor. The
+        // fixed 356pt width and 216pt height ceiling are gone — the grid's adaptive column now
+        // decides width, and content decides height rather than clipping against a hand-measured
+        // worst case.
+        .frame(maxWidth: .infinity, minHeight: density.cardMinHeight, alignment: .topLeading)
+        .sonnyCard()
         // Whole-card tap opens the detail sheet, matching the routine row's `openDetail` gesture.
-        // Applied *after* `.clipShape` so the hit area is the card's real rounded bounds, and it
-        // collides with none of the four controls above — a SwiftUI `Button` consumes its own tap
-        // before an ancestor gesture sees it, which is what keeps Delete, New task, Open and Mark
-        // as team working unchanged. Purely additive: no existing affordance moved or changed.
-        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        // The hit area is the card's own rounded bounds; a SwiftUI `Button` consumes its own tap
+        // before an ancestor gesture sees it, which is what keeps Delete, New task and Open
+        // working unchanged. Purely additive: no existing affordance moved or changed.
+        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
         .onTapGesture(perform: openDetail)
         .sonnyPointerCursor()
+        .sonnyHoverHighlight(cornerRadius: SonnyRadius.card)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens workspace details")
     }
@@ -3643,30 +3868,14 @@ private struct WorkspaceCard: View {
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         case .solo:
-            HStack(spacing: 4) {
-                // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
-                // `.caption` applied uniformly across the row rather than leaving the "Mark as
-                // team" affordance (a real Sonny feature, no wireframe equivalent) at the old 11px.
-                Text("Just you")
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.muted)
-
-                if presentation.isDefaultTeamType {
-                    Text("·")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Button(action: markAsTeam) {
-                        Text("Mark as team")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .sonnyPointerCursor()
-                    .sonnyHoverHighlight(cornerRadius: 3)
-                    .accessibilityLabel("Mark \(presentation.name) as a team workspace")
-                }
-            }
+            // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
+            // `.caption` applied uniformly across the row. The "Mark as team" affordance that used
+            // to sit beside this text moved into the card's more-actions menu (overflow lane,
+            // 2026-09-09): the row now keeps only its label text, and the control lives in the menu
+            // above.
+            Text("Just you")
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
         }
     }
 }
@@ -3702,32 +3911,20 @@ private struct WorkspaceDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
+            SonnyDialogHeader(
+                title: presentation.name,
+                subtitle: "\(presentation.teamTypeText) · \(presentation.taskCountText)",
+                closeLabel: "Close workspace details"
+            ) {
+                dismiss()
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
 
-            header
-                .padding(.horizontal, 28)
-                .padding(.top, 4)
-                .padding(.bottom, 20)
+            identityRow
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
-                .padding(.horizontal, 28)
+                .padding(.horizontal, SonnySpacing.xxl)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -3745,20 +3942,14 @@ private struct WorkspaceDetailView: View {
                             .foregroundStyle(SonnyTheme.muted)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, SonnySpacing.lg)
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 20)
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.xl)
             }
         }
-        .frame(width: 460, height: 560, alignment: .top)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
         .sheet(item: $addingTo) { target in
             WorkspaceScopeAddView(
                 presentation: WorkspaceScopeAddPresentation(kind: target.kind, workspace: workspace),
@@ -3768,45 +3959,19 @@ private struct WorkspaceDetailView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+    /// The avatar and, for a solo workspace, the "Mark as team" affordance — split out of
+    /// `SonnyDialogHeader` because that shared header has no slot for either; the name and the
+    /// team-type/task-count line already moved into its title and subtitle above.
+    private var identityRow: some View {
+        HStack(alignment: .center, spacing: SonnySpacing.sm) {
             WorkspaceAvatar(name: presentation.name, color: accent)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(presentation.name)
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                    .lineLimit(2)
-
-                HStack(spacing: 4) {
-                    Text(presentation.teamTypeText)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Text("·")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    Text(presentation.taskCountText)
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-
-                    if presentation.isDefaultTeamType {
-                        Text("·")
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.muted)
-
-                        Button(action: markAsTeam) {
-                            Text("Mark as team")
-                                .font(SonnyType.caption)
-                                .foregroundStyle(SonnyTheme.accent)
-                        }
-                        .buttonStyle(.plain)
-                        .sonnyPointerCursor()
-                        .sonnyHoverHighlight(cornerRadius: 3)
-                        .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
-                    }
+            if presentation.isDefaultTeamType {
+                Button(action: markAsTeam) {
+                    Text("Mark as team")
                 }
+                .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
+                .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
             }
 
             Spacer(minLength: 0)
@@ -3814,7 +3979,7 @@ private struct WorkspaceDetailView: View {
     }
 
     private func sectionView(_ section: WorkspaceScopeSectionPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             // Label plus control, so it goes through the adaptive row rather than a fixed `HStack`
             // — a narrow, non-fullscreen Command Center is the case a hand-rolled row breaks in.
             SettingsAdaptiveControlRow {
@@ -3827,7 +3992,7 @@ private struct WorkspaceDetailView: View {
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(section.addAccessibilityLabel)
             }
@@ -3854,7 +4019,7 @@ private struct WorkspaceDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.top, 4)
+        .padding(.top, SonnySpacing.xs)
     }
 
     /// One stored entry, its removal control, and anything true about it that the value alone does
@@ -3870,7 +4035,7 @@ private struct WorkspaceDetailView: View {
     /// `.claude/rules/macagent-ui-conventions.md`, matching the section header beside it.
     private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {
         SettingsAdaptiveControlRow {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
                 // Icon *beside* the name, never instead of it (SONNY-65, founder ask 2026-08-07).
                 // The verbatim string stays because this sheet's recorded rationale is that a user
                 // can check an entry against the one a consent prompt named, and an icon is not
@@ -3880,13 +4045,13 @@ private struct WorkspaceDetailView: View {
                 // unbounded vertically), and a centred icon beside a two-line entry floats in the
                 // middle of nowhere. The 1pt nudge is optical — a 16pt square reads high against
                 // 13pt text sitting on its own cap height.
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: SonnySpacing.sm) {
                     if let nsImage = entry.appIcon?.icon {
                         Image(nsImage: nsImage)
                             .resizable()
                             .scaledToFit()
                             .frame(width: 16, height: 16)
-                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                             .padding(.top, 1)
                             // The name is already the row's accessible content, and the icon adds
                             // nothing a screen reader can use — same call the card's tiles make.
@@ -3926,7 +4091,11 @@ private struct WorkspaceDetailView: View {
             } label: {
                 Label("Remove", systemImage: "minus")
             }
-            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            // Quiet rather than red: removing one entry from the scope is a reversible edit of a
+            // list, and this branch keeps the danger tone for what deletes (the workspace itself,
+            // from its card). Settings' approved-app Remove stays red because it revokes trust
+            // rather than editing a list.
+            .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
             .disabled(isTaskInFlight)
             .accessibilityLabel(entry.removeAccessibilityLabel)
             .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
@@ -3952,9 +4121,7 @@ private struct WorkspaceScopeAddTarget: Identifiable {
 /// computed by `WorkspaceScopeAddPresentation` rather than written inline, because inline copy is
 /// copy no test can read — including "Already added" and the free-entry button's accessibility
 /// label, both of which were literals here until PR #40's review pointed at this sentence and
-/// showed it was false of exactly the picker's most-read string. The one literal left is
-/// `accessibilityLabel("Close")` on the dismiss button, matching the precedent every other sheet in
-/// this file already sets for that control.
+/// showed it was false of exactly the picker's most-read string.
 private struct WorkspaceScopeAddView: View {
     let presentation: WorkspaceScopeAddPresentation
     let isTaskInFlight: Bool
@@ -3964,33 +4131,12 @@ private struct WorkspaceScopeAddView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(presentation.title)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.text)
-
-                Spacer()
-
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
+            SonnyDialogHeader(title: presentation.title, closeLabel: "Close") {
+                dismiss()
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
 
             SettingsDivider()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, SonnySpacing.xxl)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -4007,21 +4153,15 @@ private struct WorkspaceScopeAddView: View {
 
                     freeEntry
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 18)
+                .padding(.horizontal, SonnySpacing.xxl)
+                .padding(.bottom, SonnySpacing.xl)
             }
         }
-        .frame(width: 420, height: 520, alignment: .top)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
     }
 
     private func categoryView(_ category: WorkspaceScopeAddPresentation.Category) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(category.title)
                 .font(SonnyType.eyebrow)
                 .foregroundStyle(SonnyTheme.muted)
@@ -4034,7 +4174,7 @@ private struct WorkspaceScopeAddView: View {
                 }
             }
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, SonnySpacing.md)
     }
 
     private func entryRow(_ entry: WorkspaceScopeAddPresentation.Entry) -> some View {
@@ -4057,7 +4197,7 @@ private struct WorkspaceScopeAddView: View {
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight)
                 .accessibilityLabel(entry.accessibilityLabel)
             }
@@ -4065,31 +4205,21 @@ private struct WorkspaceScopeAddView: View {
     }
 
     private var freeEntry: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(presentation.freeEntryTitle)
                 .font(SonnyType.eyebrow)
                 .foregroundStyle(SonnyTheme.muted)
 
             SettingsAdaptiveControlRow {
                 TextField(presentation.freeEntryPlaceholder, text: $typedValue)
-                    .textFieldStyle(.plain)
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.text)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(SonnyTheme.input)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: SonnyRadius.container)
-                            .stroke(SonnyTheme.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                    .sonnyTextField()
                     .onSubmit(submitTypedValue)
                     .accessibilityLabel(presentation.freeEntryTitle)
             } trailing: {
                 Button(action: submitTypedValue) {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                 .disabled(isTaskInFlight || presentation.dispatch(forTypedValue: typedValue) == nil)
                 .accessibilityLabel(presentation.freeEntryAddAccessibilityLabel)
             }
@@ -4123,7 +4253,7 @@ private struct WorkspaceScopeAddView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, SonnySpacing.md)
     }
 
     private func submitTypedValue() {
@@ -4165,13 +4295,13 @@ private struct WorkspaceAvatar: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
                 .fill(color.opacity(0.18))
             Text(WorkspaceAvatarInitial.from(name: name))
                 .font(SonnyType.avatar)
                 .foregroundStyle(color)
         }
-        .frame(width: 36, height: 36)
+        .frame(width: 32, height: 32)
         .accessibilityHidden(true)
     }
 }
@@ -4180,19 +4310,19 @@ private struct WorkspaceAppIconStack: View {
     let icons: [WorkspaceAppIconPresentation]
     let accent: Color
 
-    private let iconSize: CGFloat = 18
-    private let overlap: CGFloat = 10
+    private let iconSize: CGFloat = 20
+    private let overlap: CGFloat = 6
     private let maxVisible = 2
 
     var body: some View {
         if icons.isEmpty {
-            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+            RoundedRectangle(cornerRadius: SonnyRadius.control)
                 .fill(accent.opacity(0.18))
                 .overlay(
                     Image(systemName: "rectangle.3.group")
                         .foregroundStyle(accent)
                 )
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 32)
         } else {
             let visible = Array(icons.prefix(maxVisible))
             ZStack(alignment: .leading) {
@@ -4214,24 +4344,24 @@ private struct WorkspaceAppIconStack: View {
 
     @ViewBuilder
     private func iconTile(for icon: WorkspaceAppIconPresentation) -> some View {
-        // Wireframe (`13-MainAppWorkspaces.svg:233,236`) renders real app icons bare, full-bleed,
-        // with no background chip or border behind them — only the no-icon-resolved fallback
-        // needs a visible tile to sit inside.
+        // A resolved app icon renders bare: macOS icons carry their own shape and a ring drawn
+        // over one reads as a mistake, which is also what the wireframe draws
+        // (`13-MainAppWorkspaces.svg:233,236`). Only the fallback tile, which has no shape of its
+        // own, gets the chip and the hairline.
         if let nsImage = icon.icon {
             Image(nsImage: nsImage)
                 .resizable()
                 .scaledToFit()
                 .frame(width: iconSize, height: iconSize)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "app.dashed")
                 .foregroundStyle(SonnyTheme.muted)
                 .frame(width: iconSize, height: iconSize)
                 .background(SonnyTheme.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: SonnyRadius.control)
                         .stroke(SonnyTheme.cardBorder, lineWidth: 1)
                 )
                 .accessibilityHidden(true)
@@ -4325,6 +4455,10 @@ struct MemoryRowPresentation: Equatable {
     /// An empty row still has nothing to do. A row Sonny cannot fully read has: its count is short
     /// or zero because a file would not open, not because there is nothing in it.
     var canDelete: Bool { count > 0 || readability != .readable }
+
+    /// The label the row's more-actions menu carries, so it names its subject rather than reading
+    /// as a bare "More actions" (overflow lane, founder ask 2026-09-09).
+    var moreActionsAccessibilityLabel: String { "More actions for \(title)" }
 
     init(
         category: MemoryCategory,
@@ -4472,9 +4606,10 @@ private struct MemoryView: View {
 
     @State private var entriesCategory: MemoryCategory?
     @State private var deletionCategory: MemoryCategory?
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: density.sectionGap) {
             CommandCenterPageHeader(title: "Memory")
 
             masterPanel
@@ -4491,11 +4626,7 @@ private struct MemoryView: View {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
+        .commandCenterPageFrame()
         .onAppear {
             // The policy is re-read here rather than only at launch, so an administrator's change
             // lands without a relaunch once row 19 supplies a real provider.
@@ -4569,11 +4700,9 @@ private struct MemoryView: View {
                 .accessibilityLabel("Memory")
                 .disabled(viewModel.memorySettings.isDisabledByPolicy)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, SonnySpacing.lg)
 
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+            SettingsDivider()
 
             // §6.10 lists user preferences as a memory type; the founder's answer is that they are
             // the existing Settings surfaced here rather than a new store, so this row opens the
@@ -4585,29 +4714,21 @@ private struct MemoryView: View {
                 )
             } trailing: {
                 Button("Open settings", action: openSettings)
-                    .buttonStyle(CommandCenterRowActionStyle())
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, SonnySpacing.lg)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyCard()
     }
 
     private var collectionPanel: some View {
         VStack(spacing: 0) {
             CollectionHeader(title: "All memory")
-
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+                .sonnyDivider(SonnyTheme.border)
 
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: density.rowGap) {
                     // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
                     // groups — one flat stack of every row adopts the row idiom without the
                     // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
@@ -4630,9 +4751,7 @@ private struct MemoryView: View {
             }
 
             if viewModel.memoryDeletionStatusMessage != nil {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
+                SettingsDivider()
 
                 // **The control the founder's decision of 2026-08-23 asks for, beside the sentence
                 // rather than inside it.** "The file Sonny could not read is still on your Mac."
@@ -4643,7 +4762,7 @@ private struct MemoryView: View {
                 // Gated on the files rather than on the message's words: reading "is still on your
                 // Mac" out of the string would be a second place that has to agree with
                 // `MemoryDeletionCopy.outcome`.
-                HStack(spacing: 12) {
+                HStack(spacing: SonnySpacing.md) {
                     LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -4651,7 +4770,7 @@ private struct MemoryView: View {
                         Button("Reveal in Finder") {
                             viewModel.revealSetAsideFilesInFinder()
                         }
-                        .buttonStyle(CommandCenterRowActionStyle())
+                        .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
                         .accessibilityLabel(
                             MemoryDeletionCopy.revealAccessibilityLabel(
                                 fileCount: viewModel.setAsideFilesFromLastDelete.count
@@ -4660,17 +4779,12 @@ private struct MemoryView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                .padding(.horizontal, SonnySpacing.lg)
+                .padding(.vertical, SonnySpacing.md)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(CommandCenterPalette.collectionSurface)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .commandCenterPanel()
     }
 
     /// Where "View" goes, resolved through `MemoryRowDestination` so the answer is a value a test
@@ -4752,77 +4866,74 @@ private struct MemoryRow: View {
     let view: () -> Void
     let delete: () -> Void
     let setEnabled: (Bool) -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
-                        .fill(CommandCenterPalette.routineIconBackground)
-                    Image(systemName: presentation.systemImage)
-                        .font(SonnyType.icon(13, weight: .medium))
-                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
-                }
-                .frame(width: 30, height: 30)
+        HStack(spacing: SonnySpacing.md) {
+            ZStack {
+                RoundedRectangle(cornerRadius: SonnyRadius.control)
+                    .fill(SonnyTheme.accentSubtle)
+                Image(systemName: presentation.systemImage)
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
+                    .foregroundStyle(SonnyTheme.accent)
+            }
+            .frame(width: 28, height: 28)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(presentation.title)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(presentation.detailText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(presentation.title)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(presentation.detailText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.textTertiary)
+                    .lineLimit(1)
+            }
 
-                Spacer(minLength: 14)
+            Spacer(minLength: SonnySpacing.md)
 
+            // `SonnySettingsToggle` rather than a bare `Toggle`, for the same reason
+            // `SettingsToggleRow` reaches for it everywhere else in Settings: one named type is
+            // where the row's toggle chrome lives, so a future change to it changes every row at
+            // once. Its body is System A's native `.switch` now — nothing here still hand-rolls
+            // a knob. It leads the trailing group now, with the overflow menu at the very end
+            // (founder ask, 2026-09-09: the hamburger menu belongs last, after the toggle).
+            SonnySettingsToggle(isOn: Binding(
+                get: { presentation.isRecording },
+                set: { isOn in setEnabled(isOn) }
+            ))
+                .disabled(!presentation.canChangeRecording)
+                .accessibilityLabel("Remember \(presentation.title)")
+
+            // View and Delete both move off the row's face and into the more-actions menu
+            // (founder ask, 2026-09-09: "the 'view' option should also be inside the hamburger
+            // menu"). View leads, Delete follows a divider, matching the order the row's own
+            // labels always meant: look before you remove.
+            //
+            // Delete is deliberately *not* disabled while memory is off, by policy or by the
+            // master switch, exactly as the button it replaced was not: deleting what is already
+            // stored is the next thing someone who turned recording off wants, and an
+            // administrator's disable-memory policy is furthered by a delete rather than
+            // contradicted by one. Only an empty row has nothing to do.
+            //
+            // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
+            // because the file would not open, not because there is nothing in it, so gating on
+            // the count alone disabled the one control that repairs it at exactly the moment it
+            // was needed. The founder's recovery was deleting the file by hand in the Finder.
+            SonnyOverflowMenu(accessibilityLabel: presentation.moreActionsAccessibilityLabel) {
                 Button("View", action: view)
-                    .buttonStyle(CommandCenterRowActionStyle())
                     .accessibilityLabel("View \(presentation.title)")
 
-                // Deliberately *not* disabled while memory is off, by policy or by the master
-                // switch. Deleting what is already stored is the next thing someone who turned
-                // recording off wants, and an administrator's disable-memory policy is furthered by
-                // a delete rather than contradicted by one. Only an empty row has nothing to do.
-                //
-                // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
-                // because the file would not open, not because there is nothing in it, so gating on
-                // the count alone disabled the one control that repairs it at exactly the moment it
-                // was needed. The founder's recovery was deleting the file by hand in the Finder.
-                Button("Delete", action: delete)
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                Divider()
+
+                Button("Delete", role: .destructive, action: delete)
                     .disabled(!presentation.canDelete)
                     .accessibilityLabel("Delete \(presentation.title)")
-
-                // **`SonnySettingsToggle`, not the native `.switch` `RoutineRow` uses.** Two
-                // reasons, and the second is the one that settles it. First, this page shows a
-                // toggle in both of its panels, forty points apart; the master switch is a Settings
-                // row where `SonnySettingsToggle` is the established control, and a native
-                // system-rendered switch beside it reads as two design languages on one screen.
-                // Second, `SonnySettingsToggle` *is* System A's toggle —
-                // `docs/sonny-design-system-reference.md` §2.6 specifies it down to the knob shadow
-                // and calls that "the one shadow exception in System A, confined to this one
-                // control", which reusing the control honours and reimplementing it would not. A
-                // native switch is macOS chrome rather than a Sonny token, so the difference from
-                // `RoutineRow` is a difference from the deviation, not from the rule.
-                SonnySettingsToggle(isOn: Binding(
-                    get: { presentation.isRecording },
-                    set: { isOn in setEnabled(isOn) }
-                ))
-                    .disabled(!presentation.canChangeRecording)
-                    .accessibilityLabel("Remember \(presentation.title)")
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 56)
-
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
             }
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: density.scaled(44))
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -4874,7 +4985,7 @@ enum MemoryDeletionCopy {
             // confirmation in the app does — *and* a file it keeps. Replacing the first with the
             // second understated the press at exactly the moment it destroyed the most.
             return message(for: category)
-                + " Part of this can't be read — Sonny keeps that file instead of deleting it."
+                + " Part of this can't be read. Sonny keeps that file instead of deleting it."
         case .unreadable:
             return unreadableMessage(for: category)
         }
@@ -5194,6 +5305,9 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
     /// continue, and the row shows Delete alone, as it always has.
     var canContinue: Bool = false
 
+    /// The label the entry row's more-actions menu carries (overflow lane, founder ask 2026-09-09).
+    var moreActionsAccessibilityLabel: String { "More actions for \(title)" }
+
     /// The four list-backed types, rendered from the arrays `AgentViewModel` publishes.
     ///
     /// Built here rather than on the view model because it is presentation — the date formatter and
@@ -5328,6 +5442,7 @@ private struct MemoryEntriesSheet: View {
     let category: MemoryCategory
     @Binding var isPresented: Bool
     @State private var pendingDeletion: PendingEntryDeletion?
+    @Environment(\.sonnyDensity) private var density
 
     /// The row a confirmation is open for. Carries the position it was rendered at, because that is
     /// what `AgentViewModel.deleteMemoryEntry(in:at:)` takes — and carries the title so the dialog
@@ -5340,33 +5455,11 @@ private struct MemoryEntriesSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(category.title)
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-
-                Spacer()
-
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close \(category.title)")
+            SonnyDialogHeader(title: category.title, closeLabel: "Close \(category.title)") {
+                isPresented = false
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
 
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
+            SettingsDivider()
 
             if entries.isEmpty {
                 // The unreadable case is not the empty case, and this sheet is exactly where the
@@ -5381,7 +5474,7 @@ private struct MemoryEntriesSheet: View {
                 .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: density.rowGap) {
                         ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                             MemoryEntryRow(
                                 entry: entry,
@@ -5432,14 +5525,7 @@ private struct MemoryEntriesSheet: View {
         } message: {
             Text(MemoryDeletionCopy.entryMessage(for: category))
         }
-        .frame(width: 560, height: 460)
-        .background(SonnyTheme.ink)
-        .foregroundStyle(SonnyTheme.text)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sonnyDialogFrame(.regular)
     }
 
     private var entries: [MemoryEntryPresentation] {
@@ -5464,47 +5550,44 @@ private struct MemoryEntryRow: View {
     let canContinueNow: Bool
     let continueTask: () -> Void
     let delete: () -> Void
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.title)
-                        .font(SonnyType.bodyEmphasis)
-                        .foregroundStyle(SonnyTheme.text)
-                        .lineLimit(1)
-                    Text(entry.detail)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                        .lineLimit(1)
-                }
+        HStack(spacing: SonnySpacing.md) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
+                Text(entry.title)
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                Text(entry.detail)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+            }
 
-                Spacer(minLength: 14)
+            Spacer(minLength: SonnySpacing.md)
 
-                // The unfinished-task row's Continue (SONNY-282): the same 23pt row-action style as
-                // the Delete beside it, in the neutral tone the workspace card's non-destructive
-                // actions use, and the word the widget's tick carries as its tooltip. It is the one
-                // way to pick up a task the widget has been told to stop offering.
-                if entry.canContinue {
-                    Button(ResumeOfferPresentation.continueLabel, action: continueTask)
-                        .buttonStyle(CommandCenterRowActionStyle(tone: .neutral))
-                        .disabled(!canContinueNow)
-                        .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
-                }
+            // The unfinished-task row's Continue (SONNY-282): the same small row-action style as
+            // the Delete beside it, in the secondary tone the workspace card's non-destructive
+            // actions use, and the word the widget's tick carries as its tooltip. It is the one
+            // way to pick up a task the widget has been told to stop offering.
+            if entry.canContinue {
+                Button(ResumeOfferPresentation.continueLabel, action: continueTask)
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
+                    .disabled(!canContinueNow)
+                    .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
+            }
 
-                Button("Delete", action: delete)
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            // Delete moves off the row's face and into the more-actions menu, the same move the
+            // Memory row and the workspace card make (founder ask, 2026-09-09).
+            SonnyOverflowMenu(accessibilityLabel: entry.moreActionsAccessibilityLabel) {
+                Button("Delete", role: .destructive, action: delete)
                     .accessibilityLabel("Delete \(entry.title)")
             }
-            .padding(.horizontal, 20)
-            .frame(height: 52)
-
-            if !isLast {
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(height: 1)
-            }
         }
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: density.scaled(52))
+        .sonnyDivider(isLast ? Color.clear : SonnyTheme.cardBorder)
     }
 }
 
@@ -5515,27 +5598,31 @@ private struct CollectionHeader: View {
     /// the Routines and Workspaces call sites are unchanged.
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SonnySpacing.md) {
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
             Spacer()
             if let actionTitle, let action {
                 Button(action: action) {
                     Label(actionTitle, systemImage: "plus")
                 }
-                .buttonStyle(CommandCenterHeaderActionStyle())
+                .buttonStyle(SonnyButtonStyle(tone: .secondary, size: .small))
             }
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 24)
-        .frame(height: 36)
+        .padding(.horizontal, SonnySpacing.xl)
+        .frame(height: density.toolbarHeight)
     }
 }
 
-private struct CollectionEmptyState: View {
+// Internal rather than `private` (phase 5, navigation lane): `JumpToPaletteView.swift` renders this
+// for its no-results state, the same reason `TaskHistoryDateFormatter` above lost its `private` —
+// a shared view the rest of the target cannot name is the problem `SettingsAdaptiveControlRow` was
+// made internal for (SONNY-144).
+struct CollectionEmptyState: View {
     let systemImage: String
     let title: String
     let message: String
@@ -5545,104 +5632,48 @@ private struct CollectionEmptyState: View {
     /// icon and the tokens are identical, so what varies is the frame and nothing else — a second
     /// view would have been the same three lines with a different number in them, free to drift.
     var minHeight: CGFloat = 180
+    /// The page's own first action, offered where the list would be: "Ask Sonny" on an empty
+    /// Tasks page, "New routine" on Routines, "Create workspace" on Workspaces. A state that says
+    /// what to do reads as a beginning; one that only says what is missing reads as a dead end.
+    /// Nil for a search with no result or a store that cannot be read, where the sentence is the
+    /// whole answer.
+    var action: Action? = nil
+
+    struct Action {
+        let title: String
+        let run: () -> Void
+    }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: SonnySpacing.sm) {
             Image(systemName: systemImage)
-                .font(SonnyType.icon(20))
-                .foregroundStyle(SonnyTheme.muted)
+                .font(SonnyType.icon(SonnyMetrics.iconEmptyState, weight: .light))
+                .foregroundStyle(SonnyTheme.textTertiary)
+                .padding(.bottom, SonnySpacing.xs)
             Text(title)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.headline)
                 .foregroundStyle(SonnyTheme.text)
             Text(message)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
+                .frame(maxWidth: 320)
+            if let action {
+                Button(action.title, action: action.run)
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary))
+                    .padding(.top, SonnySpacing.sm)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: minHeight)
-        .padding(24)
+        .padding(SonnySpacing.xxl)
+        .accessibilityElement(children: .contain)
     }
 }
 
-private struct CommandCenterHeaderActionStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(SonnyType.itemTitle)
-            .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.7 : 0.92))
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(CommandCenterPalette.buttonSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight()
-            .opacity(isEnabled ? 1 : 0.46)
-    }
-}
-
-private struct CommandCenterRowActionStyle: ButtonStyle {
-    /// `.danger` carries the same treatment "Delete Local Data" and the routine panel's danger
-    /// buttons already use — danger-tinted label and border over the normal surface — at this
-    /// style's own row-action scale, rather than importing `SonnyButtonStyle`'s larger filled
-    /// block into a card footer built around 23pt controls.
-    enum Tone {
-        case neutral
-        case danger
-    }
-
-    @Environment(\.isEnabled) private var isEnabled
-    var tone: Tone = .neutral
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(SonnyType.microEmphasis)
-            .foregroundStyle(foreground.opacity(configuration.isPressed ? 0.68 : 0.92))
-            .padding(.horizontal, 11)
-            .frame(height: 23)
-            .background(CommandCenterPalette.buttonSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-            .sonnyPointerCursor()
-            .sonnyHoverHighlight()
-            .opacity(isEnabled ? 1 : 0.46)
-    }
-
-    private var foreground: Color {
-        switch tone {
-        case .neutral:
-            return SonnyTheme.text
-        case .danger:
-            return SonnyTheme.danger
-        }
-    }
-
-    private var border: Color {
-        switch tone {
-        case .neutral:
-            return SonnyTheme.cardBorder
-        case .danger:
-            return SonnyTheme.danger.opacity(0.45)
-        }
-    }
-}
-
+/// What is left of the page-local palette after the 2026-09-08 modernization: every surface and
+/// button now reads `SonnyTheme` directly, and the one thing this file decides on its own is which
+/// of three accents a workspace avatar gets.
 private enum CommandCenterPalette {
-    static let collectionSurface = SonnyTheme.collectionSurface
-    static let cardSurface = SonnyTheme.surfaceRaised
-    static let buttonSurface = SonnyTheme.surfaceRaised
-    // Flat #242E52 per the wireframe (not a translucent accent tint) — SonnyTheme.chartBarMuted
-    // is already exactly this hex, just previously unused here.
-    static let routineIconBackground = SonnyTheme.chartBarMuted
-    static let routineIconForeground = SonnyTheme.accent
     // Wireframe assigns each workspace card a distinct avatar color (`13-MainAppWorkspaces.svg`:
     // Personal=accent, Build in Public=warning, Client Work=success) rather than one fixed color
     // for every card — cycled by grid position, same pattern as Insights' workspace-breakdown swatches.
@@ -5654,16 +5685,42 @@ private struct CommandCenterPageHeader: View {
     var subtitle: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.pageTitle)
                 .foregroundStyle(SonnyTheme.text)
             if let subtitle {
                 Text(subtitle)
-                    .font(SonnyType.body)
+                    .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.muted)
             }
         }
+        .frame(height: SonnyMetrics.controlLarge, alignment: .leading)
+    }
+}
+
+/// The frame every Command Center page hangs inside: one inset from the window edge on all four
+/// sides, one gap between the title row and the panel, the canvas colour behind. A page that draws
+/// its own numbers here is a page that no longer lines up with its neighbours.
+private struct CommandCenterPageFrame: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(SonnySpacing.pageInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SonnyTheme.ink)
+    }
+}
+
+extension View {
+    func commandCenterPageFrame() -> some View {
+        modifier(CommandCenterPageFrame())
+    }
+
+    /// The bordered panel a page's scrolling content sits in. Clip first so scrolled content
+    /// respects the corner, then the shared surface behind it.
+    func commandCenterPanel() -> some View {
+        clipShape(RoundedRectangle(cornerRadius: SonnyRadius.card))
+            .sonnyPanel()
     }
 }
 
@@ -5703,36 +5760,31 @@ struct SettingsDialogView: View {
     /// Forwarded to Security & Access, which no longer builds its own — see that page for why
     /// (SONNY-137).
     @ObservedObject var screenAccessModel: ScreenAccessOnboardingModel
+    /// Forwarded to the Usage page, which reads the plan and the screen-control figures off it and
+    /// changes nothing on it — the same instance `CommandCenterView`'s account row observes.
+    @ObservedObject var accountModel: SonnyAccountModel
     @Binding var isPresented: Bool
     @State private var selection: SettingsSection = .preferences
+    @Environment(\.sonnyDensity) private var density
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
+        HStack(alignment: .top, spacing: 0) {
+            settingsSidebar
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    SonnyDialogCloseButton(accessibilityLabel: "Close Settings") {
+                        isPresented = false
+                    }
                 }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close Settings")
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-
-            HStack(alignment: .top, spacing: 0) {
-                settingsSidebar
-
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(width: 1)
-                    .frame(maxHeight: .infinity)
+                .padding(.horizontal, SonnySpacing.md)
+                .padding(.top, SonnySpacing.md)
 
                 ScrollView {
                     Group {
@@ -5742,7 +5794,7 @@ struct SettingsDialogView: View {
                         case .notifications:
                             SettingsNotificationsPage()
                         case .usage:
-                            SettingsUsagePage()
+                            SettingsUsagePage(viewModel: viewModel, accountModel: accountModel)
                         case .security:
                             SettingsSecurityAccessPage(
                                 viewModel: viewModel,
@@ -5752,124 +5804,76 @@ struct SettingsDialogView: View {
                             SettingsDataPage(viewModel: viewModel)
                         }
                     }
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 36)
+                    .padding(.horizontal, SonnySpacing.xxxl)
+                    .padding(.top, SonnySpacing.sm)
+                    .padding(.bottom, SonnySpacing.xxxl)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(SonnyTheme.collectionSurface)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SonnyTheme.ink)
         }
-        // Widened from an initial 760pt (2026-07-18 review): at 760pt, the content pane (dialog
-        // width minus the 226pt sidebar minus 80pt of padding) left "Use pointer cursors" too
-        // narrow to keep its description on one line, so it fell back to `SettingsAdaptiveControlRow`'s
-        // stacked layout while "Display full names" (a shorter description) stayed inline —
-        // an inconsistent, mismatched look across two rows in the same section.
-        .frame(width: 880, height: 620)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        // The wide dialog size: the content pane (dialog width minus the sidebar minus its padding)
+        // has to keep "Use pointer cursors" and its description on one line, or
+        // `SettingsAdaptiveControlRow` stacks that row while the shorter "Display full names" stays
+        // inline, which is the mismatched look the 2026-07-18 review caught at 760pt.
+        .sonnyDialogFrame(.wide)
     }
 
     private var settingsSidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: SonnySpacing.xs + 2) {
                 Image(systemName: "gearshape")
-                    .font(SonnyType.icon(12, weight: .medium))
+                    .font(SonnyType.icon(SonnyMetrics.iconRow, weight: .medium))
                 Text("Settings")
-                    .font(SonnyType.itemTitle)
+                    .font(SonnyType.headline)
             }
-            .foregroundStyle(SonnyTheme.muted)
-            .padding(.horizontal, 11)
-            .padding(.bottom, 2)
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, SonnySpacing.sm)
+            .frame(height: SonnyMetrics.controlLarge)
+            .padding(.bottom, SonnySpacing.sm)
 
             ForEach(SettingsSection.allCases) { section in
+                let selected = selection == section
                 Button {
                     selection = section
                 } label: {
                     Text(section.title)
-                        .font(SonnyType.body)
-                        .foregroundStyle(selection == section ? SonnyTheme.text : SonnyTheme.muted)
+                        .font(selected ? SonnyType.bodyEmphasis : SonnyType.body)
+                        .foregroundStyle(selected ? SonnyTheme.text : SonnyTheme.muted)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 11)
-                        .frame(height: 32)
+                        .padding(.horizontal, SonnySpacing.sm)
+                        .frame(height: density.navRowHeight)
                         .background(
-                            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                                .fill(selection == section ? SonnyTheme.surfaceRaised : Color.clear)
+                            RoundedRectangle(cornerRadius: SonnyRadius.control)
+                                .fill(selected ? SonnyTheme.fillSelected : Color.clear)
                         )
-                        .contentShape(Rectangle())
+                        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.control))
                 }
                 .buttonStyle(.plain)
                 .sonnyPointerCursor()
                 .sonnyHoverHighlight()
                 .accessibilityLabel(section.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
 
             Spacer()
         }
-        .padding(14)
-        .frame(width: 226, alignment: .topLeading)
+        .padding(.horizontal, SonnySpacing.md)
+        .padding(.vertical, SonnySpacing.lg)
+        .frame(width: 200, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.sidebar)
     }
 }
 
 struct SettingsDivider: View {
     var body: some View {
         Rectangle()
-            .fill(SonnyTheme.border)
+            .fill(SonnyTheme.cardBorder)
             .frame(height: 1)
-    }
-}
-
-/// Placeholder (2026-07-18) — a real, separate dialog from `SettingsDialogView`, but its content
-/// is deliberately undecided ("I will need to plan what it does later"). Reuses the same close-X
-/// chrome as the Settings dialog for visual consistency between the account row's two menu items.
-struct ProfileDialogView: View {
-    @Binding var isPresented: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button {
-                    isPresented = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(SonnyType.icon(11, weight: .semibold))
-                        .foregroundStyle(SonnyTheme.muted)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .sonnyPointerCursor()
-                .sonnyHoverHighlight(cornerRadius: 12)
-                .accessibilityLabel("Close Profile")
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Profile")
-                    .font(SonnyType.settingsContentTitle)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Not designed yet — check back soon.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(40)
-        }
-        .frame(width: 480, height: 360)
-        .background(SonnyTheme.ink)
-        .overlay(
-            RoundedRectangle(cornerRadius: SonnyRadius.container)
-                .stroke(SonnyTheme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
     }
 }
 
@@ -5879,7 +5883,7 @@ private struct SettingsPreferencesPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Preferences", subtitle: "Manage your preferences")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
@@ -5898,8 +5902,8 @@ private struct SettingsPreferencesPage: View {
                     isOn: $viewModel.usePointerCursors
                 )
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5913,8 +5917,24 @@ private struct SettingsPreferencesPage: View {
                     SettingsThemeDropdown()
                         .fixedSize(horizontal: true, vertical: false)
                 }
+
+                SettingsDivider()
+
+                // Founder ask, 2026-09-09: "Information density slider for all the menus in Sonny
+                // app." Lives under the same "Theme" block as the appearance picker — both are
+                // whole-window looks rather than a single feature's setting. The control itself is
+                // a segmented `Picker` rather than a slider — see `SettingsDensityPicker`'s doc
+                // comment for why, after the founders retired the third stop this phase.
+                SettingsAdaptiveControlRow {
+                    SettingsControlLabel(
+                        title: "Density",
+                        detail: "How much fits on screen at once."
+                    )
+                } trailing: {
+                    SettingsDensityPicker()
+                }
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
@@ -5933,7 +5953,7 @@ private struct SettingsSecurityAccessPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Security & Access", subtitle: "Review local readiness")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
@@ -5942,7 +5962,7 @@ private struct SettingsSecurityAccessPage: View {
             // line are this session's judgment under the page-by-page best-effort rule; the
             // control itself is the founder's wireframe, built in SonnyModeSegmentedControl.
             SettingsSectionBlock(title: "Mode") {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SonnyModeSegmentedControl(selection: $viewModel.interactionMode)
 
                     Text(viewModel.interactionMode.settingsDescription)
@@ -5950,10 +5970,10 @@ private struct SettingsSecurityAccessPage: View {
                         .foregroundStyle(SonnyTheme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -5977,13 +5997,13 @@ private struct SettingsSecurityAccessPage: View {
                     )
                 )
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
             SettingsSectionBlock(title: "Permission Readiness") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     PermissionReadinessRows(items: viewModel.permissionItems)
 
                     Button {
@@ -5991,13 +6011,13 @@ private struct SettingsSecurityAccessPage: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(CommandCenterRowActionStyle())
+                    .buttonStyle(SonnyButtonStyle(tone: .tertiary, size: .small))
                     .accessibilityLabel("Refresh permission readiness")
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -6014,10 +6034,10 @@ private struct SettingsSecurityAccessPage: View {
                     .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 96))
                     .accessibilityLabel("Set up screen access")
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
 
             SettingsDivider()
 
@@ -6034,7 +6054,7 @@ private struct SettingsSecurityAccessPage: View {
             // What has not changed is why the copy is shaped this way: it states the reach and the
             // one boundary, plainly, and neither is a toggle pretending to be a choice.
             SettingsSectionBlock(title: "Screen Control") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SettingsControlLabel(
                         title: "Which apps Sonny can control",
                         detail: "Sonny asks before controlling an app it has not been allowed to control, and remembers the ones you allow. Safe mode asks about every app; Power mode asks about none. It says which app it is controlling while it does, and you can stop it at any time."
@@ -6050,7 +6070,7 @@ private struct SettingsSecurityAccessPage: View {
 
                     SettingsControlLabel(
                         title: "Terminals, never",
-                        detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has — so this is not something you can turn on."
+                        detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has, so this is not something you can turn on."
                     )
 
                     SettingsControlLabel(
@@ -6058,9 +6078,9 @@ private struct SettingsSecurityAccessPage: View {
                         detail: "To act in an app, Sonny takes a picture of that app's window and sends it to its vision model. Passwords, keys and codes it can recognise are blacked out first. In Safe mode you see each picture before it is sent."
                     )
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
@@ -6093,7 +6113,7 @@ private struct SettingsSecurityAccessPage: View {
 /// **The first `ForEach` over a stored list on any Settings page**, which is why it follows an
 /// existing pattern instead of establishing one. The row is `WorkspaceDetailView`'s scope-entry row
 /// in its layout — `SettingsAdaptiveControlRow` with a trailing
-/// `CommandCenterRowActionStyle(tone: .danger)` — and never a hand-rolled `HStack`, which is the
+/// `SonnyButtonStyle(tone: .danger, size: .small)` — and never a hand-rolled `HStack`, which is the
 /// shape that caused the narrow-width character-wrapping bug that pattern exists to fix. It is
 /// deliberately *not* that row in what a press costs: `entryRow`'s Remove dispatches a task through
 /// `prepare → assessRisk → approval`, which is why that one is `.disabled(isTaskInFlight)`; this one
@@ -6169,8 +6189,7 @@ private struct ApprovedAppRevocationList: View {
                     Button(ApprovedAppRevocationPresentation.removeAllLabel) {
                         showRemoveAllConfirmation = true
                     }
-                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .sonnyPointerCursor()
+                    .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                     .accessibilityLabel(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
                     .help(ApprovedAppRevocationPresentation.removeAllAccessibilityLabel)
                 }
@@ -6261,7 +6280,7 @@ private struct ApprovedAppRevocationRow: View {
 
     var body: some View {
         SettingsAdaptiveControlRow {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: SonnySpacing.xs) {
                 Text(row.title)
                     .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.text)
@@ -6280,8 +6299,7 @@ private struct ApprovedAppRevocationRow: View {
             Button(ApprovedAppRevocationPresentation.removeLabel) {
                 showRemoveConfirmation = true
             }
-            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-            .sonnyPointerCursor()
+            .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
             .accessibilityLabel(row.removeAccessibilityLabel)
             .help(row.removeAccessibilityLabel)
         }
@@ -6313,12 +6331,12 @@ private struct SettingsDataPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Data", subtitle: "Manage Sonny's local data")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
             SettingsSectionBlock(title: "Local Data") {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: SonnySpacing.md) {
                     SettingsAdaptiveControlRow {
                         // Single trash icon now lives on the button itself — a second one here
                         // next to the label made the row read as too bold/heavy (2026-07-18).
@@ -6342,9 +6360,9 @@ private struct SettingsDataPage: View {
                         Button {
                             showDeleteLocalDataConfirmation = true
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label("Delete local data", systemImage: "trash")
                         }
-                        .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                        .buttonStyle(SonnyButtonStyle(tone: .danger))
                         // **`isDeletingLocalData` as well as `isRunning`** (SONNY-404, PR #207's
                         // cycle-3, F3). The press became asynchronous when the wipe started reaching
                         // the gateway, and it spans up to the client's whole multi-attempt budget on
@@ -6381,9 +6399,9 @@ private struct SettingsDataPage: View {
                             Button {
                                 showDeleteSetAsideFilesConfirmation = true
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label("Delete set-aside files", systemImage: "trash")
                             }
-                            .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                            .buttonStyle(SonnyButtonStyle(tone: .danger, size: .small))
                             // The wipe's condition, one row up, by founder decision (PR #117
                             // review, F3): a delete that can fail mid-run reports its failure on
                             // `errorMessage`, which outranks the task's result once the run ends.
@@ -6422,9 +6440,9 @@ private struct SettingsDataPage: View {
 
                     LocalDataDeletionStatusMessage(message: viewModel.localDataDeletionStatusMessage)
                 }
-                .padding(.vertical, 16)
+                .padding(.vertical, SonnySpacing.lg)
             }
-            .padding(.top, 24)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
@@ -6436,57 +6454,212 @@ private struct SettingsDataPage: View {
     }
 }
 
-/// Placeholder content (2026-07-18) — real content for this tab is pending direction on what it
-/// should actually show; see docs/sonny-ui-backend-gaps.md. Deliberately honest about having
-/// nothing configurable yet rather than inventing controls with no real behavior behind them.
+/// Six per-kind toggles over `SonnyNotificationPreferences` (phase 3 of the UI modernization —
+/// the placeholder this replaced said "nothing to configure yet", and that stopped being true the
+/// moment the preference existed to bind to). The rows follow `SonnyNotificationKind.allCases`; a
+/// new kind lands here by joining that enum.
 private struct SettingsNotificationsPage: View {
+    @EnvironmentObject private var preferences: SonnyNotificationPreferences
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Notifications", subtitle: "Manage how Sonny notifies you")
-                .padding(.bottom, 20)
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Nothing to configure yet")
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Sonny uses native macOS notifications today — there are no in-app notification preferences yet.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            SettingsSectionBlock(title: "Notify me when") {
+                ForEach(Array(SonnyNotificationKind.allCases.enumerated()), id: \.offset) { index, kind in
+                    SettingsToggleRow(
+                        title: kind.title,
+                        detail: kind.settingsDetail,
+                        isOn: Binding(
+                            get: { preferences.isEnabled(kind) },
+                            set: { preferences.setEnabled($0, for: kind) }
+                        )
+                    )
+
+                    if index < SonnyNotificationKind.allCases.count - 1 {
+                        SettingsDivider()
+                    }
+                }
             }
-            .padding(.top, 20)
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
 }
 
-/// Placeholder content (2026-07-18) — real content for this tab is pending direction on what it
-/// should actually show; see docs/sonny-ui-backend-gaps.md. Sonny already records approximate
-/// per-task usage (`TaskUsageRecorder`), but there's no aggregate summary view anywhere yet, and
-/// no credits/billing system to weigh it against — showing fabricated numbers here would be worse
-/// than showing nothing.
+/// The plan's own numbers, read-only, and this run's approximate usage while one is in flight.
+/// Nothing on this page changes a setting — unlike Preferences and Notifications beside it in the
+/// same sidebar — so every value here is a read off `accountModel` and `viewModel`, never a binding.
+///
+/// **The Plan section's three rows share their words with `SignInView`'s own account surface**
+/// (`ScreenControlUsagePresentation`) rather than inventing a second copy of them, and each row's
+/// guard mirrors that surface's: "Screen control" is absent, not zeroed, when there is no allowance
+/// to read (`SignInView.screenControlUsageRow`'s own reasoning — a failed read is a failure and
+/// never a number), and "Last top-up" is absent whenever there is no charge to format
+/// (`screenControlLastTopUpRow`'s guard). The auto-top-up switch itself stays off this page and on
+/// the Account dialog alone, by the same rule that keeps one control in one place.
 private struct SettingsUsagePage: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @ObservedObject var accountModel: SonnyAccountModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsPageTitle(title: "Usage", subtitle: "See how much you've used Sonny")
-                .padding(.bottom, 20)
+            SettingsPageTitle(title: "Usage", subtitle: "What your plan includes and what a task uses")
+                .padding(.bottom, SonnySpacing.xl)
 
             SettingsDivider()
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Usage summary coming soon")
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text)
-                Text("Sonny tracks approximate usage per task today, but a full summary isn't built yet.")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            SettingsSectionBlock(title: "Plan") {
+                planSectionContent
             }
-            .padding(.top, 20)
+            .padding(.top, SonnySpacing.xxl)
+            .padding(.bottom, SonnySpacing.lg)
+
+            SettingsDivider()
+
+            SettingsSectionBlock(title: "Task usage") {
+                taskUsageContent
+            }
+            .padding(.top, SonnySpacing.xxl)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
+        // The page reads the subscription and the allowance, and nothing else fetches them until
+        // the Account dialog opens; the same two refreshes that dialog runs on appear run here, so
+        // the page is right whichever the user opened first (this branch's second review, F1).
+        .task {
+            await accountModel.refreshSubscription()
+            await viewModel.refreshScreenControlAllowance()
+        }
+    }
+
+    /// **Every divider here is conditioned on the row that follows it, never bare** — "Screen
+    /// control" and "Last top-up" are each absent, not zeroed, when there is nothing to show
+    /// (mirroring `SignInView.screenControlUsageRow` and `screenControlLastTopUpRow`'s own guards),
+    /// so a divider that ran ahead of them unconditionally would end the section on a hairline with
+    /// nothing beneath it.
+    @ViewBuilder
+    private var planSectionContent: some View {
+        planRow
+
+        if let allowance = viewModel.screenControlAllowance {
+            SettingsDivider()
+            screenControlRow(allowance: allowance)
+
+            if let charge = allowance.lastTopUp,
+               let line = ScreenControlUsagePresentation.lastTopUpLine(charge) {
+                SettingsDivider()
+                lastTopUpRow(line: line)
+            }
+        }
+    }
+
+    private var planRow: some View {
+        SettingsAdaptiveControlRow {
+            usageLabel("Plan")
+        } trailing: {
+            if let subscription = accountModel.subscription {
+                SonnyBadge(text: subscription.plan.capitalized, tone: .accent)
+            } else {
+                Text("Signed out")
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+            }
+        }
+    }
+
+    private func screenControlRow(allowance: ScreenControlAllowance) -> some View {
+        let line = ScreenControlUsagePresentation.usageLine(allowance)
+        return SettingsAdaptiveControlRow {
+            usageLabel(ScreenControlUsagePresentation.label)
+        } trailing: {
+            Text(line)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .accessibilityLabel("\(ScreenControlUsagePresentation.label), \(line)")
+        }
+    }
+
+    private func lastTopUpRow(line: String) -> some View {
+        SettingsAdaptiveControlRow {
+            usageLabel(ScreenControlUsagePresentation.lastTopUpLabel)
+        } trailing: {
+            Text(line)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .accessibilityLabel("\(ScreenControlUsagePresentation.lastTopUpLabel), \(line)")
+        }
+    }
+
+    @ViewBuilder
+    private var taskUsageContent: some View {
+        let summary = viewModel.taskUsageSummary
+        // The summary lives for one task and stays until the next one starts, so this section
+        // reads as the last task's usage once a run has finished, and the words say so.
+        if summary.requestCount == 0 {
+            CollectionEmptyState(
+                systemImage: "chart.bar",
+                title: "No task yet",
+                message: "Usage appears here once a task runs.",
+                minHeight: 96
+            )
+        } else {
+            VStack(spacing: 0) {
+                usageRow(title: "Model requests") {
+                    usageNumber("\(summary.requestCount)")
+                }
+
+                SettingsDivider()
+
+                // The reported figure when the model reported one; otherwise the estimate, said to
+                // be one. `hasUsageDetails` is true for any usage at all, audio included, so it is
+                // not the discriminator here (the settings-pages lane's own finding).
+                usageRow(title: "Tokens") {
+                    if summary.reportedTotalTokens > 0 {
+                        usageNumber("\(summary.reportedTotalTokens)")
+                    } else {
+                        HStack(spacing: SonnySpacing.xs) {
+                            usageNumber("\(summary.estimatedTotalTokens)")
+                            Text("estimated")
+                                .font(SonnyType.body)
+                                .foregroundStyle(SonnyTheme.textTertiary)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(summary.estimatedTotalTokens) estimated")
+                    }
+                }
+
+                if summary.audioDurationSeconds > 0 {
+                    SettingsDivider()
+                    usageRow(title: "Voice") {
+                        usageNumber("\(Int(summary.audioDurationSeconds.rounded())) s")
+                    }
+                }
+            }
+        }
+    }
+
+    private func usageLabel(_ title: String) -> some View {
+        Text(title)
+            .font(SonnyType.body)
+            .foregroundStyle(SonnyTheme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func usageRow<Trailing: View>(title: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        SettingsAdaptiveControlRow {
+            usageLabel(title)
+        } trailing: {
+            trailing()
+        }
+    }
+
+    private func usageNumber(_ text: String) -> some View {
+        Text(text)
+            .font(SonnyType.body.monospacedDigit())
+            .foregroundStyle(SonnyTheme.text)
     }
 }
 
@@ -6507,7 +6680,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 18) {
+            HStack(alignment: .center, spacing: SonnySpacing.lg) {
                 leading
                     .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
 
@@ -6516,7 +6689,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: SonnySpacing.md) {
                 leading
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -6524,7 +6697,7 @@ struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, SonnySpacing.md)
     }
 }
 
@@ -6533,14 +6706,14 @@ private struct SettingsControlLabel: View {
     let detail: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: SonnySpacing.xs) {
             Text(title)
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
             Text(detail)
-                .font(SonnyType.body)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -6552,15 +6725,15 @@ private struct SettingsPageTitle: View {
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SonnySpacing.sm) {
             Text(title)
                 .font(SonnyType.settingsContentTitle)
                 .foregroundStyle(SonnyTheme.text)
             Text(subtitle)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         }
-        .padding(.bottom, 2)
+        .padding(.bottom, SonnySpacing.xs)
     }
 }
 
@@ -6579,7 +6752,7 @@ private struct SettingsSectionBlock<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: SonnySpacing.md) {
             Text(title)
                 .font(SonnyType.settingsSectionLabel)
                 .foregroundStyle(SonnyTheme.text)
@@ -6615,70 +6788,74 @@ struct SonnySettingsToggle: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                RoundedRectangle(cornerRadius: SonnyRadius.pill)
-                    .fill(isOn ? SonnyTheme.accent : SonnyTheme.surfaceRaised)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: SonnyRadius.pill)
-                            .stroke(isOn ? SonnyTheme.accent : SonnyTheme.cardBorder, lineWidth: 1)
-                    )
-
-                Circle()
-                    .fill(SonnyTheme.text)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 0)
-                    .padding(3)
-            }
-            .frame(width: 30, height: 20)
-        }
-        .buttonStyle(.plain)
-        .sonnyPointerCursor()
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.pill)
-        .accessibilityValue(isOn ? "On" : "Off")
+        Toggle("", isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(SonnyTheme.accent)
     }
 }
 
 /// Wireframe's rendered state (`10-MainAppSettings.svg`) is a single closed dropdown — only
 /// "Dark" ever appears as visible text; "Light"/a third option live in the CSS export's hidden
-/// expand-list, not as permanently visible swatches. A native `Menu` matches that affordance
-/// (closed by default, opens on click) rather than three always-visible buttons.
+/// expand-list, not as permanently visible swatches. A native menu-style `Picker` matches that
+/// affordance (closed by default, opens on click, its own disclosure indicator) rather than a
+/// hand-styled swatch — and, being fully native chrome rather than a custom label, it has none of
+/// the composite-label rendering bug documented on `profileRow`.
+/// The three appearances, bound to `SonnyAppearanceModel` from the window's environment; the
+/// change is visible the moment the menu closes, and it is stored for the next launch.
 private struct SettingsThemeDropdown: View {
+    @EnvironmentObject private var appearanceModel: SonnyAppearanceModel
+
     var body: some View {
-        Menu {
-            Button("Dark") {}
-            Button("Light (Soon)") {}
-                .disabled(true)
-            Button("System (Soon)") {}
-                .disabled(true)
-        } label: {
-            // No explicit trailing chevron here — `Menu` already renders its own native
-            // disclosure indicator, so an added one showed up as a second, redundant arrow
-            // (2026-07-18). "Aa" dropped too, per direct instruction — not needed.
-            HStack(spacing: 6) {
-                Text("Dark")
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.text)
-                Spacer(minLength: 8)
+        Picker("Interface theme", selection: $appearanceModel.appearance) {
+            ForEach(SonnyAppearance.allCases) { appearance in
+                Text(appearance.title).tag(appearance)
             }
-            .padding(.horizontal, 12)
-            .frame(width: 200, height: 37)
-            .background(
-                RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch)
-                    .fill(Color(red: 0x1D / 255, green: 0x1F / 255, blue: 0x24 / 255))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch)
-                    .stroke(Color(red: 0x2A / 255, green: 0x2C / 255, blue: 0x31 / 255), lineWidth: 1)
-            )
         }
-        .menuStyle(.borderlessButton)
-        // Applied after `.menuStyle`, not inside the label — wrapping the whole `Menu` rather
-        // than adding another view inside its label's HStack, to stay well clear of the
-        // composite-label rendering issue documented on `profileRow`.
-        .sonnyHoverHighlight(cornerRadius: SonnyRadius.themeSwatch)
-        .accessibilityLabel("Interface theme, Dark selected. Light and System coming soon.")
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .tint(SonnyTheme.accent)
+        .frame(width: SonnyMetrics.settingsControlWidth)
+        .accessibilityLabel("Interface theme, \(appearanceModel.appearance.title) selected")
+    }
+}
+
+/// The density control (founder ask, 2026-09-09): a two-stop preference, bound to
+/// `SonnyDensityModel` from the window's environment. Phase 11 shipped this as a `Slider` sized
+/// for three stops; the founders removed the third (Compact) the same round, and a two-stop
+/// slider reads as broken — a thumb that only ever sits at one end or the other looks like a
+/// toggle pretending to be a slider. A segmented `Picker` is what a two-way choice like this one
+/// looks like natively, and it reads its titles directly off `SonnyDensity.allCases` rather than
+/// spelling them out a second time, so a stop could never silently go unlabeled.
+private struct SettingsDensityPicker: View {
+    @EnvironmentObject private var densityModel: SonnyDensityModel
+
+    var body: some View {
+        Picker(
+            "",
+            selection: Binding(
+                get: { densityModel.density },
+                set: { densityModel.density = $0 }
+            )
+        ) {
+            ForEach(SonnyDensity.allCases) { stop in
+                Text(stop.title).tag(stop)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .tint(SonnyTheme.accent)
+        // Its own width first, never narrower than the column: two segments reading "Default" and
+        // "Comfortable" need about the column's width already, and a fixed frame would clip the
+        // longer label rather than let the control grow (phase 12 review, F4).
+        .fixedSize()
+        .frame(minWidth: SonnyMetrics.settingsControlWidth, alignment: .leading)
+        // On the picker itself, never on a collapsed element around it: collapsing the subtree
+        // would discard the control's own adjustable trait (phase 11 review, F1, which this
+        // control keeps following even though a segmented `Picker` already exposes each segment
+        // as its own element).
+        .accessibilityLabel("Density")
+        .accessibilityValue(densityModel.density.title)
     }
 }
