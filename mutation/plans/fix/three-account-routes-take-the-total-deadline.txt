@@ -12,8 +12,10 @@
 # Killers expected, all in test/account-deadline.test.ts, as PR #235's first review measured them by
 # hand (the first draft of this header undercounted M3, M4 and M6): M1 by the entitlements route
 # test; M2 by the credits GET route test; M3 by the consent PUT route test's band assertion and the
-# two-leases test; M4 by the two-leases test, the per-lease unit test and the refuses-before-leasing
-# test; M5 by the refuses-before-leasing unit test; M6 by the bare-lease unit test, the charge-route
+# two-leases test; M4 by the two-leases test, the per-lease unit test and the pool-wait test (PR
+# #235's second review measured this after the pool-wait test joined the file; the first correction
+# of this line named the refuses-before-leasing test instead, which never reaches M4's line); M5 by
+# the refuses-before-leasing unit test; M6 by the bare-lease unit test, the charge-route
 # decision test and the two-leases test (the gate's admit lease, outside any budget, gains a SET
 # under M6 and breaks that test's exact sequence); M7 by the pool-wait test.
 
