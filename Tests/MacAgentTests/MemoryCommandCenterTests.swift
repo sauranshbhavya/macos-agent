@@ -1433,6 +1433,40 @@ struct MemoryCommandCenterTests {
         #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
     }
 
+    /// A Memory-row control against an unreadable file (PR #233's third review): the shared write
+    /// helper behind seven Delete and Forget controls reports the decrypt sentence with the way out —
+    /// this is the Memory page itself, the place the sentence sends the user.
+    @Test
+    func aMemoryRowDeleteAgainstAnUnreadableFileNamesTheWayOut() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+
+        fixture.viewModel.deleteSnippet(StoredSnippet(trigger: ";sig", expansion: "signature"))
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.hasPrefix("Could not delete this snippet: A local data file exists but could not be decrypted or decoded."))
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
+    /// A routine delete has a catch of its own rather than the shared helper, and reads the same way.
+    @Test
+    func aRoutineDeleteAgainstAnUnreadableFileNamesTheWayOut() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.command = "teach sonny a routine called morning"
+        fixture.viewModel.start(prebuiltPlan: planSavingRoutine(named: "Morning"))
+        try await fixture.waitUntilIdle()
+        let routine = try #require(try fixture.routineStore.findRoutine(named: "Morning"))
+        try fixture.writeUnreadableFile(at: fixture.routineStore.fileURL)
+
+        fixture.viewModel.deleteRoutine(routine)
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.hasPrefix("Could not delete routine: A local data file exists but could not be decrypted or decoded."))
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
     /// The control: a failure that is not a file keeps its own sentence and gains no door.
     @Test
     func aTaskThatFailsForAnotherReasonNamesNoWayOut() async throws {

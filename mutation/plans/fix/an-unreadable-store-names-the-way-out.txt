@@ -8,7 +8,9 @@
 # siblings, AgentViewModelLocalStorageTests.theLoadFailureBannerExplainsItselfOnceAndStillNamesTheAffectedStore),
 # measured by PR #233's first review. W4 by UnreadableStoreWayOutTests
 # (anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut); W5 by StandingWatcherStopTests
-# (aStopAgainstAnUnreadableFileNamesTheWayOut); both from PR #233's second review.
+# (aStopAgainstAnUnreadableFileNamesTheWayOut); both from PR #233's second review. W6 by
+# MemoryCommandCenterTests (aMemoryRowDeleteAgainstAnUnreadableFileNamesTheWayOut) and W7 by
+# MemoryCommandCenterTests (aRoutineDeleteAgainstAnUnreadableFileNamesTheWayOut); both from the third.
 
 >>> mutant W1 the way out dropped from a task's failure
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -58,4 +60,20 @@
             setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(Self.failureMessage(for: error))")
 >>> to
             setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(error.localizedDescription)")
+>>> end
+
+>>> mutant W6 the Memory rows' shared write helper reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("\(failureMessage): \(Self.failureMessage(for: error))")
+>>> to
+            setError("\(failureMessage): \(error.localizedDescription)")
+>>> end
+
+>>> mutant W7 a routine delete reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("Could not delete routine: \(Self.failureMessage(for: error))")
+>>> to
+            setError("Could not delete routine: \(error.localizedDescription)")
 >>> end

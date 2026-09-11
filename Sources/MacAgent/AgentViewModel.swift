@@ -4031,7 +4031,7 @@ final class AgentViewModel: ObservableObject {
             // orphaned with no remaining name. Nothing has been deleted at the moment this runs, so
             // this really is the user's ask not happening — the same thing the block below reports,
             // in the same words and on the same channel.
-            setError("Could not delete this task: \(error.localizedDescription)")
+            setError("Could not delete this task: \(Self.failureMessage(for: error))")
             return
         }
 
@@ -4057,7 +4057,7 @@ final class AgentViewModel: ObservableObject {
             // A delete is a write, so this gets its own accurate wording and never
             // `recordLocalStorageLoadFailure`, whose banner is hardcoded to "could not be decrypted
             // or decoded" and would be simply wrong here.
-            setError("Could not delete this task: \(error.localizedDescription)")
+            setError("Could not delete this task: \(Self.failureMessage(for: error))")
             return
         }
 
@@ -4199,7 +4199,7 @@ final class AgentViewModel: ObservableObject {
         do {
             try taskDeletionService.recordDeletedScreenRecord(taskID: id)
         } catch {
-            setError("Could not delete this task's screen record: \(error.localizedDescription)")
+            setError("Could not delete this task's screen record: \(Self.failureMessage(for: error))")
             return
         }
 
@@ -4209,7 +4209,7 @@ final class AgentViewModel: ObservableObject {
             // `try?` for `deleteTask`'s reason: the user is already being told the delete did not
             // happen, and a second sentence about bookkeeping is not something they can act on.
             try? taskDeletionService.withdrawDeletedScreenRecord(taskID: id)
-            setError("Could not delete this task's screen record: \(error.localizedDescription)")
+            setError("Could not delete this task's screen record: \(Self.failureMessage(for: error))")
             return
         }
 
@@ -4746,7 +4746,7 @@ final class AgentViewModel: ObservableObject {
             do {
                 try taskDeletionService.recordDeletedTasks(ids: enqueuedTaskIDs)
             } catch {
-                setError("Could not delete task history: \(error.localizedDescription)")
+                setError("Could not delete task history: \(Self.failureMessage(for: error))")
                 return
             }
         }
@@ -5258,11 +5258,15 @@ final class AgentViewModel: ObservableObject {
     /// user pressed: the thing they asked for did not happen, which is what `errorMessage` means. The
     /// storage notice is for bookkeeping a *task* did on its own, where `errorMessage` would replace
     /// the result of a run that succeeded.
+    /// Every Memory-row control's write, and the one catch behind seven of them. The error goes
+    /// through `failureMessage(for:)` (PR #233's third review): every store loads before it writes,
+    /// so a Delete or Forget against an unreadable file throws the decrypt sentence, and this is the
+    /// Memory page itself — the place the way out sends the user — so the sentence had better say it.
     private func performMemoryStoreWrite(failureMessage: String, write: () throws -> Void) {
         do {
             try write()
         } catch {
-            setError("\(failureMessage): \(error.localizedDescription)")
+            setError("\(failureMessage): \(Self.failureMessage(for: error))")
             return
         }
         refreshMemoryEntries()
@@ -5523,7 +5527,7 @@ final class AgentViewModel: ObservableObject {
             try workspaceStore.save(updated)
             refreshSavedItems()
         } catch {
-            setError("Could not update workspace: \(error.localizedDescription)")
+            setError("Could not update workspace: \(Self.failureMessage(for: error))")
         }
     }
 
@@ -5555,7 +5559,7 @@ final class AgentViewModel: ObservableObject {
             try routineStore.delete(routineNamed: routine.name)
             refreshSavedItems()
         } catch {
-            setError("Could not delete routine: \(error.localizedDescription)")
+            setError("Could not delete routine: \(Self.failureMessage(for: error))")
         }
     }
 
@@ -5579,7 +5583,7 @@ final class AgentViewModel: ObservableObject {
             }
             refreshSavedItems()
         } catch {
-            setError("Could not delete workspace: \(error.localizedDescription)")
+            setError("Could not delete workspace: \(Self.failureMessage(for: error))")
         }
     }
 
