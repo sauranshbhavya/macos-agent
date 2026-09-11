@@ -389,3 +389,105 @@ struct MicHoverArrivalTests {
         )
     }
 }
+
+// MARK: - SONNY-443 and SONNY-444: the tracker passes clicks and keeps its area; an expired
+// reminder does not come back under a pointer that never left
+
+/// The founders' pass, tests 13 and 7. Clicking the mic did nothing: the tracking view overlaid on
+/// the button claimed the click. And the hint "only blinks and doesn't go away": the view
+/// re-registered its tracking area on every layout pass, AppKit reported a fresh arrival for an
+/// area added under a pointer already inside it, and the reminder's own expiry (which resizes the
+/// window) was such a pass. Two fixes in the view and one belt in the model, each held here.
+@Suite
+@MainActor
+struct MicHoverTrackerAndExpiryTests {
+    @Test
+    func theTrackerAnswersNoHitSoAClickReachesTheButtonBeneath() {
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+        // A plain view of the same frame claims the point, which is what makes the nil below a
+        // measurement rather than the answer every view gives.
+        let control = NSView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+
+        #expect(control.hitTest(NSPoint(x: 18, y: 18)) === control)
+        #expect(tracker.hitTest(NSPoint(x: 18, y: 18)) == nil)
+    }
+
+    @Test
+    func theTrackerRegistersOneAreaAndKeepsItAcrossLayoutPasses() throws {
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+
+        tracker.updateTrackingAreas()
+        let first = try #require(tracker.trackingAreas.first)
+        #expect(tracker.trackingAreas.count == 1)
+
+        tracker.updateTrackingAreas()
+        tracker.updateTrackingAreas()
+
+        #expect(tracker.trackingAreas.count == 1)
+        #expect(tracker.trackingAreas.first === first, "a layout pass replaced the area, which is the synthetic arrival")
+        #expect(first.options.contains(.inVisibleRect))
+        #expect(first.options.contains(.activeAlways))
+    }
+
+    /// The blink, at the model: the reminder expires with the pointer still there, and an arrival
+    /// with no departure in between shows nothing and arms nothing.
+    @Test
+    func anArrivalAfterTheReminderExpiredUnderTheSamePointerShowsNothing() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+        #expect(model.visibleHint == nil, "the countdown ran and the hint stayed")
+
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint == nil, "the same hover, reported again, re-showed the reminder")
+        #expect(model.dismissCountdown == countdown, "and armed a fresh countdown for it")
+    }
+
+    /// The next hover: the pointer leaves and comes back, and the reminder shows with fresh seconds.
+    @Test
+    func aDepartureAfterTheExpiryMakesTheNextArrivalAFreshHover() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+
+        model.dismiss()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint != nil, "the pointer left and came back, and the reminder did not return")
+        #expect(model.dismissCountdown != countdown)
+        model.dismiss()
+    }
+
+    /// SONNY-179's case survives the belt: the reminder expired, then the mic was taken away under
+    /// the stationary pointer (the slot taken dismisses), and the hover after it is shown.
+    @Test
+    func theSlotTakenAfterTheExpiryClearsTheBeltSoTheNextArrivalShows() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+
+        model.pointerArrived(slotIsFree: false) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint != nil, "the first hover after the widget came back was swallowed — SONNY-179 again")
+        model.dismiss()
+    }
+}

@@ -2543,7 +2543,8 @@ private struct WidgetFailurePanel: View {
 /// app being active means this panel isn't). Uses a real `.activeAlways` tracking area instead,
 /// which AppKit fires regardless of key-window status. `.inVisibleRect` keeps the tracked region
 /// correct automatically as the view's frame changes (this panel resizes/repositions often), with
-/// no manual re-registration needed.
+/// no manual re-registration needed — and since SONNY-444 the code does none: re-registering on
+/// every layout pass was what re-showed an expired hint under a stationary pointer.
 ///
 /// **It reports the two arrivals, and holds no answer to "is the pointer here" (SONNY-179).** It
 /// used to write a `Binding<Bool>`, and a caller that reads such a boolean is reading a second copy
@@ -2576,10 +2577,28 @@ struct AlwaysActiveHoverTracker: NSViewRepresentable {
         var onEnter: (() -> Void)?
         var onExit: (() -> Void)?
 
+        /// **Clicks pass through** (SONNY-443). This view sits over the mic button as an overlay,
+        /// and `NSView`'s default `hitTest` claims every point inside its bounds — so the click the
+        /// founders made on the mic landed here and the button beneath never saw it, while the
+        /// hint still showed, because tracking areas do not go through hit-testing. Nothing here
+        /// wants a click; answering nil hands it to whatever is under this view.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+
+        /// **One tracking area, registered once and kept** (SONNY-444). This used to remove every
+        /// area and add a fresh one on each call, and AppKit delivers `mouseEntered` for an area
+        /// added under a pointer that is already inside it. The hint row is a real layout row, so
+        /// its arrival and departure resize the window, and a layout pass is when AppKit asks a
+        /// view to update its areas: the reminder expired, the row left, the area was re-added
+        /// under the stationary pointer, a synthetic arrival re-showed the row, and so on every
+        /// three seconds — the founders' "it only blinks and doesn't go away". `.inVisibleRect`
+        /// keeps the one area correct as the view's geometry changes, which the comment on this
+        /// type always said and the code did not do.
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
-            for area in trackingAreas {
-                removeTrackingArea(area)
+            guard trackingAreas.isEmpty else {
+                return
             }
             addTrackingArea(
                 NSTrackingArea(

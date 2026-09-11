@@ -171,6 +171,40 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/the-mic-tracker-passes-clicks-and-keeps-its-area
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-443** (clicking the mic button did nothing: the hover-tracking view laid over it claimed the click — the founders' pass, test 13's note); **SONNY-444** (the mic's hint blinked back every three seconds under a stationary pointer — test 7). The wave 7 overnight session (run log SONNY-438), fifth branch of its chain, cut from `fix/the-gate-waits-for-the-check-it-started` at `f8543b55`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: §3.3 (the widget's mic control and its hint), unchanged in shape.
+Files changed:
+- `Sources/MacAgent/FloatingWidgetView.swift` — `AlwaysActiveHoverTracker.TrackingNSView.hitTest` answers nil so a click reaches the button beneath; `updateTrackingAreas` registers one `.inVisibleRect` area and keeps it; the type's doc comment says the code now does what it always claimed
+- `Sources/MacAgent/MicHoverHint.swift` — `MicHoverHintModel` remembers that the reminder expired under a pointer that has not left, and an arrival in that state shows nothing; `show` and `dismiss` clear it
+- `Tests/MacAgentTests/WidgetMicHoverHintTests.swift` — `MicHoverTrackerAndExpiryTests` (new suite, 5): the tracker answers no hit beside a control that does; one area kept across three layout passes, by identity; an arrival after the expiry shows nothing and arms nothing; a departure makes the next arrival a fresh hover; the slot taken after the expiry clears the belt (SONNY-179's case)
+- `mutation/plans/fix/the-mic-tracker-passes-clicks-and-keeps-its-area.txt`, `docs/sonny-manual-test-checklist.md` (a section naming both tickets), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/the-mic-tracker-passes-clicks-and-keeps-its-area.txt (founder-triggered, not run on this branch) — four mutants: the click claimed again, the area re-registered on every pass, the expiry forgotten, a departure no longer clearing the belt.
+
+Behavior added: none. The mic button takes a click; the hint clears itself once and stays gone while the pointer rests, and returns on the next hover.
+Behavior preserved (required, no blanket claims):
+- Hover still works while the panel is not key (`.activeAlways`, unchanged); the two arrival events still reach `onEnter` and `onExit` (`eachOverrideCallsOnlyItsOwnHandler`, unchanged).
+- SONNY-179's lost first hover after a collapse under a stationary pointer stays fixed: the slot taken dismisses, dismissal clears the belt, and the next arrival shows (`anArrivalWhoseDepartureWasNeverDeliveredStillShowsTheHint`, unchanged and green, and the new slot-taken test).
+- The reminder's three seconds and its wording (`AgentViewModel.micHoverHintPresentation`) are untouched; the configuration hint with no countdown still leaves with the pointer.
+- `viewModel.toggleVoiceRecording(origin: .widget)` is what the click reaches, as it always was meant to; `isVoiceControlDisabled` still disables it.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**An `NSViewRepresentable` overlay is a click sink unless it says otherwise.** `.overlay` puts a real `NSView` above the SwiftUI button, and `NSView.hitTest` claims every point in its bounds by default; tracking areas do not go through hit-testing, so hover kept working while every click died. SONNY-177 added the overlay for `.activeAlways` tracking and nobody clicked the mic afterwards — the founders reach the mic through the hotkey, which never touches the view. The rule: an overlay that exists only to observe answers `nil` from `hitTest`.
+
+**A tracking area re-registered on a layout pass is a synthetic arrival, and a hint row that resizes the window is a layout pass.** The comment on the tracker said `.inVisibleRect` needed no re-registration; the code removed and re-added its area on every `updateTrackingAreas` anyway, and AppKit reports `mouseEntered` for an area added under a pointer already inside it. So the reminder's own expiry — the row leaving, the window shrinking — re-registered the area, re-arrived, re-showed, and re-armed, every three seconds. Register once. The model's belt (an arrival after the expiry with no departure is not a new hover) is defence in depth against any other synthetic arrival, and it is what a test can hold; the tracker fix is what removes the cause.
+
+Known limitations / deferred scope: whether AppKit synthesises an arrival on re-registration is argued from its documented behaviour and the founders' report, not measured in the suite (no test process can move a pointer); the manual rows are the measurement.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/a-zip-result-carries-its-chip-and-stays (SONNY-445 and SONNY-446), cut from this branch's head.
+
 ### Branch: fix/the-gate-waits-for-the-check-it-started
 Status: complete
 Date: 2026-09-11

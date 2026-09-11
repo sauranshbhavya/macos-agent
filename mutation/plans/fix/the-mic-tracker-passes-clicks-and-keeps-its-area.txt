@@ -1,0 +1,47 @@
+# SONNY-443 and SONNY-444 — the mic's hover tracker passes clicks through and keeps one tracking
+# area; the hint model ignores an arrival after its own expiry until the pointer has left.
+# Killers expected: MicHoverTrackerAndExpiryTests; the earlier suites in the same file for M3.
+
+>>> mutant M1 the tracker claims the click again
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+>>> to
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            super.hitTest(point)
+        }
+>>> end
+
+>>> mutant M2 the area re-registered on every layout pass, as before
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+            guard trackingAreas.isEmpty else {
+                return
+            }
+>>> to
+            for area in trackingAreas {
+                removeTrackingArea(area)
+            }
+>>> end
+
+>>> mutant M3 the expiry no longer remembered: an arrival after it shows the reminder again
+>>> file Sources/MacAgent/MicHoverHint.swift
+>>> from
+            self?.visibleHint = nil
+            self?.reminderExpiredUnderThePointer = true
+>>> to
+            self?.visibleHint = nil
+>>> end
+
+>>> mutant M4 a departure no longer clears the belt: the next real hover shows nothing
+>>> file Sources/MacAgent/MicHoverHint.swift
+>>> from
+        visibleHint = nil
+        reminderExpiredUnderThePointer = false
+    }
+>>> to
+        visibleHint = nil
+    }
+>>> end

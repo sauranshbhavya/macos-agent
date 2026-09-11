@@ -4435,6 +4435,21 @@ them signs you out), then relaunch Sonny, which is still signed in.
 - [ ] Signed out: the same command is refused at once with "Sign in to Sonny to use this.", with
       no wait.
 
+### The mic button takes a click, and its hint leaves and stays gone (new 2026-09-11, SONNY-443 and SONNY-444)
+
+Clicking the mic did nothing (the founders' pass, test 13's note): the hover-tracking view laid
+over the button claimed the click. And the hint "only blinks and doesn't go away" (test 7): the
+tracking area was re-registered on every layout pass, which reported a fresh arrival under a
+pointer that never moved, every three seconds.
+
+- [ ] Click the mic once: recording starts (the glyph changes and the countdown appears). Click
+      again: it stops and transcribes (signed in) or says why not (signed out).
+- [ ] Hover the mic and hold the pointer still for ten seconds: the hint row appears once, clears
+      itself after about three seconds, and does not come back while the pointer stays.
+- [ ] Move the pointer off the mic and back on: the hint returns with fresh seconds.
+- [ ] Let the widget collapse with the pointer resting on the mic, expand it and hover: the hint
+      shows (SONNY-179's case, unchanged).
+
 ## 8. How to report back
 
 For each real finding, give me:

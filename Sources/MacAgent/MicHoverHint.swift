@@ -48,7 +48,9 @@ struct MicHoverHintPresentation: Equatable {
 /// position, because a copy AppKit corrects only by delivering a boundary crossing goes wrong the
 /// first time the mic is taken away under a stationary pointer, and stays wrong until a crossing
 /// spends itself repairing it. The view now hears the pointer *arrive* and shows a hint, so a
-/// second hover and a first are the same event and neither can be swallowed.
+/// second hover and a first are the same event and neither can be swallowed — with one qualifier
+/// since SONNY-444: an arrival that follows the reminder's own expiry with no departure between is
+/// the same hover reported again, not a second one, and shows nothing until the pointer has left.
 ///
 /// **A separate object rather than more `@State` on `FloatingWidgetView`, for the reason the mic's
 /// `.disabled` predicate moved onto the view model (SONNY-173): a view cannot be asked what it
@@ -129,8 +131,25 @@ final class MicHoverHintModel: ObservableObject {
             dismiss()
             return
         }
+        // **An arrival after the reminder expired under a pointer that never left is not a new
+        // hover** (SONNY-444). The pointer did not cross the mic's edge, so whatever delivered
+        // this — a tracking area re-registered by a layout pass, or any other synthetic event — is
+        // reporting the hover the countdown already served. Showing it again would restart the
+        // countdown, and the row would blink off and back for as long as the pointer stayed. A
+        // departure, or any other dismissal, clears this and the next arrival is a fresh hover.
+        guard !reminderExpiredUnderThePointer else {
+            return
+        }
         show(hint())
     }
+
+    /// The reminder cleared itself under a pointer that has not left since (SONNY-444).
+    ///
+    /// Set by the countdown alone, on its own expiry; cleared by `show` and by `dismiss`, which
+    /// every departure and every other end of a hint goes through — the slot taken, the view gone
+    /// — so SONNY-179's lost first hover after a collapse under a stationary pointer stays fixed:
+    /// the collapse takes the slot, the slot dismisses, and the next real arrival shows.
+    private var reminderExpiredUnderThePointer = false
 
     /// Shows a hint and arms its countdown, unconditionally. `pointerArrived` is the arrival's own
     /// entry point and establishes the slot is free before calling this; this checks nothing.
@@ -141,6 +160,7 @@ final class MicHoverHintModel: ObservableObject {
     /// nothing takes its place.
     func show(_ hint: MicHoverHintPresentation) {
         dismissCountdown?.cancel()
+        reminderExpiredUnderThePointer = false
         visibleHint = hint
         guard let delay = hint.autoDismissDelay else {
             dismissCountdown = nil
@@ -150,6 +170,7 @@ final class MicHoverHintModel: ObservableObject {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.visibleHint = nil
+            self?.reminderExpiredUnderThePointer = true
         }
     }
 
@@ -173,5 +194,6 @@ final class MicHoverHintModel: ObservableObject {
         dismissCountdown?.cancel()
         dismissCountdown = nil
         visibleHint = nil
+        reminderExpiredUnderThePointer = false
     }
 }
