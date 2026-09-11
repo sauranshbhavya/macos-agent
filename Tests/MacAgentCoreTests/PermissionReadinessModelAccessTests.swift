@@ -33,11 +33,11 @@ struct PermissionReadinessModelAccessTests {
     ///
     /// **Spelled out rather than sampled**, because the sweeps below are population checks — a row
     /// naming a provider, or moving a row that is not its own, is only caught on the input that
-    /// produces it. `EntitlementRefusal` is not `CaseIterable`, so the list is hand-written and two
-    /// things hold it: **the exhaustive `switch` below, which stops this file compiling when the
-    /// enum grows a case**, and the count in `everyRefusalIsAnsweredByName`, which then has to be
-    /// bumped by hand rather than drifting. That is `EntitlementCopyTests.allRefusals`' idiom, for
-    /// the same enum, copied deliberately.
+    /// produces it. `EntitlementRefusal` is `CaseIterable` since SONNY-442, and the list stays
+    /// hand-written anyway, held two ways: **the exhaustive `switch` below, which stops this file
+    /// compiling when the enum grows a case**, and the count in `everyRefusalIsAnsweredByName`,
+    /// which then has to be bumped by hand rather than drifting. That is
+    /// `EntitlementCopyTests.allRefusals`' idiom, for the same enum, copied deliberately.
     ///
     /// **It said the test alone held this and that was wrong** (PR #216's review, F1). The test
     /// asserted nothing about the array's length and built its own second hand-written five-case
