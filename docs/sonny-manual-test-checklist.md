@@ -4320,8 +4320,15 @@ fresh install, or, with Sonny quit, `rm ~/Library/Application\ Support/Sonny/cli
       not listed; a new copy is.
 - [ ] Widget › "Don't save this task" on; type `=` so the run parks at Sonny's question; copy
       something; open Command Center (or close and reopen it), then delete a Memory row that is not
-      clipboard history; answer or cancel the question. `clipboard history`: the copy made during
-      the paused run is not listed; a new copy after the run is.
+      clipboard history, then Memory › the master switch off and on; answer or cancel the question.
+      `clipboard history`: the copy made during the paused run is not listed; a new copy after the
+      run is.
+- [ ] Widget › "Don't save this task" on, and type **nothing** (the delta review of PR #226's fix
+      round, F4: the first guard stopped clipboard history here and left it stopped). Open Command
+      Center (or close and reopen it); Settings › Security & Access › Watch clipboard history off
+      and on; Memory › the master switch off and on; clear the widget's chip. Copy something;
+      `clipboard history`: it is listed, and the Settings toggle reads on throughout. **What would
+      be a finding:** the copy missing from the list while the toggle reads on.
 
 ## 8. How to report back
 

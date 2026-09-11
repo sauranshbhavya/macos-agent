@@ -1389,6 +1389,15 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval || clarificationQuestion != nil
     }
 
+    /// A "Don't save this task" run that is running or parked — the one state in which the
+    /// clipboard monitor must not start (SONNY-439). The setting alone is not it: the widget sets
+    /// the policy before any task is sent, so the setting is on with nothing running whenever the
+    /// user has pressed the button and not yet typed, and a gate that read the setting alone
+    /// stopped clipboard history at that moment and left it stopped (PR #226's delta review, F4).
+    private var aSuppressedRunIsInFlight: Bool {
+        taskRecordingPolicy.suppressesTraces && isTaskInFlight
+    }
+
     /// Hands `start` a command on behalf of a *programmatic* caller, and guarantees that a refused
     /// dispatch leaves no text behind.
     ///
@@ -5718,14 +5727,21 @@ final class AgentViewModel: ObservableObject {
             stopClipboardHistoryMonitoring()
             return
         }
-        // **Never while the run's recording policy suppresses traces** (SONNY-439, PR #226's F4,
-        // founder decision 2026-09-11). A "Don't save this task" run stops monitoring when it
-        // starts, and every door that can start it again while that run is parked — Command
+        // **Never while a suppressed run is in flight — and never on the setting alone**
+        // (SONNY-439, PR #226's F4, founder decision 2026-09-11; narrowed to a live run by the
+        // delta review's F4). A "Don't save this task" run stops monitoring when it starts, and
+        // every door that can start it again while that run is running or parked — Command
         // Center's `.onAppear`, a Memory delete's refresh, the master switch — ends here; before
         // this guard each of them re-armed the poll and the first tick recorded what the user had
-        // copied during the pause. `finishRecordingPolicyIfSettled` puts the policy back to
-        // `.record` before it refreshes, so the resume at the run's end still passes.
-        guard !taskRecordingPolicy.suppressesTraces else {
+        // copied during the pause. The first version of this guard read the policy and never asked
+        // whether a run existed, and the widget sets the policy before anything is sent: with the
+        // setting on and nothing running, opening Command Center or turning a switch on stopped
+        // clipboard history and left it stopped while the toggle read on — the defect the ticket
+        // was filed for, reached a new way. `isTaskInFlight` is the same predicate the widget's
+        // panels use, so a parked question or approval counts as the run it is.
+        // `finishRecordingPolicyIfSettled` puts the policy back to `.record` before it refreshes,
+        // so the resume at the run's end still passes.
+        guard !aSuppressedRunIsInFlight else {
             stopClipboardHistoryMonitoring()
             return
         }

@@ -1351,8 +1351,10 @@ struct MemoryCommandCenterTests {
     /// guard deleted — nothing polls, nothing records, and the assertion holds for the wrong reason.
     /// Measured: written that way, mutant M5 (the guard removed) survived the whole suite. From a
     /// stopped start, `setMemoryEnabled(false)`'s own `refreshClipboardHistoryNotice()` reaches a nil
-    /// timer, so without the guard it starts monitoring and its first poll records — and the mutant
-    /// dies.
+    /// timer, so without the guard it arms the poll — and the timer assertions below are what kill
+    /// the mutant. The first poll records nothing either way, since a start marks the pasteboard as
+    /// seen before it polls (SONNY-439's fix round), so the recorded-nothing assertions cannot see
+    /// the guard on their own; the delta review of that round measured exactly that under C3.
     @Test
     func theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders() throws {
         let fixture = try makeMemoryFixture()

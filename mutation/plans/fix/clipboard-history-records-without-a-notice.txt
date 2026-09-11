@@ -16,7 +16,9 @@
 # aSwitchOffAndOnDoesNotRecordWhatWasCopiedWhileItWasOff on all three doors, the fresh-install test,
 # and ClarificationExitTests' abandoningAClarificationResumesClipboardHistoryThroughTheGuardedReset,
 # which counts the start door's read; C5 by aDoorOpenedDuringASuppressedRunDoesNotRestartClipboardHistory
-# on both doors and both files.
+# on all three doors and both files; C6 by theDontSaveSettingWithNothingRunningDoesNotStopClipboardHistory
+# on all three of its doors (PR #226's delta review, F4: the guard read the setting and never asked
+# whether a run existed).
 
 >>> mutant C1 the dismissed-flag gate put back beside the switch
 >>> file Sources/MacAgent/AgentViewModel.swift
@@ -70,11 +72,25 @@
 >>> mutant C5 the run's recording policy no longer asked at the start door: a refresh during a suppressed run re-arms the poll (PR #226's F4)
 >>> file Sources/MacAgent/AgentViewModel.swift
 >>> from
-        guard !taskRecordingPolicy.suppressesTraces else {
+        guard !aSuppressedRunIsInFlight else {
             stopClipboardHistoryMonitoring()
             return
         }
         guard clipboardHistoryTimer == nil else {
 >>> to
         guard clipboardHistoryTimer == nil else {
+>>> end
+
+>>> mutant C6 the start door gates on the setting alone again: with nothing running, a door stops clipboard history and leaves it stopped (PR #226's delta review, F4)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard !aSuppressedRunIsInFlight else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+>>> to
+        guard !taskRecordingPolicy.suppressesTraces else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
 >>> end
