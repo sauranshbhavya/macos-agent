@@ -100,12 +100,18 @@ final class FloatingWidgetWindowController: NSObject {
         panel?.isKeyWindow ?? false
     }
 
-    func show() {
+    /// Fronts the widget. `takingKey` is what the summons want and the default; the one caller
+    /// that passes `false` is the widget returning on its own when the run pill it had minimised
+    /// into has nothing left to show (SONNY-450) — a window that comes back because a scheduled
+    /// routine finished must not pull the keyboard out of the app the user is typing in.
+    func show(takingKey: Bool = true) {
         let panel = panel ?? makePanel()
         self.panel = panel
         reposition(panel)
         panel.orderFrontRegardless()
-        panel.makeKey()
+        if takingKey {
+            panel.makeKey()
+        }
     }
 
     func hide() {

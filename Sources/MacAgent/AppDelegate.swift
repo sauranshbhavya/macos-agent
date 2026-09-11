@@ -30,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         densityModel: densityModel
     )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
+    /// The run pill the widget minimises into while a run is in flight (SONNY-450).
+    private lazy var runPillController = RunPillWindowController(viewModel: viewModel)
+    /// The minimised state last applied to the two windows, so `applyWidgetMinimisation` moves a
+    /// window only on a change.
+    private var appliedWidgetMinimised = false
     private lazy var notificationService = SonnyNotificationService(
         onAllow: { [weak self] in self?.viewModel.start() },
         onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
@@ -186,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
+        observeWidgetMinimisation()
         // Starts the schedule tick and the wake observer. Deliberately after the notification and
         // presentation subscriptions above: the first check runs synchronously inside this call, so
         // anything it reports must already have somewhere to go.
@@ -286,6 +292,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.widgetController.show()
             }
             .store(in: &cancellables)
+    }
+
+    /// The widget minimises into the run pill while `AgentViewModel.isWidgetMinimised` holds and
+    /// comes back when it stops (SONNY-450). The state is derived on the view model from several
+    /// published properties, so this listens to `objectWillChange`, reads the value one main-queue
+    /// hop later (the publisher fires before the mutation lands), and moves a window only when
+    /// the answer changed. Idempotent by construction: `show()` and `hide()` on a window already in
+    /// that state do nothing visible.
+    private func observeWidgetMinimisation() {
+        viewModel.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyWidgetMinimisation()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func applyWidgetMinimisation() {
+        let minimised = viewModel.isWidgetMinimised
+        guard minimised != appliedWidgetMinimised else {
+            return
+        }
+        appliedWidgetMinimised = minimised
+        if minimised {
+            widgetController.hide()
+            runPillController.show()
+        } else {
+            runPillController.hide()
+            // Key focus only when the user asked for the widget (the pill's click, or any other
+            // summon, which sets the flag); a widget returning on its own because its pill has
+            // nothing left to show takes no focus.
+            widgetController.show(takingKey: viewModel.widgetWasExpandedForThisRun)
+        }
     }
 
     private func observeNotificationTriggers() {

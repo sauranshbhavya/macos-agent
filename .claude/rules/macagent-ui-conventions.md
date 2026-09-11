@@ -65,6 +65,21 @@ Command Center has its own permission/clarification/failure surface as of branch
 
 The floating widget is unchanged and still shows all three states for **every** task regardless of origin. That redundancy is deliberate, not an oversight: the widget is a permanent on-screen overlay while Command Center is a window that may be closed, so for an unattended run the widget is the more reliable surface for an approval, not the less. `AgentViewModel.hasVisibleWidgetPanel` is the single source of truth for both the widget's panel and the widget's own mic-hover-hint slot (`FloatingWidgetView.isMicHintSlotFree`). Do not origin-gate those three states without revisiting both. Until 2026-08-21 this named `FloatingWidgetWindowController`'s compositing decision as the second reader; that positioning mode was superseded on 2026-07-21, the controller has one mode, and nothing composites into Command Center anymore (SONNY-189). **"A regression test pins it" was checked rather than inherited while fixing that**, because the sentence read as though compositing itself were pinned: it is not, and cannot be — there is nothing left to assert. What is pinned is this predicate's value for the three attention states, by `CommandCenterAttentionSurfaceTests.widgetStillShowsAllThreeAttentionStatesForACommandCenterOriginTask` and `VisionSessionRunTests.theWidgetPanelIsVisibleWhileACaptureIsWaitingToBeReviewed`, with further assertions in `ConsequenceRuleDispatchTests`, `ScheduledRoutineRunTests`, `ClarificationExitTests` and `ResumableTaskRunTests` (`git grep -nE '#expect\(.*hasVisibleWidgetPanel' -- Tests/` → 29 assertion lines across 6 files at `372528e`). **That figure read 13 across 5 at `fef3684` until SONNY-299, and the difference is not drift in the sentence — it is the tree moving under a stamp that was complete when taken.** `fef3684` is 2026-08-21 and is non-ancestral today; the five files it named really were the whole population there, and `ResumableTaskRunTests.swift` did not exist yet. A stamped figure is true of the tree it was stamped on and of nothing else, so this is re-measured rather than adjusted — and the file list is re-enumerated with it, because a list of names goes stale the same way a count does and reads as complete either way.
 
+## The run pill (SONNY-450)
+
+While a run is in flight and the user has not expanded the widget since it started, the widget is
+minimised into `RunPillView` in its own `RunPillWindowController`, pinned to the top-right of the
+cursor's screen. The state is *derived* on the one view model — `AgentViewModel.isWidgetMinimised`
+is "no expansion since the run started" and "there is a pill to show" — and the pill's words come
+from `RunPillPresentation.make(state:command:)` over `AgentViewModel.widgetState`, which is the
+widget's own state precedence hoisted off `FloatingWidgetView` so the two read one order. So a
+parked question is "needs you" on the pill exactly when the widget would draw it and
+`CommandCenterAttentionPanel` shows it; the pill answers nothing. Every summon
+(`widgetPresentationRequest`) is an expansion, the pill's click included, and a minimised outcome
+holds (`outcomeHolds`, the SONNY-121 hold widened) until then. The pill is System B and never a
+`SonnyTheme` token; `RunPillPresentationTests` scans for that. There is one pill because there is
+one run; a pill per task is its own ticket.
+
 ## Responsive rows
 
 `SettingsAdaptiveControlRow` (a `ViewThatFits` horizontal-first, `minWidth`-floored, vertical-fallback pattern) is the fix for any label+control row that needs to survive a narrow, non-fullscreen window. Reuse it for new settings/control rows rather than a fixed `HStack` — a fixed `HStack` is what caused the narrow-width character-wrapping bug this pattern replaced.

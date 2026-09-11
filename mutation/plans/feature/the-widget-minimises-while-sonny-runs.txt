@@ -1,0 +1,67 @@
+# SONNY-450 — the widget minimises into the run pill when a run starts, the pill reads the widget's
+# own state precedence, a click expands the widget, a minimised outcome holds until then, and the
+# pill sits at the top-right of the cursor's screen. Property: every run minimises; every summon
+# expands; needs-you is exactly the widget's parked questions; the hold and the placement are pure.
+# Killers expected (hand-traced; the founders' weekly battery measures): P1 by WidgetMinimiseTests
+# (aRunStartingMinimisesTheWidgetIntoARunningPill, theNextRunMinimisesAgainAfterAnExpansion); P2 by
+# WidgetMinimiseTests (aSummonFromAnywhereExpandsTheWidget, theOutcomeOfAMinimisedRunHoldsUntilTheWidgetIsExpanded);
+# P3 by RunPillPresentationTests (aParkedClarificationSaysSonnyNeedsYou) and WidgetMinimiseTests
+# (aParkedClarificationReadsAsNeedsYouOnThePill); P4 by WidgetMinimiseTests
+# (theOutcomeOfAMinimisedRunHoldsUntilTheWidgetIsExpanded); P5 by RunPillPlacementTests (both tests);
+# P6 by RunPillPresentationTests (aResultIsDoneWithItsFirstLine).
+
+>>> mutant P1 a run starting no longer minimises the widget
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            if isRunning, !oldValue {
+                widgetWasExpandedForThisRun = false
+            }
+>>> to
+            if isRunning, !oldValue {
+                widgetWasExpandedForThisRun = true
+            }
+>>> end
+
+>>> mutant P2 a summon no longer counts as expanding
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            // pill's own click all reach here, and a widget the user asked for is not minimised.
+            widgetWasExpandedForThisRun = true
+>>> to
+            // pill's own click all reach here, and a widget the user asked for is not minimised.
+            widgetWasExpandedForThisRun = widgetWasExpandedForThisRun
+>>> end
+
+>>> mutant P3 a parked question reads as a run in flight
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+                kind: .needsYou,
+                glyph: "exclamationmark.bubble.fill",
+>>> to
+                kind: .running,
+                glyph: "exclamationmark.bubble.fill",
+>>> end
+
+>>> mutant P4 a minimised outcome no longer holds
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        outcomeWasNotified || isWidgetMinimised
+>>> to
+        outcomeWasNotified
+>>> end
+
+>>> mutant P5 the pill placed at the top-left instead of the top-right
+>>> file Sources/MacAgent/RunPillWindowController.swift
+>>> from
+            x: visibleFrame.maxX - contentSize.width,
+>>> to
+            x: visibleFrame.minX,
+>>> end
+
+>>> mutant P6 the spoken label doubles a full stop again
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+        let separator = first.last.map { terminal.contains($0) } == true ? " " : ". "
+>>> to
+        let separator = ". "
+>>> end

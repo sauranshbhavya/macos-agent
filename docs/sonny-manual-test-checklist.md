@@ -4707,6 +4707,33 @@ lane database with the migrations applied.
       regressed fails a named test here.
 - [ ] `npm run test:db` at the lane database: the whole database suite passes with those nine.
 
+### The widget minimises into a run pill while Sonny runs (new 2026-09-11, SONNY-450)
+
+When a run starts, the floating widget leaves the bottom of the screen and a small glass pill
+appears at the top-right of the screen the cursor is on, showing a spinner and the request. A
+parked approval or clarification turns it amber with "Sonny needs you"; a finished run turns it
+green with the result's first line, a failed one red with the failure. Clicking the pill brings
+the widget back where it was, focused, on whatever is parked; the pill goes. Signed in, gateway up.
+
+- [ ] Type `zip the largest files on my Desktop` into the widget and press Return: the widget
+      disappears and a pill with a spinner and that request sits at the top-right of the screen the
+      pointer is on. Move the pointer to another display: the pill follows within a second.
+- [ ] When the run finishes, the pill turns green and reads the result's first line, and stays —
+      it does not clear on its own. Click it: the widget is back at the bottom, focused, showing the
+      result with its chip; the pill is gone; after about twenty seconds the widget collapses as usual.
+- [ ] Run one that asks first — `rename ~/Desktop/rename-check/scan1.pdf to march-scan` — and wait:
+      the pill turns amber, "Sonny needs you"; Command Center's attention panel shows the same
+      question. Click the pill: the widget opens on the approval; answer it there. Nothing was
+      approved or answered by the pill itself.
+- [ ] Start any run and press Ctrl-Opt-Esc while the pill shows: the run stops exactly as before
+      and the pill reads the cancellation; clicking it brings the widget back.
+- [ ] Open Command Center › Tasks after a minimised run: the run is listed, as any run is.
+- [ ] Summon the widget with the push-to-talk hotkey or the status menu's New Task while a pill
+      shows: the widget comes back and the pill goes — a summon from anywhere is an expansion.
+- [ ] A scheduled routine that fires while you work: the widget minimises for its run and comes
+      back on its own when the run ends (its outcome goes to the routine's notice, not the widget),
+      without taking the keyboard from the app you were typing in.
+
 ## 8. How to report back
 
 For each real finding, give me:

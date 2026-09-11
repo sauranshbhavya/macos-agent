@@ -286,6 +286,11 @@ struct FloatingWidgetView: View {
                 scheduleAutoDismissIfNeeded()
             }
         }
+        // Expanding from the run pill ends the hold on a minimised outcome (SONNY-450): the user
+        // is looking at it now, so its countdown starts here, on the ordinary outcome figure.
+        .onChange(of: viewModel.widgetWasExpandedForThisRun) { _, _ in
+            scheduleAutoDismissIfNeeded()
+        }
         // The panel (or a collapse) taking the slot mid-countdown dismisses the hint and cancels
         // with it, so nothing is left counting toward a row that is no longer there. The slot coming
         // back free deliberately does not re-show it: the user is looking at whatever just finished,
@@ -388,15 +393,17 @@ struct FloatingWidgetView: View {
             // it is opened — which is the founder's own wording for when it should be raised.
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
-            // An outcome the user was notified about does not collapse (SONNY-121). They were
-            // working somewhere else when it happened, so the outcome's timer would measure how
-            // long they have been *away*, not how long they have had to read it. Returning `false` here
-            // also stops the clear: `scheduleAutoDismissIfNeeded` returns before arming the timer.
+            // An outcome the user was notified about does not collapse (SONNY-121), and neither
+            // does one that landed while the widget was minimised into the run pill (SONNY-450).
+            // In both they were working somewhere else when it happened, so the timer would
+            // measure how long they have been *away*, not how long they have had to read it.
+            // Returning `false` here also stops the clear: `scheduleAutoDismissIfNeeded` returns
+            // before arming the timer. `outcomeHolds` is the one reading of both holds.
             //
             // Only `.failure` can currently be notified — the marker is set when an error
-            // notification posts — but the two share this branch, and a `.result` that is not
-            // notified reads `true` exactly as before.
-            return !viewModel.outcomeWasNotified
+            // notification posts — but the two share this branch, and a `.result` that is neither
+            // notified nor minimised reads `true` exactly as before.
+            return !viewModel.outcomeHolds
         case .working:
             return viewModel.activeTaskOrigin != .widget
         case .tooOld, .updateAvailable:
@@ -430,7 +437,7 @@ struct FloatingWidgetView: View {
             // for a notified outcome. Stated twice deliberately: the two decisions are read in
             // different places, and a later change to the collapse rule must not silently start
             // wiping outcomes nobody has seen. Both read the one marker, so it is one fact.
-            return !viewModel.errorIsPersistent && !viewModel.outcomeWasNotified
+            return !viewModel.errorIsPersistent && !viewModel.outcomeHolds
         default:
             return false
         }
@@ -549,72 +556,12 @@ struct FloatingWidgetView: View {
         .help(CompactCapsulePresentation.expandLabel)
     }
 
-    /// Which panel the widget draws, and the order is the whole of it — the first branch that
-    /// matches wins, so every reader of this property is really reading its ordering.
-    ///
-    /// Not `private`: see `WidgetState`'s own doc comment for why a test reads this.
+    /// Which panel the widget draws. The precedence itself lives on
+    /// `AgentViewModel.widgetState` since SONNY-450, so the run pill reads the same order this
+    /// draws; this is one reader of it. Not `private`: see `WidgetState`'s own doc comment for why
+    /// a test reads this.
     var state: WidgetState {
-        if let preview = viewModel.visionCapturePreview {
-            return .captureReview(preview)
-        }
-        if let delegation = viewModel.visionDelegationRequest {
-            return .delegationReview(delegation)
-        }
-        if let pause = viewModel.visionSessionPause {
-            return .sessionPaused(pause)
-        }
-        // **The fourth parked question, and it belongs with the three above rather than under the
-        // progress line below** (SONNY-255). All four suspend the loop on a continuation nothing but
-        // the user resolves; a progress report describes a loop that is moving. Placed below
-        // `.controlling`, as it was until this ticket, it could never render during a session at
-        // all — `visionSessionProgress` is written at the top of every iteration and cleared only at
-        // session end, so the branch below won from iteration 1 and the question was on no widget
-        // surface while the run waited for it.
-        if let approvalRequest = viewModel.approvalRequest {
-            return .permission(approvalRequest)
-        }
-        // Below the four parked questions and above `.working`: a question waiting on the user
-        // outranks a progress line, and a vision session's progress line outranks the generic
-        // working panel, which would otherwise say "Sonny is working" while it moves the cursor.
-        if let progress = viewModel.visionSessionProgress {
-            return .controlling(progress)
-        }
-        // Below `.controlling`, and unlike the approval above it that is not an accident: a
-        // clarification is unreachable inside a session by construction. `clarificationQuestion` is
-        // written in exactly one place, `performStart`, and a delegated plan that needs one never
-        // reaches it — `runVisionDelegation` hands the question back to the model as a failed
-        // delegation rather than putting it to the user, so one question is on screen at a time.
-        if let question = viewModel.clarificationQuestion {
-            return .clarification(question)
-        }
-        // §8.3's wall, above `.failure` — see `WidgetState.tooOld` for why it sits exactly here.
-        // `AgentViewModel.hasVisibleWidgetPanel` mirrors this branch in the same position.
-        if viewModel.isTooOldForThisBackend,
-           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
-            return .tooOld(prompt)
-        }
-        if let error = viewModel.errorMessage, !viewModel.isRunning {
-            return .failure(error)
-        }
-        if viewModel.isRunning {
-            return .working
-        }
-        if !viewModel.finalSummary.isEmpty {
-            let suggestion = viewModel.suggestions.first { $0.kind == .openFile }
-            return .result(viewModel.finalSummary, suggestion)
-        }
-        // `AgentViewModel.hasVisibleWidgetPanel` mirrors this branch in the same position, and the
-        // two must not drift — its own doc comment is where the shared rule lives.
-        if let offer = viewModel.resumeOffer {
-            return .resumeOffer(offer)
-        }
-        // §8.4's warning, last — see `WidgetState.updateAvailable`. `hasVisibleWidgetPanel` mirrors
-        // this branch in the same position.
-        if viewModel.showsUpdateAvailablePrompt,
-           let prompt = ClientVersionCopy.prompt(for: viewModel.clientVersionState) {
-            return .updateAvailable(prompt)
-        }
-        return .idle
+        viewModel.widgetState
     }
 
     /// A cheap, `Equatable` key to drive `.animation(value:)` without making `WidgetState` itself

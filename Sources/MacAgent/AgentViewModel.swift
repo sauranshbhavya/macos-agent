@@ -5,7 +5,17 @@ import MacAgentCore
 @MainActor
 final class AgentViewModel: ObservableObject {
     @Published var command: String = ""
-    @Published var isRunning: Bool = false
+    @Published var isRunning: Bool = false {
+        didSet {
+            // A run starting minimises the widget into the run pill (SONNY-450): every run, from
+            // every origin, because the founders asked for the widget to get out of the way the
+            // moment Sonny starts. The flag is the user's half of the rule; `isWidgetMinimised`
+            // derives the rest.
+            if isRunning, !oldValue {
+                widgetWasExpandedForThisRun = false
+            }
+        }
+    }
     @Published var plan: AgentPlan?
     @Published var finalSummary: String = ""
     @Published var errorMessage: String?
@@ -446,7 +456,55 @@ final class AgentViewModel: ObservableObject {
     /// observes this to call `widgetController.show()`; `FloatingWidgetView` observes it to focus
     /// its text field — every caller reacting through the same shared state rather than reaching
     /// into AppKit/the widget directly, since `show()` alone cannot move keyboard focus.
-    @Published var widgetPresentationRequest: Int = 0
+    @Published var widgetPresentationRequest: Int = 0 {
+        didSet {
+            // Any summon is an expansion: the hotkey, the status menu, a Command Center row and the
+            // pill's own click all reach here, and a widget the user asked for is not minimised.
+            widgetWasExpandedForThisRun = true
+        }
+    }
+
+    /// Whether the user has brought the widget forward since the current run started (SONNY-450).
+    ///
+    /// Reset to `false` the moment `isRunning` turns on, and set by every
+    /// `widgetPresentationRequest` — the pill's click included — so it reads "the user has seen
+    /// this run". `true` at launch, because a widget nobody has run anything from is not minimised.
+    /// `private(set)` rather than a stored `isWidgetMinimised`, because the minimised state is
+    /// *derived*: the widget is minimised only while there is a pill to stand in for it, and a run
+    /// whose state drains back to idle (a scheduled routine, whose outcome goes to its notice and
+    /// never to the widget's result panel) brings the widget back on its own rather than leaving
+    /// the user with neither.
+    @Published private(set) var widgetWasExpandedForThisRun = true
+
+    /// The widget is minimised while a run the user has not expanded has a pill to show.
+    var isWidgetMinimised: Bool {
+        !widgetWasExpandedForThisRun && runPillPresentation != nil
+    }
+
+    /// What the run pill shows, read off the widget's own state precedence, or `nil` when there
+    /// is nothing to stand in for. The pill's words for a run are the request that is running,
+    /// which `command` no longer holds by then (see `runningCommandDisplayText`).
+    var runPillPresentation: RunPillPresentation? {
+        RunPillPresentation.make(state: widgetState, command: runningCommandDisplayText)
+    }
+
+    /// The pill's one action: bring the widget back, on whatever is parked, and focus it. Through
+    /// `widgetPresentationRequest`, like every other summon, so the delegate fronts the panel and
+    /// the view focuses its field — and so the flag above flips through the one door every summon
+    /// takes rather than a second one.
+    func expandWidgetFromPill() {
+        widgetPresentationRequest += 1
+    }
+
+    /// Whether the outcome on screen is held for the user rather than counted down and cleared:
+    /// one the user was notified about (SONNY-121), or one that landed while the widget was
+    /// minimised (SONNY-450) — in both, the user was elsewhere when it happened, so the widget's
+    /// timer would measure how long they have been away, not how long they have had to read it. A
+    /// done or failed pill therefore never points at a result that has already cleared itself. The
+    /// view reads this and nothing narrower, so the two holds cannot drift apart.
+    var outcomeHolds: Bool {
+        outcomeWasNotified || isWidgetMinimised
+    }
     @Published var usePointerCursors: Bool = true {
         didSet {
             userDefaults.set(usePointerCursors, forKey: UserDefaultsKeys.usePointerCursors)
@@ -1953,6 +2011,76 @@ final class AgentViewModel: ObservableObject {
     /// launch because a second reader disagreed with it — Command Center took key-window focus
     /// first, the widget composited in while still idle, and an idle+composited render drew
     /// literally nothing (no compact capsule, no pill), with no way to click back into it.
+    /// Which panel the widget draws, and the order is the whole of it — the first branch that
+    /// matches wins, so every reader of this property is really reading its ordering. Lived on
+    /// `FloatingWidgetView` until SONNY-450 hoisted it here, unchanged, so the run pill
+    /// (`runPillPresentation`) reads the same precedence the widget draws and the two can never
+    /// disagree about what needs the user; the view's `state` now delegates here. See
+    /// `WidgetState`'s own doc comment for why a test reads this.
+    var widgetState: WidgetState {
+        if let preview = visionCapturePreview {
+            return .captureReview(preview)
+        }
+        if let delegation = visionDelegationRequest {
+            return .delegationReview(delegation)
+        }
+        if let pause = visionSessionPause {
+            return .sessionPaused(pause)
+        }
+        // **The fourth parked question, and it belongs with the three above rather than under the
+        // progress line below** (SONNY-255). All four suspend the loop on a continuation nothing but
+        // the user resolves; a progress report describes a loop that is moving. Placed below
+        // `.controlling`, as it was until this ticket, it could never render during a session at
+        // all — `visionSessionProgress` is written at the top of every iteration and cleared only at
+        // session end, so the branch below won from iteration 1 and the question was on no widget
+        // surface while the run waited for it.
+        if let approvalRequest {
+            return .permission(approvalRequest)
+        }
+        // Below the four parked questions and above `.working`: a question waiting on the user
+        // outranks a progress line, and a vision session's progress line outranks the generic
+        // working panel, which would otherwise say "Sonny is working" while it moves the cursor.
+        if let progress = visionSessionProgress {
+            return .controlling(progress)
+        }
+        // Below `.controlling`, and unlike the approval above it that is not an accident: a
+        // clarification is unreachable inside a session by construction. `clarificationQuestion` is
+        // written in exactly one place, `performStart`, and a delegated plan that needs one never
+        // reaches it — `runVisionDelegation` hands the question back to the model as a failed
+        // delegation rather than putting it to the user, so one question is on screen at a time.
+        if let question = clarificationQuestion {
+            return .clarification(question)
+        }
+        // §8.3's wall, above `.failure` — see `WidgetState.tooOld` for why it sits exactly here.
+        // `hasVisibleWidgetPanel` mirrors this branch in the same position.
+        if isTooOldForThisBackend,
+           let prompt = ClientVersionCopy.prompt(for: clientVersionState) {
+            return .tooOld(prompt)
+        }
+        if let error = errorMessage, !isRunning {
+            return .failure(error)
+        }
+        if isRunning {
+            return .working
+        }
+        if !finalSummary.isEmpty {
+            let suggestion = suggestions.first { $0.kind == .openFile }
+            return .result(finalSummary, suggestion)
+        }
+        // `hasVisibleWidgetPanel` mirrors this branch in the same position, and the two must not
+        // drift — its own doc comment is where the shared rule lives.
+        if let offer = resumeOffer {
+            return .resumeOffer(offer)
+        }
+        // §8.4's warning, last — see `WidgetState.updateAvailable`. `hasVisibleWidgetPanel` mirrors
+        // this branch in the same position.
+        if showsUpdateAvailablePrompt,
+           let prompt = ClientVersionCopy.prompt(for: clientVersionState) {
+            return .updateAvailable(prompt)
+        }
+        return .idle
+    }
+
     var hasVisibleWidgetPanel: Bool {
         // Row I's two Safe-mode questions, first for the same reason the permission, clarification
         // and failure branches below them are unconditional: each is a parked continuation waiting
