@@ -1349,7 +1349,7 @@ Also part of the taxonomy:
 | Account holds no subscription to manage | 409 | `entitlement.no_subscription` | `POST /v1/billing/portal` only (SONNY-216). The mirror of the row above, and like it a state an ordinary client should not reach — the app knows its own entitlement and should not offer Manage subscription. **Not an error at the provider**: it is what a signed-in user who never subscribed looks like, which is most accounts. Client copy is SONNY-136's |
 | No top-up was made for this account | 409 | `topup.not_permitted` | `POST /v1/account/credits/top-up` only (SONNY-215). **One code for five refusals** — the deployment sells no pack, the account has not opted in, it is not actually low, the period's attempts are spent, or there is no customer at the provider to charge — because a client does the same thing about all five: do not retry, and let the gate refuse as it would have. Which one it was is logged and never sent. The one this code exists to guarantee is the consent, and it is checked before anything else is read |
 | The provider did not complete the charge | 402 | `topup.declined` | `POST /v1/account/credits/top-up` only (SONNY-215). The provider answered and did not charge — a declined card, no payment method on file, or an authentication challenge an off-session charge cannot answer. Its own status because the fix is the user's payment method rather than their settings, and collapsing it into the row above is a distinction a later surface could not recover |
-| The provider's answer could not be read | 502 | `topup.unconfirmed` | `POST /v1/account/credits/top-up` only (SONNY-215). The charge was attempted and its answer could not be read, so **money may have moved and nothing was granted for it**. **Not retryable, which is why it is not `provider.unavailable`**: a client told to retry would buy a second pack to recover from a first one it cannot see. The provider's order id is recorded server-side for an operator to resolve |
+| The provider's answer could not be read | 502 | `topup.unconfirmed` | `POST /v1/account/credits/top-up` only (SONNY-215). The charge was attempted and its answer could not be read, so **money may have moved and nothing was granted for it**. **Not retryable, which is why it is not `provider.unavailable`**: a client told to retry would buy a second pack to recover from a first one it cannot see. The provider's order id is recorded server-side for an operator to resolve. **Never answered over a row that says granted** (SONNY-435, PR #236's fresh review): two attempts can finalize one order, and the later one's settle writes nothing when the row is already closed; that caller answers from the row — `200` with the pack when the row says granted, `402 topup.declined` when it says declined — and this code only when the row itself is unconfirmed |
 | Client below the minimum supported version | 410 | `version.unsupported` | Section 8.3 |
 | Sign-in code wrong, expired or already used | 400 | `auth.code_invalid`, `auth.code_expired`, `auth.code_used` | Three distinct codes because SONNY-127 and SONNY-128 both need to tell them apart |
 
@@ -2070,7 +2070,12 @@ such decision this table does not override.** It answers **`502 topup.unconfirme
 `provider.timeout` invites the retry that buys a second pack — the defect PR #196 found and closed.
 The deadline bounds the *answer* and never the work: the attempt row already carries the provider's
 order id, written before anything can charge, so the charge that outran the deadline settles that row
-and the account's next attempt resolves it rather than starting again.
+and the account's next attempt resolves it rather than starting again. **A second attempt that arrives
+while the first is still finalizing answers from the row the first one wrote** (SONNY-435): its own
+settle writes nothing onto a closed row, and it answers `200` with the pack when the row says granted,
+whatever its own reading of the provider was — never `502 topup.unconfirmed` over a grant. The one move
+a closed row takes is a grant onto a decline, because the provider's `paid` beats its own earlier
+decline and `granted` stays final.
 
 **Underneath all of that, the pool sets a `statement_timeout`, and it is the only bound in this
 document the database itself enforces** (SONNY-427). Every other number here is a timer this process

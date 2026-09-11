@@ -153,7 +153,16 @@ export interface TopUpAttemptStore {
     readonly provider: string;
     readonly periodStart: Date;
   }) => Promise<OutstandingTopUp | undefined>;
-  /** Record how the attempt ended, what it bought, and what it cost. */
+  /**
+   * Record how the attempt ended, what it bought, and what it cost — **and say whether the record
+   * took, with the row as it stands afterwards** (SONNY-435, PR #236's fresh review, F2).
+   *
+   * A settle writes only onto a row still waiting for an answer, or a grant onto a decline; one
+   * that arrives after the row was closed writes nothing. The caller that arrived late has to
+   * answer its client from the row rather than from the answer it meant to write, because the
+   * row is the record of the money: a late `unconfirmed` settle over a grant must not tell the
+   * client the charge could not be confirmed while the row says the pack was granted.
+   */
   readonly settle: (input: {
     readonly topUpId: string;
     readonly outcome: TopUpAttemptOutcome;
@@ -163,7 +172,17 @@ export interface TopUpAttemptStore {
     readonly chargedAmount: number | undefined;
     readonly chargedCurrency: string | undefined;
     readonly settledAt: Date;
-  }) => Promise<void>;
+  }) => Promise<TopUpSettlement>;
+}
+
+/**
+ * What a settle found (SONNY-435): whether it wrote, and the outcome and credits the row holds
+ * afterwards — the caller's own answer when it wrote, and the earlier caller's when it did not.
+ */
+export interface TopUpSettlement {
+  readonly wrote: boolean;
+  readonly outcome: TopUpAttemptOutcome;
+  readonly credits: number;
 }
 
 export interface TopUpDeps {
@@ -250,22 +269,33 @@ async function chargeAndSettle(
    *
    * A failure is swallowed rather than logged here because this module holds no logger; the route
    * logs every refusal it returns, and `unconfirmed` is the one it names for an operator.
+   *
+   * **A settle that wrote nothing answers from the row** (SONNY-435, PR #236's fresh review, F2).
+   * Two attempts can finalize one order — the first outruns the route's deadline and grants late,
+   * the second found the row outstanding and meets the provider's `412` — and the second's settle
+   * then matches nothing, because the row is closed. Its own reading of the provider is not what
+   * happened to the money; the row is. So a late caller whose write was refused answers `granted`
+   * when the row says granted, `declined` when it says declined, and `unconfirmed` only when the
+   * row itself is unconfirmed — never `unconfirmed` over a grant, which §7.2 defines as "money may
+   * have moved and nothing was granted for it" and which was false of that row.
    */
-  const settleOrReportUnconfirmed = async (
+  const settleAndAnswer = async (
     row: Parameters<TopUpAttemptStore["settle"]>[0],
-    onSettled: TopUpResult,
+    onWrote: TopUpResult,
   ): Promise<TopUpResult> => {
+    let settlement: TopUpSettlement;
     try {
-      await deps.attempts.settle(row);
+      settlement = await deps.attempts.settle(row);
     } catch {
       return { kind: "refused", refusal: "unconfirmed" };
     }
-    return onSettled;
+    if (settlement.wrote) return onWrote;
+    return answerFromRow(settlement);
   };
 
   const charge = await deps.provider.finalizeTopUpOrder(attempt.orderId);
   if (charge.kind === "charged") {
-    return await settleOrReportUnconfirmed({
+    return await settleAndAnswer({
       topUpId: attempt.topUpId,
       outcome: "granted",
       credits: pack.credits,
@@ -279,7 +309,7 @@ async function chargeAndSettle(
     }, { kind: "granted", credits: pack.credits });
   }
   if (charge.kind === "declined") {
-    return await settleOrReportUnconfirmed({
+    return await settleAndAnswer({
       topUpId: attempt.topUpId,
       outcome: "declined",
       credits: 0,
@@ -298,7 +328,7 @@ async function chargeAndSettle(
       : charge.kind === "rejected"
         ? "rejected"
         : "unconfirmed";
-  return await settleOrReportUnconfirmed({
+  return await settleAndAnswer({
     topUpId: attempt.topUpId,
     outcome: "unconfirmed",
     credits: 0,
@@ -307,6 +337,25 @@ async function chargeAndSettle(
     chargedCurrency: undefined,
     settledAt: input.now,
   }, { kind: "refused", refusal });
+}
+
+/**
+ * The answer a caller gives when its settle wrote nothing: the row's own outcome (SONNY-435).
+ * `provider_error` cannot be met here — such a row carries no order id, so `readOutstandingTopUp`
+ * never hands one to a charge — and is answered as the provider being unavailable rather than as a
+ * grant or a decline it never was.
+ */
+function answerFromRow(settlement: TopUpSettlement): TopUpResult {
+  switch (settlement.outcome) {
+    case "granted":
+      return { kind: "granted", credits: settlement.credits };
+    case "declined":
+      return { kind: "refused", refusal: "declined" };
+    case "unconfirmed":
+      return { kind: "refused", refusal: "unconfirmed" };
+    case "provider_error":
+      return { kind: "refused", refusal: "unavailable" };
+  }
 }
 
 /**
@@ -383,7 +432,8 @@ export async function attemptTopUp(deps: TopUpDeps, input: TopUpInput): Promise<
   const order = await deps.provider.createTopUpOrder({ customerId, productId: pack.productId });
   if (order.kind !== "created") {
     // Nothing exists at the provider, so this row is closed rather than left resolvable — there is
-    // no object for a later attempt to ask about.
+    // no object for a later attempt to ask about. The row was claimed a moment ago and carries no
+    // order id, so nothing else can reach it, and the settle's report is not consulted.
     await deps.attempts.settle({
       topUpId: attempt.topUpId,
       outcome: outcomeForFailedOrder(order.kind),
@@ -551,24 +601,36 @@ export async function readOutstandingTopUp(
  * write: a closed row is closed, in either direction, and the two resolvable states are the same two
  * `readOutstandingTopUp` names.
  *
- * **A settle that matched nothing is silent here**, as the matching one is: this module holds no
- * logger, the store's contract is `Promise<void>`, and the caller that arrives late has already
- * answered its client `unconfirmed` from the provider's own words. What that costs is one pessimistic
- * answer — the user is told the charge could not be confirmed while the row already says granted —
- * and their next read of the balance shows the pack, because `readToppedUpCredits` sums granted rows.
- * Reporting the refusal to the caller so it can answer `granted` instead is the follow-up SONNY-435's
- * closing comment names.
+ * **A grant lands on a decline, and that is the one move off a closed row** (PR #236's fresh review,
+ * F1; the founders' decision of 2026-09-11). The first version refused every settle on a closed row
+ * "in either direction", and the review measured what that costs in the direction nobody had run:
+ * attempt A's finalize answers `declined` and A settles the row `declined`; attempt B, which had
+ * already read the row as outstanding, gets `charged` for the same order; B's `granted` settle
+ * matches nothing. The provider says money moved, the row says declined with no amount, the balance
+ * shows nothing topped up, and `billing-debts` reports nothing, because `declined` is not debt — a
+ * charge nobody records, behind an answer B still gave as a success. The provider's `paid` beats its
+ * own earlier decline, `granted` stays final, and nothing else moves: `unconfirmed`, `declined` and
+ * `provider_error` never overwrite a grant, and nothing overwrites a decline but a grant.
+ *
+ * **A settle that matched nothing is not silent any more, and the reading that called it
+ * "pessimistic" was wrong** (F1 and F2). The first version said a refused settle costs "one
+ * pessimistic answer" — the late caller tells its client `unconfirmed` while the row says granted.
+ * In the direction above the late answer was `granted` over a row that said declined, which is the
+ * opposite of pessimistic; and even over a grant, §7.2 defines `topup.unconfirmed` as "money may have
+ * moved and nothing was granted for it", which was false of that row. So the statement returns the
+ * row it wrote, or the row it found when it wrote nothing, and `chargeAndSettle` answers from that.
  */
 export async function settleTopUpAttempt(
   client: pg.Client,
   input: Parameters<TopUpAttemptStore["settle"]>[0],
-): Promise<void> {
-  await client.query(
+): Promise<TopUpSettlement> {
+  const written = await client.query<{ outcome: TopUpAttemptOutcome; credits: number }>(
     `UPDATE sonny.credit_topup
         SET outcome = $2, credits = $3, provider_order_id = coalesce($4, provider_order_id),
             charged_amount = $6, charged_currency = $7, settled_at = $5
       WHERE topup_id = $1
-        AND outcome IN ('attempted', 'unconfirmed')`,
+        AND (outcome IN ('attempted', 'unconfirmed') OR (outcome = 'declined' AND $2 = 'granted'))
+      RETURNING outcome, credits`,
     [
       input.topUpId,
       input.outcome,
@@ -579,6 +641,22 @@ export async function settleTopUpAttempt(
       input.chargedCurrency ?? null,
     ],
   );
+  const wrote = written.rows[0];
+  if (wrote !== undefined) {
+    return { wrote: true, outcome: wrote.outcome, credits: Number(wrote.credits) };
+  }
+  const found = await client.query<{ outcome: TopUpAttemptOutcome; credits: number }>(
+    "SELECT outcome, credits FROM sonny.credit_topup WHERE topup_id = $1",
+    [input.topUpId],
+  );
+  const row = found.rows[0];
+  if (row === undefined) {
+    // A settle names a row that `claim` wrote; a missing one is a bug, and the guard above the
+    // charge path turns the throw into `unconfirmed`, which is the honest answer for a record that
+    // is not there.
+    throw new Error(`credit_topup ${input.topUpId} is not there to settle`);
+  }
+  return { wrote: false, outcome: row.outcome, credits: Number(row.credits) };
 }
 
 export function postgresTopUpAttemptStore(withConnection: WithConnection): TopUpAttemptStore {

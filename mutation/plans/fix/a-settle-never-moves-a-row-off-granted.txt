@@ -6,34 +6,55 @@
 # with a lane database up (CLAUDE.md's recipe). Under scripts/mutate-all's default command every
 # mutant here reports SURVIVED with no test having seen it (SONNY-455).
 #
-# Killers expected, all in test/topup.db.test.ts's SONNY-435 block: T1 by "a settle that arrives
-# after the grant leaves the grant standing", "a declined row does not take a later grant either" and
-# "a provider_error row does not take a later settle either"; T2 by "an unconfirmed row still takes
-# the grant that arrives after it"; T3 by "a provider_error row does not take a later settle either"
-# alone (PR #236's first review wrote T3 and watched it survive before that test existed). All
-# measured by hand on the branch, at the lane database.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #236, 2026-09-11),
+# all in test/topup.db.test.ts: T1 by "a settle that arrives after the grant leaves the grant
+# standing", "a provider_error row does not take a later settle either", "a settle that matched
+# nothing reports the row it found" and the interleavings; T2 by "an unconfirmed row still takes the
+# grant that arrives after it"; T3 by "a provider_error row does not take a later settle either"
+# alone (PR #236's first review wrote T3 and watched it survive before that test existed); T4 by "a
+# declined row takes a later grant, because paid beats the provider's own earlier decline" and "a
+# grant that arrives after a decline lands, and the row says granted"; T5 by "the late caller whose
+# settle matched nothing is answered from the grant, not unconfirmed" and test/topup.test.ts's late
+# caller tests, so T5 alone is also killed by the unit suite (npm test).
 
 >>> mutant T1 the condition dropped: any settle moves any row, the grant included
 >>> file server/src/credit/topup.ts
 >>> from
       WHERE topup_id = $1
-        AND outcome IN ('attempted', 'unconfirmed')`,
+        AND (outcome IN ('attempted', 'unconfirmed') OR (outcome = 'declined' AND $2 = 'granted'))
 >>> to
-      WHERE topup_id = $1`,
+      WHERE topup_id = $1
 >>> end
 
 >>> mutant T2 only a row never answered may settle: an unconfirmed row would refuse its own grant
 >>> file server/src/credit/topup.ts
 >>> from
-        AND outcome IN ('attempted', 'unconfirmed')`,
+        AND (outcome IN ('attempted', 'unconfirmed') OR (outcome = 'declined' AND $2 = 'granted'))
 >>> to
-        AND outcome = 'attempted'`,
+        AND (outcome = 'attempted' OR (outcome = 'declined' AND $2 = 'granted'))
 >>> end
 
 >>> mutant T3 the third closed outcome let back in: a provider_error row may be settled again
 >>> file server/src/credit/topup.ts
 >>> from
-        AND outcome IN ('attempted', 'unconfirmed')`,
+        AND (outcome IN ('attempted', 'unconfirmed') OR (outcome = 'declined' AND $2 = 'granted'))
 >>> to
-        AND outcome IN ('attempted', 'unconfirmed', 'provider_error')`,
+        AND (outcome IN ('attempted', 'unconfirmed', 'provider_error') OR (outcome = 'declined' AND $2 = 'granted'))
+>>> end
+
+>>> mutant T4 the declined-to-granted arm dropped: a grant after a decline is refused and the charge goes unrecorded (PR #236's fresh review, F1)
+>>> file server/src/credit/topup.ts
+>>> from
+        AND (outcome IN ('attempted', 'unconfirmed') OR (outcome = 'declined' AND $2 = 'granted'))
+>>> to
+        AND outcome IN ('attempted', 'unconfirmed')
+>>> end
+
+>>> mutant T5 the late caller answers what it meant to write rather than what the row says (PR #236's fresh review, F2)
+>>> file server/src/credit/topup.ts
+>>> from
+    if (settlement.wrote) return onWrote;
+    return answerFromRow(settlement);
+>>> to
+    return onWrote;
 >>> end

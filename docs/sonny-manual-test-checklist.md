@@ -4683,25 +4683,29 @@ says to release it:
 
 A top-up row that was already granted could be written back to unconfirmed with zero credits by a
 second attempt that arrived while the first was still finalizing. The settle now writes only onto a
-row still waiting for an answer. Server half only; needs a lane database with the migrations applied.
+row still waiting for an answer, or a grant onto a decline (the founders' decision of 2026-09-11 after
+the fresh review), and a settle that wrote nothing answers from the row. Server half only; needs a
+lane database with the migrations applied.
 
-- [ ] The late settle by hand, with the statements verbatim (PR #236's first review built the
-      insert a reader would write from a description and hit two `NOT NULL` violations before the
-      demonstration; the SQL below carries every required column, as SONNY-408's rows above do):
+- [ ] The shipped code, at the lane database (PR #236's fresh review, F5: the hand-typed SQL that
+      stood here could not fail when the product regressed, and `psql` is not installed on this Mac).
+      With a lane database up by `CLAUDE.md`'s recipe and its port in `PORT`:
 
       ```
-      psql "$DATABASE_URL" -c "INSERT INTO sonny.credit_topup (topup_id, account_id, provider, provider_order_id, period_start, attempt_no, outcome, consented_at, runs_left_at_trigger, credits_remaining_at_trigger) VALUES ('00000000-0000-4000-8000-000000000435', gen_random_uuid(), 'polar', 'order-planted-435', date_trunc('month', now()), 1, 'attempted', now(), 0, 0);"
-      psql "$DATABASE_URL" -c "UPDATE sonny.credit_topup SET outcome = 'granted', credits = 500, charged_amount = 500, charged_currency = 'USD', settled_at = now() WHERE topup_id = '00000000-0000-4000-8000-000000000435' AND outcome IN ('attempted', 'unconfirmed');"
-      psql "$DATABASE_URL" -c "UPDATE sonny.credit_topup SET outcome = 'unconfirmed', credits = 0, charged_amount = NULL, charged_currency = NULL, settled_at = now() WHERE topup_id = '00000000-0000-4000-8000-000000000435' AND outcome IN ('attempted', 'unconfirmed');"
-      psql "$DATABASE_URL" -c "SELECT outcome, credits FROM sonny.credit_topup WHERE topup_id = '00000000-0000-4000-8000-000000000435';"
-      psql "$DATABASE_URL" -c "DELETE FROM sonny.credit_topup WHERE topup_id = '00000000-0000-4000-8000-000000000435';"
+      cd server && npm install && npm run build
+      DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm run migrate -- up
+      DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npx vitest run test/topup.db.test.ts -t "SONNY-435" --reporter=verbose
       ```
 
-      The first `UPDATE` prints `UPDATE 1`, the second prints **`UPDATE 0`**, and the `SELECT` reads
-      `granted | 500`. The condition is the one the code runs — `server/src/credit/topup.ts`'s
-      `settleTopUpAttempt` carries it.
-- [ ] `npm run test:db` at the lane database: `test/topup.db.test.ts`'s four SONNY-435 tests pass
-      with the rest of the suite.
+      The runner names, and passes, the nine tests of the two `SONNY-435` blocks, among them
+      `a settle that arrives after the grant leaves the grant standing`, `a declined row takes a
+      later grant, because paid beats the provider's own earlier decline`, `the late caller whose
+      settle matched nothing is answered from the grant, not unconfirmed`, `a grant that arrives
+      after a decline lands, and the row says granted` and `a late settle that waits on the grant's
+      row lock writes nothing once the grant commits`; the tally reads `Tests  9 passed | 27 skipped (36)` — nine, the file's other twenty-seven deselected by `-t`, none failed.
+      Each drives `settleTopUpAttempt`, or `attemptTopUp` over the real store, so a statement that
+      regressed fails a named test here.
+- [ ] `npm run test:db` at the lane database: the whole database suite passes with those nine.
 
 ## 8. How to report back
 

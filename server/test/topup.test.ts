@@ -108,6 +108,11 @@ function recordingAttempts(
     readonly outstanding?: { topUpId: string; orderId: string };
     /** Make the first `settle` throw, which is the window F1 is about. */
     readonly settleThrowsOnce?: boolean;
+    /**
+     * The state the outstanding row is already in when the attempt arrives — `granted` with its
+     * credits is the row another attempt closed while this one was finalizing (SONNY-435).
+     */
+    readonly outstandingRow?: { outcome: "granted" | "declined" | "unconfirmed"; credits: number };
   } = {},
 ): TopUpAttemptStore & {
   readonly claims: Parameters<TopUpAttemptStore["claim"]>[0][];
@@ -120,6 +125,10 @@ function recordingAttempts(
   const recorded: Parameters<TopUpAttemptStore["recordOrder"]>[0][] = [];
   const asked: Parameters<TopUpAttemptStore["outstanding"]>[0][] = [];
   let settleThrowsLeft = options.settleThrowsOnce === true ? 1 : 0;
+  const rows = new Map<string, { outcome: "attempted" | "granted" | "declined" | "unconfirmed" | "provider_error"; credits: number }>();
+  if (options.outstanding !== undefined) {
+    rows.set(options.outstanding.topUpId, options.outstandingRow ?? { outcome: "attempted", credits: 0 });
+  }
   return {
     claims,
     settlements,
@@ -146,9 +155,74 @@ function recordingAttempts(
         throw new Error("connection terminated unexpectedly");
       }
       settlements.push(input);
+      // **The statement's own rule, so this fake can refuse what Postgres refuses** (PR #236's
+      // fresh review, F3): a settle writes onto a row still waiting for an answer, or a grant onto
+      // a decline, and nothing else. The first version of this fake took every settle, which is
+      // why no unit test could say anything about a late caller's answer.
+      const before = rows.get(input.topUpId);
+      if (
+        before !== undefined &&
+        before.outcome !== "attempted" &&
+        before.outcome !== "unconfirmed" &&
+        !(before.outcome === "declined" && input.outcome === "granted")
+      ) {
+        return { wrote: false, outcome: before.outcome, credits: before.credits };
+      }
+      rows.set(input.topUpId, { outcome: input.outcome, credits: input.credits });
+      return { wrote: true, outcome: input.outcome, credits: input.credits };
     },
   };
 }
+
+/**
+ * **A late caller answers from the row** (SONNY-435, PR #236's fresh review, F2 and F3): the
+ * outstanding row was closed `granted` by another attempt while this one was finalizing, this one's
+ * provider reading could not be read, its `unconfirmed` settle writes nothing — and it answers
+ * `granted` with the row's credits, never `topup.unconfirmed` over a grant. The fake refuses the
+ * settle exactly as the statement does, which is what lets a unit test see this.
+ */
+describe("a late caller answers from the row (SONNY-435)", () => {
+  it("answers granted when its unconfirmed settle met a row already granted", async () => {
+    const attempts = recordingAttempts({
+      outstanding: { topUpId: "topup-late", orderId: "order-late" },
+      outstandingRow: { outcome: "granted", credits: 500 },
+    });
+    const result = await attemptTopUp(
+      depsFor(scriptedProvider({ kind: "unavailable", reason: "the provider could not be reached" }), attempts),
+      { accountId: ACCOUNT, balance: exhausted(), consentedAt: AT, now: AT },
+    );
+
+    expect(result).toEqual({ kind: "granted", credits: 500 });
+    expect(attempts.settlements.map((s) => s.outcome)).toEqual(["unconfirmed"]);
+  });
+
+  it("answers declined when its unconfirmed settle met a row already declined", async () => {
+    const attempts = recordingAttempts({
+      outstanding: { topUpId: "topup-late", orderId: "order-late" },
+      outstandingRow: { outcome: "declined", credits: 0 },
+    });
+    const result = await attemptTopUp(
+      depsFor(scriptedProvider({ kind: "unavailable", reason: "the provider could not be reached" }), attempts),
+      { accountId: ACCOUNT, balance: exhausted(), consentedAt: AT, now: AT },
+    );
+
+    expect(result).toEqual({ kind: "refused", refusal: "declined" });
+  });
+
+  it("answers granted when its grant landed on a row already declined", async () => {
+    const attempts = recordingAttempts({
+      outstanding: { topUpId: "topup-late", orderId: "order-late" },
+      outstandingRow: { outcome: "declined", credits: 0 },
+    });
+    const result = await attemptTopUp(
+      depsFor(scriptedProvider(charged("order-late")), attempts),
+      { accountId: ACCOUNT, balance: exhausted(), consentedAt: AT, now: AT },
+    );
+
+    expect(result).toEqual({ kind: "granted", credits: 500 });
+    expect(attempts.settlements.at(-1)?.outcome).toBe("granted");
+  });
+});
 
 /** The catalogue every decision test uses: ten credits a run, a thousand a month, one a iteration. */
 function catalogue() {
