@@ -4529,6 +4529,15 @@ banner's own sentence, "Open Memory in Command Center to clear it."
       recovers. Type the same save again: it succeeds.
 - [ ] A failure that is not a file (`calc banana`, or a research command with the gateway
       stopped): its sentence is unchanged, with no "Open Memory" on the end.
+- [ ] With `snippets.json` poisoned again, an item job whose every item saves a snippet (`save these
+      as snippets: addr = 221B Baker Street, phone = 555-0100`): the failure ends with "Open Memory
+      in Command Center to clear it." — this door reports the first item's sentence rather than the
+      file error itself, and it used to arrive bare (PR #233's second review).
+- [ ] Quit Sonny; `echo garbage > ~/Library/Application\ Support/Sonny/resumable-tasks.json`;
+      launch, Command Center › Tasks › a standing watcher row › Stop: the error reads "Could not stop
+      watching “…”: A local data file exists but could not be decrypted or decoded. Open Memory in
+      Command Center to clear it." (A watcher has to exist first: create one before poisoning the
+      file, or read the sentence off any Stop press against the poisoned file.)
 
 ## 8. How to report back
 
