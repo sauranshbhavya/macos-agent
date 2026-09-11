@@ -4529,22 +4529,37 @@ banner's own sentence, "Open Memory in Command Center to clear it."
       recovers. Type the same save again: it succeeds.
 - [ ] A failure that is not a file (`calc banana`, or a research command with the gateway
       stopped): its sentence is unchanged, with no "Open Memory" on the end.
-- [ ] With `snippets.json` poisoned again, an item job whose every item saves a snippet (`save these
-      as snippets: addr = 221B Baker Street, phone = 555-0100`): the failure ends with "Open Memory
-      in Command Center to clear it." — this door reports the first item's sentence rather than the
-      file error itself, and it used to arrive bare (PR #233's second review).
-- [ ] Quit Sonny; `echo garbage > ~/Library/Application\ Support/Sonny/resumable-tasks.json`;
-      launch, Command Center › Tasks › a standing watcher row › Stop: the error reads "Could not stop
-      watching “…”: A local data file exists but could not be decrypted or decoded. Open Memory in
-      Command Center to clear it." (A watcher has to exist first: create one before poisoning the
-      file, or read the sentence off any Stop press against the poisoned file.)
-- [ ] With `snippets.json` poisoned, Command Center › Memory › Snippets › a row's Delete (the row
-      reads "Can't be read", so use the row-level Delete rather than a per-entry one if only that is
-      offered): the error ends with "Open Memory in Command Center to clear it." (PR #233's third
-      review: the Memory rows' shared write helper, behind seven Delete and Forget controls).
-- [ ] With `routines.json` poisoned and a routine created beforehand, Routines › the routine › Delete:
+- [ ] Best effort, since whether the planner builds an item job is its choice: with `snippets.json`
+      poisoned again, `save these as snippets: addr = 221B Baker Street, phone = 555-0100`: the
+      failure ends with "Open Memory in Command Center to clear it." whichever route the planner
+      took; the item-job door itself is held by the unit test
+      `anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut`.
+- [ ] The watcher Stop. **Sonny stays running for this row**: a relaunch empties the Watching list
+      when the file cannot be read, so there would be no row to press. Create a standing watcher
+      (`watch for the order status on this page`, or any watcher command) and see it on Command
+      Center › **Routines** › Watching. Then, with Sonny still running, `echo garbage >
+      ~/Library/Application\ Support/Sonny/resumable-tasks.json`, and press that row's Stop: the
+      error reads "Could not stop watching “…”: A local data file exists but could not be decrypted
+      or decoded. Open Memory in Command Center to clear it."
+- [ ] The per-entry Delete. **Sonny stays running with the entries on screen**: open Command Center
+      › Memory › Snippets with a saved snippet listed, then `echo garbage >
+      ~/Library/Application\ Support/Sonny/snippets.json` with Sonny still running, then press that
+      entry's own Delete (not the row-level Delete, which is the recovery and moves the file aside):
+      the error ends with "Open Memory in Command Center to clear it." (PR #233's third review: the
+      Memory rows' shared write helper, behind seven Delete and Forget controls; the row-level
+      Delete is row 2 above.)
+- [ ] With Sonny running and a routine created beforehand, `echo garbage >
+      ~/Library/Application\ Support/Sonny/routines.json`, then Routines › the routine › Delete:
       "Could not delete routine: A local data file exists but could not be decrypted or decoded.
-      Open Memory in Command Center to clear it."
+      Open Memory in Command Center to clear it." Then, on the same routine, Remove schedule (or
+      the row's schedule toggle): the storage notice reads "Sonny could not save this routine's
+      schedule: …" ending with the same way out (PR #233's fresh review, F1).
+- [ ] The notice channel (PR #233's fresh review, F2). Quit Sonny; `echo garbage >
+      ~/Library/Application\ Support/Sonny/task-history.json`; launch (the storage banner names
+      the way out); type `2 + 2`: the answer shows, and the notice now reads "Sonny could not save
+      this task to task history: A local data file exists but could not be decrypted or decoded.
+      Open Memory in Command Center to clear it." — the way out still there after a task that
+      succeeded.
 
 ## 8. How to report back
 

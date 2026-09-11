@@ -77,3 +77,27 @@
 >>> to
             setError("Could not delete routine: \(error.localizedDescription)")
 >>> end
+
+>>> mutant W8 a task's own bookkeeping reports the bare decrypt sentence on the notice again (PR #233's fresh review, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save this task to task history: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save this task to task history: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W9 the schedule controls report the bare decrypt sentence again (PR #233's fresh review, F1)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save this routine's schedule: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save this routine's schedule: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W10 declining a resume offer reports the bare decrypt sentence again (PR #233's fresh review, F1)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(error.localizedDescription)"
+>>> end

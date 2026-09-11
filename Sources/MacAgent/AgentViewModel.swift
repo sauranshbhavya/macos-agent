@@ -2969,6 +2969,11 @@ final class AgentViewModel: ObservableObject {
     /// errors in this app are one-off task/validation outcomes, not environment problems; the small
     /// number of genuinely persistent cases (missing API key, denied mic permission, unavailable
     /// hotkey) pass `persistent: true` explicitly.
+    func setError(_ message: String, persistent: Bool = false) {
+        errorMessage = message
+        errorIsPersistent = persistent
+    }
+
     /// The failure a run shows for a thrown error (SONNY-449). Almost always the error's own
     /// sentence; for an unreadable local file it adds the way out the storage banner already
     /// names, because the widget's failure panel is the surface the user is actually looking at,
@@ -3000,11 +3005,6 @@ final class AgentViewModel: ObservableObject {
     /// The decrypt failure's own sentence, read off the type rather than written twice.
     nonisolated private static let unreadableStoreSentence =
         LocalStorageEncryptionError.undecodableLocalData(underlying: "").localizedDescription
-
-    func setError(_ message: String, persistent: Bool = false) {
-        errorMessage = message
-        errorIsPersistent = persistent
-    }
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
     /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
@@ -5411,7 +5411,7 @@ final class AgentViewModel: ObservableObject {
             refreshSavedItems()
         } catch {
             recordLocalStorageWriteFailure(
-                "Sonny could not save this routine's schedule: \(error.localizedDescription)"
+                "Sonny could not save this routine's schedule: \(Self.failureMessage(for: error))"
             )
         }
     }
@@ -6809,7 +6809,7 @@ final class AgentViewModel: ObservableObject {
             // borrow its wording — "could not be decrypted or decoded" describes an existing file
             // that will not read back, which is the wrong problem entirely.
             recordLocalStorageWriteFailure(
-                "Sonny could not save that you allowed it to control \(displayName): \(error.localizedDescription)"
+                "Sonny could not save that you allowed it to control \(displayName): \(Self.failureMessage(for: error))"
             )
             return false
         }
@@ -7291,7 +7291,7 @@ final class AgentViewModel: ObservableObject {
             // follow-up could be aimed at. That is worth saying plainly, which is what the wording
             // does — it is not worth saying in the slot that means the task itself failed.
             recordLocalStorageWriteFailure(
-                "Sonny could not save this task to task history: \(error.localizedDescription)"
+                "Sonny could not save this task to task history: \(Self.failureMessage(for: error))"
             )
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
             return nil
@@ -7350,7 +7350,7 @@ final class AgentViewModel: ObservableObject {
                 evictedTaskIDs: evictedTaskIDs
             )
         } catch {
-            recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(error.localizedDescription)")
+            recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(Self.failureMessage(for: error))")
             logStore.append(.observe, "Could not record this task's plan: \(error.localizedDescription)")
         }
     }
@@ -7558,7 +7558,7 @@ final class AgentViewModel: ObservableObject {
                 try resumableTaskStore.delete(id: task.id)
             } catch {
                 recordLocalStorageWriteFailure(
-                    "Sonny could not clear the record of a task that has now finished: \(error.localizedDescription)"
+                    "Sonny could not clear the record of a task that has now finished: \(Self.failureMessage(for: error))"
                 )
                 logStore.append(.observe, "Could not clear an unfinished-task record: \(error.localizedDescription)")
             }
@@ -7584,7 +7584,7 @@ final class AgentViewModel: ObservableObject {
         do {
             try resumableTaskStore.save(task)
         } catch {
-            recordLocalStorageWriteFailure("Sonny \(what): \(error.localizedDescription)")
+            recordLocalStorageWriteFailure("Sonny \(what): \(Self.failureMessage(for: error))")
             logStore.append(.observe, "Could not record an unfinished task: \(error.localizedDescription)")
         }
         refreshResumableTasks()
@@ -7779,7 +7779,7 @@ final class AgentViewModel: ObservableObject {
             try resumableTaskStore.save(declined)
         } catch {
             setError(
-                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(error.localizedDescription)"
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(Self.failureMessage(for: error))"
             )
             logStore.append(.observe, "Could not record a declined unfinished task: \(error.localizedDescription)")
         }
@@ -8498,7 +8498,7 @@ final class AgentViewModel: ObservableObject {
             evictedTaskIDs = try taskHistoryStore.record(record)
         } catch {
             recordLocalStorageWriteFailure(
-                "Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
+                "Sonny could not save this scheduled run to task history: \(Self.failureMessage(for: error))"
             )
             return
         }
@@ -8562,7 +8562,7 @@ final class AgentViewModel: ObservableObject {
             // twice over here. The honest consequence is narrow and worth saying: the run is in the
             // history, and a follow-up on it will have its command and its outcome but not its plan.
             recordLocalStorageWriteFailure(
-                "Sonny could not save what this scheduled run planned: \(error.localizedDescription)"
+                "Sonny could not save what this scheduled run planned: \(Self.failureMessage(for: error))"
             )
         }
     }
@@ -8584,7 +8584,7 @@ final class AgentViewModel: ObservableObject {
             refreshSavedItems()
         } catch {
             recordLocalStorageWriteFailure(
-                "Sonny could not pause this routine's schedule: \(error.localizedDescription)"
+                "Sonny could not pause this routine's schedule: \(Self.failureMessage(for: error))"
             )
         }
         scheduledRunNotice = "“\(name)” needs your approval to run, so Sonny paused its schedule instead of skipping it every time. \(cause) Run it yourself to review, then switch its schedule back on."
@@ -8618,7 +8618,7 @@ final class AgentViewModel: ObservableObject {
             try routineStore.advanceScheduleBaseline(routineNamed: routineName, to: occurrence)
         } catch {
             recordLocalStorageWriteFailure(
-                "Sonny could not save this routine's schedule state: \(error.localizedDescription)"
+                "Sonny could not save this routine's schedule state: \(Self.failureMessage(for: error))"
             )
         }
     }
@@ -8652,7 +8652,7 @@ final class AgentViewModel: ObservableObject {
             try routineStore.recordRun(routineNamed: name, at: occurrence)
         } catch {
             recordLocalStorageWriteFailure(
-                "Sonny could not save this routine's run history: \(error.localizedDescription)"
+                "Sonny could not save this routine's run history: \(Self.failureMessage(for: error))"
             )
         }
     }

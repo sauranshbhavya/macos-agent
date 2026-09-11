@@ -1467,6 +1467,112 @@ struct MemoryCommandCenterTests {
         #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
     }
 
+    /// **The schedule controls, through all four of their callers** (PR #233's fresh review, F1).
+    /// `applySchedule` reports on the storage notice, and its store loads before it writes, so a
+    /// routine still on screen after its file broke — `refreshSavedItems` keeps `savedRoutines` on
+    /// a failed load — had Delete naming the way out and Remove schedule not. Each door is driven
+    /// in the shape of the review's probe A: a real routine, a schedule where the door needs one,
+    /// the file rewritten under a foreign key, the press.
+    @Test(arguments: ScheduleDoor.allCases)
+    func aScheduleControlAgainstAnUnreadableFileNamesTheWayOut(door: ScheduleDoor) async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.command = "teach sonny a routine called morning"
+        fixture.viewModel.start(prebuiltPlan: planSavingRoutine(named: "Morning"))
+        try await fixture.waitUntilIdle()
+        if door.needsASchedule {
+            let saved = try #require(try fixture.routineStore.findRoutine(named: "Morning"))
+            fixture.viewModel.commitScheduleDraft(for: saved, cadence: .daily, hour: 9, minute: 0, weekday: 2, dayOfMonth: 1)
+            #expect(fixture.viewModel.localStorageNotice == nil, "the schedule could not be saved before the file was poisoned")
+        }
+        let routine = try #require(try fixture.routineStore.findRoutine(named: "Morning"))
+        #expect(routine.schedule != nil || !door.needsASchedule)
+        try fixture.writeUnreadableFile(at: fixture.routineStore.fileURL)
+
+        door.press(fixture.viewModel, routine)
+
+        let notice = try #require(fixture.viewModel.localStorageNotice, "\(door) reported nothing")
+        #expect(notice.hasPrefix("Sonny could not save this routine's schedule: A local data file exists but could not be decrypted or decoded."), "\(door): \(notice)")
+        #expect(notice.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut), "\(door): \(notice)")
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// **Declining a resume offer against an unreadable file** (the fresh review's F1). The offer
+    /// is on screen, the file breaks under the running app, and the decline's save loads first.
+    @Test
+    func decliningAResumeOfferAgainstAnUnreadableFileNamesTheWayOut() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let anHourAgo = Date().addingTimeInterval(-3_600)
+        let unfinished = ResumableTask(
+            command: "Write notes and open the page",
+            plan: AgentPlan(
+                summary: "Write notes, then open the page.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "draft", operation: .createLocalDraft, description: "Write the notes.", outputPath: fixture.root.appendingPathComponent("notes.md").path, draftTitle: "Notes", draftContent: "Body."),
+                    AgentStep(id: "url", operation: .openURL, description: "Open the page.", targetURL: "https://example.com/")
+                ]
+            ),
+            completedStepIDs: ["draft"],
+            startedAt: anHourAgo,
+            updatedAt: anHourAgo,
+            stopReason: .failed
+        )
+        try fixture.resumableTaskStore.save(unfinished)
+        fixture.viewModel.refreshResumableTasks()
+        #expect(fixture.viewModel.resumeOffer?.id == unfinished.id, "the offer never appeared, so there is no decline to press")
+        try fixture.writeUnreadableFile(at: fixture.resumableTaskStore.fileURL)
+
+        fixture.viewModel.declineResumeOffer()
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.hasPrefix("Sonny could not save that you declined this task, so it may offer it again after a relaunch: A local data file exists but could not be decrypted or decoded."))
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
+    /// **The Allow press at a screen-control session's per-app question** (the fresh review's
+    /// F1): the grant's store loads before it writes and reports on the storage notice.
+    @Test
+    func rememberingAnAppControlGrantAgainstAnUnreadableFileNamesTheWayOut() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.approvedAppStore.fileURL)
+
+        let remembered = fixture.viewModel.rememberAppControlGrant(bundleIdentifier: "com.apple.Safari", displayName: "Safari")
+
+        #expect(!remembered)
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save that you allowed it to control Safari: A local data file exists but could not be decrypted or decoded."))
+        #expect(notice.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
+    /// **A task's own bookkeeping against an unreadable file keeps the way out on the notice**
+    /// (the fresh review's F2, its probe B). The task-history file breaks, launch's refresh posts
+    /// the banner with the way out, and one successful run then fails to save its row: the write
+    /// notice replaces the banner — and the load banner is never republished, by the guard that
+    /// keeps an unchanged failure from posting every tick — so the notice the user is left with
+    /// has to carry the way out itself.
+    @Test
+    func aSuccessfulRunWhoseBookkeepingMeetsAnUnreadableFileKeepsTheWayOutOnTheNotice() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.taskHistoryStore.fileURL)
+        fixture.viewModel.refreshTaskHistory()
+        let banner = try #require(fixture.viewModel.localStorageNotice)
+        #expect(banner.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+
+        fixture.viewModel.command = "2 + 2"
+        fixture.viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+
+        #expect(fixture.viewModel.finalSummary == "2 + 2 = 4.")
+        #expect(fixture.viewModel.errorMessage == nil)
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save this task to task history: A local data file exists but could not be decrypted or decoded."))
+        #expect(notice.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
     /// The control: a failure that is not a file keeps its own sentence and gains no door.
     @Test
     func aTaskThatFailsForAnotherReasonNamesNoWayOut() async throws {
@@ -4369,6 +4475,44 @@ final class MemoryFixtureFinderRevealer: @unchecked Sendable {
 
 private struct MemoryFixtureShortcutCatalog: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] { [] }
+}
+
+/// The four controls that reach `applySchedule` (PR #233's fresh review, F1).
+enum ScheduleDoor: CaseIterable, CustomStringConvertible {
+    case removeSchedule
+    case commitDraft
+    case toggleEnabled
+    case unattendedTrust
+
+    var description: String {
+        switch self {
+        case .removeSchedule: return "Remove schedule"
+        case .commitDraft: return "the schedule editor's Save"
+        case .toggleEnabled: return "the Routines row's toggle"
+        case .unattendedTrust: return "the unattended-trust switch"
+        }
+    }
+
+    var needsASchedule: Bool {
+        switch self {
+        case .removeSchedule, .commitDraft: return false
+        case .toggleEnabled, .unattendedTrust: return true
+        }
+    }
+
+    @MainActor
+    func press(_ viewModel: AgentViewModel, _ routine: StoredRoutine) {
+        switch self {
+        case .removeSchedule:
+            viewModel.setRoutineSchedule(routine, to: nil)
+        case .commitDraft:
+            viewModel.commitScheduleDraft(for: routine, cadence: .daily, hour: 9, minute: 0, weekday: 2, dayOfMonth: 1)
+        case .toggleEnabled:
+            viewModel.setRoutineScheduleEnabled(routine, to: false)
+        case .unattendedTrust:
+            _ = viewModel.setRoutineUnattendedTrust(routine, to: true)
+        }
+    }
 }
 
 /// Returns nothing by default, so no test records a clipboard entry by accident. The one test that
