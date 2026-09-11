@@ -4516,6 +4516,20 @@ planner's reason goes to the log.
       `aRefusedPlansReasonReachesTheActLog`; the delta pass on PR #232's fix round removed a row
       here that sent you looking for it under a refused task.)
 
+### A task that meets an unreadable local file names the way out (new 2026-09-11, SONNY-449)
+
+Test 19 of the founders' pass hit a snippets file that would not decrypt: "A local data file exists
+but could not be decrypted or decoded." with Retry, and no door. The task failure now ends with the
+banner's own sentence, "Open Memory in Command Center to clear it."
+
+- [ ] Quit Sonny. `echo garbage > ~/Library/Application\ Support/Sonny/snippets.json`. Launch,
+      type `snippet save addr = 221B Baker Street`: the failure reads the decrypt sentence
+      followed by "Open Memory in Command Center to clear it."
+- [ ] Command Center › Memory › Snippets reads "Can't be read"; press Delete and confirm; the row
+      recovers. Type the same save again: it succeeds.
+- [ ] A failure that is not a file (`calc banana`, or a research command with the gateway
+      stopped): its sentence is unchanged, with no "Open Memory" on the end.
+
 ## 8. How to report back
 
 For each real finding, give me:

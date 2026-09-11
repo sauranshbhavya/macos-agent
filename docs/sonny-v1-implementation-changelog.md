@@ -171,6 +171,41 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/an-unreadable-store-names-the-way-out
+Status: complete
+Date: 2026-09-11
+Tickets: **SONNY-449** (a task that met an unreadable local file failed with the decrypt sentence and Retry, and nothing said where to clear it — the founders' pass, test 19, marked Blocked; the file's poisoning is environmental and the recovery exists on the Memory page, and this is the product's half). The wave 7 overnight session (run log SONNY-438), eighth branch of its chain, cut from `fix/a-refusal-in-sonnys-own-words` at `9b48eebd`.
+Reviewed by: sonny-code-reviewer agent, two passes on the PR (findings posted in full on the PR).
+
+Spec sections covered: none new; SONNY-239's recovery door, reached from one more surface.
+Files changed:
+- `Sources/MacAgentCore/LocalStorageEncryption.swift` — `LocalStorageEncryptionError.unreadableStoreWayOut`, the sentence the banner ends with, as one constant
+- `Sources/MacAgent/AgentViewModel.swift` — `failureMessage(for:)`: a run's thrown `undecodableLocalData` ends with that sentence, any other error is its own sentence; both run-failure catches read it; the banner's singular reads the constant
+- `Tests/MacAgentTests/MemoryCommandCenterTests.swift` — a snippet save into a poisoned file ends with the way out; a failure for another reason does not
+- `Tests/MacAgentTests/UnreadableStoreWayOutTests.swift` (new) — `failureMessage(for:)` over the store error and two others; the constant is the banner's sentence
+- `mutation/plans/fix/an-unreadable-store-names-the-way-out.txt`, `docs/sonny-manual-test-checklist.md` (a section naming SONNY-449), this entry
+
+Tests: TESTS_PLACEHOLDER
+Mutation plan: mutation/plans/fix/an-unreadable-store-names-the-way-out.txt (founder-triggered, not run on this branch) — three mutants: the way out dropped, every failure told to open Memory, the banner's singular off the constant.
+
+Behavior added: a task that fails on an unreadable local file says "Open Memory in Command Center to clear it." after the decrypt sentence, on the widget and in Command Center.
+Behavior preserved (required, no blanket claims):
+- The load-versus-write wording rule: `undecodableLocalData`'s own sentence is unchanged and still load/decrypt-only; write failures still take `recordLocalStorageWriteFailure`.
+- Every other run failure reads exactly the error's own sentence (the second Memory test and the unit test's two controls).
+- The storage banner's singular and plural sentences are byte-identical to before; the singular now reads the constant.
+- Voice and transcription failures (`setError` at their own sites) are untouched.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A recovery door that only the banner names is a door a task failure hides.** SONNY-239 put the way out on the storage banner, which posts once and can be dismissed; the task failure the same condition produces sits on the surface the user is looking at, with a Retry that cannot help until the file is cleared. Every store loads before it writes, so any task touching a poisoned file lands there. The rule: when a condition has one recovery, every surface that reports the condition names it, from one constant.
+
+**The block itself was not Sonny's**, and the ticket says so: the founders' snippets file would not decrypt (likeliest test 71's own `echo garbage` step run before its Delete half); the recovery is the Memory row's Delete, which test 71 passed on. The founders owe a rerun of test 19 after it.
+
+Known limitations / deferred scope: none.
+Open questions (required, write "none" if true): none.
+
+Next branch: fix/a-crlf-robots-file-keeps-its-rules (SONNY-437), cut from this branch's head — the first of the four deferred tickets.
+
 ### Branch: fix/a-refusal-in-sonnys-own-words
 Status: complete
 Date: 2026-09-11

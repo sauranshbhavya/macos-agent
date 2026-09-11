@@ -1412,6 +1412,42 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied while on"])
     }
 
+    // MARK: - A task that meets an unreadable file names the way out (SONNY-449)
+
+    /// The founders' pass, test 19: a snippet save into a snippets file that would not decrypt
+    /// failed with "A local data file exists but could not be decrypted or decoded." and Retry, and
+    /// nothing said where to clear it. The same condition's storage banner ends with a door; the
+    /// task failure ends with the same one now, from the same constant.
+    @Test
+    func aTaskThatMeetsAnUnreadableStoreNamesTheWayOut() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+
+        fixture.viewModel.command = "snippet save addr = 221B Baker Street"
+        fixture.viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.contains("could not be decrypted or decoded"))
+        #expect(message.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut))
+    }
+
+    /// The control: a failure that is not a file keeps its own sentence and gains no door.
+    @Test
+    func aTaskThatFailsForAnotherReasonNamesNoWayOut() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        fixture.viewModel.command = "calc banana"
+        fixture.viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(!message.contains(LocalStorageEncryptionError.unreadableStoreWayOut))
+        #expect(!message.contains("Open Memory"))
+    }
+
     // MARK: - Allowed apps
 
     @Test

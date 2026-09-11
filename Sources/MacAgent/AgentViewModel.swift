@@ -2709,7 +2709,7 @@ final class AgentViewModel: ObservableObject {
                 }
             } else {
                 markAllSteps(.failed)
-                setError(error.localizedDescription)
+                setError(Self.failureMessage(for: error))
                 logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
                 if let preparedRun {
                     recordPriorTaskContext(
@@ -2969,6 +2969,19 @@ final class AgentViewModel: ObservableObject {
     /// errors in this app are one-off task/validation outcomes, not environment problems; the small
     /// number of genuinely persistent cases (missing API key, denied mic permission, unavailable
     /// hotkey) pass `persistent: true` explicitly.
+    /// The failure a run shows for a thrown error (SONNY-449). Almost always the error's own
+    /// sentence; for an unreadable local file it adds the way out the storage banner already
+    /// names, because the widget's failure panel is the surface the user is actually looking at,
+    /// with a Retry that cannot help until the file is cleared. The founders' pass met exactly
+    /// this on a snippet save (test 19): the decrypt sentence, Retry, and no door. Every store
+    /// loads before it writes (SONNY-239), so any task that touches a poisoned file lands here.
+    nonisolated static func failureMessage(for error: any Error) -> String {
+        if case LocalStorageEncryptionError.undecodableLocalData = error {
+            return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+        }
+        return error.localizedDescription
+    }
+
     func setError(_ message: String, persistent: Bool = false) {
         errorMessage = message
         errorIsPersistent = persistent
@@ -5891,7 +5904,7 @@ final class AgentViewModel: ObservableObject {
         case 0:
             wayOut = ""
         case 1:
-            wayOut = " Open Memory in Command Center to clear it."
+            wayOut = " " + LocalStorageEncryptionError.unreadableStoreWayOut
         default:
             // The founder's two broken files were two rows, and the singular pronoun then covered
             // both (PR #110 review). Small, and it is the sentence someone reads while deciding
@@ -6951,7 +6964,7 @@ final class AgentViewModel: ObservableObject {
             }
         } catch {
             markAllSteps(.failed)
-            setError(error.localizedDescription)
+            setError(Self.failureMessage(for: error))
             logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
