@@ -4180,7 +4180,16 @@ final class AgentViewModel: ObservableObject {
 
         clipboardHistoryEnabled = settings.isEnabled
 
-        if settings.noticeDismissed && settings.isEnabled {
+        // **The switch alone decides, and `noticeDismissed` gates nothing** (SONNY-439). This read
+        // `settings.noticeDismissed && settings.isEnabled` for as long as a one-time notice in the
+        // old menu-bar popover was the setting's only surface: dismissing it was the consent, and
+        // that dismissal was what let monitoring start. The popover went, a persistent Settings
+        // toggle replaced the notice, and the flag kept gating — so a fresh install read the
+        // toggle as on while nothing polled, and `clipboard history` answered an empty list until
+        // the toggle was touched once (the founders' pass, test 18, versus test 73 which touches
+        // it). Consent lives on the two switches that exist: this one, and the Memory page's
+        // recording policy that `startClipboardHistoryMonitoring` asks before it starts.
+        if settings.isEnabled {
             startClipboardHistoryMonitoring()
         } else {
             stopClipboardHistoryMonitoring()

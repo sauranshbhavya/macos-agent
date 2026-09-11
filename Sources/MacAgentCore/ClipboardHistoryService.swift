@@ -14,6 +14,11 @@ public struct ClipboardHistoryItem: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct ClipboardHistorySettings: Codable, Equatable, Sendable {
+    /// Historical. Recorded that the one-time clipboard notice in the old menu-bar popover was
+    /// dismissed, and until SONNY-439 was the second half of the gate that let monitoring start.
+    /// The notice is gone, a persistent Settings toggle replaced it, and nothing reads this to
+    /// decide anything any more; it stays on the struct so every settings file already written
+    /// still decodes, and the toggle keeps writing it `true` so the file's shape does not change.
     public var noticeDismissed: Bool
     public var isEnabled: Bool
 

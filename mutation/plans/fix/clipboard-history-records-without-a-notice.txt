@@ -1,0 +1,44 @@
+# SONNY-439 — clipboard history records on a fresh install. Property: the Settings switch and the
+# Memory recording policy are the whole gate; the historical dismissed-notice flag decides nothing.
+# Killers expected: MemoryCommandCenterTests (aFreshInstallRecordsClipboardHistoryWithoutTheSwitch
+# BeingTouched, aSettingsFileWhoseNoticeWasNeverDismissedStillRecords,
+# theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays,
+# theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders).
+
+>>> mutant C1 the dismissed-flag gate put back beside the switch
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        if settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> to
+        if settings.noticeDismissed && settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> end
+
+>>> mutant C2 the switch ignored: monitoring starts whatever the setting says
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        if settings.isEnabled {
+            startClipboardHistoryMonitoring()
+        } else {
+            stopClipboardHistoryMonitoring()
+        }
+>>> to
+        startClipboardHistoryMonitoring()
+>>> end
+
+>>> mutant C3 the Memory recording policy no longer asked at the start door
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        guard memorySettings.allowsRecording(in: .clipboardHistory) else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
+>>> to
+>>> end

@@ -1258,6 +1258,63 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["something copied"])
     }
 
+    /// **A fresh install records without anyone touching a switch** (SONNY-439). The founders'
+    /// pass copied text, asked for `clipboard history` and got nothing (test 18), while test 73,
+    /// which flips the Settings toggle off and on, passed: `refreshClipboardHistoryNotice` required
+    /// `noticeDismissed` beside `isEnabled`, and the notice that set it went with the menu-bar
+    /// popover. No settings file at all is what a fresh install has, so this fixture writes none.
+    /// The control one test up writes the dismissed flag `true` and records; this one writes
+    /// nothing and must record just the same.
+    @Test
+    func aFreshInstallRecordsClipboardHistoryWithoutTheSwitchBeingTouched() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        #expect(!FileManager.default.fileExists(atPath: fixture.clipboardSettingsStore.fileURL.path))
+        fixture.pasteboard.text = "copied on a fresh install"
+        fixture.pasteboard.changeCount = 1
+
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        #expect(fixture.viewModel.clipboardHistoryEnabled)
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied on a fresh install"])
+    }
+
+    /// The exact file the founders' Mac held: the toggle never touched, so the dismissed flag is
+    /// still `false` beside the default `isEnabled == true`. This is the case the old gate refused.
+    @Test
+    func aSettingsFileWhoseNoticeWasNeverDismissedStillRecords() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: false, isEnabled: true)
+        )
+        fixture.pasteboard.text = "copied before any notice"
+        fixture.pasteboard.changeCount = 1
+
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["copied before any notice"])
+    }
+
+    /// The switch off is still the whole of what stops it, with the dismissed flag at its fresh
+    /// value — the control for the two above, so a gate that read nothing at all would fail here
+    /// rather than pass everywhere.
+    @Test
+    func theSwitchOffStillStopsRecordingWhateverTheNoticeFlagSays() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: false, isEnabled: false)
+        )
+        fixture.pasteboard.text = "copied with the switch off"
+        fixture.pasteboard.changeCount = 1
+
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        #expect(!fixture.viewModel.clipboardHistoryEnabled)
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
+    }
+
     /// **The master switch has to stop the clipboard *timer*, not merely answer a question.**
     ///
     /// Every other type is withheld by a guard consulted at write time; clipboard history is a 1s

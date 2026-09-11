@@ -4297,6 +4297,20 @@ choice. Compare against `main` at `6d7bf058` where a row says "as before".
 **The founders' fifth round (2026-09-10)**
 - [ ] Tasks: select a task. The list is 60% of the panel and the receipt 40% at the default window, and still 60/40 at full screen, in both sidebar states; at the 900-wide minimum the receipt holds its width and the list gives (the list about 434pt with the sidebar collapsed, 270 with it expanded), and the receipt's title, metadata, buttons and sections read whole (the buttons may fall to two rows); the Show picker and the search field share one row in the list; a thin rule separates the two and there is no drag handle.
 
+### Clipboard history on a fresh install (new 2026-09-11, SONNY-439)
+
+The recording gate used to wait for a one-time notice that no surface shows any more, so a fresh
+install read the Settings toggle as on while nothing was recorded (the founders' pass, test 18).
+The toggle's own value is the whole gate now. Do these on a Mac whose Settings › Security & Access
+clipboard toggle has never been touched (a fresh install, or `rm ~/Library/Application\ Support/Sonny/clipboard-history-settings.json` with Sonny quit).
+
+- [ ] Launch, copy three different texts from any app, type `clipboard history`: the three are
+      listed newest first, without Settings having been opened at all.
+- [ ] Type `clip <a word from one of them>`: only the matching entry is shown.
+- [ ] Settings › Security & Access › Watch clipboard history off; copy something new; `clipboard
+      history`: the new copy is not listed. Toggle it on; copy once more: listed.
+- [ ] Memory › the clipboard row's own switch off: a new copy is not listed; on: it is (as before).
+
 ## 8. How to report back
 
 For each real finding, give me:
