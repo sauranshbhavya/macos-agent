@@ -270,13 +270,30 @@ export function underTotalDeadline<T>(
   return totalDeadlineOfThisRequest.run({ expiresAt: Date.now() + deadline.total }, work);
 }
 
-/** `withConnection`, bounding each lease by what is left of the request's budget — if it has one. */
+/**
+ * `withConnection`, bounding each lease by what is left of the request's budget — if it has one.
+ *
+ * **What is left is read twice, and the second reading is the one that counts** (PR #235's review,
+ * F1). `withDatabaseDeadline` anchors its own deadline at `Date.now()` when it is *entered*, which
+ * is after `withConnection` has waited for a free pooled connection; a remainder computed before
+ * that wait would hand the wrapper a budget the wait had already spent, so time queued for a
+ * connection was added on top of the request's total rather than taken out of it — measured by the
+ * reviewer at a 400 ms wait against a 1000 ms budget as a 1401 ms bound. The pool's
+ * `connectionTimeoutMillis` (5 s) is how wide that could get, and pool contention is exactly the
+ * load a total deadline is for. So the remainder is recomputed inside the lease, once the connection
+ * is in hand. The reading before the lease stays: a budget already spent refuses without taking a
+ * connection, which is the cheap half.
+ */
 export function leasingUnderTotalDeadline(withConnection: WithConnection): WithConnection {
   return async <T>(work: (client: pg.Client) => Promise<T>): Promise<T> => {
     const request = totalDeadlineOfThisRequest.getStore();
     if (request === undefined) return withConnection(work);
-    const remaining = request.expiresAt - Date.now();
-    if (remaining <= 0) throw new ProviderTimedOut("the route's total deadline elapsed");
-    return withConnection((client) => withDatabaseDeadline({ total: remaining }, client, work));
+    if (request.expiresAt - Date.now() <= 0) {
+      throw new ProviderTimedOut("the route's total deadline elapsed");
+    }
+    return withConnection((client) => {
+      const remaining = request.expiresAt - Date.now();
+      return withDatabaseDeadline({ total: remaining }, client, work);
+    });
   };
 }

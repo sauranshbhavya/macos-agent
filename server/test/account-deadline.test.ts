@@ -250,6 +250,27 @@ describe("leasingUnderTotalDeadline, apart from the routes", () => {
     expect(record.filter((statement) => statement === "RESET statement_timeout")).toHaveLength(2);
   });
 
+  it("time spent waiting for a pooled connection comes out of the budget, not on top of it", async () => {
+    // PR #235's review, F1: the wrapper anchors its deadline once it is entered, which is after the
+    // pool wait, so a remainder computed before the wait handed Postgres a budget the wait had spent.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-11T10:00:00Z"));
+    const record: string[] = [];
+    const slowPool = stallingConnection(record, (text) => (text === "SELECT 1" ? { rows: [] } : undefined));
+    const waiting: WithConnection = async (work) => {
+      // Four hundred milliseconds queued for a free connection.
+      vi.setSystemTime(Date.now() + 400);
+      return slowPool(work);
+    };
+    const bounded = leasingUnderTotalDeadline(waiting);
+
+    await underTotalDeadline({ total: 1_000 }, async () => {
+      await bounded(async (client) => client.query("SELECT 1"));
+    });
+
+    expect(budgetsSet(record)).toEqual([600]);
+  });
+
   it("a budget already spent refuses before taking a connection at all", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-11T10:00:00Z"));
