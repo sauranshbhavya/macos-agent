@@ -4603,7 +4603,7 @@ block does (`docker run … postgres:17` with the derived name and port, the `pg
 then, in the same shell and still in `server/`:
 
 ```
-export SUPABASE_JWT_SECRET='local-only-secret-of-at-least-thirty-two-characters'   # under 32 characters the gateway refuses to start
+export SUPABASE_JWT_SECRET="$(openssl rand -hex 24)"   # 48 characters, generated: under 32 the gateway refuses to start, and a literal here is a credential shape `npm run check:secrets` refuses
 export SUPABASE_JWT_ISSUER='https://placeholder.supabase.co/auth/v1'
 export SUPABASE_JWT_AUDIENCE=authenticated
 export SUPABASE_ANON_KEY=placeholder

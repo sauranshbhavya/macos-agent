@@ -1999,7 +1999,7 @@ the sense that any bound is.
 the four this paragraph said until PR #235's fresh review counted — the fifth is
 `DELETE /v1/account/content`, one of the four content-deletion routes above:
 `git grep -nE 'app\.(get|put|post|delete)\((CREDITS_PATH|AUTO_TOP_UP_PATH|TOP_UP_PATH|"/v1/account/)' <sha> -- server/src`
-→ 5 at `__FIX_SHA__`, run from the repository root, since the same pathspec from inside `server/`
+→ 5 at `1f022a65`, run from the repository root, since the same pathspec from inside `server/`
 answers 0 for the reason `CLAUDE.md`'s clean-zero rule names).
 `GET /v1/account/entitlements`, `GET /v1/account/credits` and `PUT /v1/account/credits/auto-top-up`
 wait on the database rather than on a provider, and the pool bounds every statement they issue — the
