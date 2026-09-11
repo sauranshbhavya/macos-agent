@@ -6,10 +6,12 @@
 # with a lane database up (CLAUDE.md's recipe). Under scripts/mutate-all's default command every
 # mutant here reports SURVIVED with no test having seen it (SONNY-455).
 #
-# Killers expected, both in test/topup.db.test.ts's SONNY-435 block: T1 by "a settle that arrives
-# after the grant leaves the grant standing" and "a declined row does not take a later grant either";
-# T2 by "an unconfirmed row still takes the grant that arrives after it". Both measured by hand on the
-# branch, at the lane database, before the plan was committed.
+# Killers expected, all in test/topup.db.test.ts's SONNY-435 block: T1 by "a settle that arrives
+# after the grant leaves the grant standing", "a declined row does not take a later grant either" and
+# "a provider_error row does not take a later settle either"; T2 by "an unconfirmed row still takes
+# the grant that arrives after it"; T3 by "a provider_error row does not take a later settle either"
+# alone (PR #236's first review wrote T3 and watched it survive before that test existed). All
+# measured by hand on the branch, at the lane database.
 
 >>> mutant T1 the condition dropped: any settle moves any row, the grant included
 >>> file server/src/credit/topup.ts
@@ -26,4 +28,12 @@
         AND outcome IN ('attempted', 'unconfirmed')`,
 >>> to
         AND outcome = 'attempted'`,
+>>> end
+
+>>> mutant T3 the third closed outcome let back in: a provider_error row may be settled again
+>>> file server/src/credit/topup.ts
+>>> from
+        AND outcome IN ('attempted', 'unconfirmed')`,
+>>> to
+        AND outcome IN ('attempted', 'unconfirmed', 'provider_error')`,
 >>> end

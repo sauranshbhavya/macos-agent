@@ -4685,12 +4685,21 @@ A top-up row that was already granted could be written back to unconfirmed with 
 second attempt that arrived while the first was still finalizing. The settle now writes only onto a
 row still waiting for an answer. Server half only; needs a lane database with the migrations applied.
 
-- [ ] In `psql`: insert a claimed row for any account and period (`attempt_no 1`, `outcome
-      'attempted'`, a `provider_order_id`), then `UPDATE … SET outcome = 'granted', credits = 500
-      WHERE topup_id = …`. Now run the late settle by hand: `UPDATE sonny.credit_topup SET outcome =
-      'unconfirmed', credits = 0 WHERE topup_id = … AND outcome IN ('attempted','unconfirmed')`:
-      `UPDATE 0`, and the row still reads `granted`, `500`. (The condition is the one the code runs;
-      `server/src/credit/topup.ts`'s `settleTopUpAttempt` carries it.)
+- [ ] The late settle by hand, with the statements verbatim (PR #236's first review built the
+      insert a reader would write from a description and hit two `NOT NULL` violations before the
+      demonstration; the SQL below carries every required column, as SONNY-408's rows above do):
+
+      ```
+      psql "$DATABASE_URL" -c "INSERT INTO sonny.credit_topup (topup_id, account_id, provider, provider_order_id, period_start, attempt_no, outcome, consented_at, runs_left_at_trigger, credits_remaining_at_trigger) VALUES ('00000000-0000-4000-8000-000000000435', gen_random_uuid(), 'polar', 'order-planted-435', date_trunc('month', now()), 1, 'attempted', now(), 0, 0);"
+      psql "$DATABASE_URL" -c "UPDATE sonny.credit_topup SET outcome = 'granted', credits = 500, charged_amount = 500, charged_currency = 'USD', settled_at = now() WHERE topup_id = '00000000-0000-4000-8000-000000000435' AND outcome IN ('attempted', 'unconfirmed');"
+      psql "$DATABASE_URL" -c "UPDATE sonny.credit_topup SET outcome = 'unconfirmed', credits = 0, charged_amount = NULL, charged_currency = NULL, settled_at = now() WHERE topup_id = '00000000-0000-4000-8000-000000000435' AND outcome IN ('attempted', 'unconfirmed');"
+      psql "$DATABASE_URL" -c "SELECT outcome, credits FROM sonny.credit_topup WHERE topup_id = '00000000-0000-4000-8000-000000000435';"
+      psql "$DATABASE_URL" -c "DELETE FROM sonny.credit_topup WHERE topup_id = '00000000-0000-4000-8000-000000000435';"
+      ```
+
+      The first `UPDATE` prints `UPDATE 1`, the second prints **`UPDATE 0`**, and the `SELECT` reads
+      `granted | 500`. The condition is the one the code runs — `server/src/credit/topup.ts`'s
+      `settleTopUpAttempt` carries it.
 - [ ] `npm run test:db` at the lane database: `test/topup.db.test.ts`'s three SONNY-435 tests pass
       with the rest of the suite.
 

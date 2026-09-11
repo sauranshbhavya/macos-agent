@@ -804,6 +804,45 @@ describeDb("a settle moves a resolvable row to an answer and never moves a close
     expect(row.settled_at).toEqual(LATER);
   });
 
+  /**
+   * The third closed outcome, held by its own test because PR #236's first review widened the set
+   * to include it and the suite stayed green: a `provider_error` row carries no order id, so no
+   * caller can reach it through `readOutstandingTopUp` today, and the condition still has to say so.
+   */
+  itUnderHangBackstop("a provider_error row does not take a later settle either", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "provider_error",
+      credits: 0,
+      providerOrderId: undefined,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("provider_error");
+    expect(row.credits).toBe(0);
+    expect(row.settled_at).toEqual(AT);
+    const { rows } = await client.query<{ provider_order_id: string | null }>(
+      "SELECT provider_order_id FROM sonny.credit_topup WHERE topup_id = $1",
+      [attempt!.topUpId],
+    );
+    // The refused settle did not even lend the row an order id.
+    expect(rows[0]!.provider_order_id).toBeNull();
+  });
+
   /** Closed is closed in every direction, not only for a grant. */
   itUnderHangBackstop("a declined row does not take a later grant either", async () => {
     const attempt = await claimTopUpAttempt(client, claimOf());
