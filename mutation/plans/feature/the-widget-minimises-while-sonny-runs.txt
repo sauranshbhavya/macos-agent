@@ -128,3 +128,36 @@
                 WidgetSessionPauseButton(appDisplayName: controlling.appDisplayName, action: onStop)
                 WidgetSessionStopButton(appDisplayName: controlling.appDisplayName, action: onPause)
 >>> end
+
+# P10 and P11 are PR #237's third delta review, A and B.
+#
+# P10 is P9's swap on the other surface that renders the shared Stop. P9 targets the pill's content
+# and cannot reach the widget's own controlling panel, so the swap there needs a mutant of its own:
+# the review applied it and a HUD with two controls that pause and none that stops passed the whole
+# suite, because only that panel's Pause line was pinned. A mutant names one file, which is why this
+# is a second mutant rather than P9 extended.
+#
+# P11 puts the hit-testable hairline back. The outline traced on every tinted widget button sat on top
+# of it and took the clicks that landed on it, so the session's Stop had a dead ring exactly on the
+# edge of its drawn circle; the suite's 4 pt sweep stepped straight over a line half a point wide.
+#
+# Killers expected (hand-applied at this branch's fix round for the third delta review; the founders'
+# weekly battery measures): P10 by WidgetSessionApprovalPanelTests
+# (everySessionControlWearsItsOwnAccessibilityLabel); P11 by SharedSessionControlEdgeTests
+# (noPointInsideTheClickAreaIsDead, both cases).
+
+>>> mutant P10 the widget's own controlling panel hands its Stop the pause action
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+                WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onStop)
+>>> to
+                WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onPause)
+>>> end
+
+>>> mutant P11 the tinted buttons' hairline takes clicks again
+>>> file Sources/MacAgent/SonnyWidgetTheme.swift
+>>> from
+            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5).allowsHitTesting(false))
+>>> to
+            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5))
+>>> end

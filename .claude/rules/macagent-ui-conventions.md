@@ -107,8 +107,12 @@ paid for once:
   ordered in fires nothing anywhere, and a `.plain`-style button's clickable area is its *label*, so
   padding and height applied outside the button are dead — which is why the shared
   `WidgetSessionPauseButton` and `WidgetSessionStopButton` carry both inside the label with a
-  `Capsule` content shape. What no test here can see is the window server's handling of a first click
-  on a panel that cannot become key; that is the manual row's.
+  `Capsule` content shape. **That click area is a capsule; what is drawn is a 28 pt circle**, so describe
+  the control as a circle. And **anything drawn on top of a control ignores hit testing**: the hairline
+  that traces every tinted widget button's edge took the clicks that landed on it, leaving a dead ring
+  on the session's Stop that a 4 pt sweep could not see (PR #237's third delta review, B);
+  `SharedSessionControlEdgeTests` sweeps at 0.5 pt for it. What no test here can see is the window
+  server's handling of a first click on a panel that cannot become key; that is the manual row's.
 - **Each control's action is pinned at its own site**, not counted across the pill
   (`RunPillControlBindingTests`). A count across the pill is satisfied by a swap, and swapping the
   actions behind Pause and Stop passed the whole suite until that suite existed.

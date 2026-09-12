@@ -4763,8 +4763,11 @@ the app you name; if Sonny asks for that permission first, grant it and carry on
       would have read as a regression, and it is the rule working.) **What would be a finding:** the
       click does nothing, the click expands the widget instead of stopping, or the session keeps
       going — a control that looks live and is not is exactly what SONNY-443 shipped on the mic.
-      Try clicking the **edge** of the red capsule, not only the word: the whole capsule should stop
-      the session.
+      **Stop is drawn as a small red circle behind the word, and the word runs past it on both
+      sides.** Click the **edge of that red circle**, not only the word, and on a second run click
+      just past the circle beside the word: both should stop the session. (This row said "capsule"
+      until PR #237's third delta review, B — there is no capsule drawn — and the circle's edge was
+      the one place a click did nothing until that round's fix.)
 - [ ] **Pause actually pauses.** Start another screen-control run and press **Pause**. Sonny stops
       at the top of its next step and waits; the widget's paused panel is how you resume or end it.
       Again, the click must reach Pause rather than expanding the widget.

@@ -46,7 +46,7 @@ struct RunPillControlsReceiveClicksTests {
 
         // **Stop is the Stop.** Pause and Stop sit in one row, Pause first, which is the order the
         // view declares them in. So every point that fires Stop lies to the right of every point
-        // that fires Pause: swap the actions behind the two capsules and the rightmost one fires
+        // that fires Pause: swap the actions behind the two controls and the rightmost one fires
         // Pause, which fails here. The delta review's N2, pinned behaviourally.
         #expect(stop.minX > pause.maxX, "Stop fired at x \(stop.minX)…\(stop.maxX), Pause at \(pause.minX)…\(pause.maxX)")
         #expect(abs(stop.midY - pause.midY) < 3, "Pause and Stop are one row")
@@ -55,12 +55,14 @@ struct RunPillControlsReceiveClicksTests {
         // hosting view's top-left-origin space.
         #expect(expand.maxY < stop.minY, "Expand fired level with or below the control row")
 
-        // **The whole capsule takes the click, not only the word.** With the padding and height
-        // outside a `.plain` button, a sweep fired each control only over its label's glyphs — four
-        // rows of this 4 pt grid, about 16 pt, inside a 28 pt capsule. At least six rows is a
-        // clickable height the size of the capsule.
-        #expect(map.rowCount(of: .pause) >= 6, "Pause took clicks on \(map.rowCount(of: .pause)) rows of a 28 pt capsule")
-        #expect(map.rowCount(of: .stop) >= 6, "Stop took clicks on \(map.rowCount(of: .stop)) rows of a 28 pt capsule")
+        // **The control's full height takes the click, not only the word.** With the padding and
+        // height outside a `.plain` button, a sweep fired each control only over its label's glyphs —
+        // four rows of this 4 pt grid, about 16 pt, on a control drawn as a 28 pt circle. At least six
+        // rows is a clickable height of the control's own 28 pt. (This said "capsule" until PR #237's
+        // third delta review, B: the click area is the capsule the content shape gives the word, and
+        // what is drawn is a circle; `SharedSessionControlEdgeTests` holds the circle's edge.)
+        #expect(map.rowCount(of: .pause) >= 6, "Pause took clicks on \(map.rowCount(of: .pause)) rows of a control 28 pt tall")
+        #expect(map.rowCount(of: .stop) >= 6, "Stop took clicks on \(map.rowCount(of: .stop)) rows of a control 28 pt tall")
 
         // **Nothing fires anywhere that is not a control**: the window's transparent margin, the
         // glass beside the identity row, the step line and the hotkey line. Each is a grid point
@@ -84,6 +86,157 @@ struct RunPillControlsReceiveClicksTests {
         #expect(map.bounds(of: .pause) == nil)
         #expect(map.bounds(of: .stop) == nil)
         #expect(map.clickCount > 1000, "the sweep did not run: \(map.clickCount) clicks")
+    }
+}
+
+// MARK: - The shared controls' drawn edge takes clicks (PR #237's third delta review, B)
+
+/// **No point inside Pause's or Stop's click area is dead, at a grid finer than the outline.**
+///
+/// What the user sees of each control is a 28 pt **circle** centred on its word — `widgetCircularBackground`
+/// draws a `Circle` in a frame wider than it is tall — and a 0.5 pt hairline traces that circle's edge.
+/// What takes the click is wider: the `Capsule` content shape the word, its padding and the control's
+/// height are given, so a founder aiming at the circle's edge is inside the click area. The hairline
+/// sat on top of the button and could take clicks, and a click that landed on it went nowhere. The
+/// suite's 4 pt sweep stepped straight over a line half a point wide; the third delta review found it
+/// with a 0.5 pt sweep — 216 dead samples across the two controls at the pill — and the manual Stop row
+/// had just sent a founder to click exactly there.
+///
+/// Measured here the same way, on each shared control alone: every point of a 0.5 pt grid is clicked
+/// through a real ordered-in panel, the click area is the capsule inscribed in the bounds of the points
+/// that fired (inset 1 pt, so the capsule's own boundary is not sampled), and a dead sample is a point
+/// inside it that fired nothing. **The control is the same control under a hit-testable copy of that
+/// hairline**, which is the shape the modifier had: the sweep finds dead samples there, so its zero on
+/// the shipped control is a measurement rather than an instrument that cannot see a ring.
+@Suite(.serialized)
+@MainActor
+struct SharedSessionControlEdgeTests {
+    enum Control: CustomTestStringConvertible, Sendable {
+        case stop
+        case pause
+
+        var testDescription: String { self == .stop ? "Stop" : "Pause" }
+
+        @MainActor
+        func view(action: @escaping () -> Void, hairlineTakesClicks: Bool) -> AnyView {
+            let control: AnyView = self == .stop
+                ? AnyView(WidgetSessionStopButton(appDisplayName: "Notes", action: action))
+                : AnyView(WidgetSessionPauseButton(appDisplayName: "Notes", action: action))
+            guard hairlineTakesClicks else {
+                return control
+            }
+            // The modifier's hairline as it was before the fix: the same circle, the same half point,
+            // and nothing telling it to ignore hit testing.
+            return AnyView(control.overlay(Circle().stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5)))
+        }
+    }
+
+    @Test(arguments: [Control.stop, .pause])
+    func noPointInsideTheClickAreaIsDead(_ control: Control) throws {
+        let sweep = try FineControlSweep(control: control, hairlineTakesClicks: false)
+        defer { sweep.tearDown() }
+        let result = try sweep.run()
+        #expect(result.live > 1000, "the sweep did not reach the control: \(result.live) live samples")
+        #expect(result.deadInsideClickArea == 0, "\(result.deadInsideClickArea) dead samples inside \(control)'s click area")
+    }
+
+    @Test(arguments: [Control.stop, .pause])
+    func aHitTestableHairlineIsWhatTheSweepFinds(_ control: Control) throws {
+        let sweep = try FineControlSweep(control: control, hairlineTakesClicks: true)
+        defer { sweep.tearDown() }
+        let result = try sweep.run()
+        #expect(result.deadInsideClickArea > 20, "a hit-testable outline left only \(result.deadInsideClickArea) dead samples, so the instrument cannot see a ring")
+    }
+}
+
+@MainActor
+private final class FineControlSweep {
+    private static let step: CGFloat = 0.5
+
+    private final class Recorder {
+        var fired = false
+    }
+
+    struct Result {
+        let live: Int
+        let deadInsideClickArea: Int
+    }
+
+    let panel: RunPillPanel
+    let hosting: NSView
+    private let recorder = Recorder()
+
+    init(control: SharedSessionControlEdgeTests.Control, hairlineTakesClicks: Bool) throws {
+        let recorder = self.recorder
+        let hosting = NSHostingView(rootView: AnyView(
+            control.view(action: { recorder.fired = true }, hairlineTakesClicks: hairlineTakesClicks).padding(12)
+        ))
+        let size = hosting.fittingSize
+        hosting.frame = NSRect(origin: .zero, size: size)
+        panel = RunPillPanel(
+            contentRect: NSRect(x: -30_000, y: -30_000, width: size.width, height: size.height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = hosting
+        self.hosting = hosting
+        panel.orderFrontRegardless()
+        for _ in 0..<4 {
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+    }
+
+    func run() throws -> Result {
+        var live: [CGPoint] = []
+        var liveKeys = Set<RunPillGridPoint>()
+        var samples: [CGPoint] = []
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        var y: CGFloat = 0
+        while y < hosting.bounds.height {
+            var x: CGFloat = 0
+            while x < hosting.bounds.width {
+                let point = CGPoint(x: x, y: y)
+                samples.append(point)
+                recorder.fired = false
+                let inWindow = hosting.convert(point, to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(
+                        with: type,
+                        location: inWindow,
+                        modifierFlags: [],
+                        timestamp: timestamp,
+                        windowNumber: panel.windowNumber,
+                        context: nil,
+                        eventNumber: 0,
+                        clickCount: 1,
+                        pressure: type == .leftMouseDown ? 1 : 0
+                    ) {
+                        panel.sendEvent(event)
+                    }
+                }
+                if recorder.fired {
+                    live.append(point)
+                    liveKeys.insert(RunPillGridPoint(x: Int(x * 2), y: Int(y * 2)))
+                }
+                x += Self.step
+            }
+            y += Self.step
+        }
+        let first = try #require(live.first, "nothing fired anywhere")
+        let bounds = live.dropFirst().reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
+        let clickArea = Capsule().path(in: bounds.insetBy(dx: 1, dy: 1))
+        let dead = samples.filter {
+            clickArea.contains($0) && !liveKeys.contains(RunPillGridPoint(x: Int($0.x * 2), y: Int($0.y * 2)))
+        }.count
+        return Result(live: live.count, deadInsideClickArea: dead)
+    }
+
+    func tearDown() {
+        panel.orderOut(nil)
+        panel.contentView = nil
+        panel.close()
     }
 }
 

@@ -1871,14 +1871,19 @@ struct WidgetSessionStopButton: View {
             Text(ScreenControlSessionPresentation.stopLabel)
                 .font(WidgetType.captionMedium)
                 .foregroundStyle(.white)
-                // **The whole capsule takes the click, not only the word** (PR #237's third fix
-                // round). The padding and the height used to sit outside the button, and a
-                // `.plain`-style button's clickable area is its label: a click sweep across the
-                // hosted control fired Stop only on the glyphs of the word, about 16 pt tall inside
-                // a 28 pt red capsule, and nothing on the capsule's own ends or edges. Moving both
-                // inside the label and giving it the capsule as its content shape makes the
-                // clickable area the control the user can see. The drawn geometry is unchanged,
-                // because the background wraps the button either way.
+                // **The whole control takes the click, not only the word** (PR #237's third fix
+                // round). What is drawn is a 28 pt red **circle** centred on the word —
+                // `widgetCircularBackground` draws a `Circle` in this frame, which is wider than it
+                // is tall — and the word runs past it on either side. The padding and the height
+                // used to sit outside the button, and a `.plain`-style button's clickable area is its
+                // label, so a click sweep fired Stop only over the glyphs of the word, about 16 pt
+                // tall. With both inside the label and a `Capsule` content shape, the click area is a
+                // capsule the width of the word plus its padding and the circle's full height — wider
+                // than anything drawn, which is a generous target for an emergency control and not a
+                // description of its shape. (This comment called the drawn control a capsule until
+                // PR #237's third delta review, B.) Its edge takes clicks too, since the hairline that
+                // traces it ignores hit testing — `WidgetTintedButtonBackground` says why. Nothing
+                // drawn moved: the background wraps the button either way.
                 .padding(.horizontal, 10)
                 .frame(height: WidgetTheme.controlSize)
                 .contentShape(Capsule())
@@ -1908,7 +1913,8 @@ struct WidgetSessionPauseButton: View {
             Text(ScreenControlSessionPresentation.pauseLabel)
                 .font(WidgetType.captionMedium)
                 .foregroundStyle(WidgetTheme.textFull)
-                // The whole capsule takes the click, for the reason `WidgetSessionStopButton` gives.
+                // The whole control takes the click — a capsule-shaped click area around a control
+                // drawn as a 28 pt circle — for the reason `WidgetSessionStopButton` gives.
                 .padding(.horizontal, 10)
                 .frame(height: WidgetTheme.controlSize)
                 .contentShape(Capsule())

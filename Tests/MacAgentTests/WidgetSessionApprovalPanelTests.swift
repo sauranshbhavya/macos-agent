@@ -285,6 +285,31 @@ struct WidgetSessionApprovalPanelTests {
             of: "WidgetSessionPauseButton(appDisplayName: progress.appDisplayName, action: onPause)",
             inText: hud
         ) == 1)
+        // **The HUD's Stop, at its own site, beside its Pause** (PR #237's third delta review, A). Only
+        // the Pause line was pinned here, so `WidgetSessionStopButton(… action: onPause)` — a HUD with
+        // two controls that pause and none that stops — passed the whole suite. It is the swap the
+        // pill already catches, on the other surface that renders the shared Stop. The swapped forms
+        // are refused by name, because a count of the right line alone is still satisfied if a second,
+        // wrong line is added beside it.
+        #expect(MacAgentSource.count(
+            of: "WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onStop)",
+            inText: hud
+        ) == 1)
+        #expect(MacAgentSource.count(of: "WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onPause)", inText: hud) == 0)
+        #expect(MacAgentSource.count(of: "WidgetSessionPauseButton(appDisplayName: progress.appDisplayName, action: onStop)", inText: hud) == 0)
+
+        // **And one level up, where the view model's two methods are handed to the HUD** — the same
+        // second site the pill pins in `RunPillControlBindingTests`, because a swap there reaches the
+        // screen exactly as the one inside the panel does, and nothing inside the panel can see it.
+        let hudRouting = try MacAgentSource.region(
+            of: widget,
+            from: "case .controlling(let progress):",
+            to: "case .resumeOffer(let task):"
+        )
+        #expect(MacAgentSource.count(of: "onPause: { viewModel.pauseVisionSession() },", inText: hudRouting) == 1)
+        #expect(MacAgentSource.count(of: "onStop: { viewModel.emergencyStopVisionSession() }", inText: hudRouting) == 1)
+        #expect(MacAgentSource.count(of: "onPause: { viewModel.emergencyStopVisionSession() }", inText: hudRouting) == 0)
+        #expect(MacAgentSource.count(of: "onStop: { viewModel.pauseVisionSession() }", inText: hudRouting) == 0)
 
         // And Command Center's Stop, whose label is the one the nit above rebound.
         let commandCenter = try MacAgentSource.region(

@@ -127,12 +127,25 @@ extension AgentViewModel: VisionSessionInteracting {
     /// `onStop: viewModel.emergencyStopVisionSession`, and **the grep this paragraph used to cite
     /// could not see that spelling** — `git grep -n emergencyStopVisionSession'()'` still answered 4
     /// with the pill in the tree, the clean-zero family arriving as a clean *four*. So the population
-    /// is written to read both spellings, and the comment stage is what keeps these sentences out of
-    /// it: `git grep -nP 'emergencyStopVisionSession(\(\))?(?![A-Za-z])' -- Sources | grep -v 'func
-    /// emergencyStopVisionSession' | grep -vE ':[0-9]+: *//'` → 5 lines at the head this was written
-    /// on, 8 with the last stage dropped. (`-P` rather than `-E` with a `\b`, because `git grep`'s
-    /// ERE engine does not honour `\b` and answers that pattern with a clean zero — which it did,
-    /// once, while this count was being taken.) Of the five, one is the closure below and four are
+    /// is written to read both spellings, and its last stage drops comment lines so these sentences
+    /// stay out of what they count, the command kept on one line so it names the method once:
+    /// `git grep -nP 'emergencyStopVisionSession(\(\))?(?![A-Za-z])' -- Sources | grep -v 'func emergencyStopVisionSession' | grep -vE ':[0-9]+: *//'`
+    /// (`-P` rather than `-E` with a `\b`, because `git grep`'s ERE engine does not honour `\b` and
+    /// answers that pattern with a clean zero, which it did once while this count was being taken).
+    /// It answers 5 lines. **The control for the last stage is taken over this file alone, because
+    /// that is where it is exact**: the same command ending `-- Sources/MacAgent/AgentViewModel+VisionSession.swift`
+    /// answers 1, the closure below, and with the last stage dropped it answers 3 — one more for each
+    /// of the two lines of this paragraph that name the method in prose, the pill's spelling and the
+    /// old command. The line holding the command itself names the method too and is not among them,
+    /// because it quotes the declaration and the stage before the last drops it. Over all of `Sources`
+    /// the last stage removes 4 lines: those two, and two older doc comments that name the method in
+    /// `CommandCenterView` and `FloatingWidgetView`, which the same command lists with `grep -E` in
+    /// place of `grep -vE`. **This used to read "5 lines at the head this was written
+    /// on, 8 with the last stage dropped"** (PR #237's third delta review, C). The 8 was counted
+    /// before this paragraph's own lines joined the population it counts, so by the time it was
+    /// committed the same command answered 11: the citation that matches its own text which
+    /// `CLAUDE.md` warns about, and "the head this was written on" was not a SHA. Of the five, one is
+    /// the closure below and four are
     /// controls — `WidgetControllingPanel`'s Stop and `WidgetPermissionPanel`'s in
     /// `FloatingWidgetView`, `CommandCenterAttentionPanel`'s in `CommandCenterView`, and the run
     /// pill's in `RunPillView`. Hotkey plus four controls is the five. Every one ends in
