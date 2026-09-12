@@ -4357,6 +4357,34 @@ session can measure: until it passes, the premise is unmeasured.
       bottom of the page`. Safari comes forward before the first capture and the session runs (as
       before, now from the background too).
 
+### The Finder selection is named (new 2026-09-11, SONNY-441)
+
+"What is selected in Finder?" answered "Finder selection contains 1 whitelisted item(s)." (the
+founders' pass, test 20). It names the items now, by the name Finder shows: one item by name; more
+than one behind their total, up to five named while the sentence fits the widget's three lines, and
+the rest counted.
+
+- [ ] Select one file on the Desktop, type `what is selected in Finder?`: "Selected in Finder:
+      <its name>." with the real file name, extension included.
+- [ ] Select three short-named files: "3 selected in Finder: a, b, c." with all three named, in
+      the order Finder reports them, comma-separated.
+- [ ] Select seven short-named files (`1.txt` to `7.txt`): "7 selected in Finder: 1.txt, 2.txt,
+      3.txt, 4.txt, 5.txt, and 2 more."
+- [ ] Select seven screenshots (`Screenshot 2026-09-11 at 09.14.02.png` and the like, the names a
+      24-hour clock gives): the widget shows the whole sentence on three lines or fewer with no
+      ellipsis — "7 selected in Finder: " first, three names, then ", and 4 more." — exactly the
+      sentence the test pins for that shape, and hovering the panel shows the same sentence. On a
+      Mac set to a 12-hour clock the names read `… at 9.14.02 AM.png` and the sentence names two
+      and counts ", and 5 more." on two lines; either way the count leads and nothing is cut (the
+      delta review of PR #228's fix round, N1: the earlier wording of this row expected the
+      12-hour shape's count for the 24-hour names).
+- [ ] Make a symbolic link on the Desktop (`ln -s ~/Desktop/q3-final-v7.pdf ~/Desktop/"Latest
+      report.pdf"`), select the link: "Selected in Finder: Latest report.pdf." — the link's own
+      name, not `q3-final-v7.pdf`.
+- [ ] Select a file outside Desktop and Documents (for example in ~/Downloads): the whitelist
+      refusal reads as before, "<path> is not one of the folders Sonny can use: <Desktop>,
+      <Documents>."; nothing about that sentence changed.
+
 ## 8. How to report back
 
 For each real finding, give me:

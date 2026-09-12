@@ -919,7 +919,7 @@ struct AgentRunnerTests {
 
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
-        #expect(result.summary == "Finder selection contains 1 whitelisted item(s).")
+        #expect(result.summary == "Selected in Finder: selected.txt.")
     }
 
     @Test
