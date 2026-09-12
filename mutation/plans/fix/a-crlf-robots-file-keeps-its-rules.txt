@@ -1,0 +1,34 @@
+# SONNY-437 — a CRLF robots.txt keeps its rules. Property: the parser yields one element per line
+# whatever the line endings, so a group is closed only by a genuinely empty line.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #234, 2026-09-11;
+# the first two were hand-traced by PR #234's second review before that): R1 by
+# robotsPolicyReadsACRLFFileAsItReadsAnLFOne and robotsPolicyReadsMixedLineEndings; R2 by
+# aGenuinelyEmptyLineStillClosesAGroupWhateverTheEndings alone, and only while a blank line closes a
+# group. SONNY-454 (the RFC 9309 reading, where only the next user-agent line or the end of the file
+# closes one) makes R2 an equivalent mutant nothing can kill; that branch retires or replaces it.
+# R3 by robotsPolicyReadsACRLFFileAsItReadsAnLFOne alone, on its CR-only assertions (PR #234's fresh
+# review, F2: this split passed every parser test before the CR-only twin existed).
+
+>>> mutant R1 the character split put back: CRLF yields an empty element between every two lines
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+>>> to
+        for rawLine in text.components(separatedBy: .newlines) {
+>>> end
+
+>>> mutant R2 empty lines dropped instead of closing a group: a second group's rules leak into the first
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+>>> to
+        for rawLine in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
+>>> end
+
+>>> mutant R3 a split that knows LF and CRLF but not CR: RFC 9309's third line ending reads as one line (PR #234's fresh review, F2)
+>>> file Sources/MacAgentCore/WebResearchService.swift
+>>> from
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+>>> to
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
+>>> end

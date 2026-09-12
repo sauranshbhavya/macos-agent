@@ -4565,6 +4565,29 @@ banner's own sentence, "Open Memory in Command Center to clear it."
       Open Memory in Command Center to clear it." — the way out still there after a task that
       succeeded.
 
+### A CRLF robots.txt keeps its rules (new 2026-09-11, SONNY-437)
+
+The robots.txt parser split on newline characters rather than line breaks, so a file with CRLF
+endings read as one with no rules at all, in the permissive direction: pages such a site disallows
+were fetched. Signed in, gateway up.
+
+- [ ] `summarize https://accounts.google.com/ClientLogin and save it as Markdown`. That site's
+      robots.txt is CRLF and disallows the path, and the page itself answers HTTP 404, so **both
+      builds refuse and neither writes a note — the sentence is the only thing that tells them
+      apart** (PR #234's fresh review, F1: the earlier wording of this row passed on the unfixed
+      build too). **Expected:** the widget reads **"The source could not be retrieved, so no note
+      was written. Robots.txt does not allow Sonny to fetch https://accounts.google.com/ClientLogin."**
+      — the robots rule refused it before any fetch. **What would be a finding:** the same first
+      sentence followed by **"Fetching https://accounts.google.com/ClientLogin failed with HTTP 404."**,
+      which is the unfixed build fetching a page the site's rules forbid and being told 404 by it.
+      Optional, before running it: confirm the site still serves the file with CRLF endings and the
+      rule — `curl -s https://accounts.google.com/robots.txt | file -` reads `ASCII text, with CRLF
+      line terminators`, and `curl -s https://accounts.google.com/robots.txt | grep -c ClientLogin`
+      is at least 1 (both true on 2026-09-11). If the site has changed, the row cannot be run against
+      it and needs another CRLF site that disallows a path.
+- [ ] `summarize https://simonwillison.net/2006/Dec/19/botbouncer/ and save it as Markdown` (an LF
+      site that allows the page): a real note, as before.
+
 ## 8. How to report back
 
 For each real finding, give me:
