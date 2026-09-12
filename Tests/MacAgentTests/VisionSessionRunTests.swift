@@ -78,6 +78,8 @@ struct VisionSessionRunTests {
             /// from `activated`, which is the session bringing its *target* forward, so a test can
             /// tell the two apart in one ordered list.
             case restored(String)
+            /// An `open_app` step opened an app, through `HermeticAppOpener` (SONNY-451).
+            case opened(String)
         }
 
         private(set) var events: [Event] = []
@@ -147,6 +149,12 @@ struct VisionSessionRunTests {
         /// What the run's focus restorer did to this screen: the user's app is in front again.
         func recordRestore(_ bundleIdentifier: String) {
             events.append(.restored(bundleIdentifier))
+            frontmost = bundleIdentifier
+        }
+
+        /// What an `open_app` step did to this screen: the opened app came forward.
+        func recordOpen(_ bundleIdentifier: String) {
+            events.append(.opened(bundleIdentifier))
             frontmost = bundleIdentifier
         }
     }
@@ -320,6 +328,27 @@ struct VisionSessionRunTests {
 
         func tearDown() {
             try? FileManager.default.removeItem(at: root)
+        }
+    }
+
+    /// Opens an app on the synthesizer's own screen and nowhere else, so a delegated `open_app` step
+    /// inside a session lands in the same ordered event list and cannot open a real app.
+    private struct HermeticAppOpener: AppOpening {
+        let synthesizer: RecordingSynthesizer
+        func open(bundleIdentifier: String) async throws {
+            synthesizer.recordOpen(bundleIdentifier)
+        }
+    }
+
+    /// A delegated instruction's planner that answers with one `open_app` step for `appName`.
+    private struct OpenAppPlanner: Planning {
+        let appName: String
+        func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+            AgentPlan(
+                summary: "Open \(appName).",
+                requiresConfirmation: false,
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open \(appName).", appName: appName)]
+            )
         }
     }
 
@@ -639,6 +668,61 @@ struct VisionSessionRunTests {
         #expect(events.last == .restored("com.other.App"))
     }
 
+    /// **A delegated open inside a session gives the controlled app back, never the user's.** The one
+    /// path where an open step's restore runs while a session is live: the model delegates "open
+    /// Notes", the delegated plan opens Notes, and the open step's own restore brings back what was in
+    /// front when it began — the app under control — so the session's next click lands on it. The
+    /// user's app comes back only when the session ends.
+    @Test
+    func aDelegatedOpenInsideASessionGivesTheControlledAppBackBeforeTheNextAction() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"open Notes","rationale":"a note is needed"}"#,
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            delegationPlanner: OpenAppPlanner(appName: "Notes"),
+            restore: SessionRestoreScript(),
+            hermeticAppOpener: true
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        let opened = try #require(events.firstIndex(of: .opened("com.apple.Notes")), "the delegated open did not run: \(events)")
+        let backToTarget = try #require(events.firstIndex(of: .restored("com.apple.Safari")), "the controlled app was not given back: \(events)")
+        let click = try #require(events.firstIndex { if case .clicked = $0 { return true } else { return false } })
+        #expect(opened < backToTarget)
+        #expect(backToTarget < click, "the next action ran before the controlled app was back in front")
+        #expect(events.last == .restored("com.other.App"), "the user's app did not come back at the end")
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1, "the user's app came back mid-session")
+    }
+
+    /// **A model cannot start a second session by delegating `[s]`.** The prefix is new, and the
+    /// instruction a vision model delegates is written by a model that has been reading untrusted
+    /// screen content — so a delegated `[s] …` must meet the no-recursion rule that already refuses
+    /// a planner-made vision step. It does, because the check reads the prepared plan and the
+    /// resolver runs before it; this holds that ordering.
+    @Test
+    func aDelegatedPrefixedInstructionIsRefusedAsASecondSession() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"delegate","instruction":"[s] archive every newsletter in Mail","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "tidy the reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.count == 2)
+        let afterDelegation = try #require(fixture.model.prompts.dropFirst().first)
+        #expect(afterDelegation.contains("Sonny does not start a second screen-control session from inside one."))
+        #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.mail") }.isEmpty, "a second session reached Mail")
+    }
+
     private func makeFixture(
         replies: [String],
         mode: AgentInteractionMode = .normal,
@@ -699,7 +783,11 @@ struct VisionSessionRunTests {
         /// that is not about giving the user's app back wants. A script builds the **real**
         /// `FocusRestorer` shape over the synthesizer's own screen, so the never-start-a-quit-app
         /// check is exercised through the session rather than asserted beside it.
-        restore: SessionRestoreScript? = nil
+        restore: SessionRestoreScript? = nil,
+        /// Whether an `open_app` step opens on the synthesizer's screen rather than on this Mac.
+        /// `false` keeps the view model's default opener, which no test that does not open an app
+        /// ever reaches.
+        hermeticAppOpener: Bool = false
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -732,6 +820,7 @@ struct VisionSessionRunTests {
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: NoShortcuts(),
+            appOpener: hermeticAppOpener ? HermeticAppOpener(synthesizer: synthesizer) : WorkspaceAppOpener(),
             finderRevealer: hermeticFinderRevealer,
             focusRestorer: focusRestorer,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
