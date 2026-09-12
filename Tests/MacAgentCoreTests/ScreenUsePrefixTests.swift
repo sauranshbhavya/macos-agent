@@ -66,6 +66,13 @@ struct ScreenUsePrefixTests {
         // to whatever the rest of the resolver and the planner make of them.
         #expect(makeResolver().resolve(command: "(s) make a note in Notes") == nil)
         #expect(makeResolver().resolve(command: "s make a note in Notes") == nil)
+        // Exact spelling: the brackets with the one letter between them and nothing else. A space
+        // inside, a doubled letter, a longer word or a missing bracket is not the prefix.
+        for nearMiss in ["[ s ] make a note in Notes", "[s make a note in Notes", "[ss] make a note in Notes", "[sync] make a note in Notes", "s] make a note in Notes"] {
+            #expect(makeResolver().resolve(command: nearMiss) == nil, "\(nearMiss) was read as the prefix")
+        }
+        // Trimmed before the rest is read, so the prefix needs no space after it.
+        #expect(try plan("[s]make a note in Notes").steps[0].visionGoal == "make a note in Notes")
     }
 
     @Test

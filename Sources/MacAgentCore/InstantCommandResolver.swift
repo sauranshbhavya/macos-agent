@@ -1191,12 +1191,12 @@ public struct InstantCommandResolver: Sendable {
         // the last preposition first — "in Mail" at the end of a sentence is the ordinary case.
         for index in words.indices.reversed() where Self.screenUseAppPrepositions.contains(words[index].lowercased()) {
             for length in stride(from: 3, through: 1, by: -1) {
-                let end = index + length
-                guard end < words.count + 0, end <= words.count - 1 + 1, index + 1 + length <= words.count else {
+                // The words after the preposition, if there are this many of them.
+                let end = index + 1 + length
+                guard end <= words.count else {
                     continue
                 }
-                let tail = words[(index + 1)..<(index + 1 + length)]
-                candidates.append(Self.screenUseName(from: tail))
+                candidates.append(Self.screenUseName(from: words[(index + 1)..<end]))
             }
         }
 

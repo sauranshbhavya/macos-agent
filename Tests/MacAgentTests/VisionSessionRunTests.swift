@@ -360,15 +360,26 @@ struct VisionSessionRunTests {
         func canPresentApproval() async -> Bool { presentable }
     }
 
-    // MARK: - Screen use by the [s] prefix, and the app the user was in (SONNY-451)
+    // MARK: - Screen use by the [s] prefix: every gate a planned session meets (SONNY-451)
 
-    /// A prefixed command enters the session by the same door a planned one does — here Normal
-    /// mode's per-app consent, on an app outside `AppControlStarterList` (Safari and Slack are on
-    /// it, so neither would ask; VS Code is not, which is why the direct-door test above uses it
-    /// too) — and never through the planner: this fixture's planner throws if it is reached, so a
-    /// plan that came from anywhere but the resolver ends the test.
+    // **A prefixed command is a route, not a gate, and each test below proves it meets one gate.**
+    // The founders' decision of 2026-09-12: `[s]` routes a command into a screen-control session
+    // "through every gate a planner-routed one meets", with a test that drives a prefixed command
+    // through the gates and asserts each fires. Each test types the command into the view model the
+    // way the widget does — `command`, then `start()` — so the resolver builds the plan and the real
+    // dispatch runs it, and each asserts what that gate's own test asserts on the planned or direct
+    // route, so a gate the prefix skipped would read differently here than there. This fixture's
+    // planner throws if reached, so a plan that came from anywhere but the resolver ends the test.
+    //
+    // What makes this structural rather than lucky is recorded where it lives:
+    // `PreparedPlanSource`'s own doc says nothing may read a plan's source to weaken a consent, and
+    // `requiresConfirmation` — the one field the resolver's plan sets differently — gates nothing
+    // (`git grep -nE '\.requiresConfirmation' -- Sources` finds only copies of it).
+
+    /// **Normal mode's per-app consent**, on an app outside `AppControlStarterList` (Safari is on it
+    /// and would not ask; VS Code is not): the question is raised before anything is clicked.
     @Test
-    func aPrefixedCommandAsksForConsentInNormalModeBeforeAnythingIsClicked() async throws {
+    func aPrefixedCommandMeetsNormalModesPerAppConsent() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#],
             bundleIdentifier: "com.microsoft.VSCode",
@@ -383,15 +394,15 @@ struct VisionSessionRunTests {
         let request = try #require(fixture.viewModel.approvalRequest)
         let reasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
         #expect(reasons.contains("has not been allowed to control VS Code"))
-        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+        #expect(fixture.synthesizer.clickCount == 0)
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
     }
 
-    /// Safe mode asks before every action for a prefixed session exactly as for a planned one: a
-    /// capture review or an approval is parked before the first click.
+    /// **Safe mode asking for everything**: a capture review or an approval is parked before the
+    /// first click, exactly as for a planned session.
     @Test
-    func aPrefixedCommandInSafeModeAsksBeforeTheFirstAction() async throws {
+    func aPrefixedCommandMeetsSafeModesAskBeforeEveryAction() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#],
             mode: .safe
@@ -404,18 +415,21 @@ struct VisionSessionRunTests {
             fixture.viewModel.visionCapturePreview != nil || fixture.viewModel.approvalRequest != nil
         }
 
-        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+        #expect(fixture.synthesizer.clickCount == 0)
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
     }
 
-    /// The billing gate stands in front of a prefixed session: refused at the session's start,
-    /// nothing is clicked.
+    /// **The billing gate at the door**, with the assertions `aSessionWithNoAllowanceIsRefusedAtTheDoorAndTouchesNothing`
+    /// makes on the direct route: the allowance sentence, nothing clicked, nothing sent, no journal
+    /// row, and exactly one consult, the door's. (The version this replaces accepted any error or any
+    /// summary at all, which a session refused for a different reason would also have passed.)
     @Test
-    func aPrefixedCommandIsRefusedByTheBillingGateBeforeAnythingIsClicked() async throws {
+    func aPrefixedCommandMeetsTheBillingGateAtTheDoor() async throws {
+        let gate = ScriptedScreenControlGate(answers: [], thereafter: .refused(.allowanceExhausted))
         let fixture = try makeFixture(
             replies: [#"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#],
-            screenControlGate: ScriptedScreenControlGate(answers: [.refused(.allowanceExhausted)], thereafter: .refused(.allowanceExhausted))
+            screenControlGate: gate
         )
         defer { fixture.tearDown() }
 
@@ -423,8 +437,102 @@ struct VisionSessionRunTests {
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
 
-        #expect(!fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
-        #expect(fixture.viewModel.errorMessage != nil || !fixture.viewModel.finalSummary.isEmpty)
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("You've used your screen-control allowance — top up or wait."))
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(try fixture.journal.loadAll().isEmpty)
+        #expect(gate.consults == [.sessionStart])
+    }
+
+    /// **Redaction**: a password on screen is found and painted out of the capture before the model
+    /// sees it, and every capture the prefixed session sent went through the redaction service.
+    @Test
+    func aPrefixedCommandMeetsRedaction() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"Read it."}"#],
+            recognizer: ScriptedRecognizer(["password: hunter2"])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] read the login page in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let payload = try #require(fixture.model.payloads.first, "the prefixed session sent no capture")
+        #expect(payload.redactedImageData != nil)
+        #expect(payload.report.contains { $0.detectionClass == .passwordField }, "the password on screen was not redacted: \(payload.report)")
+    }
+
+    /// **The tier-3 advisory**: an action on a control labelled Delete asks for explicit approval at
+    /// tier 3 even though the model called it ordinary, and nothing is clicked while it is open.
+    @Test
+    func aPrefixedCommandMeetsTheTierThreeAdvisory() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"ordinary","rationale":"remove it"}"#,
+            #"{"action":"done","rationale":"Deleted."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] delete the draft in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("the mid-loop approval") { fixture.viewModel.approvalRequest != nil }
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.first?.consequence == .destructive)
+        #expect(fixture.synthesizer.clickCount == 0)
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **Ctrl-Opt-Esc**: the prefixed session takes the emergency stop while it is live, releases it
+    /// on exit, and pressing it ends the session.
+    @Test
+    func aPrefixedCommandMeetsTheEmergencyStop() async throws {
+        let keepClicking = #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: keepClicking, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 40_000_000)
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil)
+
+        fixture.viewModel.command = "[s] click through the list in Safari"
+        fixture.viewModel.start()
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        let hotKey = try #require(fixture.viewModel.visionEmergencyStopHotKey as? FakeStopHotKey, "the prefixed session did not take the emergency stop")
+        hotKey.press()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount <= 2, "actual: \(fixture.synthesizer.clickCount)")
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil, "the emergency stop was not released")
+    }
+
+    /// **The terminal ban**, the structural deny: a prefixed command naming a terminal is refused
+    /// with no question and no capture, as `askingSonnyToControlATerminalIsRefusedWithNoApprovalAndNoCapture`
+    /// is on the planned route.
+    @Test
+    func aPrefixedCommandMeetsTheTerminalBan() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.apple.Terminal"
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] run the build in Terminal"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil, "a terminal is never a question")
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+        let told = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(told.contains("Sonny never controls a terminal"), "told: \(told)")
     }
 
     /// **The session gives the user's app back when it ends, and only then.** The screen starts on

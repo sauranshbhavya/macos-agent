@@ -33,34 +33,41 @@ struct OpenStepsRestoreFocusTests {
         }
     }
 
+    /// Opens land on the screen as the app that actually comes forward. **A URL opens in a browser's
+    /// own bundle identifier** — the one the plan chose, or Safari standing in for the default — so a
+    /// browser that was already in front reads as in front after the open. This recorded
+    /// `browser:<host>` until SONNY-451's rebase, a name no browser has, which made the founders'
+    /// "a browser already in front included" impossible to express in this suite at all.
     private struct ScreenOpener: AppOpening, BrowserOpening {
+        static let defaultBrowser = "com.apple.Safari"
         let screen: Screen
         func open(bundleIdentifier: String) async throws {
             screen.opened(bundleIdentifier)
         }
         func open(_ url: URL, using browser: MacApp?) async throws {
-            screen.opened("browser:\(url.host ?? url.absoluteString)")
+            screen.opened(browser?.bundleIdentifier ?? Self.defaultBrowser)
         }
     }
 
     private struct ScreenRestorer: FocusRestoring {
         let screen: Screen
+        var outcome: RunningAppActivationOutcome = .switched
         func frontmost() -> NotedFrontmost? {
             screen.frontmost.map { NotedFrontmost(app: $0, heldInstances: []) }
         }
         func bringToFront(_ noted: NotedFrontmost) async -> RunningAppActivationOutcome {
             screen.broughtToFront(noted.app)
-            return .switched
+            return outcome
         }
     }
 
     @MainActor
-    private func makeContext(screen: Screen) -> CapabilityExecutionContext {
+    private func makeContext(screen: Screen, outcome: RunningAppActivationOutcome = .switched) -> CapabilityExecutionContext {
         VisionTestContext.make(
             installed: [Self.safari, Self.notes],
             appOpener: ScreenOpener(screen: screen),
             browserOpener: ScreenOpener(screen: screen),
-            focusRestorer: ScreenRestorer(screen: screen)
+            focusRestorer: ScreenRestorer(screen: screen, outcome: outcome)
         )
     }
 
@@ -96,7 +103,53 @@ struct OpenStepsRestoreFocusTests {
 
         _ = try await OpenSafeURLCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen)) { _, _ in }
 
-        #expect(screen.events == ["opened browser:example.com", "front com.apple.dt.Xcode"])
+        #expect(screen.events == ["opened com.apple.Safari", "front com.apple.dt.Xcode"])
+    }
+
+    /// **A browser that was already in front is included, and the open moves nothing** (founder
+    /// decision, 2026-09-12). The user is in Safari and opens a page, which Safari takes: the front
+    /// is still the user's own app, so the restore is asked nothing and Safari stays where it was.
+    @Test
+    @MainActor
+    func aURLOpenInTheBrowserAlreadyInFrontRestoresNothing() async throws {
+        let inBrowser = RunningApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari", processIdentifier: 4)
+        let screen = Screen(frontmost: inBrowser)
+        var trace: [String] = []
+        let plan = AgentPlan(
+            summary: "Open a page.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "open", operation: .openURL, description: "Open a page.", targetURL: "https://example.com/")]
+        )
+
+        _ = try await OpenSafeURLCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen)) { _, line in
+            trace.append(line)
+        }
+
+        #expect(screen.events == ["opened com.apple.Safari"])
+        #expect(screen.frontmost?.bundleIdentifier == "com.apple.Safari")
+        #expect(!trace.contains { $0.hasPrefix("Brought ") })
+    }
+
+    /// **A launch is not reported in the trace as the user's app coming back.** The restore is
+    /// attempted, Launch Services answers that it started a copy rather than switching to the one
+    /// the user had, and the run's trace says nothing was brought back.
+    @Test
+    @MainActor
+    func anOpenWhoseRestoreWasALaunchDoesNotSayTheAppCameBack() async throws {
+        let screen = Screen(frontmost: Self.xcode)
+        var trace: [String] = []
+        let plan = AgentPlan(
+            summary: "Open Safari.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+        )
+
+        _ = try await OpenAppCapabilityAdapter().execute(plan: plan, context: makeContext(screen: screen, outcome: .launched)) { _, line in
+            trace.append(line)
+        }
+
+        #expect(screen.events == ["opened com.apple.Safari", "front com.apple.dt.Xcode"], "the restore was attempted")
+        #expect(!trace.contains("Brought Xcode back in front"), "a launch was reported as the user's app coming back")
     }
 
     /// The whole workspace opens under one restore: the user's app comes back once, at the end,
@@ -118,7 +171,7 @@ struct OpenStepsRestoreFocusTests {
         #expect(screen.events == [
             "opened com.apple.Safari",
             "opened com.apple.Notes",
-            "opened browser:example.com",
+            "opened com.apple.Safari",
             "front com.apple.dt.Xcode"
         ])
     }
