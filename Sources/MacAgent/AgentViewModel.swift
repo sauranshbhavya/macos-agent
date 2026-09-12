@@ -6805,9 +6805,14 @@ final class AgentViewModel: ObservableObject {
             }
             return true
         } catch {
-            // A *write* failure, which is a different thing from a load failure and must never
-            // borrow its wording — "could not be decrypted or decoded" describes an existing file
-            // that will not read back, which is the wrong problem entirely.
+            // A *write* failure, which is a different thing from a load failure: the notice says
+            // what could not be saved, in its own words. The sentence after the colon is the
+            // error's, and when the store's own load failed on the way to the write — every store
+            // loads before it writes — that sentence is "could not be decrypted or decoded" with the
+            // way out appended, which `rememberingAnAppControlGrantAgainstAnUnreadableFileNamesTheWayOut`
+            // pins (the delta pass on PR #233's fix round found the earlier comment here saying
+            // that wording is never borrowed, which the load banner's wording is not; the save's
+            // own load error is a different thing and does arrive here).
             recordLocalStorageWriteFailure(
                 "Sonny could not save that you allowed it to control \(displayName): \(Self.failureMessage(for: error))"
             )

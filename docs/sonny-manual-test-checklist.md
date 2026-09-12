@@ -4551,9 +4551,13 @@ banner's own sentence, "Open Memory in Command Center to clear it."
 - [ ] With Sonny running and a routine created beforehand, `echo garbage >
       ~/Library/Application\ Support/Sonny/routines.json`, then Routines › the routine › Delete:
       "Could not delete routine: A local data file exists but could not be decrypted or decoded.
-      Open Memory in Command Center to clear it." Then, on the same routine, Remove schedule (or
-      the row's schedule toggle): the storage notice reads "Sonny could not save this routine's
-      schedule: …" ending with the same way out (PR #233's fresh review, F1).
+      Open Memory in Command Center to clear it." Then, on the same routine, open its editor and
+      press Add a schedule, then Save schedule — the editor's Save reaches the same door, and it is
+      there whether or not the routine has a schedule; on a routine that already has one, Remove
+      schedule or the row's schedule toggle do the same (the delta pass on PR #233's fix round: the
+      earlier wording named only the two controls a routine without a schedule does not show). The
+      storage notice reads "Sonny could not save this routine's schedule: …" ending with the same
+      way out (PR #233's fresh review, F1).
 - [ ] The notice channel (PR #233's fresh review, F2). Quit Sonny; `echo garbage >
       ~/Library/Application\ Support/Sonny/task-history.json`; launch (the storage banner names
       the way out); type `2 + 2`: the answer shows, and the notice now reads "Sonny could not save
