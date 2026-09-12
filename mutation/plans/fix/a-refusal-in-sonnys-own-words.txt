@@ -4,7 +4,9 @@
 # Killers, each measured by applying the mutant by hand at the fix round's tree (PR #232, 2026-09-11):
 # U1 by UnsupportedRefusalTests, AgentRunnerTests.aRefusedPlanThrowsSonnysOwnSentenceAndKeepsThePlannersReason
 # and BackendTaskIdentityTests.aRefusalReadsSonnysSentenceOnEverySurfaceTheUserSees; U2 by the runner's
-# two refusal tests; U3 by UnsupportedRefusalTests and the surface test; U4 by
+# two refusal tests; U3 by UnsupportedRefusalTests, the surface test and
+# AgentRunnerTests.aRefusedPlanThrowsSonnysOwnSentenceAndKeepsThePlannersReason, which checks the literal
+# sentence (the delta pass named the third); U4 by
 # AgentRunnerTests.aRefusedPlansReasonReachesTheActLog. The unified-log line beside the throw has no
 # mutant and no test: nothing in this suite reads the unified log, so its privacy setting is unguarded.
 
