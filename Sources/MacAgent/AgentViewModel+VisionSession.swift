@@ -132,8 +132,9 @@ extension AgentViewModel: VisionSessionInteracting {
     /// `git grep -nP 'emergencyStopVisionSession(\(\))?(?![A-Za-z])' -- Sources | grep -v 'func emergencyStopVisionSession' | grep -vE ':[0-9]+: *//'`
     /// (`-P` rather than `-E` with a `\b`, because `git grep`'s ERE engine does not honour `\b` and
     /// answers that pattern with a clean zero, which it did once while this count was being taken).
-    /// It answers 5 lines. **The control for the last stage is taken over this file alone, because
-    /// that is where it is exact**: the same command ending `-- Sources/MacAgent/AgentViewModel+VisionSession.swift`
+    /// It answers 5 lines, and every figure in this paragraph is at `e992dd21`. **The control for the
+    /// last stage is taken over this file alone, because that is where it is exact**: the same
+    /// command ending `-- Sources/MacAgent/AgentViewModel+VisionSession.swift`
     /// answers 1, the closure below, and with the last stage dropped it answers 3 — one more for each
     /// of the two lines of this paragraph that name the method in prose, the pill's spelling and the
     /// old command. The line holding the command itself names the method too and is not among them,
