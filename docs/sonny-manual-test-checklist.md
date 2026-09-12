@@ -4679,6 +4679,34 @@ says to release it:
       restored and no transaction left open, and the budget costs one extra round trip per statement
       and nothing a person can notice.
 
+### A settle never moves a paid top-up row off granted (new 2026-09-11, SONNY-435)
+
+A top-up row that was already granted could be written back to unconfirmed with zero credits by a
+second attempt that arrived while the first was still finalizing. The settle now writes only onto a
+row still waiting for an answer, or a grant onto a decline (the founders' decision of 2026-09-11 after
+the fresh review), and a settle that wrote nothing answers from the row. Server half only; needs a
+lane database with the migrations applied.
+
+- [ ] The shipped code, at the lane database (PR #236's fresh review, F5: the hand-typed SQL that
+      stood here could not fail when the product regressed, and `psql` is not installed on this Mac).
+      With a lane database up by `CLAUDE.md`'s recipe and its port in `PORT`:
+
+      ```
+      cd server && npm install && npm run build
+      DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npm run migrate -- up
+      DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/postgres" npx vitest run test/topup.db.test.ts -t "SONNY-435" --reporter=verbose
+      ```
+
+      The runner names, and passes, the nine tests of the two `SONNY-435` blocks, among them
+      `a settle that arrives after the grant leaves the grant standing`, `a declined row takes a
+      later grant, because paid beats the provider's own earlier decline`, `the late caller whose
+      settle matched nothing is answered from the grant, not unconfirmed`, `a grant that arrives
+      after a decline lands, and the row says granted` and `a late settle that waits on the grant's
+      row lock writes nothing once the grant commits`; the tally reads `Tests  9 passed | 27 skipped (36)` — nine, the file's other twenty-seven deselected by `-t`, none failed.
+      Each drives `settleTopUpAttempt`, or `attemptTopUp` over the real store, so a statement that
+      regressed fails a named test here.
+- [ ] `npm run test:db` at the lane database: the whole database suite passes with those nine.
+
 ## 8. How to report back
 
 For each real finding, give me:

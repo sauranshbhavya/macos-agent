@@ -3,12 +3,17 @@ import { describe, expect } from "vitest";
 import { creditBalance } from "../src/credit/balance.js";
 import { postgresCreditStore } from "../src/credit/store.js";
 import {
+  attemptTopUp,
   claimTopUpAttempt,
+  postgresTopUpAttemptStore,
   readOutstandingTopUp,
   recordTopUpOrder,
   settleTopUpAttempt,
 } from "../src/credit/topup.js";
-import { readLastTopUpCharge } from "../src/credit/store.js";
+import type { TopUpDeps, TopUpResult } from "../src/credit/topup.js";
+import type { BillingProvider, TopUpCharge } from "../src/billing/provider.js";
+import { readUnresolvedTopUps } from "../src/billing-debts.js";
+import { readLastTopUpCharge, readToppedUpCredits } from "../src/credit/store.js";
 import { periodStart } from "../src/entitlement/period.js";
 import {
   afterAllUnderHangBackstop,
@@ -702,3 +707,425 @@ describeDb("the consent a charge is authorised by", () => {
     expect(await store().setAutoTopUp(ACCOUNT, true, again)).toEqual(again);
   });
 });
+
+describeDb("a settle moves a resolvable row to an answer and never moves a closed one (SONNY-435)", () => {
+  let client: pg.Client;
+  const LATER = new Date("2026-08-15T12:00:20Z");
+
+  beforeAllUnderHangBackstop(async () => {
+    client = new pg.Client({ connectionString: url });
+    await client.connect();
+    await rebuildSchema(client);
+  });
+  afterAllUnderHangBackstop(async () => {
+    await client.end();
+  });
+  beforeEachUnderHangBackstop(async () => {
+    await client.query("TRUNCATE sonny.credit_topup");
+  });
+
+  async function rowOf(topUpId: string) {
+    const { rows } = await client.query<{
+      outcome: string;
+      credits: number;
+      charged_amount: string | null;
+      charged_currency: string | null;
+      settled_at: Date | null;
+    }>(
+      `SELECT outcome, credits, charged_amount, charged_currency, settled_at
+         FROM sonny.credit_topup WHERE topup_id = $1`,
+      [topUpId],
+    );
+    return rows[0]!;
+  }
+
+  /**
+   * PR #220's O1, as the reviewer constructed it: the first attempt outruns the route's deadline and
+   * its finalize grants late; the second attempt found the row outstanding, met the provider's `412`,
+   * failed its read-back, and settles what it saw — `unconfirmed`, zero credits — over the grant.
+   */
+  itUnderHangBackstop("a settle that arrives after the grant leaves the grant standing", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.charged_currency).toBe("USD");
+    expect(row.settled_at).toEqual(AT);
+    // Closed rows are not outstanding, so the account's next attempt buys afresh rather than asking
+    // about an order that is already answered.
+    expect(
+      await readOutstandingTopUp(client, { accountId: ACCOUNT, provider: PROVIDER, periodStart: PERIOD }),
+    ).toBeUndefined();
+  });
+
+  /** The reverse interleaving ends granted too: the pessimistic answer lands first, the grant after. */
+  itUnderHangBackstop("an unconfirmed row still takes the grant that arrives after it", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.settled_at).toEqual(LATER);
+  });
+
+  /**
+   * The third closed outcome, held by its own test because PR #236's first review widened the set
+   * to include it and the suite stayed green: a `provider_error` row carries no order id, so no
+   * caller can reach it through `readOutstandingTopUp` today, and the condition still has to say so.
+   */
+  itUnderHangBackstop("a provider_error row does not take a later settle either", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "provider_error",
+      credits: 0,
+      providerOrderId: undefined,
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("provider_error");
+    expect(row.credits).toBe(0);
+    expect(row.settled_at).toEqual(AT);
+    const { rows } = await client.query<{ provider_order_id: string | null }>(
+      "SELECT provider_order_id FROM sonny.credit_topup WHERE topup_id = $1",
+      [attempt!.topUpId],
+    );
+    // The refused settle did not even lend the row an order id.
+    expect(rows[0]!.provider_order_id).toBeNull();
+  });
+
+  /**
+   * **A declined row takes a later grant — the one move off a closed row** (PR #236's fresh review,
+   * F1; the founders' decision of 2026-09-11). The first version of this test held the opposite,
+   * and the review measured what it cost through `attemptTopUp`: the provider says money moved,
+   * the row says declined with no amount, and nothing records the charge. The provider's `paid`
+   * beats its own earlier decline; the settle reports that it wrote.
+   */
+  itUnderHangBackstop("a declined row takes a later grant, because paid beats the provider's own earlier decline", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    const first = await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: AT,
+    });
+    expect(first).toEqual({ wrote: true, outcome: "declined", credits: 0 });
+
+    const second = await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: LATER,
+    });
+    expect(second).toEqual({ wrote: true, outcome: "granted", credits: 500 });
+
+    const row = await rowOf(attempt!.topUpId);
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.charged_amount).toBe("500");
+    expect(row.settled_at).toEqual(LATER);
+    // And granted stays final: a decline arriving after the grant writes nothing and reports the grant.
+    const third = await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "declined",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: LATER,
+    });
+    expect(third).toEqual({ wrote: false, outcome: "granted", credits: 500 });
+    expect((await rowOf(attempt!.topUpId)).outcome).toBe("granted");
+  });
+
+  /** A settle that wrote nothing reports the row it found: the grant, with its credits (F2). */
+  itUnderHangBackstop("a settle that matched nothing reports the row it found", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-1" });
+    await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "granted",
+      credits: 500,
+      providerOrderId: "order-1",
+      chargedAmount: 500,
+      chargedCurrency: "USD",
+      settledAt: AT,
+    });
+
+    const late = await settleTopUpAttempt(client, {
+      topUpId: attempt!.topUpId,
+      outcome: "unconfirmed",
+      credits: 0,
+      providerOrderId: "order-1",
+      chargedAmount: undefined,
+      chargedCurrency: undefined,
+      settledAt: LATER,
+    });
+
+    expect(late).toEqual({ wrote: false, outcome: "granted", credits: 500 });
+  });
+});
+
+/**
+ * **The ticket's own sequence, through `attemptTopUp` and the real store** (SONNY-435, PR #236's
+ * fresh review, F4). Two attempts finalize one order: the second read the row as outstanding while
+ * the first was still inside its finalize. What each caller is told, and what the row says, are
+ * asserted together — the first version of this block held the statement's `WHERE` with settles in
+ * sequence on one connection and could not see either. The provider's answers are released by hand,
+ * and each case asserts the interleaving was really built before it releases anything.
+ */
+describeDb("two attempts that finalize one order answer from the row (SONNY-435)", () => {
+  let client: pg.Client;
+  const PACK = { credits: 500, productId: "pack-500", maxPerPeriod: 3, price: { amount: 500, currency: "usd" } };
+  const LATER = new Date("2026-08-15T12:00:20Z");
+
+  beforeAllUnderHangBackstop(async () => {
+    client = new pg.Client({ connectionString: url });
+    await client.connect();
+    await rebuildSchema(client);
+  });
+  afterAllUnderHangBackstop(async () => {
+    await client.end();
+  });
+  beforeEachUnderHangBackstop(async () => {
+    await client.query("TRUNCATE sonny.credit_topup");
+  });
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  /** A provider whose two finalize answers are released by the test, in order. */
+  function gatedProvider() {
+    const entered = [deferred<void>(), deferred<void>()];
+    const answers = [deferred<TopUpCharge>(), deferred<TopUpCharge>()];
+    const creates: string[] = [];
+    const finalized: string[] = [];
+    const provider: BillingProvider = {
+      name: PROVIDER,
+      webhookKey: Buffer.alloc(0),
+      read: () => ({ kind: "ignored", eventId: "x", eventType: "y" }),
+      checkoutUrlFor: () => "https://checkout.invalid",
+      portalUrlFor: async () => ({ kind: "noCustomer" }),
+      createTopUpOrder: async () => {
+        creates.push("order-p");
+        return { kind: "created", orderId: "order-p" };
+      },
+      finalizeTopUpOrder: async (orderId) => {
+        const n = finalized.length;
+        finalized.push(orderId);
+        entered[n]!.resolve();
+        return answers[n]!.promise;
+      },
+    };
+    return { provider, entered, answers, creates, finalized };
+  }
+
+  async function interleave(first: TopUpCharge, second: TopUpCharge): Promise<{ resultA: TopUpResult; resultB: TopUpResult }> {
+    const g = gatedProvider();
+    const deps: TopUpDeps = {
+      pack: PACK,
+      provider: g.provider,
+      billingCustomerFor: async () => "cust",
+      attempts: postgresTopUpAttemptStore(async (work) => work(client)),
+    };
+    // Exhausted: a thousand iterations at one credit each is the whole allowance, so the attempt
+    // has a reason to buy, and `periodStart` is derived from `now` exactly as the route's is.
+    const balance = creditBalance({
+      catalogue: catalogueOf({ runCredits: 10, monthlyCredits: [1000] }),
+      planKey: undefined,
+      draw: { sessions: 0, iterations: 1000, pixels: 0 },
+      toppedUpCredits: 0,
+      now: AT,
+    });
+    const input = { accountId: ACCOUNT, balance, consentedAt: CONSENTED, now: AT };
+    const a = attemptTopUp(deps, input);
+    await g.entered[0]!.promise; // A is inside its finalize; the row is attempted, with order-p
+    const b = attemptTopUp(deps, { ...input, now: LATER });
+    await g.entered[1]!.promise; // B read the row as outstanding and is finalizing the same order
+    expect(g.creates).toEqual(["order-p"]);
+    expect(g.finalized).toEqual(["order-p", "order-p"]);
+    g.answers[0]!.resolve(first);
+    const resultA = await a;
+    g.answers[1]!.resolve(second);
+    const resultB = await b;
+    return { resultA, resultB };
+  }
+
+  async function theRow() {
+    const { rows } = await client.query<{ outcome: string; credits: number; settled_at: Date | null }>(
+      "SELECT outcome, credits, settled_at FROM sonny.credit_topup WHERE provider_order_id = 'order-p'",
+    );
+    return rows[0]!;
+  }
+
+  /** PR #220's O1: the grant lands, then the late caller's provider reading could not be read. */
+  itUnderHangBackstop("the late caller whose settle matched nothing is answered from the grant, not unconfirmed", async () => {
+    const { resultA, resultB } = await interleave(
+      { kind: "charged", orderId: "order-p", amount: 500, currency: "usd" },
+      { kind: "unavailable", reason: "the provider could not be reached" },
+    );
+
+    expect(resultA).toEqual({ kind: "granted", credits: 500 });
+    expect(resultB).toEqual({ kind: "granted", credits: 500 });
+    const row = await theRow();
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.settled_at).toEqual(AT);
+    expect(await readToppedUpCredits(client, { accountId: ACCOUNT, periodStart: PERIOD })).toBe(500);
+    expect(await readUnresolvedTopUps(client)).toEqual([]);
+  });
+
+  /** The fresh review's F1: the decline lands, then the late caller's grant for the same order. */
+  itUnderHangBackstop("a grant that arrives after a decline lands, and the row says granted", async () => {
+    const { resultA, resultB } = await interleave(
+      { kind: "declined", reason: "provider answered 402" },
+      { kind: "charged", orderId: "order-p", amount: 500, currency: "usd" },
+    );
+
+    expect(resultA).toEqual({ kind: "refused", refusal: "declined" });
+    expect(resultB).toEqual({ kind: "granted", credits: 500 });
+    const row = await theRow();
+    expect(row.outcome).toBe("granted");
+    expect(row.credits).toBe(500);
+    expect(row.settled_at).toEqual(LATER);
+    expect(await readToppedUpCredits(client, { accountId: ACCOUNT, periodStart: PERIOD })).toBe(500);
+    expect(await readUnresolvedTopUps(client)).toEqual([]);
+  });
+
+  /** Two grants for one order: one grant, the first settle's instant, and both callers told granted. */
+  itUnderHangBackstop("two grants for one order leave one grant and tell both callers granted", async () => {
+    const { resultA, resultB } = await interleave(
+      { kind: "charged", orderId: "order-p", amount: 500, currency: "usd" },
+      { kind: "charged", orderId: "order-p", amount: 500, currency: "usd" },
+    );
+
+    expect(resultA).toEqual({ kind: "granted", credits: 500 });
+    expect(resultB).toEqual({ kind: "granted", credits: 500 });
+    const row = await theRow();
+    expect(row.outcome).toBe("granted");
+    expect(row.settled_at).toEqual(AT);
+    expect(await readToppedUpCredits(client, { accountId: ACCOUNT, periodStart: PERIOD })).toBe(500);
+  });
+
+  /**
+   * The same moment: the late `unconfirmed` waits on the grant's row lock, then finds a closed row.
+   * Held on a second connection with the grant's `UPDATE` inside an open transaction, so the check is
+   * against a real lock and not against settles that happened to arrive in sequence.
+   */
+  itUnderHangBackstop("a late settle that waits on the grant's row lock writes nothing once the grant commits", async () => {
+    const attempt = await claimTopUpAttempt(client, claimOf());
+    await recordTopUpOrder(client, { topUpId: attempt!.topUpId, providerOrderId: "order-p" });
+    const holder = new pg.Client({ connectionString: url });
+    await holder.connect();
+    try {
+      await holder.query("BEGIN");
+      const grant = await settleTopUpAttempt(holder, {
+        topUpId: attempt!.topUpId,
+        outcome: "granted",
+        credits: 500,
+        providerOrderId: "order-p",
+        chargedAmount: 500,
+        chargedCurrency: "USD",
+        settledAt: AT,
+      });
+      expect(grant.wrote).toBe(true);
+
+      const late = settleTopUpAttempt(client, {
+        topUpId: attempt!.topUpId,
+        outcome: "unconfirmed",
+        credits: 0,
+        providerOrderId: "order-p",
+        chargedAmount: undefined,
+        chargedCurrency: undefined,
+        settledAt: LATER,
+      });
+      let waiting = false;
+      for (let poll = 0; poll < 500 && !waiting; poll += 1) {
+        const { rows } = await holder.query<{ n: string }>(
+          `SELECT count(*) AS n FROM pg_stat_activity
+            WHERE wait_event_type = 'Lock' AND query LIKE 'UPDATE sonny.credit_topup%'`,
+        );
+        waiting = Number(rows[0]!.n) > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(waiting).toBe(true);
+      await holder.query("COMMIT");
+
+      expect(await late).toEqual({ wrote: false, outcome: "granted", credits: 500 });
+      const { rows } = await client.query<{ outcome: string; credits: number }>(
+        "SELECT outcome, credits FROM sonny.credit_topup WHERE topup_id = $1",
+        [attempt!.topUpId],
+      );
+      expect(rows[0]).toEqual({ outcome: "granted", credits: 500 });
+    } finally {
+      await holder.end();
+    }
+  });
+});
+
