@@ -2,15 +2,37 @@
 # app read from the command's words and checked against what is installed or asked for; and an
 # open_app, open_workspace or open_url step, and a screen-control session, bring the app the user
 # was in back in front when they are done. Property: the prefix is the first and only new door,
-# exact and case-insensitive; no app named is a clarification and its answer completes the
-# command; an open that moved the front restores it, on a throw too; a session restores the
-# previous app on every exit and never the target.
-# Killers expected (hand-traced; the founders' weekly battery measures): X1 by every
-# ScreenUsePrefixTests plan test; X2 by ScreenUsePrefixTests (thePrefixIsExactSpellingAndCaseInsensitive);
-# X3 by ScreenUsePrefixTests (noAppNamedAsksWhichAppAndTheAnswerCompletesTheCommand); X4 by
-# FocusRestorerTests (anOpenThatMovedTheFrontmostAppBringsItBack, anOpenThatThrowsStillBringsTheAppBackAndRethrows);
-# X5 by VisionSessionRunTests (theSessionBringsThePreviousAppBackWhenItEnds); X6 by
-# OpenStepsRestoreFocusTests (anAppOpenBringsThePreviousAppBack).
+# exact and case-insensitive, and every gate a planned session meets stands in front of it; no app
+# named is a clarification and its answer completes the command; an open that moved the front
+# restores it, on a throw too, and one that moved nothing restores nothing; only a switch is a
+# restore, and an app that has quit is never asked to come back; a session restores the user's app
+# through the same restorer on every exit and at a pause, never over the app under control while
+# Sonny acts; and a delegated [s] cannot start a second session.
+#
+# X4 and X5 were rewritten on SONNY-451's rebase over SONNY-440: their `from` blocks named code the
+# break fix changed (`onRestore(before)` became `onRestore(before.app)`, and the session stopped
+# restoring through the synthesizer), so they matched nothing and a battery would have refused them
+# at pre-flight. X7 to X12 are the founders' decision of 2026-09-12 and the defects that decision's
+# rebase found.
+#
+# Killers expected (hand-traced, and X4, X5, X7, X8, X9 and X10 hand-applied on this branch; the
+# founders' weekly battery measures): X1 by every ScreenUsePrefixTests plan test and every
+# VisionSessionRunTests aPrefixedCommandMeets… test; X2 by ScreenUsePrefixTests
+# (thePrefixIsExactSpellingAndCaseInsensitive); X3 by ScreenUsePrefixTests
+# (noAppNamedAsksWhichAppAndTheAnswerCompletesTheCommand); X4 by FocusRestorerTests
+# (anOpenThatMovedTheFrontmostAppBringsItBack) and OpenStepsRestoreFocusTests
+# (anAppOpenBringsThePreviousAppBack); X5 by VisionSessionRunTests
+# (theSessionBringsThePreviousAppBackWhenItEnds); X6 by OpenStepsRestoreFocusTests
+# (anAppOpenBringsThePreviousAppBack); X7 by FocusRestorerTests (aLaunchIsNotReportedAsARestore,
+# throughTheShippingShapeALaunchIsNotARestore) and OpenStepsRestoreFocusTests
+# (anOpenWhoseRestoreWasALaunchDoesNotSayTheAppCameBack); X8 by FocusRestorerTests
+# (anAppThatHasQuitIsNeverAskedToComeBack) and VisionSessionRunTests
+# (anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds); X9 by VisionSessionRunTests
+# (theSessionBringsThePreviousAppBackWhenItEnds, anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds);
+# X10 by VisionSessionRunTests (aPauseGivesTheUsersAppBackAndNothingIsClickedUntilTheTargetIsInFrontAgain);
+# X11 by FocusRestorerTests (anOpenThatMovedNothingRestoresNothing) and OpenStepsRestoreFocusTests
+# (aURLOpenInTheBrowserAlreadyInFrontRestoresNothing, anOpenOfTheAppAlreadyInFrontRestoresNothing);
+# X12 by VisionSessionRunTests (aDelegatedPrefixedInstructionIsRefusedAsASecondSession).
 
 >>> mutant X1 the prefix door removed: [s] falls through to the other doors and the planner
 >>> file Sources/MacAgentCore/InstantCommandResolver.swift
@@ -48,19 +70,19 @@
 >>> file Sources/MacAgentCore/FocusRestorer.swift
 >>> from
         if let before, await restored(before) {
-            onRestore(before)
+            onRestore(before.app)
         }
         return result
 >>> to
         return result
 >>> end
 
->>> mutant X5 the session restores the target instead of the app the user was in
+>>> mutant X5 the session gives back the controlled app instead of the app the user was in
 >>> file Sources/MacAgentCore/VisionSessionRunner.swift
 >>> from
-        _ = await environment.synthesizer.activateApp(bundleIdentifier: previous)
+        guard let previous = previousFrontmost, previous.app.bundleIdentifier != target.bundleIdentifier else {
 >>> to
-        _ = await environment.synthesizer.activateApp(bundleIdentifier: target.bundleIdentifier)
+        guard let previous = await focusRestorer.frontmost(), previous.app.bundleIdentifier != target.bundleIdentifier else {
 >>> end
 
 >>> mutant X6 an app open no longer restores focus
@@ -73,4 +95,59 @@
         }
 >>> to
         try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
+>>> end
+
+>>> mutant X7 a launch is counted as a restore
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        return await bringToFront(before) == .switched
+>>> to
+        return await bringToFront(before) != .refused
+>>> end
+
+>>> mutant X8 the liveness check removed: an app that has quit is asked to come back, which starts it
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        guard stillRunning(noted) else {
+            return .refused
+        }
+        return await activation(noted)
+>>> to
+        return await activation(noted)
+>>> end
+
+>>> mutant X9 the session gives the user's app back through the synthesizer again, which starts one that quit
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+        _ = await focusRestorer.bringToFront(previous)
+>>> to
+        _ = await environment.synthesizer.activateApp(bundleIdentifier: previous.app.bundleIdentifier)
+>>> end
+
+>>> mutant X10 a session resumed from a pause acts without bringing the controlled app forward again
+>>> file Sources/MacAgentCore/VisionSessionRunner.swift
+>>> from
+                    _ = await environment.synthesizer.activateApp(bundleIdentifier: target.bundleIdentifier)
+>>> to
+                    _ = ()
+>>> end
+
+>>> mutant X11 an open that moved nothing still asks for a restore
+>>> file Sources/MacAgentCore/FocusRestorer.swift
+>>> from
+        if let now = frontmost(), now.app.bundleIdentifier == before.app.bundleIdentifier {
+            return false
+        }
+>>> to
+        if false, let now = frontmost(), now.app.bundleIdentifier == before.app.bundleIdentifier {
+            return false
+        }
+>>> end
+
+>>> mutant X12 a delegated [s] is no longer refused as a second session
+>>> file Sources/MacAgent/AgentViewModel+VisionSession.swift
+>>> from
+            if prepared.plan.steps.contains(where: { $0.operation == AgentOperation.visionSession }) {
+>>> to
+            if prepared.plan.steps.contains(where: { _ in false }) {
 >>> end
