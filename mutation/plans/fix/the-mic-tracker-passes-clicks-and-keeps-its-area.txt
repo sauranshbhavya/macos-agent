@@ -1,0 +1,53 @@
+# SONNY-443 and SONNY-444 — the mic's hover tracker passes clicks through and keeps one tracking
+# area; the hint model ignores an arrival after its own expiry until the pointer has left.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #230, 2026-09-11):
+# M1 by theTrackerAnswersNoHitSoAClickReachesTheButtonBeneath, which since the fresh review's F3
+# hosts the mic's chain in a widget panel and asks AppKit's hit-testing where a click lands, beside
+# a plain-overlay control; M2 by theTrackerRegistersOneAreaAndKeepsItAcrossLayoutPasses; M3 by
+# anArrivalAfterTheReminderExpiredUnderTheSamePointerShowsNothing; M4 by
+# aDepartureAfterTheExpiryMakesTheNextArrivalAFreshHover and
+# theSlotTakenAfterTheExpiryClearsTheBeltSoTheNextArrivalShows.
+
+>>> mutant M1 the tracker claims the click again
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+>>> to
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            super.hitTest(point)
+        }
+>>> end
+
+>>> mutant M2 the area re-registered on every layout pass, as before
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+            guard trackingAreas.isEmpty else {
+                return
+            }
+>>> to
+            for area in trackingAreas {
+                removeTrackingArea(area)
+            }
+>>> end
+
+>>> mutant M3 the expiry no longer remembered: an arrival after it shows the reminder again
+>>> file Sources/MacAgent/MicHoverHint.swift
+>>> from
+            self?.visibleHint = nil
+            self?.reminderExpiredUnderThePointer = true
+>>> to
+            self?.visibleHint = nil
+>>> end
+
+>>> mutant M4 a departure no longer clears the belt: the next real hover shows nothing
+>>> file Sources/MacAgent/MicHoverHint.swift
+>>> from
+        visibleHint = nil
+        reminderExpiredUnderThePointer = false
+    }
+>>> to
+        visibleHint = nil
+    }
+>>> end

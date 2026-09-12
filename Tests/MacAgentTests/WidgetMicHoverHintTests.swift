@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import MacAgent
 
@@ -389,3 +390,218 @@ struct MicHoverArrivalTests {
         )
     }
 }
+
+// MARK: - SONNY-443 and SONNY-444: the tracker passes clicks and keeps its area; an expired
+// reminder does not come back under a pointer that never left
+
+/// The founders' pass, tests 13 and 7. Clicking the mic did nothing: the tracking view overlaid on
+/// the button claimed the click. And the hint "only blinks and doesn't go away": the view
+/// re-registered its tracking area on every layout pass, and the working hypothesis — not settled
+/// AppKit behaviour, see the tracker's own doc comment and PR #230's fresh review, F1 — is that
+/// AppKit reported a fresh arrival for an area added under a pointer already inside it, the
+/// reminder's own expiry (which resizes the window) being such a pass. Two fixes in the view and
+/// one belt in the model, each held here; the belt holds whatever sends the extra arrival.
+@Suite
+@MainActor
+struct MicHoverTrackerAndExpiryTests {
+    /// **A real button beneath the tracker, hosted the way the widget hosts it, and the question
+    /// put to AppKit's own hit-testing** (PR #230's fresh review, F3). The first version of this
+    /// test asked a bare `TrackingNSView` for its own `hitTest`, which held the override and
+    /// nothing above it: where a click lands is decided by `NSHostingView` and the platform host
+    /// it wraps the overlay in, and a sample that never passes through them tests only what
+    /// already works. So the mic's own chain — the plain-style button, its 36 pt frame, the
+    /// circular background, the overlay, the 20 pt padding — is hosted in an `NSHostingView`
+    /// inside a `FloatingWidgetPanel` that is never ordered in, laid out four times with the run
+    /// loop turned between passes, and the hit test at the button's centre is asked of the
+    /// hosting view's superview. With the tracker the answer is the hosting view itself: nothing
+    /// of AppKit's above the SwiftUI button claims the point. The control is the same chain with a
+    /// plain overlay whose `hitTest` is `NSView`'s default: the answer is that overlay, inside its
+    /// platform host — the click sink the founders met. Both replicas are checked to hold their
+    /// overlay view, so an empty hierarchy cannot read as a clean one.
+    @Test
+    func theTrackerAnswersNoHitSoAClickReachesTheButtonBeneath() throws {
+        let tracked = HostedMicReplica(overlay: AlwaysActiveHoverTracker(onEnter: {}, onExit: {}))
+        let control = HostedMicReplica(overlay: PlainClickSinkOverlay())
+        defer {
+            tracked.tearDown()
+            control.tearDown()
+        }
+
+        #expect(tracked.overlayView(AlwaysActiveHoverTracker.TrackingNSView.self) != nil, "the replica does not host the tracker")
+        #expect(control.overlayView(PlainClickSinkOverlay.PlainView.self) != nil, "the control does not host its overlay")
+
+        let hitWithTracker = try #require(tracked.hitAtButtonCentre())
+        let hitWithPlainOverlay = try #require(control.hitAtButtonCentre())
+
+        #expect(hitWithTracker === tracked.hosting, "AppKit sent the click to \(type(of: hitWithTracker)) rather than to the view hosting the button")
+        #expect(hitWithPlainOverlay is PlainClickSinkOverlay.PlainView, "the control's plain overlay did not claim the click: \(type(of: hitWithPlainOverlay))")
+        #expect(hitWithPlainOverlay !== control.hosting)
+    }
+
+    @Test
+    func theTrackerRegistersOneAreaAndKeepsItAcrossLayoutPasses() throws {
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+
+        tracker.updateTrackingAreas()
+        let first = try #require(tracker.trackingAreas.first)
+        #expect(tracker.trackingAreas.count == 1)
+
+        tracker.updateTrackingAreas()
+        tracker.updateTrackingAreas()
+
+        #expect(tracker.trackingAreas.count == 1)
+        #expect(tracker.trackingAreas.first === first, "a layout pass replaced the area, which is the synthetic arrival")
+        #expect(first.options.contains(.inVisibleRect))
+        #expect(first.options.contains(.activeAlways))
+    }
+
+    /// The blink, at the model: the reminder expires with the pointer still there, and an arrival
+    /// with no departure in between shows nothing and arms nothing.
+    @Test
+    func anArrivalAfterTheReminderExpiredUnderTheSamePointerShowsNothing() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+        #expect(model.visibleHint == nil, "the countdown ran and the hint stayed")
+
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint == nil, "the same hover, reported again, re-showed the reminder")
+        #expect(model.dismissCountdown == countdown, "and armed a fresh countdown for it")
+    }
+
+    /// The next hover: the pointer leaves and comes back, and the reminder shows with fresh seconds.
+    @Test
+    func aDepartureAfterTheExpiryMakesTheNextArrivalAFreshHover() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+
+        model.dismiss()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint != nil, "the pointer left and came back, and the reminder did not return")
+        #expect(model.dismissCountdown != countdown)
+        model.dismiss()
+    }
+
+    /// SONNY-179's case survives the belt: the reminder expired, then the mic was taken away under
+    /// the stationary pointer (the slot taken dismisses), and the hover after it is shown.
+    @Test
+    func theSlotTakenAfterTheExpiryClearsTheBeltSoTheNextArrivalShows() async throws {
+        let model = MicHoverHintModel()
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.promptly)
+        }
+        let countdown = try #require(model.dismissCountdown)
+        await countdown.value
+
+        model.pointerArrived(slotIsFree: false) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+        model.pointerArrived(slotIsFree: true) {
+            WidgetMicHoverHintTests.reminder(clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall)
+        }
+
+        #expect(model.visibleHint != nil, "the first hover after the widget came back was swallowed — SONNY-179 again")
+        model.dismiss()
+    }
+}
+
+// MARK: - The hosted mic replica (PR #230's F3)
+
+/// The mic button's own chain, hosted as the widget hosts it, with the overlay as a parameter so
+/// the tracker and a plain-overlay control take one path.
+private struct MicReplica<Overlay: View>: View {
+    let overlay: Overlay
+
+    var body: some View {
+        Button {} label: {
+            Image(systemName: "mic.fill")
+                .font(WidgetType.captionMedium)
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .frame(width: 36, height: 36)
+        .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
+        .accessibilityLabel("Voice input")
+        .overlay(overlay)
+        .padding(20)
+    }
+}
+
+/// An overlay with `NSView`'s default `hitTest`: the click sink the founders met.
+private struct PlainClickSinkOverlay: NSViewRepresentable {
+    final class PlainView: NSView {}
+
+    func makeNSView(context: Context) -> PlainView {
+        PlainView()
+    }
+
+    func updateNSView(_ nsView: PlainView, context: Context) {}
+}
+
+@MainActor
+private final class HostedMicReplica {
+    let panel: FloatingWidgetPanel
+    let hosting: NSView
+
+    init<Overlay: View>(overlay: Overlay) {
+        panel = FloatingWidgetPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 76, height: 76),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let hosting = NSHostingView(rootView: MicReplica(overlay: overlay))
+        hosting.frame = NSRect(x: 0, y: 0, width: 76, height: 76)
+        panel.contentView = hosting
+        self.hosting = hosting
+        // Four passes with the run loop turned between them: SwiftUI mounts the representable's
+        // platform host on a later pass than the first, and a hit test asked before it exists
+        // would read as the button's, which is the reassuring direction.
+        for _ in 0..<4 {
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+    }
+
+    /// The overlay's own view, found by walking the hosted hierarchy — the proof the walk reached
+    /// the thing under test.
+    func overlayView<T: NSView>(_ type: T.Type) -> T? {
+        func walk(_ view: NSView) -> T? {
+            if let match = view as? T {
+                return match
+            }
+            for child in view.subviews {
+                if let match = walk(child) {
+                    return match
+                }
+            }
+            return nil
+        }
+        return walk(hosting)
+    }
+
+    /// AppKit's answer for a click at the button's centre, asked of the view above the hosting
+    /// view, as a real event's dispatch asks it.
+    func hitAtButtonCentre() -> NSView? {
+        (hosting.superview ?? hosting).hitTest(NSPoint(x: 38, y: 38))
+    }
+
+    func tearDown() {
+        panel.contentView = nil
+        panel.close()
+    }
+}
+
