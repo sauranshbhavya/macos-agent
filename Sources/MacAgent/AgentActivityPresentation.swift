@@ -546,9 +546,20 @@ enum ScreenControlSessionPresentation {
     static let stopLabel = "Stop"
 
     /// The control that holds the session at the top of its next iteration. **A named constant
-    /// since SONNY-450**, because the run pill became a third surface drawing it and a word the
-    /// widget's panel spelled inline is a word two surfaces can spell differently.
+    /// since SONNY-450**, because the run pill became a second surface drawing it and a word the
+    /// widget's panel spelled inline is a word two surfaces can spell differently. `WidgetSessionPauseButton`
+    /// is the one view that renders it, for both surfaces.
     static let pauseLabel = "Pause"
+
+    /// The line naming the key that stops a session from anywhere, said once and quietly under the
+    /// controls. **One owner since PR #237's delta review (N8)**: it was written out twice, once in
+    /// `WidgetControllingPanel` and once in the run pill's presentation, and the two tests comparing
+    /// it each carried a third literal, so nothing tied the copies together. It is here because this
+    /// type already owns every other word a session's HUD says.
+    ///
+    /// During a session the pointer is not the user's to aim, so the keyboard is the input path
+    /// that reliably is theirs — and a control nobody knows about is not a control.
+    static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
 
     /// Its VoiceOver name, which names the app because "Stop" alone does not say what stops.
     static func stopAccessibilityLabel(appDisplayName: String) -> String {

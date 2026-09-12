@@ -24,7 +24,9 @@ struct RunPillPresentation: Equatable {
         /// Sonny is working and carries no controls, and this one says Sonny is *controlling* a
         /// named app and carries Pause and Stop. Folding the two together is what that finding
         /// found, and `mutation/plans/feature/the-widget-minimises-while-sonny-runs.txt`'s P7 is
-        /// the mutant that folds them back.
+        /// the mutant that folds them back — as a fold that compiles, because a `where` on this
+        /// case leaves `make`'s switch non-exhaustive and a mutant that does not build measures
+        /// nothing (PR #237's delta review, N1).
         case controlling
         case needsYou
         case done
@@ -37,25 +39,20 @@ struct RunPillPresentation: Equatable {
     ///
     /// The panel's own doc comment states the requirement this exists to keep: *"While Sonny
     /// controls an app it says so, says which app, says what it is doing right now, and puts Stop
-    /// where the user can reach it… a product requirement rather than a courtesy."* Every field
-    /// below is one clause of that sentence, and `hotkeyLine` is the panel's closing line, kept for
-    /// its own stated reason — a control nobody knows about is not a control.
+    /// where the user can reach it… a product requirement rather than a courtesy."*
     ///
-    /// The strings are built here rather than in the view so a test asserts the sentence a founder
-    /// would read, without a window; the two labels are `ScreenControlSessionPresentation`'s, which
-    /// is where the panel gets them, so the corner and the panel cannot word the same control
-    /// differently.
+    /// **Only what varies from one session to the next is carried here** (PR #237's delta review,
+    /// N8). The fixed words — Pause, Stop, their spoken names and the line naming the emergency key —
+    /// have one owner, `ScreenControlSessionPresentation`, and one view each,
+    /// `WidgetSessionPauseButton` and `WidgetSessionStopButton`, which the widget's HUD and this pill
+    /// both render. This payload used to copy all five in, which gave the corner a second spelling of
+    /// each that nothing tied to the panel's.
     struct Controlling: Equatable {
         let appDisplayName: String
         /// What Sonny is doing right now, cut to `actionLimit` — measured against the pill's real
         /// width with AppKit's own text layout in `RunPillControllingLayoutTests`, not chosen.
         let currentAction: String
         let stepLine: String
-        let pauseLabel: String
-        let pauseAccessibilityLabel: String
-        let stopLabel: String
-        let stopAccessibilityLabel: String
-        let hotkeyLine: String
     }
 
     /// Which `WidgetTheme` colour the pill's glyph takes. Named here and resolved in
@@ -147,7 +144,7 @@ struct RunPillPresentation: Equatable {
                     "\(identity). \(action)",
                     then: "\(ScreenControlSessionPresentation.stopLabel) and "
                         + "\(ScreenControlSessionPresentation.pauseLabel) are on this pill. "
-                        + hotkeyLine
+                        + ScreenControlSessionPresentation.hotkeyLine
                 ),
                 tooltip: identity,
                 controlling: Controlling(
@@ -156,16 +153,7 @@ struct RunPillPresentation: Equatable {
                     stepLine: ScreenControlSessionPresentation.stepLine(
                         iteration: progress.iteration,
                         maximumIterations: progress.maximumIterations
-                    ),
-                    pauseLabel: ScreenControlSessionPresentation.pauseLabel,
-                    pauseAccessibilityLabel: ScreenControlSessionPresentation.pauseAccessibilityLabel(
-                        appDisplayName: progress.appDisplayName
-                    ),
-                    stopLabel: ScreenControlSessionPresentation.stopLabel,
-                    stopAccessibilityLabel: ScreenControlSessionPresentation.stopAccessibilityLabel(
-                        appDisplayName: progress.appDisplayName
-                    ),
-                    hotkeyLine: hotkeyLine
+                    )
                 )
             )
         case .working:
@@ -217,10 +205,6 @@ struct RunPillPresentation: Equatable {
     /// The first line of `text`, trimmed, cut at `limit` characters with an ellipsis (the pill's
     /// `wordLimit` unless a caller names its own, which the action line does); the fallback when
     /// nothing is left.
-    /// The hotkey sentence, worded exactly as `WidgetControllingPanel` words it, because it is the
-    /// same statement about the same key and the two surfaces must not drift.
-    static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
-
     static func trimmed(_ text: String, fallback: String, limit: Int = wordLimit) -> String {
         let firstLine = text
             .split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)

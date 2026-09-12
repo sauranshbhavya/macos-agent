@@ -741,6 +741,43 @@ final class VisionSessionRunner {
 
     // MARK: - Acting
 
+    /// What the model is told when an action lands on one of Sonny's own windows and is not sent.
+    ///
+    /// **The suppression is right and stays** — a click or scroll inside Sonny's own window would be
+    /// Sonny operating itself, and `VisionPointResolver` refuses it. What was wrong is what the model
+    /// was told (PR #237's delta review, N4). While the widget is minimised the run pill is a visible
+    /// window in the top-right corner of the controlled display, so a whole corner of a maximised
+    /// app — where toolbar search fields and share buttons sit — refuses every action. The model's
+    /// capture is scoped to the target window, so the pill is **not in its screenshot**: it saw a
+    /// control, aimed at it, and was told only "pick a different control or report stuck", which gave
+    /// it no reason the point failed and no way through but to give up.
+    ///
+    /// So this says plainly what covers the point, that it cannot be seen, that the same point will
+    /// fail again, and then the routes the model's own vocabulary can take. **Only those routes.**
+    /// `VisionActionKey` carries enter, tab, escape, delete and the four arrows and no modifier, and
+    /// there is no action that moves a window, so "move the window" or "use a keyboard shortcut"
+    /// would be instructions it cannot follow — the same dead end in more confident words. And the
+    /// scroll route says *somewhere else*, because a scroll resolves through this same refusal and a
+    /// scroll aimed at the covered point is blocked exactly as the click was.
+    ///
+    /// **The pill is not hidden or moved to let the action through.** The statement that Sonny is
+    /// controlling this app must not disappear at the moment Sonny acts on it.
+    static func ownWindowCoversThePoint(
+        iteration: Int,
+        kind: VisionActionKind,
+        target: String,
+        x: Int,
+        y: Int,
+        appDisplayName: String
+    ) -> String {
+        "iteration \(iteration): the \(kind.rawValue) on \u{201C}\(target)\u{201D} at (\(x), \(y)) was not sent — "
+            + "one of Sonny's own windows is on top of that point on the screen. That window is not part of "
+            + "\(appDisplayName) and is not in your screenshot, so the control looks reachable there and is not, "
+            + "and the same point will be refused again. To reach it: scroll at a different point in the window "
+            + "so the control moves away from that spot, move keyboard focus to it with tab or the arrow keys "
+            + "and press enter, delegate the step, or report stuck."
+    }
+
     private func perform(
         _ decision: VisionDecision,
         capture: CapturedWindowImage,
@@ -793,7 +830,14 @@ final class VisionSessionRunner {
                 history.append("iteration \(iteration): the action was skipped — the window resized from \(Int(from.width))x\(Int(from.height)) to \(Int(to.width))x\(Int(to.height)) and the layout moved. Reassess from the new screenshot.")
             case .suppressedOwnWindow:
                 journal(decision, imagePoint: imagePoint, observationAfter: "Blocked: the point fell inside Sonny's own window.")
-                history.append("iteration \(iteration): the action was blocked — that part of the screen is covered by Sonny's own window. Pick a different control or report stuck.")
+                history.append(Self.ownWindowCoversThePoint(
+                    iteration: iteration,
+                    kind: decision.kind,
+                    target: decision.target,
+                    x: x,
+                    y: y,
+                    appDisplayName: target.displayName
+                ))
                 try await settle(multiplier: 0.5)
             case .posted(let globalPoint):
                 if decision.kind == .click {

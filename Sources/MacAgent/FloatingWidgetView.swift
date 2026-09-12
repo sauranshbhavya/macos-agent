@@ -1854,10 +1854,15 @@ private struct WidgetSessionIdentityLine: View {
 ///
 /// **Shared for the same reason the line above is** (SONNY-255): the emergency control for a program
 /// driving the user's screen has one label, one colour and one VoiceOver name, whether it is sitting
-/// in the HUD or in the approval panel that outranks it. Its action is the caller's, and both callers
-/// pass the same one — `emergencyStopVisionSession`, which routes into `cancelCurrentRun` like every
-/// other stop in the product.
-private struct WidgetSessionStopButton: View {
+/// in the HUD, in the approval panel that outranks it, or in the run pill the widget minimises into.
+/// Its action is the caller's, and every caller passes the same one — `emergencyStopVisionSession`,
+/// which routes into `cancelCurrentRun` like every other stop in the product.
+///
+/// **Not `private` since PR #237's delta review (N8)**, because the run pill became a third place
+/// drawing a Stop and re-implemented this chrome rather than using it, which made "one stop control"
+/// a property of this file and not of the app. The pill now renders this view, so it is a property
+/// of the app again, and `WidgetSessionApprovalPanelTests` counts its call sites across the target.
+struct WidgetSessionStopButton: View {
     let appDisplayName: String
     let action: () -> Void
 
@@ -1866,12 +1871,51 @@ private struct WidgetSessionStopButton: View {
             Text(ScreenControlSessionPresentation.stopLabel)
                 .font(WidgetType.captionMedium)
                 .foregroundStyle(.white)
+                // **The whole capsule takes the click, not only the word** (PR #237's third fix
+                // round). The padding and the height used to sit outside the button, and a
+                // `.plain`-style button's clickable area is its label: a click sweep across the
+                // hosted control fired Stop only on the glyphs of the word, about 16 pt tall inside
+                // a 28 pt red capsule, and nothing on the capsule's own ends or edges. Moving both
+                // inside the label and giving it the capsule as its content shape makes the
+                // clickable area the control the user can see. The drawn geometry is unchanged,
+                // because the background wraps the button either way.
+                .padding(.horizontal, 10)
+                .frame(height: WidgetTheme.controlSize)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 10)
-        .frame(height: WidgetTheme.controlSize)
         .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
         .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(appDisplayName: appDisplayName))
+    }
+}
+
+/// The control that holds a screen-control session at the top of its next iteration.
+///
+/// **Shared since PR #237's delta review (N8)**, for the reason `WidgetSessionStopButton` is: the
+/// widget's HUD and the run pill both carry a Pause, and the pill had re-implemented the chrome and
+/// spelled the word inline. Neutral fill rather than the Stop's red, because pausing is recoverable
+/// and stopping is not, and the two must never read as the same control.
+///
+/// **Only where the loop is advancing.** `WidgetControllingPanel`'s doc says why Pause does not
+/// travel to a panel that outranks the HUD: the flag it sets is read at the top of the *next*
+/// iteration, so pressing it while a question is parked would appear to do nothing and then act.
+struct WidgetSessionPauseButton: View {
+    let appDisplayName: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(ScreenControlSessionPresentation.pauseLabel)
+                .font(WidgetType.captionMedium)
+                .foregroundStyle(WidgetTheme.textFull)
+                // The whole capsule takes the click, for the reason `WidgetSessionStopButton` gives.
+                .padding(.horizontal, 10)
+                .frame(height: WidgetTheme.controlSize)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .widgetCircularBackground()
+        .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(appDisplayName: appDisplayName))
     }
 }
 
@@ -1921,18 +1965,7 @@ private struct WidgetControllingPanel: View {
 
                 Spacer(minLength: 8)
 
-                Button(action: onPause) {
-                    Text("Pause")
-                        .font(WidgetType.captionMedium)
-                        .foregroundStyle(WidgetTheme.textFull)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: WidgetTheme.controlSize)
-                .widgetCircularBackground()
-                .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(
-                    appDisplayName: progress.appDisplayName
-                ))
+                WidgetSessionPauseButton(appDisplayName: progress.appDisplayName, action: onPause)
 
                 // **Pause does not travel to the approval panel with the Stop, and that is the one
                 // thing this ticket left behind on purpose** (SONNY-255). `pauseVisionSession` sets
@@ -1947,7 +1980,7 @@ private struct WidgetControllingPanel: View {
             // The hotkey, said once and quietly. During a session the pointer is not the user's to
             // aim, so the keyboard is the one input path that is reliably theirs — and a control
             // nobody knows about is not a control.
-            Text("\(EmergencyStopHotKey.displayName) stops it from anywhere.")
+            Text(ScreenControlSessionPresentation.hotkeyLine)
                 .font(WidgetType.captionSmall)
                 .foregroundStyle(WidgetTheme.textMuted)
         }

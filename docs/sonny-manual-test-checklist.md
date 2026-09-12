@@ -4755,10 +4755,16 @@ the app you name; if Sonny asks for that permission first, grant it and carry on
 - [ ] **The action line is readable.** Watch it for a few iterations. It should be legible at the
       pill's width and wrap to at most two lines — never one word per line, never cut mid-word with
       no ellipsis, never spilling outside the glass.
-- [ ] **Stop actually stops.** Press **Stop** on the pill mid-session. The session ends, the pointer
-      is yours again, and the widget comes back with the cancellation. **What would be a finding:**
-      the click does nothing, or it expands the widget instead of stopping — a control that looks
-      live and is not is exactly what SONNY-443 shipped on the mic.
+- [ ] **Stop actually stops.** Press **Stop** on the pill mid-session. The session ends and the
+      pointer is yours again. **The widget does not come back on its own**: the pill stays in the
+      corner and turns into a done pill reading **"Canceled."** — a minimised outcome holds until
+      you expand it, and a stop's outcome is that word. Click the pill: the widget comes back showing
+      it. (This row said the widget comes back by itself until PR #237's delta review, N5; that
+      would have read as a regression, and it is the rule working.) **What would be a finding:** the
+      click does nothing, the click expands the widget instead of stopping, or the session keeps
+      going — a control that looks live and is not is exactly what SONNY-443 shipped on the mic.
+      Try clicking the **edge** of the red capsule, not only the word: the whole capsule should stop
+      the session.
 - [ ] **Pause actually pauses.** Start another screen-control run and press **Pause**. Sonny stops
       at the top of its next step and waits; the widget's paused panel is how you resume or end it.
       Again, the click must reach Pause rather than expanding the widget.
@@ -4774,6 +4780,17 @@ the app you name; if Sonny asks for that permission first, grant it and carry on
       Answer it from the widget. When the session then starts, the widget minimises **again** and
       the controlling pill is what you get — not a blue spinner. (This is the second route PR #237's
       F1 traced: approving re-enters the run and resets the minimise flag.)
+- [ ] **(PR #237's delta review, N4 — Sonny cannot click under its own pill.)** Maximise an app
+      whose top-right corner holds something to click — Safari with its toolbar, or Notes with its
+      search field — then ask for a screen-control run that has to use that corner (*"search Notes
+      for invoices"*). While the widget is minimised, the controlling pill covers that corner, and
+      Sonny deliberately does not click anything under a window of its own. Watch what happens and
+      say which: Sonny reaches the control another way (scrolling, or moving focus with Tab), Sonny
+      reports that it is stuck, or something else. **What would be a finding:** Sonny clicks
+      *through* the pill into the app, the pill hides or jumps out of the way at the moment Sonny
+      acts, or the run hangs rather than ending. The covered area is the pill's whole window — about
+      372 × 157 pt with its transparent margin, taller when the action line wraps — and no one has yet
+      measured how often it costs a real task.
 - [ ] **(PR #237's F8 — nobody has measured this.)** While a run is minimised, get a notification to
       post — let a run finish while you are in another app, or trigger an error notification. The
       banner and the pill are both at the top-right. Say what it looks like: do they overlap, does

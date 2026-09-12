@@ -90,21 +90,48 @@ its own amber tint and cursor glyph, carrying the identity line, the action line
 Pause, Stop and the line naming `⌃⌥⎋`. Option A — a session that does not minimise at all — was
 recommended by the coordinator and declined; the record is on SONNY-450.
 
-Three rules follow for anyone editing that pill, each of them something this repository has already
+The rules below are for anyone editing that pill, and each is something this repository has already
 paid for once:
 
 - **Controls must receive their own clicks.** The controlling pill is deliberately *not* wrapped in
   the ordinary pill's expand `Button`; the identity row is its own button and each control is its
   own button beside it. SONNY-443 shipped an overlay over the mic that claimed every point in its
   bounds, and the founders' clicks went nowhere while the button still looked live.
-  `RunPillControlsReceiveClicksTests` hosts the real pill and asks AppKit where a click at each
-  control's centre lands, against a control that reproduces the sink.
+  `RunPillControlsReceiveClicksTests` sends real mouse events through a real, ordered-in
+  `RunPillPanel` at every point of a 4 pt grid and records which action each one fires, so it tells
+  Pause, Stop and the identity row apart from each other and from the glass around them; its control
+  is SONNY-443's overlay, under which nothing fires. **Do not go back to `NSView.hitTest` for this.**
+  It answers the hosting view at every point of a SwiftUI window, empty corner included, so it can
+  only say no AppKit layer covers the window — which is all the first version of that suite could
+  say (PR #237's delta review, N6). Two measured facts the sweep rests on: a panel that is **not**
+  ordered in fires nothing anywhere, and a `.plain`-style button's clickable area is its *label*, so
+  padding and height applied outside the button are dead — which is why the shared
+  `WidgetSessionPauseButton` and `WidgetSessionStopButton` carry both inside the label with a
+  `Capsule` content shape. What no test here can see is the window server's handling of a first click
+  on a panel that cannot become key; that is the manual row's.
+- **Each control's action is pinned at its own site**, not counted across the pill
+  (`RunPillControlBindingTests`). A count across the pill is satisfied by a swap, and swapping the
+  actions behind Pause and Stop passed the whole suite until that suite existed.
+- **One owner for the words, one view for each control.** Pause, Stop, their spoken names and the
+  line naming `⌃⌥⎋` come from `ScreenControlSessionPresentation`; the widget's HUD, its approval panel
+  and the pill render the same `WidgetSessionPauseButton`/`WidgetSessionStopButton`. A surface that
+  spells one of them itself is a second copy nothing ties to the first.
 - **The action line is measured, not eyeballed.** `RunPillPresentation.actionLimit` is laid out at
   the pill's real width in its real font with AppKit's own text layout
   (`RunPillControllingLayoutTests`), the instrument PR #228 used for the widget's Finder sentence.
 - **A parked question still outranks the session**, as it always has: the pill goes to "needs you",
   the controls go with it, and answering happens in the widget. Nothing on the pill approves
-  anything.
+  anything. While that question is parked the pill does not name the app or carry Stop — the
+  widget's outranking panels do, the pill does not — and the hotkey stays live, so the way out
+  survives even there.
+- **Sonny will not act under its own pill, and the pill does not get out of the way.**
+  `VisionPointResolver` refuses any click or scroll landing inside one of Sonny's visible windows,
+  and the pill is one, so a corner of the controlled display is unreachable while the widget is
+  minimised. The model cannot see the pill (its capture is the target window), so the refusal tells
+  it what covered the point and names only routes its vocabulary can take
+  (`VisionSessionRunner.ownWindowCoversThePoint`). Do not hide or move the pill to let an action
+  through: the statement that Sonny is controlling this app must not disappear at the moment Sonny
+  acts on it.
 
 ## Responsive rows
 

@@ -123,12 +123,28 @@ struct WidgetSessionApprovalPanelTests {
         #expect(MacAgentSource.count(of: "onDeny: { viewModel.cancelCurrentRun() }", inText: routing) == 1)
 
         // And the HUD's Stop is the same component with the same call, so "one stop control" is a
-        // property of the file rather than a claim about it. Two call sites, one per panel — the
-        // declarations carry no open paren, so they are not in these counts.
+        // property of the code rather than a claim about it. Two call sites in this file, one per
+        // panel — the declarations carry no open paren, so they are not in these counts.
         #expect(MacAgentSource.count(of: "WidgetSessionStopButton(", inText: widget) == 2, "one call site per panel")
         #expect(MacAgentSource.count(of: "WidgetSessionIdentityLine(", inText: widget) == 2, "one call site per panel")
-        #expect(MacAgentSource.count(of: "private struct WidgetSessionStopButton: View {", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "struct WidgetSessionStopButton: View {", inText: widget) == 1)
         #expect(MacAgentSource.count(of: "private struct WidgetSessionIdentityLine: View {", inText: widget) == 1)
+
+        // **Across the app, not only this file** (PR #237's delta review, N8). The run pill became a
+        // third surface with a Stop and first re-implemented this chrome rather than using it, so
+        // "one stop control" held of this file and not of the app. The component is no longer
+        // `private` and the pill renders it; the population is the whole app target, so a fourth
+        // surface drawing a Stop of its own arrives here instead of joining silently.
+        //
+        // What this count does not do is find a Stop someone draws *without* the component — a
+        // text search for one spelling of that misses the next, which is how the pill's own
+        // hand-rolled copy read differently from the panel's. The pill's side of that is pinned at
+        // its site by `RunPillControlBindingTests`, which refuses a bare `Button` bound to stop.
+        var stopComponentCalls = 0
+        for url in try MacAgentSource.appSourceFiles() {
+            stopComponentCalls += MacAgentSource.count(of: "WidgetSessionStopButton(", inText: try MacAgentSource.read(url))
+        }
+        #expect(stopComponentCalls == 3, "the widget's two panels and the run pill")
     }
 
     /// **Nothing this panel gained explains how Sonny works**, per the founder's standing rule of
@@ -146,9 +162,16 @@ struct WidgetSessionApprovalPanelTests {
 
         #expect(MacAgentSource.count(of: "EmergencyStopHotKey.displayName", inText: panel) == 0)
         #expect(MacAgentSource.count(of: "stops it from anywhere", inText: panel) == 0)
-        // The HUD still says it, so this is an absence here rather than a deletion there.
+        // **And the owner's spelling**, since PR #237's delta review (N8) moved the sentence into
+        // `ScreenControlSessionPresentation.hotkeyLine`: an absence check that looked only for the
+        // literal would pass over a panel that drew the sentence through its owner, which is now
+        // the only way either surface draws it.
+        #expect(MacAgentSource.count(of: "hotkeyLine", inText: panel) == 0)
+        // The HUD still says it, so this is an absence here rather than a deletion there — through
+        // the owner, once, in this file.
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
-        #expect(MacAgentSource.count(of: "stops it from anywhere", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "Text(ScreenControlSessionPresentation.hotkeyLine)", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "stops it from anywhere", inText: widget) == 0)
     }
 
     // MARK: - The same argument on Command Center's surface (PR #132 review, F1)
@@ -232,7 +255,7 @@ struct WidgetSessionApprovalPanelTests {
         // The Stop, shared by both widget panels — one component, so one site.
         let stop = try MacAgentSource.braceBlock(
             of: widget,
-            openedBy: "private struct WidgetSessionStopButton: View {"
+            openedBy: "struct WidgetSessionStopButton: View {"
         )
         #expect(
             MacAgentSource.count(
@@ -241,22 +264,27 @@ struct WidgetSessionApprovalPanelTests {
             ) == 1
         )
 
-        // The HUD's Pause, which lives only on the controlling panel.
+        // The HUD's Pause — the shared component since PR #237's delta review (N8), which wears the
+        // spoken name inside its own body, handed the HUD's app name at the HUD's call site.
+        let pause = try MacAgentSource.braceBlock(
+            of: widget,
+            openedBy: "struct WidgetSessionPauseButton: View {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: ".accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(appDisplayName: appDisplayName))",
+                inText: pause
+            ) == 1
+        )
         let hud = try MacAgentSource.region(
             of: widget,
             from: "private struct WidgetControllingPanel: View {",
             to: "private struct WidgetClarificationPanel: View {"
         )
-        #expect(
-            MacAgentSource.count(
-                of: """
-                .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(
-                                    appDisplayName: progress.appDisplayName
-                                ))
-                """,
-                inText: hud
-            ) == 1
-        )
+        #expect(MacAgentSource.count(
+            of: "WidgetSessionPauseButton(appDisplayName: progress.appDisplayName, action: onPause)",
+            inText: hud
+        ) == 1)
 
         // And Command Center's Stop, whose label is the one the nit above rebound.
         let commandCenter = try MacAgentSource.region(
@@ -379,7 +407,7 @@ struct WidgetSessionApprovalPanelTests {
             from: "private struct WidgetControllingPanel: View {",
             to: "private struct WidgetClarificationPanel: View {"
         )
-        #expect(MacAgentSource.count(of: "Button(action: onPause)", inText: hud) == 1)
+        #expect(MacAgentSource.count(of: "WidgetSessionPauseButton(", inText: hud) == 1)
         #expect(MacAgentSource.count(of: "WidgetSessionStopButton(", inText: hud) == 1)
     }
 

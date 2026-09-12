@@ -96,23 +96,18 @@ struct RunPillPresentationTests {
         #expect(controlling.appDisplayName == "Notes")
         #expect(controlling.currentAction == "Clicking the New Note button")
         #expect(controlling.stepLine == "Step 2 of 12")
-        #expect(controlling.pauseLabel == ScreenControlSessionPresentation.pauseLabel)
-        #expect(controlling.stopLabel == ScreenControlSessionPresentation.stopLabel)
-        #expect(controlling.pauseAccessibilityLabel == "Pause Sonny controlling Notes")
-        #expect(controlling.stopAccessibilityLabel == "Stop Sonny controlling Notes")
     }
 
-    /// **The way out, in the pill's own words and in the spoken label** — the panel's closing line
+    /// **The way out, in the one owner's words and in the spoken label** — the panel's closing line
     /// is on the pill for the reason the panel gives it: during a session the pointer is not the
     /// user's to aim, so a control nobody knows about is not a control. `mutation/plans/…`'s P8
-    /// empties it.
+    /// empties it at its owner; the view's own site is pinned in `RunPillControllingSiteTests`.
     @Test
     func theControllingPillCarriesTheWayOut() throws {
         let pill = try #require(RunPillPresentation.make(state: .controlling(Self.session), command: ""))
-        let controlling = try #require(pill.controlling)
 
-        #expect(controlling.hotkeyLine == "\(EmergencyStopHotKey.displayName) stops it from anywhere.")
-        #expect(!controlling.hotkeyLine.isEmpty)
+        #expect(ScreenControlSessionPresentation.hotkeyLine == "\u{2303}\u{2325}\u{238B} stops it from anywhere.")
+        #expect(pill.accessibilityLabel.contains(ScreenControlSessionPresentation.hotkeyLine))
         #expect(pill.accessibilityLabel.contains(EmergencyStopHotKey.displayName))
         #expect(pill.accessibilityLabel.contains(ScreenControlSessionPresentation.stopLabel))
         #expect(pill.accessibilityLabel.contains("Sonny is controlling Notes"))

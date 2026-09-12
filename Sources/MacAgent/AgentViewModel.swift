@@ -1983,9 +1983,15 @@ final class AgentViewModel: ObservableObject {
     /// pill, the widget's panel and Command Center's attention panel to disagree about whether
     /// something needs the user.
     ///
-    /// **Lived on `FloatingWidgetView` until SONNY-450 hoisted it here, byte for byte.** A view
-    /// cannot be read by a model, and the pill is the model's, so the body moved rather than being
-    /// copied — a copy is two orderings that agree until one of them is edited. Six tests pinned
+    /// **Lived on `FloatingWidgetView` until SONNY-450 hoisted it here, with one line changed.** A
+    /// view cannot be read by a model, and the pill is the model's, so the body moved rather than
+    /// being copied — a copy is two orderings that agree until one of them is edited. This said the
+    /// move was byte for byte until PR #237's delta review (N11); PR #237's cycle-3 review had
+    /// already measured it, and the fix round for the delta review re-measured it the same way —
+    /// both brace blocks with comment lines, blank lines and the view's `viewModel.` prefix dropped:
+    /// 42 lines each, two different. One is the declaration, `var state` renamed `var widgetState`;
+    /// the other is in the body, `if let approvalRequest = approvalRequest` become the shorthand
+    /// `if let approvalRequest`. No branch, condition, order or return moved. Six tests pinned
     /// the order by scanning the view's source and now scan this; `WidgetState`'s own doc comment
     /// says why the order is pinned by a test at all.
     ///

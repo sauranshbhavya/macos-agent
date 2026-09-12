@@ -68,28 +68,63 @@
 
 # P7 and P8 are the founder decision of 2026-09-12 (option B on PR #237's F1): a live
 # screen-control session still minimises, and the pill has to be the HUD rather than a generic
-# running pill. P7 folds the controlling arm back into `.working`, which is the exact defect the
-# review found and the one no test could see before that round; P8 drops the way out from the
-# pill, which is the half of the requirement a reader is least likely to notice missing.
-# Killers expected (hand-traced; the founders' weekly battery measures): P7 by WidgetMinimiseTests
-# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement,
-# approvingAScreenControlRunReMinimisesIntoTheControllingPill) and RunPillPresentationTests
-# (aLiveSessionIsItsOwnKindAndNotAnOrdinaryRun); P8 by WidgetMinimiseTests
-# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement) and
-# RunPillPresentationTests (theControllingPillCarriesTheWayOut).
+# running pill. P9 is PR #237's delta review, N2.
+#
+# P7 folds a live session back into the ordinary running pill — the exact defect F1 found. **It was
+# first written as `case .controlling(let progress) where progress.iteration < 0:`, which does not
+# compile** (the delta review's N1): `make`'s switch lists every case with no `default`, so a `where`
+# on one arm leaves it non-exhaustive, and a battery would have reported the mutant "KILLED by the
+# compiler" with no test evidence at all. This form folds the state before the switch, so every arm
+# still compiles and the controlling arm is simply never reached — the fold the delta review ran,
+# which it recorded killed by nine tests.
+#
+# P8 empties the line naming the emergency stop at its one owner, which both the widget's HUD and
+# the pill now read.
+#
+# P9 swaps the actions behind the two labelled controls on the pill. The delta review ran this swap
+# against the pill as it then stood and **the whole suite passed**, because the only scan counted
+# each action once across the pill. On a screen-control session a Stop that pauses is the worst
+# wiring in the product.
+#
+# Killers expected (hand-traced and hand-applied at this branch's fix round for the delta review;
+# the founders' weekly battery measures): P7 by WidgetMinimiseTests
+# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement), RunPillPresentationTests
+# (aLiveSessionIsItsOwnKindAndNotAnOrdinaryRun) and VisionSessionRunTests
+# (approvingAScreenControlSessionThroughTheRealDoorReMinimisesIntoTheControllingPill); P8 by
+# RunPillPresentationTests (theControllingPillCarriesTheWayOut); P9 by RunPillControlsReceiveClicksTests
+# (eachControlFiresOnlyItsOwnActionOverItsOwnCapsuleAndNothingFiresElsewhere) and
+# RunPillControlBindingTests (eachSharedControlIsGivenItsOwnActionInTheContent).
 
 >>> mutant P7 a live screen-control session folds back into the ordinary running pill
 >>> file Sources/MacAgent/RunPillPresentation.swift
 >>> from
-        case .controlling(let progress):
+    static func make(state: WidgetState, command: String) -> RunPillPresentation? {
+        switch state {
 >>> to
-        case .controlling(let progress) where progress.iteration < 0:
+    static func make(state: WidgetState, command: String) -> RunPillPresentation? {
+        let folded: WidgetState
+        if case .controlling = state {
+            folded = .working
+        } else {
+            folded = state
+        }
+        switch folded {
 >>> end
 
->>> mutant P8 the controlling pill stops naming the emergency stop
->>> file Sources/MacAgent/RunPillPresentation.swift
+>>> mutant P8 the controlling HUD stops naming the emergency stop
+>>> file Sources/MacAgent/AgentActivityPresentation.swift
 >>> from
     static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
 >>> to
     static let hotkeyLine = ""
+>>> end
+
+>>> mutant P9 the pill's Pause and Stop are handed each other's action
+>>> file Sources/MacAgent/RunPillView.swift
+>>> from
+                WidgetSessionPauseButton(appDisplayName: controlling.appDisplayName, action: onPause)
+                WidgetSessionStopButton(appDisplayName: controlling.appDisplayName, action: onStop)
+>>> to
+                WidgetSessionPauseButton(appDisplayName: controlling.appDisplayName, action: onStop)
+                WidgetSessionStopButton(appDisplayName: controlling.appDisplayName, action: onPause)
 >>> end

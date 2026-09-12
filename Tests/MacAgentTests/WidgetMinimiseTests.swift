@@ -109,51 +109,19 @@ struct WidgetMinimiseTests {
         #expect(controlling.appDisplayName == "Notes")
         #expect(controlling.currentAction == "Clicking the New Note button")
         #expect(controlling.stepLine == "Step 2 of 12")
-        #expect(controlling.pauseLabel == "Pause")
-        #expect(controlling.stopLabel == "Stop")
-        #expect(controlling.pauseAccessibilityLabel == "Pause Sonny controlling Notes")
-        #expect(controlling.stopAccessibilityLabel == "Stop Sonny controlling Notes")
-        #expect(controlling.hotkeyLine == "\(EmergencyStopHotKey.displayName) stops it from anywhere.")
-        // A control nobody knows about is not a control: the way out is spoken too.
-        #expect(pill.accessibilityLabel.contains("Stop"))
-        #expect(pill.accessibilityLabel.contains(EmergencyStopHotKey.displayName))
+        // A control nobody knows about is not a control: the way out is spoken too. The controls
+        // themselves are the shared `WidgetSessionPauseButton` and `WidgetSessionStopButton`, whose
+        // words have one owner and whose wiring `RunPillControlsReceiveClicksTests` clicks.
+        #expect(pill.accessibilityLabel.contains(ScreenControlSessionPresentation.stopLabel))
+        #expect(pill.accessibilityLabel.contains(ScreenControlSessionPresentation.hotkeyLine))
     }
 
-    /// **Route two: the session is approved first, and approving re-enters the run.** The user
-    /// clicks the pill (so the flag goes up and the widget is back), presses Allow, and `approve()`
-    /// sets `isRunning` again — whose `didSet` puts the flag straight back down. So the widget
-    /// minimises a second time, at the moment the session starts, and what it minimises into must
-    /// be the HUD rather than a spinner. This is the route the review traced and the one no test
-    /// covered.
-    @Test
-    func approvingAScreenControlRunReMinimisesIntoTheControllingPill() throws {
-        let fixture = try makePillFixture()
-        defer { fixture.cleanUp() }
-        fixture.viewModel.isRunning = true
-        fixture.viewModel.isRunning = false
-        fixture.viewModel.clarificationQuestion = "Which note did you mean?"
-        #expect(fixture.viewModel.runPillPresentation?.kind == .needsYou)
-
-        // The user brings the widget forward to answer.
-        fixture.viewModel.expandWidgetFromPill()
-        #expect(!fixture.viewModel.isWidgetMinimised)
-        fixture.viewModel.clarificationQuestion = nil
-
-        // Approving re-enters the run: `isRunning` goes on again and the flag drops with it.
-        fixture.viewModel.isRunning = true
-        #expect(fixture.viewModel.isWidgetMinimised, "approving re-minimises, which is the whole route")
-
-        fixture.viewModel.visionSessionProgress = VisionSessionProgress(
-            appDisplayName: "Notes",
-            iteration: 1,
-            maximumIterations: 12,
-            currentAction: "Looking at the screen"
-        )
-
-        let pill = try #require(fixture.viewModel.runPillPresentation)
-        #expect(pill.kind == .controlling)
-        #expect(try #require(pill.controlling).stopLabel == "Stop")
-    }
+    // Route two — a session approved first, where approving re-enters the run and drops the minimise
+    // flag again — is driven through the real approval door in
+    // `VisionSessionRunTests.approvingAScreenControlSessionThroughTheRealDoorReMinimisesIntoTheControllingPill`.
+    // It lived here until PR #237's delta review (N9) found that the version in this file set
+    // `isRunning` by hand after parking a *clarification*, so it entered downstream of the approval
+    // path its own doc said it covered.
 
     /// A parked question still outranks the session and still expands the widget — the controlling
     /// pill changes what a *progressing* session looks like and nothing about how a question is
