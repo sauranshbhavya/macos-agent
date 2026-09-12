@@ -114,21 +114,43 @@ extension AgentViewModel: VisionSessionInteracting {
 
     /// Take `Ctrl-Opt-Esc` for the duration of the session.
     ///
-    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of four
+    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of five
     /// ways to stop a session, and refusing to run because a convenience shortcut was already taken
     /// by another app would be a worse product than running without it.
     ///
-    /// **The other three are the Stop controls, enumerated rather than described, because this count
-    /// has been wrong once already** (PR #132 review, F5). It said three ways and named "the HUD's
-    /// Stop and the widget's existing cancel" — a set that stopped being the set when SONNY-255 gave
-    /// the widget's approval panel its own Stop and PR #132's F1 gave Command Center's one, and whose
-    /// second member is now hidden during a session precisely because it ended one while reading as a
-    /// per-step decline. The population is one grep, and it is the whole of it because every door is
-    /// the same call: `git grep -n emergencyStopVisionSession'()' -- Sources | grep -v 'func '` → 4
-    /// lines, of which one is the closure below and three are controls —
-    /// `WidgetControllingPanel`'s Stop and `WidgetPermissionPanel`'s in `FloatingWidgetView`, and
-    /// `CommandCenterAttentionPanel`'s in `CommandCenterView`. Hotkey plus three controls is the
-    /// four. Every one ends in `cancelCurrentRun`, which is the point of the paragraph below.
+    /// **The other four are the Stop controls, enumerated rather than described, because this count
+    /// has now been wrong twice** (PR #132 review, F5; PR #237's delta review, N8). It first said
+    /// three ways and named "the HUD's Stop and the widget's existing cancel" — a set that stopped
+    /// being the set when SONNY-255 gave the widget's approval panel its own Stop and PR #132's F1
+    /// gave Command Center's one. It then said four, and was stale the moment SONNY-450's run pill
+    /// gained a Stop: the pill hands the method over without calling it,
+    /// `onStop: viewModel.emergencyStopVisionSession`, and **the grep this paragraph used to cite
+    /// could not see that spelling** — `git grep -n emergencyStopVisionSession'()'` still answered 4
+    /// with the pill in the tree, the clean-zero family arriving as a clean *four*. So the population
+    /// is written to read both spellings, and its last stage drops comment lines so these sentences
+    /// stay out of what they count, the command kept on one line so it names the method once:
+    /// `git grep -nP 'emergencyStopVisionSession(\(\))?(?![A-Za-z])' -- Sources | grep -v 'func emergencyStopVisionSession' | grep -vE ':[0-9]+: *//'`
+    /// (`-P` rather than `-E` with a `\b`, because `git grep`'s ERE engine does not honour `\b` and
+    /// answers that pattern with a clean zero, which it did once while this count was being taken).
+    /// It answers 5 lines, and every figure in this paragraph is at `e992dd21`. **The control for the
+    /// last stage is taken over this file alone, because that is where it is exact**: the same
+    /// command ending `-- Sources/MacAgent/AgentViewModel+VisionSession.swift`
+    /// answers 1, the closure below, and with the last stage dropped it answers 3 — one more for each
+    /// of the two lines of this paragraph that name the method in prose, the pill's spelling and the
+    /// old command. The line holding the command itself names the method too and is not among them,
+    /// because it quotes the declaration and the stage before the last drops it. Over all of `Sources`
+    /// the last stage removes 4 lines: those two, and two older doc comments that name the method in
+    /// `CommandCenterView` and `FloatingWidgetView`, which the same command lists with `grep -E` in
+    /// place of `grep -vE`. **This used to read "5 lines at the head this was written
+    /// on, 8 with the last stage dropped"** (PR #237's third delta review, C). The 8 was counted
+    /// before this paragraph's own lines joined the population it counts, so by the time it was
+    /// committed the same command answered 11: the citation that matches its own text which
+    /// `CLAUDE.md` warns about, and "the head this was written on" was not a SHA. Of the five, one is
+    /// the closure below and four are
+    /// controls — `WidgetControllingPanel`'s Stop and `WidgetPermissionPanel`'s in
+    /// `FloatingWidgetView`, `CommandCenterAttentionPanel`'s in `CommandCenterView`, and the run
+    /// pill's in `RunPillView`. Hotkey plus four controls is the five. Every one ends in
+    /// `cancelCurrentRun`, which is the point of the paragraph below.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
@@ -164,15 +186,19 @@ extension AgentViewModel: VisionSessionInteracting {
         visionUserPauseMonitor?.pause()
     }
 
-    /// The emergency stop, from the hotkey or from any of the three Stop controls that call it.
+    /// The emergency stop, from the hotkey or from any of the four Stop controls that call it.
     ///
-    /// **Three, and this line named one of them until PR #132's review (F5).** They are the HUD's
-    /// Stop, the widget's approval panel's Stop (SONNY-255, which is the panel that outranks the HUD
-    /// while a question is parked), and Command Center's approval panel's Stop (PR #132's F1). The
-    /// last two exist because on both surfaces the refusal that was there before ended the whole
-    /// session while reading as a per-step decline — an icon-only cross in the widget, a button
-    /// labelled "Deny" in Command Center — and the fix on each was to give the call a word that
-    /// says what it does rather than to change what it does.
+    /// **Four, and this line has undercounted twice** — it named one of them until PR #132's review
+    /// (F5), and said three until PR #237's delta review (N8). They are the HUD's Stop, the widget's
+    /// approval panel's Stop (SONNY-255, which is the panel that outranks the HUD while a question is
+    /// parked), Command Center's approval panel's Stop (PR #132's F1), and the run pill's Stop
+    /// (SONNY-450, founder decision of 2026-09-12 — the HUD relocated to the corner while the widget
+    /// is minimised). The widget's two and the pill's are one view, `WidgetSessionStopButton`.
+    /// `registerEmergencyStopHotKey`'s doc has the command that counts them and why the earlier one
+    /// could not see the pill. The approval panels' two exist because on both surfaces the refusal
+    /// that was there before ended the whole session while reading as a per-step decline — an
+    /// icon-only cross in the widget, a button labelled "Deny" in Command Center — and the fix on each
+    /// was to give the call a word that says what it does rather than to change what it does.
     ///
     /// **Deliberately the same call as every other stop.** §13.5's invariant is one implementation
     /// of "control was lost, for any reason", and a bespoke emergency path would be the second stop

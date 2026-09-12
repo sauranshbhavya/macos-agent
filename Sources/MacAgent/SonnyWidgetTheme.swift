@@ -212,7 +212,13 @@ private struct WidgetTintedButtonBackground<S: InsettableShape>: ViewModifier {
                     )
                     .allowsHitTesting(false)
             )
-            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5))
+            // **Drawn, never clicked** (PR #237's third delta review, B). The gradient overlay above
+            // already ignored hit testing and this hairline did not, so a stroke 0.5 pt wide, sitting
+            // on top of every tinted widget button, took the clicks that landed on it and handed them
+            // to nothing — SONNY-443's mic tracker at the scale of an outline. On the session's Stop
+            // it was a dead ring exactly where a founder aims at the edge of a red circle. Ignoring
+            // hit testing changes where clicks land and nothing that is drawn.
+            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5).allowsHitTesting(false))
             .shadow(
                 color: Color.black.opacity(tint == nil ? 0.04 : 0.45),
                 radius: tint == nil ? 8 : 12,

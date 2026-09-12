@@ -239,9 +239,11 @@ struct WidgetComposerStateTests {
     /// together and this assertion is what says so.
     @Test
     func theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue() throws {
+        // The precedence lives on the view model since SONNY-450 (`widgetState`), so the run pill
+        // reads the same order the widget draws; the view's `state` delegates to it.
         let precedence = try MacAgentSource.braceBlock(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "var state: WidgetState {"
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
 
         func position(of branch: String) throws -> Int {

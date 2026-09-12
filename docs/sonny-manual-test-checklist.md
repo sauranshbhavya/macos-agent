@@ -4707,6 +4707,99 @@ lane database with the migrations applied.
       regressed fails a named test here.
 - [ ] `npm run test:db` at the lane database: the whole database suite passes with those nine.
 
+### The widget minimises into a run pill while Sonny runs (new 2026-09-11, SONNY-450)
+
+When a run starts, the floating widget leaves the bottom of the screen and a small glass pill
+appears at the top-right of the screen the cursor is on, showing a spinner and the request. A
+parked approval or clarification turns it amber with "Sonny needs you"; a finished run turns it
+green with the result's first line, a failed one red with the failure. Clicking the pill brings
+the widget back where it was, focused, on whatever is parked; the pill goes.
+
+**While Sonny is controlling an app the pill is the HUD, not a spinner** (founder decision
+2026-09-12, option B on PR #237's F1): it says Sonny is controlling, names the app, shows what it is
+doing right now and how far in, and carries Pause, Stop and the line naming the emergency stop — the
+same things the widget's controlling panel carries, moved to the corner rather than hidden.
+
+**Set up (under a minute).** Signed in, gateway up. In `~/Desktop`, make a folder called
+`pill-check` and put one file in it called `pill-scan.pdf` — any file will do. This section uses its
+own file rather than `rename-check`'s, because the rows in section 5 rename `scan1.pdf` away before
+a top-to-bottom pass reaches here (PR #237's F4).
+
+- [ ] Type `zip the largest files on my Desktop` into the widget and press Return: the widget
+      disappears and a pill with a spinner and that request sits at the top-right of the screen the
+      pointer is on. Move the pointer to another display: the pill follows within a second.
+- [ ] When the run finishes, the pill turns green and reads the result's first line, and stays —
+      it does not clear on its own. Click it: the widget is back at the bottom, focused, showing the
+      result with its chip; the pill is gone; after about twenty seconds the widget collapses as usual.
+- [ ] Run one that asks first — `rename ~/Desktop/pill-check/pill-scan.pdf to pill-march` — and
+      wait: the pill turns amber, "Sonny needs you"; Command Center's attention panel shows the same
+      question. Click the pill: the widget opens on the approval; answer it there. Nothing was
+      approved or answered by the pill itself.
+- [ ] Open Command Center › Tasks after a minimised run: the run is listed, as any run is.
+- [ ] Summon the widget with the push-to-talk hotkey or the status menu's New Task while a pill
+      shows: the widget comes back and the pill goes — a summon from anywhere is an expansion.
+- [ ] A scheduled routine that fires while you work: the widget minimises for its run and comes
+      back on its own when the run ends (its outcome goes to the routine's notice, not the widget),
+      without taking the keyboard from the app you were typing in.
+
+**The controlling pill (founder decision 2026-09-12, option B).** Screen control must be allowed for
+the app you name; if Sonny asks for that permission first, grant it and carry on.
+
+- [ ] **A screen-control run with nothing to approve.** Ask for one — *"open Notes and write a line
+      saying wave 7"* — and let it start. The widget minimises as usual, and the pill in the corner
+      is **not** the ordinary blue spinner: it reads **"Sonny is controlling Notes"** with an amber
+      cursor glyph, a line underneath saying what it is doing right now, a "Step n of m" line, and
+      **Pause** and **Stop** buttons, with `⌃⌥⎋ stops it from anywhere.` beneath them. **What would
+      be a finding:** a plain "Sonny is working on: …" pill, no app name, no action line, or no
+      Stop — that is the shape this decision exists to prevent.
+- [ ] **The action line is readable.** Watch it for a few iterations. It should be legible at the
+      pill's width and wrap to at most two lines — never one word per line, never cut mid-word with
+      no ellipsis, never spilling outside the glass.
+- [ ] **Stop actually stops.** Press **Stop** on the pill mid-session. The session ends and the
+      pointer is yours again. **The widget does not come back on its own**: the pill stays in the
+      corner and turns into a done pill reading **"Canceled."** — a minimised outcome holds until
+      you expand it, and a stop's outcome is that word. Click the pill: the widget comes back showing
+      it. (This row said the widget comes back by itself until PR #237's delta review, N5; that
+      would have read as a regression, and it is the rule working.) **What would be a finding:** the
+      click does nothing, the click expands the widget instead of stopping, or the session keeps
+      going — a control that looks live and is not is exactly what SONNY-443 shipped on the mic.
+      **Stop is drawn as a small red circle behind the word, and the word runs past it on both
+      sides.** Click the **edge of that red circle**, not only the word, and on a second run click
+      just past the circle beside the word: both should stop the session. (This row said "capsule"
+      until PR #237's third delta review, B — there is no capsule drawn — and the circle's edge was
+      the one place a click did nothing until that round's fix.)
+- [ ] **Pause actually pauses.** Start another screen-control run and press **Pause**. Sonny stops
+      at the top of its next step and waits; the widget's paused panel is how you resume or end it.
+      Again, the click must reach Pause rather than expanding the widget.
+- [ ] **The hotkey, on a run where it is live.** During a screen-control session press
+      **Ctrl-Opt-Esc**: the session stops from anywhere, without clicking the pill. (This row names
+      a screen-control run deliberately — the combination is registered only while a session is
+      live, so pressing it during an ordinary run does nothing, and a row asking for that would read
+      as a regression this branch caused. PR #237's F3.)
+- [ ] **Clicking the pill's top line still expands.** Click the "Sonny is controlling …" line
+      itself: the widget comes back on the session, as clicking any pill does. Nothing is approved
+      or answered by the click.
+- [ ] **A session that starts by asking.** Ask for a screen-control run that needs approval first.
+      Answer it from the widget. When the session then starts, the widget minimises **again** and
+      the controlling pill is what you get — not a blue spinner. (This is the second route PR #237's
+      F1 traced: approving re-enters the run and resets the minimise flag.)
+- [ ] **(PR #237's delta review, N4 — Sonny cannot click under its own pill.)** Maximise an app
+      whose top-right corner holds something to click — Safari with its toolbar, or Notes with its
+      search field — then ask for a screen-control run that has to use that corner (*"search Notes
+      for invoices"*). While the widget is minimised, the controlling pill covers that corner, and
+      Sonny deliberately does not click anything under a window of its own. Watch what happens and
+      say which: Sonny reaches the control another way (scrolling, or moving focus with Tab), Sonny
+      reports that it is stuck, or something else. **What would be a finding:** Sonny clicks
+      *through* the pill into the app, the pill hides or jumps out of the way at the moment Sonny
+      acts, or the run hangs rather than ending. The covered area is the pill's whole window — about
+      372 × 157 pt with its transparent margin, taller when the action line wraps — and no one has yet
+      measured how often it costs a real task.
+- [ ] **(PR #237's F8 — nobody has measured this.)** While a run is minimised, get a notification to
+      post — let a run finish while you are in another app, or trigger an error notification. The
+      banner and the pill are both at the top-right. Say what it looks like: do they overlap, does
+      one cover the other, is the pill still readable and clickable? There is no expected answer
+      here; this row exists because no one has looked.
+
 ## 8. How to report back
 
 For each real finding, give me:

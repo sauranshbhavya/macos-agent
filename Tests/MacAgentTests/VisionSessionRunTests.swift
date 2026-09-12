@@ -102,7 +102,11 @@ struct VisionSessionRunTests {
             CGRect(x: 0, y: 0, width: 800, height: 600)
         }
 
-        func ownWindowFrames() async -> [CGRect] { [] }
+        /// Sonny's own visible windows, in global coordinates. Empty unless a test puts one over the
+        /// target, which is how the run pill covers a corner of the controlled app while minimised.
+        var ownWindows: [CGRect] = []
+
+        func ownWindowFrames() async -> [CGRect] { ownWindows }
 
         func click(atGlobalPoint point: CGPoint) async throws {
             events.append(.clicked(point))
@@ -2594,6 +2598,207 @@ struct VisionSessionRunTests {
         #expect(record.endReasonCode == "allowance_exhausted")
     }
 
+    // MARK: - An action under Sonny's own window (PR #237's delta review, N4)
+
+    /// **Refused, and told why in words it can act on.** While the widget is minimised, the run pill
+    /// is a visible window of Sonny's in the corner of the controlled display, and the model cannot
+    /// see it — its capture is the target window alone. So a click the model aims under the pill is
+    /// correctly never sent, and the next thing the model reads has to say what covered the point and
+    /// how to get there another way, rather than "pick a different control", which offered neither.
+    ///
+    /// Driven through the real loop: an own window covering the target's whole frame, one click
+    /// scripted, and the second prompt — the one the model reads after the refusal — asserted.
+    @Test
+    func anActionUnderSonnysOwnWindowIsNotSentAndTheModelIsToldHowToReachTheControl() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Search","consequence":"ordinary","rationale":"open search"}"#,
+            #"{"action":"stuck","rationale":"covered."}"#
+        ])
+        defer { fixture.tearDown() }
+        // The double reports the target window at (0, 0, 800, 600); this covers all of it.
+        fixture.synthesizer.ownWindows = [CGRect(x: 0, y: 0, width: 800, height: 600)]
+
+        fixture.viewModel.startVisionSession(goal: "search for invoices", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 0, "Sonny clicked underneath its own window")
+        #expect(fixture.model.prompts.count == 2)
+        let afterRefusal = try #require(fixture.model.prompts.dropFirst().first)
+
+        // What covered the point, that it is invisible, and that retrying the point is pointless.
+        #expect(afterRefusal.contains("the click on \u{201C}Search\u{201D} at (10, 10) was not sent"))
+        #expect(afterRefusal.contains("one of Sonny's own windows is on top of that point"))
+        #expect(afterRefusal.contains("not part of Safari and is not in your screenshot"))
+        #expect(afterRefusal.contains("the same point will be refused again"))
+        // Routes the model's vocabulary can actually take.
+        #expect(afterRefusal.contains("scroll at a different point in the window"))
+        #expect(afterRefusal.contains("tab or the arrow keys and press enter"))
+        #expect(afterRefusal.contains("delegate the step"))
+        #expect(afterRefusal.contains("report stuck"))
+        // And nothing it cannot: its keys carry no modifier and no action moves a window.
+        #expect(!afterRefusal.localizedCaseInsensitiveContains("shortcut"))
+        #expect(!afterRefusal.localizedCaseInsensitiveContains("move the window"))
+        // The old dead end is gone.
+        #expect(!afterRefusal.contains("Pick a different control or report stuck."))
+    }
+
+    /// **The control**: the same script with nothing of Sonny's over the target. The click is sent
+    /// and the model is told nothing about a covering window, so the refusal above is the own
+    /// window's doing and not the script's.
+    @Test
+    func theSameClickIsSentWhenNothingOfSonnysCoversIt() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Search","consequence":"ordinary","rationale":"open search"}"#,
+            #"{"action":"stuck","rationale":"stopping."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "search for invoices", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1)
+        let next = try #require(fixture.model.prompts.dropFirst().first)
+        #expect(!next.contains("Sonny's own windows"))
+    }
+
+    // MARK: - Minimised into the run pill, through the real approval doors (SONNY-450)
+
+    /// **Route two, through the app's own door** (PR #237's review F1; its delta review, N9).
+    ///
+    /// A screen-control session that asks before it starts: the widget minimises into a needs-you
+    /// pill, the user clicks it to answer, and presses Allow. In Safe mode that question is a
+    /// *plan-level* approval — `isRunning` is false while it is parked and no vision continuation
+    /// holds it — so Allow goes through `start()` into `approvePendingRun`, which sets `isRunning`
+    /// again. That false-to-true edge drops the minimise flag a second time, at the moment the
+    /// session starts, and the founders' decision of 2026-09-12 is that what the widget minimises
+    /// into then is the HUD rather than a spinner.
+    ///
+    /// **The version this replaces never took that door.** It parked a clarification and set
+    /// `isRunning` by hand, so the sample entered downstream of the approval path its own doc named.
+    /// The two assertions at the question are what keep this one honest about which door it is
+    /// testing: were the question a parked continuation instead, Allow would take the other branch
+    /// and there would be no edge — which is the next test.
+    @Test
+    func approvingAScreenControlSessionThroughTheRealDoorReMinimisesIntoTheControllingPill() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            mode: .safe,
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the plan-level approval") { fixture.viewModel.approvalRequest != nil }
+
+        // Which door this is: a plan-level question, not a continuation the loop is holding.
+        #expect(!fixture.viewModel.isRunning, "a plan-level approval is parked with the run stopped")
+        #expect(fixture.viewModel.visionApprovalContinuation == nil, "this is not the loop's own question")
+        #expect(fixture.viewModel.isWidgetMinimised)
+        #expect(fixture.viewModel.runPillPresentation?.kind == .needsYou)
+
+        // The user clicks the pill to answer it.
+        fixture.viewModel.expandWidgetFromPill()
+        #expect(!fixture.viewModel.isWidgetMinimised)
+
+        // Allow, through the app's own door, and on into the session. Safe mode shows each capture
+        // and asks before each action; those are answered as they arrive, the way
+        // `BackendOutageTests.run` answers what a run stops on, and the pill is read at the first
+        // moment the session is live with nothing parked — inside the same main-actor turn, so the
+        // reading cannot race the loop.
+        fixture.viewModel.start()
+        var liveMinimised = false
+        var livePill: RunPillPresentation?
+        var liveFlag = true
+        try await waitUntil("the session to be live with nothing parked") {
+            let viewModel = fixture.viewModel
+            if viewModel.visionCapturePreview != nil {
+                viewModel.resolveVisionCapturePreview(allowing: true)
+                return false
+            }
+            if viewModel.approvalRequest != nil {
+                viewModel.start()
+                return false
+            }
+            guard viewModel.visionSessionProgress != nil else {
+                return false
+            }
+            liveMinimised = viewModel.isWidgetMinimised
+            livePill = viewModel.runPillPresentation
+            liveFlag = viewModel.widgetWasExpandedForThisRun
+            return true
+        }
+
+        #expect(!liveFlag, "approving re-entered the run, and the edge dropped the flag")
+        #expect(liveMinimised, "the session minimised again at the moment it started")
+        let pill = try #require(livePill)
+        #expect(pill.kind == .controlling, "what it minimised into is the HUD, not a spinner")
+        #expect(try #require(pill.controlling).appDisplayName == "VS Code")
+
+        fixture.viewModel.emergencyStopVisionSession()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **A third route, traced while building the one above, and pinned so nobody reads it as the
+    /// gap F1 was.** In Normal mode the per-app question is a step of the loop: a parked
+    /// continuation with `isRunning` still true. Allow resolves the continuation and sets nothing,
+    /// so there is no edge, and the flag the user raised by clicking the pill stays up for the rest
+    /// of the session. The widget therefore stays expanded — on the HUD panel, which carries the
+    /// identity line, the action, Pause, Stop and the hotkey line. So the statement and the way out
+    /// are on screen here too, through the panel rather than the pill, and "a summon is an
+    /// expansion that holds until the next run" is the branch's own rule working. What would be the
+    /// defect is the one F1 found: a live session with *neither* surface showing it.
+    @Test
+    func answeringTheLoopsOwnQuestionKeepsTheWidgetExpandedOnTheHudPanel() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
+
+        #expect(fixture.viewModel.isRunning, "the loop's own question is parked with the run going")
+        #expect(fixture.viewModel.visionApprovalContinuation != nil)
+        #expect(fixture.viewModel.isWidgetMinimised)
+
+        fixture.viewModel.expandWidgetFromPill()
+        fixture.viewModel.start()
+
+        var liveMinimised = true
+        var liveState: WidgetState?
+        var livePanelVisible = false
+        try await waitUntil("the session to be live with nothing parked") {
+            let viewModel = fixture.viewModel
+            guard viewModel.visionSessionProgress != nil, viewModel.approvalRequest == nil else {
+                return false
+            }
+            liveMinimised = viewModel.isWidgetMinimised
+            liveState = viewModel.widgetState
+            livePanelVisible = viewModel.hasVisibleWidgetPanel
+            return true
+        }
+
+        #expect(!liveMinimised, "the user expanded it and no edge re-minimised it")
+        #expect(livePanelVisible, "the expanded widget draws its panel")
+        guard case .controlling(let progress) = try #require(liveState) else {
+            Issue.record("the expanded widget is not on the HUD: \(String(describing: liveState))")
+            return
+        }
+        #expect(progress.appDisplayName == "VS Code")
+
+        fixture.viewModel.emergencyStopVisionSession()
+        try await waitForIdle(fixture.viewModel)
+    }
+
     // MARK: - The HUD (SONNY-95)
 
     /// **Power without covertness.** While Sonny controls an app the HUD says so, says which app,
@@ -4360,8 +4565,8 @@ struct VisionSessionRunTests {
         // And the same ordering on the widget's side, so "mirrors exactly" is checked on both
         // properties rather than asserted on one and trusted on the other.
         let state = try MacAgentSource.braceBlock(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "var state: WidgetState {"
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
         let statePermission = try #require(state.range(of: "return .permission(approvalRequest)"))
         let stateControlling = try #require(state.range(of: "return .controlling(progress)"))

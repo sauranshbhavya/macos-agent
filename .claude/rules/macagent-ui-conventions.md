@@ -65,6 +65,78 @@ Command Center has its own permission/clarification/failure surface as of branch
 
 The floating widget is unchanged and still shows all three states for **every** task regardless of origin. That redundancy is deliberate, not an oversight: the widget is a permanent on-screen overlay while Command Center is a window that may be closed, so for an unattended run the widget is the more reliable surface for an approval, not the less. `AgentViewModel.hasVisibleWidgetPanel` is the single source of truth for both the widget's panel and the widget's own mic-hover-hint slot (`FloatingWidgetView.isMicHintSlotFree`). Do not origin-gate those three states without revisiting both. Until 2026-08-21 this named `FloatingWidgetWindowController`'s compositing decision as the second reader; that positioning mode was superseded on 2026-07-21, the controller has one mode, and nothing composites into Command Center anymore (SONNY-189). **"A regression test pins it" was checked rather than inherited while fixing that**, because the sentence read as though compositing itself were pinned: it is not, and cannot be — there is nothing left to assert. What is pinned is this predicate's value for the three attention states, by `CommandCenterAttentionSurfaceTests.widgetStillShowsAllThreeAttentionStatesForACommandCenterOriginTask` and `VisionSessionRunTests.theWidgetPanelIsVisibleWhileACaptureIsWaitingToBeReviewed`, with further assertions in `ConsequenceRuleDispatchTests`, `ScheduledRoutineRunTests`, `ClarificationExitTests` and `ResumableTaskRunTests` (`git grep -nE '#expect\(.*hasVisibleWidgetPanel' -- Tests/` → 29 assertion lines across 6 files at `372528e`). **That figure read 13 across 5 at `fef3684` until SONNY-299, and the difference is not drift in the sentence — it is the tree moving under a stamp that was complete when taken.** `fef3684` is 2026-08-21 and is non-ancestral today; the five files it named really were the whole population there, and `ResumableTaskRunTests.swift` did not exist yet. A stamped figure is true of the tree it was stamped on and of nothing else, so this is re-measured rather than adjusted — and the file list is re-enumerated with it, because a list of names goes stale the same way a count does and reads as complete either way.
 
+## The run pill (SONNY-450)
+
+While a run is in flight and the user has not expanded the widget since it started, the widget is
+minimised into `RunPillView` in its own `RunPillWindowController`, pinned to the top-right of the
+cursor's screen. The state is *derived* on the one view model — `AgentViewModel.isWidgetMinimised`
+is "no expansion since the run started" and "there is a pill to show" — and the pill's words come
+from `RunPillPresentation.make(state:command:)` over `AgentViewModel.widgetState`, which is the
+widget's own state precedence hoisted off `FloatingWidgetView` so the two read one order. So a
+parked question is "needs you" on the pill exactly when the widget would draw it and
+`CommandCenterAttentionPanel` shows it; the pill answers nothing. Every summon
+(`widgetPresentationRequest`) is an expansion, the pill's click included, and a minimised outcome
+holds (`outcomeHolds`, the SONNY-121 hold widened) until then. The pill is System B and never a
+`SonnyTheme` token; `RunPillPresentationTests` and `RunPillControllingTokenTests` scan for that.
+There is one pill because there is one run; a pill per task is its own ticket.
+
+**A live screen-control session minimises like any other run, and the pill is then the HUD**
+(founder decision 2026-09-12, option B on PR #237's F1). This is the one pill state that carries
+controls, and it exists because `WidgetControllingPanel`'s requirement — Sonny says it is
+controlling, says which app, says what it is doing now, and puts Stop where the user can reach it —
+is a product requirement rather than a courtesy, and minimising the widget would otherwise hide all
+of it for the length of a session. So `RunPillPresentation.Kind.controlling` is its own kind, with
+its own amber tint and cursor glyph, carrying the identity line, the action line, the step line,
+Pause, Stop and the line naming `⌃⌥⎋`. Option A — a session that does not minimise at all — was
+recommended by the coordinator and declined; the record is on SONNY-450.
+
+The rules below are for anyone editing that pill, and each is something this repository has already
+paid for once:
+
+- **Controls must receive their own clicks.** The controlling pill is deliberately *not* wrapped in
+  the ordinary pill's expand `Button`; the identity row is its own button and each control is its
+  own button beside it. SONNY-443 shipped an overlay over the mic that claimed every point in its
+  bounds, and the founders' clicks went nowhere while the button still looked live.
+  `RunPillControlsReceiveClicksTests` sends real mouse events through a real, ordered-in
+  `RunPillPanel` at every point of a 4 pt grid and records which action each one fires, so it tells
+  Pause, Stop and the identity row apart from each other and from the glass around them; its control
+  is SONNY-443's overlay, under which nothing fires. **Do not go back to `NSView.hitTest` for this.**
+  It answers the hosting view at every point of a SwiftUI window, empty corner included, so it can
+  only say no AppKit layer covers the window — which is all the first version of that suite could
+  say (PR #237's delta review, N6). Two measured facts the sweep rests on: a panel that is **not**
+  ordered in fires nothing anywhere, and a `.plain`-style button's clickable area is its *label*, so
+  padding and height applied outside the button are dead — which is why the shared
+  `WidgetSessionPauseButton` and `WidgetSessionStopButton` carry both inside the label with a
+  `Capsule` content shape. **That click area is a capsule; what is drawn is a 28 pt circle**, so describe
+  the control as a circle. And **anything drawn on top of a control ignores hit testing**: the hairline
+  that traces every tinted widget button's edge took the clicks that landed on it, leaving a dead ring
+  on the session's Stop that a 4 pt sweep could not see (PR #237's third delta review, B);
+  `SharedSessionControlEdgeTests` sweeps at 0.5 pt for it. What no test here can see is the window
+  server's handling of a first click on a panel that cannot become key; that is the manual row's.
+- **Each control's action is pinned at its own site**, not counted across the pill
+  (`RunPillControlBindingTests`). A count across the pill is satisfied by a swap, and swapping the
+  actions behind Pause and Stop passed the whole suite until that suite existed.
+- **One owner for the words, one view for each control.** Pause, Stop, their spoken names and the
+  line naming `⌃⌥⎋` come from `ScreenControlSessionPresentation`; the widget's HUD, its approval panel
+  and the pill render the same `WidgetSessionPauseButton`/`WidgetSessionStopButton`. A surface that
+  spells one of them itself is a second copy nothing ties to the first.
+- **The action line is measured, not eyeballed.** `RunPillPresentation.actionLimit` is laid out at
+  the pill's real width in its real font with AppKit's own text layout
+  (`RunPillControllingLayoutTests`), the instrument PR #228 used for the widget's Finder sentence.
+- **A parked question still outranks the session**, as it always has: the pill goes to "needs you",
+  the controls go with it, and answering happens in the widget. Nothing on the pill approves
+  anything. While that question is parked the pill does not name the app or carry Stop — the
+  widget's outranking panels do, the pill does not — and the hotkey stays live, so the way out
+  survives even there.
+- **Sonny will not act under its own pill, and the pill does not get out of the way.**
+  `VisionPointResolver` refuses any click or scroll landing inside one of Sonny's visible windows,
+  and the pill is one, so a corner of the controlled display is unreachable while the widget is
+  minimised. The model cannot see the pill (its capture is the target window), so the refusal tells
+  it what covered the point and names only routes its vocabulary can take
+  (`VisionSessionRunner.ownWindowCoversThePoint`). Do not hide or move the pill to let an action
+  through: the statement that Sonny is controlling this app must not disappear at the moment Sonny
+  acts on it.
+
 ## Responsive rows
 
 `SettingsAdaptiveControlRow` (a `ViewThatFits` horizontal-first, `minWidth`-floored, vertical-fallback pattern) is the fix for any label+control row that needs to survive a narrow, non-fullscreen window. Reuse it for new settings/control rows rather than a fixed `HStack` — a fixed `HStack` is what caused the narrow-width character-wrapping bug this pattern replaced.

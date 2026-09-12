@@ -1266,6 +1266,10 @@ struct ProductShellTests {
             // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
             // went.
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
+            // `widgetWasExpandedForThisRun` is the same kind of thing (SONNY-450): whether the user has
+            // summoned the widget since the current run started, derived into the run pill's minimised
+            // state; transient UI state about the run in flight, holding no user data.
+            "widgetWasExpandedForThisRun",
             // `standingWatcherObserver` is a collaborator; `standingWatcherCheck` and the three
             // beside it are one check's bookkeeping — a task handle, the watcher it is about, when it
             // started, and the generation that makes a late answer inert. None is state a surface
@@ -3307,8 +3311,8 @@ struct ProductShellTests {
         // pins it, and a view-model test cannot reach the view — so it is read off the source, in
         // the scan shape this target already uses.
         let widgetState = try MacAgentSource.braceBlock(
-            of: try MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "var state: WidgetState {"
+            of: try MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
         let failureArm = try #require(widgetState.range(of: "return .failure("))
         let resultArm = try #require(widgetState.range(of: "return .result("))

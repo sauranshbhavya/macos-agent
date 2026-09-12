@@ -1,0 +1,163 @@
+# SONNY-450 — the widget minimises into the run pill when a run starts, the pill reads the widget's
+# own state precedence, a click expands the widget, a minimised outcome holds until then, and the
+# pill sits at the top-right of the cursor's screen. Property: every run minimises; every summon
+# expands; needs-you is exactly the widget's parked questions; the hold and the placement are pure.
+# Killers expected (hand-traced; the founders' weekly battery measures): P1 by WidgetMinimiseTests
+# (aRunStartingMinimisesTheWidgetIntoARunningPill, theNextRunMinimisesAgainAfterAnExpansion); P2 by
+# WidgetMinimiseTests (aSummonFromAnywhereExpandsTheWidget, theOutcomeOfAMinimisedRunHoldsUntilTheWidgetIsExpanded);
+# P3 by RunPillPresentationTests (aParkedClarificationSaysSonnyNeedsYou) and WidgetMinimiseTests
+# (aParkedClarificationReadsAsNeedsYouOnThePill); P4 by WidgetMinimiseTests
+# (theOutcomeOfAMinimisedRunHoldsUntilTheWidgetIsExpanded); P5 by RunPillPlacementTests (both tests);
+# P6 by RunPillPresentationTests (aResultIsDoneWithItsFirstLine).
+
+>>> mutant P1 a run starting no longer minimises the widget
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            if isRunning, !oldValue {
+                widgetWasExpandedForThisRun = false
+            }
+>>> to
+            if isRunning, !oldValue {
+                widgetWasExpandedForThisRun = true
+            }
+>>> end
+
+>>> mutant P2 a summon no longer counts as expanding
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            // pill's own click all reach here, and a widget the user asked for is not minimised.
+            widgetWasExpandedForThisRun = true
+>>> to
+            // pill's own click all reach here, and a widget the user asked for is not minimised.
+            widgetWasExpandedForThisRun = widgetWasExpandedForThisRun
+>>> end
+
+>>> mutant P3 a parked question reads as a run in flight
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+                kind: .needsYou,
+                glyph: "exclamationmark.bubble.fill",
+>>> to
+                kind: .running,
+                glyph: "exclamationmark.bubble.fill",
+>>> end
+
+>>> mutant P4 a minimised outcome no longer holds
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        outcomeWasNotified || isWidgetMinimised
+>>> to
+        outcomeWasNotified
+>>> end
+
+>>> mutant P5 the pill placed at the top-left instead of the top-right
+>>> file Sources/MacAgent/RunPillWindowController.swift
+>>> from
+            x: visibleFrame.maxX - contentSize.width,
+>>> to
+            x: visibleFrame.minX,
+>>> end
+
+>>> mutant P6 the spoken label doubles a full stop again
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+        let separator = first.last.map { terminal.contains($0) } == true ? " " : ". "
+>>> to
+        let separator = ". "
+>>> end
+
+# P7 and P8 are the founder decision of 2026-09-12 (option B on PR #237's F1): a live
+# screen-control session still minimises, and the pill has to be the HUD rather than a generic
+# running pill. P9 is PR #237's delta review, N2.
+#
+# P7 folds a live session back into the ordinary running pill — the exact defect F1 found. **It was
+# first written as `case .controlling(let progress) where progress.iteration < 0:`, which does not
+# compile** (the delta review's N1): `make`'s switch lists every case with no `default`, so a `where`
+# on one arm leaves it non-exhaustive, and a battery would have reported the mutant "KILLED by the
+# compiler" with no test evidence at all. This form folds the state before the switch, so every arm
+# still compiles and the controlling arm is simply never reached — the fold the delta review ran,
+# which it recorded killed by nine tests.
+#
+# P8 empties the line naming the emergency stop at its one owner, which both the widget's HUD and
+# the pill now read.
+#
+# P9 swaps the actions behind the two labelled controls on the pill. The delta review ran this swap
+# against the pill as it then stood and **the whole suite passed**, because the only scan counted
+# each action once across the pill. On a screen-control session a Stop that pauses is the worst
+# wiring in the product.
+#
+# Killers expected (hand-traced and hand-applied at this branch's fix round for the delta review;
+# the founders' weekly battery measures): P7 by WidgetMinimiseTests
+# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement), RunPillPresentationTests
+# (aLiveSessionIsItsOwnKindAndNotAnOrdinaryRun) and VisionSessionRunTests
+# (approvingAScreenControlSessionThroughTheRealDoorReMinimisesIntoTheControllingPill); P8 by
+# RunPillPresentationTests (theControllingPillCarriesTheWayOut); P9 by RunPillControlsReceiveClicksTests
+# (eachControlFiresOnlyItsOwnActionOverItsOwnCapsuleAndNothingFiresElsewhere) and
+# RunPillControlBindingTests (eachSharedControlIsGivenItsOwnActionInTheContent).
+
+>>> mutant P7 a live screen-control session folds back into the ordinary running pill
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+    static func make(state: WidgetState, command: String) -> RunPillPresentation? {
+        switch state {
+>>> to
+    static func make(state: WidgetState, command: String) -> RunPillPresentation? {
+        let folded: WidgetState
+        if case .controlling = state {
+            folded = .working
+        } else {
+            folded = state
+        }
+        switch folded {
+>>> end
+
+>>> mutant P8 the controlling HUD stops naming the emergency stop
+>>> file Sources/MacAgent/AgentActivityPresentation.swift
+>>> from
+    static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
+>>> to
+    static let hotkeyLine = ""
+>>> end
+
+>>> mutant P9 the pill's Pause and Stop are handed each other's action
+>>> file Sources/MacAgent/RunPillView.swift
+>>> from
+                WidgetSessionPauseButton(appDisplayName: controlling.appDisplayName, action: onPause)
+                WidgetSessionStopButton(appDisplayName: controlling.appDisplayName, action: onStop)
+>>> to
+                WidgetSessionPauseButton(appDisplayName: controlling.appDisplayName, action: onStop)
+                WidgetSessionStopButton(appDisplayName: controlling.appDisplayName, action: onPause)
+>>> end
+
+# P10 and P11 are PR #237's third delta review, A and B.
+#
+# P10 is P9's swap on the other surface that renders the shared Stop. P9 targets the pill's content
+# and cannot reach the widget's own controlling panel, so the swap there needs a mutant of its own:
+# the review applied it and a HUD with two controls that pause and none that stops passed the whole
+# suite, because only that panel's Pause line was pinned. A mutant names one file, which is why this
+# is a second mutant rather than P9 extended.
+#
+# P11 puts the hit-testable hairline back. The outline traced on every tinted widget button sat on top
+# of it and took the clicks that landed on it, so the session's Stop had a dead ring exactly on the
+# edge of its drawn circle; the suite's 4 pt sweep stepped straight over a line half a point wide.
+#
+# Killers expected (hand-applied at this branch's fix round for the third delta review; the founders'
+# weekly battery measures): P10 by WidgetSessionApprovalPanelTests
+# (everySessionControlWearsItsOwnAccessibilityLabel); P11 by SharedSessionControlEdgeTests
+# (noPointInsideTheClickAreaIsDead, both cases).
+
+>>> mutant P10 the widget's own controlling panel hands its Stop the pause action
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+                WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onStop)
+>>> to
+                WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onPause)
+>>> end
+
+>>> mutant P11 the tinted buttons' hairline takes clicks again
+>>> file Sources/MacAgent/SonnyWidgetTheme.swift
+>>> from
+            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5).allowsHitTesting(false))
+>>> to
+            .overlay(shape.stroke(WidgetTheme.hairline.opacity(0.6), lineWidth: 0.5))
+>>> end

@@ -652,13 +652,14 @@ struct ResumeOfferPresentationTests {
     /// comment, and presence would be satisfied by a branch sitting anywhere at all.
     @Test
     func theOfferIsTheLastBranchOfTheWidgetsPrecedenceBeforeIdle() throws {
+        // `widgetState` on the view model is the widget's precedence since SONNY-450 hoisted it.
         let state = try MacAgentSource.braceBlock(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "var state: WidgetState {"
+            of: MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "var widgetState: WidgetState {"
         )
 
         let failure = try #require(state.range(of: "return .failure(error)"))
-        let result = try #require(state.range(of: "return .result(viewModel.finalSummary, suggestion)"))
+        let result = try #require(state.range(of: "return .result(finalSummary, suggestion)"))
         let offer = try #require(state.range(of: "return .resumeOffer(offer)"))
         let idle = try #require(state.range(of: "return .idle"))
 
