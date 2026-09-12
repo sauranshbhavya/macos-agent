@@ -9,21 +9,41 @@
 # that runs this plan under the default Swift command reports every mutant here SURVIVED without a
 # test having seen it (SONNY-455 records the gap).
 #
-# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #235, 2026-09-11),
-# under the command above unless a line says otherwise. M1 by the entitlements route test; M2 by the
-# credits GET route test; M3 by the two-leases test alone (the route test's first SET is the pool's
-# ten seconds whichever total the handler declares, so the band assertion that used to kill M3 no
-# longer can — the six-second step between the two leases is what tells fifteen from sixty); M4 by
-# the two-leases test, the per-lease unit test, the pool-wait test and the wider-budget test; M5 by
-# the refuses-before-leasing unit test; M6 by the bare-lease unit test, the charge-route decision
-# test, the two-leases test and the pool-timeout-outside-a-budget test; M7 by the pool-wait test;
-# M8 by every route test's first-SET assertion, the two-leases test, the wider-budget test and, in
-# test/account-deadline.db.test.ts at a lane database, the wider-than-the-pool direction; M9 by the
-# pool-held-empty unit test, the pool-timeout-inside-a-budget unit test (the mapping goes with the
-# timer) and, at a lane database, the real-pool wait test and the real-pool connect-timeout test;
-# M10 by the
-# pool-timeout-inside-a-budget unit test and, at a lane database, the real-pool connect-timeout
-# test; M11 and M12 by the every-error-is-not-a-timeout route tests, one per route.
+# Killers, each measured by applying the mutant by hand at the fix round's tree 1f022a65 (PR #235,
+# 2026-09-11), under the command above for the unit file and, where a line names the database file,
+# `npx vitest run test/account-deadline.db.test.ts` at a lane database as well; the sets below are
+# copied from the hand-applied runs' own failure lists and reproduced test for test by the delta
+# pass of 2026-09-12 (this header's sets had been wrong three rounds running, so nothing here is
+# traced or remembered). Test names are the vitest names, shortened:
+# M1 (2): "GET /v1/account/entitlements answers §7.2's 504 …" and "GET /v1/account/entitlements
+#   answers 500 server.error, not a dressed-up timeout …".
+# M2 (2): the same pair for "GET /v1/account/credits".
+# M3 (1): "the consent switch's two leases share one budget …" alone — the route test's first SET is
+#   the pool's ten seconds whichever total the handler declares, so the band assertion that used to
+#   kill M3 no longer can, and the six-second step between the two leases is what tells fifteen from
+#   sixty.
+# M4 (3): "the consent switch's two leases share one budget …", "inside one, each lease is bounded by
+#   what is left of the request's budget" and "time spent waiting for a pooled connection comes out of
+#   the budget …" — not the wider-budget test, which passes under M4 because the ceiling still cuts the
+#   forced 15 000 to 10 000.
+# M5 (1): "a budget already spent refuses before taking a connection at all" alone.
+# M6 (6): the three route 504 tests, "the consent switch's two leases share one budget …", "the charge
+#   route's reads stay on the pool's bound …" and "outside a declared deadline the lease is the bare
+#   lease …" — not the pool-timeout-outside-a-budget test, whose outside arm throws from the lease
+#   before the mutant's branch runs.
+# M7 (1): "time spent waiting for a pooled connection comes out of the budget …" alone.
+# M8 (7): the three route 504 tests, "the consent switch's two leases share one budget …", "inside a
+#   budget wider than the pool's bound, each statement is bounded by the pool's bound", "a ceiling a
+#   caller supplies is honoured, and one of nothing is refused where it is wired" and, in the database
+#   file, underABudgetWiderThanThePoolsBoundAStatementIsCutAtThePoolsBound.
+# M9 (4): "a wait for a pooled connection that outlasts the budget ends at the budget …", "the pool's
+#   own connect timeout inside a budget is a timeout, and outside one it is untouched" and, in the
+#   database file, aWaitForAPooledConnectionThatOutlastsTheBudgetEndsAtTheBudgetAndRunsNothingOnTheConnectionItIsHanded
+#   and thePoolsOwnConnectTimeoutInsideABudgetIsAnsweredAsATimeout.
+# M10 (2): "the pool's own connect timeout inside a budget is a timeout …" and, in the database file,
+#   thePoolsOwnConnectTimeoutInsideABudgetIsAnsweredAsATimeout.
+# M11 (1): "GET /v1/account/entitlements answers 500 server.error, not a dressed-up timeout …" alone.
+# M12 (1): "GET /v1/account/credits answers 500 server.error, not a dressed-up timeout …" alone.
 
 >>> mutant M1 the entitlement read runs under no budget
 >>> file server/src/routes/entitlements.ts

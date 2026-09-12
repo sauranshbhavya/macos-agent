@@ -41,14 +41,6 @@ function millisecondsShown(shown: string): number {
   return Number(match[1]) * scale;
 }
 
-/** Postgres's own view: is some backend waiting on a lock right now? */
-async function aBackendIsBlockedOnALock(client: pg.Client): Promise<boolean> {
-  const { rows } = await client.query<{ n: string }>(
-    "SELECT count(*)::text AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND state = 'active'",
-  );
-  return rows[0]!.n !== "0";
-}
-
 describeDb("the account routes' lease against a real Postgres (SONNY-434)", () => {
   let setup: pg.Client;
 
