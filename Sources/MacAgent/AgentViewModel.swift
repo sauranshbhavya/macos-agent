@@ -1976,47 +1976,24 @@ final class AgentViewModel: ObservableObject {
         return screenControlAllowance?.runsLeft
     }
 
-    /// Whether the floating widget currently has real content to show — one of row I's parked
-    /// Safe-mode questions, a permission/clarification/failure state, a live screen-control session,
-    /// or row 13's offer to carry on with an unfinished run (all of those regardless of which
-    /// surface submitted the task), or a working/result state for a task the widget itself
-    /// submitted. Single source of truth for both
-    /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
-    /// `FloatingWidgetView`'s `state`/`showsPanel` precedence exactly — keep both in sync if either
-    /// changes. (That property stopped being `private` in SONNY-255, so a test could read the panel
-    /// the widget resolved to; this sentence went on calling it private until PR #132's review, F4.)
+    /// Which panel the widget draws, in precedence order — and the order is the whole of it: the
+    /// first branch that matches wins, so every reader of this property is really reading its
+    /// ordering. `FloatingWidgetView.state` delegates here and draws whatever this answers;
+    /// `runPillPresentation` reads the same answer, which is what makes it impossible for the
+    /// pill, the widget's panel and Command Center's attention panel to disagree about whether
+    /// something needs the user.
     ///
-    /// **"Mirrors exactly" was a requirement this property did not meet until SONNY-299.** `state`
-    /// has had a `.controlling` branch since row I and this had no session term at all, so a screen
-    /// session started anywhere but the widget fell through to the origin-gated running branch and
-    /// the widget rendered nothing — the one state whose entire purpose is to be seen was the one
-    /// the panel gate could refuse. The opening sentence is written out branch by branch for the
-    /// same reason: it used to name the permission, clarification, failure, working and result
-    /// states and stop, saying nothing about row I's parked questions or row 13's resume offer, and
-    /// the branch that was missing was one it had never mentioned. **The rewrite then dropped the
-    /// resume offer from its own enumeration and had to be completed** (PR #140 review, F2) — the
-    /// same class of omission, in the sentence written to fix it, which is worth leaving on the
-    /// record rather than quietly repairing: an enumeration is only as good as the moment someone
-    /// last counted it against the branches below.
+    /// **Lived on `FloatingWidgetView` until SONNY-450 hoisted it here, byte for byte.** A view
+    /// cannot be read by a model, and the pill is the model's, so the body moved rather than being
+    /// copied — a copy is two orderings that agree until one of them is edited. Six tests pinned
+    /// the order by scanning the view's source and now scan this; `WidgetState`'s own doc comment
+    /// says why the order is pinned by a test at all.
     ///
-    /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
-    /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
-    /// states on four Command Center pages since branch 10 and wires Deny/Allow to the same
-    /// `cancelCurrentRun()`/`start()` entry points (SONNY-183). And it named the second reader as
-    /// `FloatingWidgetWindowController`'s decision to composite into Command Center; that mode was
-    /// superseded on 2026-07-21 and the controller has one positioning mode now (SONNY-189).
-    ///
-    /// The warning underneath both is kept, because it is the part that is still live: this
-    /// predicate is read in more than one place, and the widget once vanished silently right after
-    /// launch because a second reader disagreed with it — Command Center took key-window focus
-    /// first, the widget composited in while still idle, and an idle+composited render drew
-    /// literally nothing (no compact capsule, no pill), with no way to click back into it.
-    /// Which panel the widget draws, and the order is the whole of it — the first branch that
-    /// matches wins, so every reader of this property is really reading its ordering. Lived on
-    /// `FloatingWidgetView` until SONNY-450 hoisted it here, unchanged, so the run pill
-    /// (`runPillPresentation`) reads the same precedence the widget draws and the two can never
-    /// disagree about what needs the user; the view's `state` now delegates here. See
-    /// `WidgetState`'s own doc comment for why a test reads this.
+    /// **Not to be confused with `hasVisibleWidgetPanel`, which mirrors this branch for branch in
+    /// the same position and must not drift from it** — its own doc comment, directly below this
+    /// property, is where that shared rule and its history live. This property answers *which*
+    /// panel; that one answers *whether* there is one to show, and the two have gone out of step
+    /// before (SONNY-299).
     var widgetState: WidgetState {
         if let preview = visionCapturePreview {
             return .captureReview(preview)
@@ -2081,6 +2058,41 @@ final class AgentViewModel: ObservableObject {
         return .idle
     }
 
+    /// Whether the floating widget currently has real content to show — one of row I's parked
+    /// Safe-mode questions, a permission/clarification/failure state, a live screen-control session,
+    /// or row 13's offer to carry on with an unfinished run (all of those regardless of which
+    /// surface submitted the task), or a working/result state for a task the widget itself
+    /// submitted. Single source of truth for both
+    /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
+    /// `FloatingWidgetView`'s `state`/`showsPanel` precedence exactly — keep both in sync if either
+    /// changes. (That property stopped being `private` in SONNY-255, so a test could read the panel
+    /// the widget resolved to; this sentence went on calling it private until PR #132's review, F4.)
+    ///
+    /// **"Mirrors exactly" was a requirement this property did not meet until SONNY-299.** `state`
+    /// has had a `.controlling` branch since row I and this had no session term at all, so a screen
+    /// session started anywhere but the widget fell through to the origin-gated running branch and
+    /// the widget rendered nothing — the one state whose entire purpose is to be seen was the one
+    /// the panel gate could refuse. The opening sentence is written out branch by branch for the
+    /// same reason: it used to name the permission, clarification, failure, working and result
+    /// states and stop, saying nothing about row I's parked questions or row 13's resume offer, and
+    /// the branch that was missing was one it had never mentioned. **The rewrite then dropped the
+    /// resume offer from its own enumeration and had to be completed** (PR #140 review, F2) — the
+    /// same class of omission, in the sentence written to fix it, which is worth leaving on the
+    /// record rather than quietly repairing: an enumeration is only as good as the moment someone
+    /// last counted it against the branches below.
+    ///
+    /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
+    /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
+    /// states on four Command Center pages since branch 10 and wires Deny/Allow to the same
+    /// `cancelCurrentRun()`/`start()` entry points (SONNY-183). And it named the second reader as
+    /// `FloatingWidgetWindowController`'s decision to composite into Command Center; that mode was
+    /// superseded on 2026-07-21 and the controller has one positioning mode now (SONNY-189).
+    ///
+    /// The warning underneath both is kept, because it is the part that is still live: this
+    /// predicate is read in more than one place, and the widget once vanished silently right after
+    /// launch because a second reader disagreed with it — Command Center took key-window focus
+    /// first, the widget composited in while still idle, and an idle+composited render drew
+    /// literally nothing (no compact capsule, no pill), with no way to click back into it.
     var hasVisibleWidgetPanel: Bool {
         // Row I's two Safe-mode questions, first for the same reason the permission, clarification
         // and failure branches below them are unconditional: each is a parked continuation waiting

@@ -18,9 +18,44 @@ import Foundation
 struct RunPillPresentation: Equatable {
     enum Kind: Equatable {
         case running
+        /// A screen-control session is live and this pill is its HUD (SONNY-450, founder decision
+        /// 2026-09-12 on PR #237's F1). Its own case rather than a flavour of `.running`, because
+        /// the two must never be told apart by reading their words: the ordinary running pill says
+        /// Sonny is working and carries no controls, and this one says Sonny is *controlling* a
+        /// named app and carries Pause and Stop. Folding the two together is what that finding
+        /// found, and `mutation/plans/feature/the-widget-minimises-while-sonny-runs.txt`'s P7 is
+        /// the mutant that folds them back.
+        case controlling
         case needsYou
         case done
         case failed
+    }
+
+    /// Everything `WidgetControllingPanel` is required to show, carried to the corner (SONNY-450,
+    /// founder decision 2026-09-12: option B — a screen-control session still minimises, and the
+    /// pill carries what that panel carries, so in effect the panel relocates rather than hides).
+    ///
+    /// The panel's own doc comment states the requirement this exists to keep: *"While Sonny
+    /// controls an app it says so, says which app, says what it is doing right now, and puts Stop
+    /// where the user can reach it… a product requirement rather than a courtesy."* Every field
+    /// below is one clause of that sentence, and `hotkeyLine` is the panel's closing line, kept for
+    /// its own stated reason — a control nobody knows about is not a control.
+    ///
+    /// The strings are built here rather than in the view so a test asserts the sentence a founder
+    /// would read, without a window; the two labels are `ScreenControlSessionPresentation`'s, which
+    /// is where the panel gets them, so the corner and the panel cannot word the same control
+    /// differently.
+    struct Controlling: Equatable {
+        let appDisplayName: String
+        /// What Sonny is doing right now, cut to `actionLimit` — measured against the pill's real
+        /// width with AppKit's own text layout in `RunPillControllingLayoutTests`, not chosen.
+        let currentAction: String
+        let stepLine: String
+        let pauseLabel: String
+        let pauseAccessibilityLabel: String
+        let stopLabel: String
+        let stopAccessibilityLabel: String
+        let hotkeyLine: String
     }
 
     /// Which `WidgetTheme` colour the pill's glyph takes. Named here and resolved in
@@ -28,6 +63,11 @@ struct RunPillPresentation: Equatable {
     /// than colours.
     enum Tint: Equatable {
         case action
+        /// The amber `WidgetSessionIdentityLine` already draws its cursor glyph in — the same
+        /// token, so the identity line reads the same in the corner as it does in the panel, and
+        /// distinct from both the action blue of an ordinary run and the attention amber of a
+        /// parked question.
+        case controlling
         case attention
         case allow
         case error
@@ -40,11 +80,27 @@ struct RunPillPresentation: Equatable {
     let words: String
     let tint: Tint
     let accessibilityLabel: String
+    /// The visible tooltip, which is the label without its instruction sentence (PR #237's F7).
+    /// The action belongs in `accessibilityLabel`, where a screen reader needs it; a tooltip that
+    /// tells the user to click is explanatory copy on a product surface, and the nearest precedent
+    /// — the compact capsule, which uses the identical two-channel pattern — carries the two words
+    /// "Open Sonny" and no instruction.
+    let tooltip: String
+    /// Non-`nil` exactly when `kind` is `.controlling`, and the only kind that carries controls.
+    let controlling: Controlling?
 
     /// How much of a command, summary or failure the pill carries: the first line, cut at this
     /// many characters with an ellipsis. A pill is a glance, and the widget has the whole text.
     static let wordLimit = 48
+    /// How much of the session's action line the pill carries. Measured rather than chosen:
+    /// `RunPillControllingLayoutTests` lays a sentence of this length out at the controlling
+    /// pill's real width in its real font with AppKit's own text layout and asserts it fits the
+    /// two lines the view allows — the instrument PR #228 (SONNY-441) used for the widget's own
+    /// summary, applied to this surface because a founder decision asked for the action line to be
+    /// readable at the pill's real width rather than by eye.
+    static let actionLimit = 64
     static let runningFallback = "Sonny is working"
+    static let controllingActionFallback = "Looking at the screen"
     static let needsYouWords = "Sonny needs you"
     static let doneFallback = "Done"
     static let failedFallback = "Failed"
@@ -59,16 +115,69 @@ struct RunPillPresentation: Equatable {
                 glyph: "exclamationmark.bubble.fill",
                 words: needsYouWords,
                 tint: .attention,
-                accessibilityLabel: "\(needsYouWords). Click to answer."
+                accessibilityLabel: "\(needsYouWords). Click to answer.",
+                tooltip: needsYouWords,
+                controlling: nil
             )
-        case .working, .controlling:
+        case .controlling(let progress):
+            // **A live screen-control session gets its own pill, and it is the HUD** (founder
+            // decision 2026-09-12 on PR #237's F1, option B). This arm used to be folded into
+            // `.working` below, which put a session behind a pill reading "Sonny is working on: …"
+            // in the same action blue as a file zip — naming no app, showing no action, and
+            // offering neither Pause, Stop nor the hotkey line, while the widget that carries all
+            // four was hidden for the length of the session. That is the one shape
+            // `WidgetControllingPanel`'s own doc says this feature must never take.
+            let identity = ScreenControlSessionPresentation.controllingMessage(
+                appDisplayName: progress.appDisplayName
+            )
+            let action = trimmed(
+                progress.currentAction,
+                fallback: controllingActionFallback,
+                limit: actionLimit
+            )
+            return RunPillPresentation(
+                kind: .controlling,
+                glyph: "cursorarrow.rays",
+                words: identity,
+                tint: .controlling,
+                // Everything a screen reader needs in the order a person needs it: what is
+                // happening, to which app, what it is doing now, and the way out that works
+                // without the pointer — which during a session is not the user's to aim.
+                accessibilityLabel: spoken(
+                    "\(identity). \(action)",
+                    then: "\(ScreenControlSessionPresentation.stopLabel) and "
+                        + "\(ScreenControlSessionPresentation.pauseLabel) are on this pill. "
+                        + hotkeyLine
+                ),
+                tooltip: identity,
+                controlling: Controlling(
+                    appDisplayName: progress.appDisplayName,
+                    currentAction: action,
+                    stepLine: ScreenControlSessionPresentation.stepLine(
+                        iteration: progress.iteration,
+                        maximumIterations: progress.maximumIterations
+                    ),
+                    pauseLabel: ScreenControlSessionPresentation.pauseLabel,
+                    pauseAccessibilityLabel: ScreenControlSessionPresentation.pauseAccessibilityLabel(
+                        appDisplayName: progress.appDisplayName
+                    ),
+                    stopLabel: ScreenControlSessionPresentation.stopLabel,
+                    stopAccessibilityLabel: ScreenControlSessionPresentation.stopAccessibilityLabel(
+                        appDisplayName: progress.appDisplayName
+                    ),
+                    hotkeyLine: hotkeyLine
+                )
+            )
+        case .working:
             let words = trimmed(command, fallback: runningFallback)
             return RunPillPresentation(
                 kind: .running,
                 glyph: nil,
                 words: words,
                 tint: .action,
-                accessibilityLabel: spoken("Sonny is working on: \(words)", then: "Click to expand.")
+                accessibilityLabel: spoken("Sonny is working on: \(words)", then: "Click to expand."),
+                tooltip: "Sonny is working on: \(words)",
+                controlling: nil
             )
         case .result(let summary, _):
             let words = trimmed(summary, fallback: doneFallback)
@@ -77,7 +186,9 @@ struct RunPillPresentation: Equatable {
                 glyph: "checkmark.circle.fill",
                 words: words,
                 tint: .allow,
-                accessibilityLabel: spoken("Done: \(words)", then: "Click to expand.")
+                accessibilityLabel: spoken("Done: \(words)", then: "Click to expand."),
+                tooltip: "Done: \(words)",
+                controlling: nil
             )
         case .failure(let message):
             let words = trimmed(message, fallback: failedFallback)
@@ -86,7 +197,9 @@ struct RunPillPresentation: Equatable {
                 glyph: "xmark.octagon.fill",
                 words: words,
                 tint: .error,
-                accessibilityLabel: spoken("Failed: \(words)", then: "Click to expand.")
+                accessibilityLabel: spoken("Failed: \(words)", then: "Click to expand."),
+                tooltip: "Failed: \(words)",
+                controlling: nil
             )
         case .idle, .resumeOffer, .tooOld, .updateAvailable:
             return nil
@@ -101,9 +214,14 @@ struct RunPillPresentation: Equatable {
         return first + separator + second
     }
 
-    /// The first line of `text`, trimmed, cut at `wordLimit` characters with an ellipsis; the
-    /// fallback when nothing is left.
-    static func trimmed(_ text: String, fallback: String) -> String {
+    /// The first line of `text`, trimmed, cut at `limit` characters with an ellipsis (the pill's
+    /// `wordLimit` unless a caller names its own, which the action line does); the fallback when
+    /// nothing is left.
+    /// The hotkey sentence, worded exactly as `WidgetControllingPanel` words it, because it is the
+    /// same statement about the same key and the two surfaces must not drift.
+    static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
+
+    static func trimmed(_ text: String, fallback: String, limit: Int = wordLimit) -> String {
         let firstLine = text
             .split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
             .first
@@ -112,9 +230,9 @@ struct RunPillPresentation: Equatable {
         guard !line.isEmpty else {
             return fallback
         }
-        guard line.count > wordLimit else {
+        guard line.count > limit else {
             return line
         }
-        return String(line.prefix(wordLimit - 1)).trimmingCharacters(in: .whitespaces) + "…"
+        return String(line.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 }

@@ -75,6 +75,114 @@ struct WidgetMinimiseTests {
         #expect(fixture.viewModel.clarificationQuestion == "Which file did you mean?")
     }
 
+    // MARK: - A live screen-control session, both routes into it (PR #237's F1)
+
+    /// **Route one: a screen-control run with nothing to approve.** `dispatch` turns `isRunning`
+    /// on, which drops the flag and minimises; the session then reports progress and `widgetState`
+    /// becomes `.controlling`. Before the founders' decision of 2026-09-12 this left a live session
+    /// behind a pill reading "Sonny is working on: …" — no app named, no action, no Stop — with the
+    /// panel that carries all three hidden for the length of the session. The pill is the HUD now.
+    @Test
+    func aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement() throws {
+        let fixture = try makePillFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.isRunning = true
+        #expect(fixture.viewModel.isWidgetMinimised)
+
+        fixture.viewModel.visionSessionProgress = VisionSessionProgress(
+            appDisplayName: "Notes",
+            iteration: 2,
+            maximumIterations: 12,
+            currentAction: "Clicking the New Note button"
+        )
+
+        // Still minimised — option B, deliberately: the session does not bring the widget back.
+        #expect(fixture.viewModel.isWidgetMinimised)
+        let pill = try #require(fixture.viewModel.runPillPresentation)
+        #expect(pill.kind == .controlling, "a live session must not read as an ordinary run")
+        #expect(pill.tint == .controlling)
+        #expect(pill.glyph == "cursorarrow.rays")
+        #expect(pill.words == "Sonny is controlling Notes")
+
+        // Every clause of `WidgetControllingPanel`'s stated requirement, in the corner.
+        let controlling = try #require(pill.controlling, "the controlling pill carries no controls")
+        #expect(controlling.appDisplayName == "Notes")
+        #expect(controlling.currentAction == "Clicking the New Note button")
+        #expect(controlling.stepLine == "Step 2 of 12")
+        #expect(controlling.pauseLabel == "Pause")
+        #expect(controlling.stopLabel == "Stop")
+        #expect(controlling.pauseAccessibilityLabel == "Pause Sonny controlling Notes")
+        #expect(controlling.stopAccessibilityLabel == "Stop Sonny controlling Notes")
+        #expect(controlling.hotkeyLine == "\(EmergencyStopHotKey.displayName) stops it from anywhere.")
+        // A control nobody knows about is not a control: the way out is spoken too.
+        #expect(pill.accessibilityLabel.contains("Stop"))
+        #expect(pill.accessibilityLabel.contains(EmergencyStopHotKey.displayName))
+    }
+
+    /// **Route two: the session is approved first, and approving re-enters the run.** The user
+    /// clicks the pill (so the flag goes up and the widget is back), presses Allow, and `approve()`
+    /// sets `isRunning` again — whose `didSet` puts the flag straight back down. So the widget
+    /// minimises a second time, at the moment the session starts, and what it minimises into must
+    /// be the HUD rather than a spinner. This is the route the review traced and the one no test
+    /// covered.
+    @Test
+    func approvingAScreenControlRunReMinimisesIntoTheControllingPill() throws {
+        let fixture = try makePillFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.isRunning = true
+        fixture.viewModel.isRunning = false
+        fixture.viewModel.clarificationQuestion = "Which note did you mean?"
+        #expect(fixture.viewModel.runPillPresentation?.kind == .needsYou)
+
+        // The user brings the widget forward to answer.
+        fixture.viewModel.expandWidgetFromPill()
+        #expect(!fixture.viewModel.isWidgetMinimised)
+        fixture.viewModel.clarificationQuestion = nil
+
+        // Approving re-enters the run: `isRunning` goes on again and the flag drops with it.
+        fixture.viewModel.isRunning = true
+        #expect(fixture.viewModel.isWidgetMinimised, "approving re-minimises, which is the whole route")
+
+        fixture.viewModel.visionSessionProgress = VisionSessionProgress(
+            appDisplayName: "Notes",
+            iteration: 1,
+            maximumIterations: 12,
+            currentAction: "Looking at the screen"
+        )
+
+        let pill = try #require(fixture.viewModel.runPillPresentation)
+        #expect(pill.kind == .controlling)
+        #expect(try #require(pill.controlling).stopLabel == "Stop")
+    }
+
+    /// A parked question still outranks the session and still expands the widget — the controlling
+    /// pill changes what a *progressing* session looks like and nothing about how a question is
+    /// answered. Nothing is auto-approved.
+    @Test
+    func aQuestionParkedInsideASessionStillReadsAsNeedsYouAndStaysParked() throws {
+        let fixture = try makePillFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.isRunning = true
+        fixture.viewModel.visionSessionProgress = VisionSessionProgress(
+            appDisplayName: "Notes",
+            iteration: 3,
+            maximumIterations: 12,
+            currentAction: "Typing the line"
+        )
+        #expect(fixture.viewModel.runPillPresentation?.kind == .controlling)
+
+        fixture.viewModel.visionSessionPause = VisionSessionPause(
+            appDisplayName: "Notes",
+            reason: .userPaused,
+            iteration: 3
+        )
+
+        let pill = try #require(fixture.viewModel.runPillPresentation)
+        #expect(pill.kind == .needsYou, "a parked continuation outranks a progress report, as it always has")
+        #expect(pill.controlling == nil)
+        #expect(fixture.viewModel.visionSessionPause != nil, "the pill answered nothing")
+    }
+
     /// A scheduled routine's outcome goes to its notice and never to the widget's result panel, so
     /// its run drains back to idle with no pill to show; the widget comes back on its own rather
     /// than leaving the user with neither surface. The flag stays down — nobody expanded — and

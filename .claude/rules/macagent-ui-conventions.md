@@ -77,8 +77,34 @@ parked question is "needs you" on the pill exactly when the widget would draw it
 `CommandCenterAttentionPanel` shows it; the pill answers nothing. Every summon
 (`widgetPresentationRequest`) is an expansion, the pill's click included, and a minimised outcome
 holds (`outcomeHolds`, the SONNY-121 hold widened) until then. The pill is System B and never a
-`SonnyTheme` token; `RunPillPresentationTests` scans for that. There is one pill because there is
-one run; a pill per task is its own ticket.
+`SonnyTheme` token; `RunPillPresentationTests` and `RunPillControllingTokenTests` scan for that.
+There is one pill because there is one run; a pill per task is its own ticket.
+
+**A live screen-control session minimises like any other run, and the pill is then the HUD**
+(founder decision 2026-09-12, option B on PR #237's F1). This is the one pill state that carries
+controls, and it exists because `WidgetControllingPanel`'s requirement — Sonny says it is
+controlling, says which app, says what it is doing now, and puts Stop where the user can reach it —
+is a product requirement rather than a courtesy, and minimising the widget would otherwise hide all
+of it for the length of a session. So `RunPillPresentation.Kind.controlling` is its own kind, with
+its own amber tint and cursor glyph, carrying the identity line, the action line, the step line,
+Pause, Stop and the line naming `⌃⌥⎋`. Option A — a session that does not minimise at all — was
+recommended by the coordinator and declined; the record is on SONNY-450.
+
+Three rules follow for anyone editing that pill, each of them something this repository has already
+paid for once:
+
+- **Controls must receive their own clicks.** The controlling pill is deliberately *not* wrapped in
+  the ordinary pill's expand `Button`; the identity row is its own button and each control is its
+  own button beside it. SONNY-443 shipped an overlay over the mic that claimed every point in its
+  bounds, and the founders' clicks went nowhere while the button still looked live.
+  `RunPillControlsReceiveClicksTests` hosts the real pill and asks AppKit where a click at each
+  control's centre lands, against a control that reproduces the sink.
+- **The action line is measured, not eyeballed.** `RunPillPresentation.actionLimit` is laid out at
+  the pill's real width in its real font with AppKit's own text layout
+  (`RunPillControllingLayoutTests`), the instrument PR #228 used for the widget's Finder sentence.
+- **A parked question still outranks the session**, as it always has: the pill goes to "needs you",
+  the controls go with it, and answering happens in the widget. Nothing on the pill approves
+  anything.
 
 ## Responsive rows
 

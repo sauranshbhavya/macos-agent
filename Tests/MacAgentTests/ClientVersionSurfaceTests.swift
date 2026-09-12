@@ -348,7 +348,15 @@ struct ClientVersionSurfaceTests {
 
         // Twice per chain, once per branch, and the count is what makes that checkable: a third
         // reader of this owner arrives at this test rather than joining the population silently.
+        //
+        // **The last of the four is what keeps that true after SONNY-450's hoist** (PR #237's F6).
+        // `widgetChain` is `widgetState`'s brace block, not the file it sits in, so before that
+        // line a third `ClientVersionCopy.prompt(for:` added anywhere else in `AgentViewModel.swift`
+        // — thirteen thousand lines — reached no assertion at all, where before the hoist any third
+        // reader in `FloatingWidgetView.swift` did. The file-wide count is the reach the sentence
+        // above describes; the block count is where the two live.
         #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: widgetChain) == 2)
+        #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: viewModel) == 2)
         #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: commandCenter) == 2)
         #expect(MacAgentSource.count(of: "ClientVersionCopy.prompt(for:", inText: widget) == 0)
         for source in [widget, viewModel, commandCenter] {

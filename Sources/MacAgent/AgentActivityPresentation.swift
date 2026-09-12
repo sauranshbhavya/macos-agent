@@ -545,6 +545,11 @@ enum ScreenControlSessionPresentation {
     /// The control that ends the session, on both surfaces.
     static let stopLabel = "Stop"
 
+    /// The control that holds the session at the top of its next iteration. **A named constant
+    /// since SONNY-450**, because the run pill became a third surface drawing it and a word the
+    /// widget's panel spelled inline is a word two surfaces can spell differently.
+    static let pauseLabel = "Pause"
+
     /// Its VoiceOver name, which names the app because "Stop" alone does not say what stops.
     static func stopAccessibilityLabel(appDisplayName: String) -> String {
         "Stop Sonny controlling \(appDisplayName)"

@@ -65,3 +65,31 @@
 >>> to
         let separator = ". "
 >>> end
+
+# P7 and P8 are the founder decision of 2026-09-12 (option B on PR #237's F1): a live
+# screen-control session still minimises, and the pill has to be the HUD rather than a generic
+# running pill. P7 folds the controlling arm back into `.working`, which is the exact defect the
+# review found and the one no test could see before that round; P8 drops the way out from the
+# pill, which is the half of the requirement a reader is least likely to notice missing.
+# Killers expected (hand-traced; the founders' weekly battery measures): P7 by WidgetMinimiseTests
+# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement,
+# approvingAScreenControlRunReMinimisesIntoTheControllingPill) and RunPillPresentationTests
+# (aLiveSessionIsItsOwnKindAndNotAnOrdinaryRun); P8 by WidgetMinimiseTests
+# (aScreenControlRunMinimisesIntoTheControllingPillAndKeepsTheHudsWholeStatement) and
+# RunPillPresentationTests (theControllingPillCarriesTheWayOut).
+
+>>> mutant P7 a live screen-control session folds back into the ordinary running pill
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+        case .controlling(let progress):
+>>> to
+        case .controlling(let progress) where progress.iteration < 0:
+>>> end
+
+>>> mutant P8 the controlling pill stops naming the emergency stop
+>>> file Sources/MacAgent/RunPillPresentation.swift
+>>> from
+    static let hotkeyLine = "\(EmergencyStopHotKey.displayName) stops it from anywhere."
+>>> to
+    static let hotkeyLine = ""
+>>> end
