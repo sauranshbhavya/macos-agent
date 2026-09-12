@@ -127,7 +127,8 @@ export function pooledConnections(
      * **It has to arrive in the startup packet and not as a `SET` after connect, and that is the
      * one thing about this line a later simplification must not undo** (SONNY-428's neighbour). A
      * route may set its own bound on a connection it has leased — `model/routing.ts`'s
-     * `withDatabaseDeadline` does, per statement, for the four content-deletion routes — and clears
+     * `withDatabaseDeadline` does, per statement, for the four content-deletion routes and, through
+     * `leasingUnderTotalDeadline`, for the three account routes' leases (SONNY-434) — and clears
      * it with `RESET statement_timeout` on the way out. `RESET` restores a parameter to its
      * *reset value*, which a startup parameter sets and a session `SET` does not. So the two shapes
      * differ in production and in nothing a casual test would show. Measured on `postgres:17`,

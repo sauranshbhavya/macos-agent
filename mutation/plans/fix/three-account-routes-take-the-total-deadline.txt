@@ -1,0 +1,161 @@
+# SONNY-434 — the three database-bound account routes run under §12's last row's total as one
+# request-scoped budget every lease their stores take reads. Property: a statement cancelled inside
+# the budget answers 504 provider.timeout; the budget handed to Postgres is the row's total minus
+# what elapsed, across every lease in the handler; outside a declared budget a lease is untouched.
+#
+# SERVER HALF. The suite that kills these is vitest, not the flagged swift test, so this plan is run as
+#   MUTATE_TEST_CMD='cd server && npx vitest run test/account-deadline.test.ts' scripts/mutate mutation/plans/fix/three-account-routes-take-the-total-deadline.txt
+# scripts/mutate-all runs every plan under the one suite command it is given, so a weekly battery
+# that runs this plan under the default Swift command reports every mutant here SURVIVED without a
+# test having seen it (SONNY-455 records the gap).
+#
+# Killers, each measured by applying the mutant by hand at the fix round's tree 1f022a65 (PR #235,
+# 2026-09-11), under the command above for the unit file and, where a line names the database file,
+# `npx vitest run test/account-deadline.db.test.ts` at a lane database as well; the sets below are
+# copied from the hand-applied runs' own failure lists and reproduced test for test by the delta
+# pass of 2026-09-12 (this header's sets had been wrong three rounds running, so nothing here is
+# traced or remembered). Test names are the vitest names, shortened:
+# M1 (2): "GET /v1/account/entitlements answers §7.2's 504 …" and "GET /v1/account/entitlements
+#   answers 500 server.error, not a dressed-up timeout …".
+# M2 (2): the same pair for "GET /v1/account/credits".
+# M3 (1): "the consent switch's two leases share one budget …" alone — the route test's first SET is
+#   the pool's ten seconds whichever total the handler declares, so the band assertion that used to
+#   kill M3 no longer can, and the six-second step between the two leases is what tells fifteen from
+#   sixty.
+# M4 (3): "the consent switch's two leases share one budget …", "inside one, each lease is bounded by
+#   what is left of the request's budget" and "time spent waiting for a pooled connection comes out of
+#   the budget …" — not the wider-budget test, which passes under M4 because the ceiling still cuts the
+#   forced 15 000 to 10 000.
+# M5 (1): "a budget already spent refuses before taking a connection at all" alone.
+# M6 (6): the three route 504 tests, "the consent switch's two leases share one budget …", "the charge
+#   route's reads stay on the pool's bound …" and "outside a declared deadline the lease is the bare
+#   lease …" — not the pool-timeout-outside-a-budget test, whose outside arm throws from the lease
+#   before the mutant's branch runs.
+# M7 (1): "time spent waiting for a pooled connection comes out of the budget …" alone.
+# M8 (7): the three route 504 tests, "the consent switch's two leases share one budget …", "inside a
+#   budget wider than the pool's bound, each statement is bounded by the pool's bound", "a ceiling a
+#   caller supplies is honoured, and one of nothing is refused where it is wired" and, in the database
+#   file, underABudgetWiderThanThePoolsBoundAStatementIsCutAtThePoolsBound.
+# M9 (4): "a wait for a pooled connection that outlasts the budget ends at the budget …", "the pool's
+#   own connect timeout inside a budget is a timeout, and outside one it is untouched" and, in the
+#   database file, aWaitForAPooledConnectionThatOutlastsTheBudgetEndsAtTheBudgetAndRunsNothingOnTheConnectionItIsHanded
+#   and thePoolsOwnConnectTimeoutInsideABudgetIsAnsweredAsATimeout.
+# M10 (2): "the pool's own connect timeout inside a budget is a timeout …" and, in the database file,
+#   thePoolsOwnConnectTimeoutInsideABudgetIsAnsweredAsATimeout.
+# M11 (1): "GET /v1/account/entitlements answers 500 server.error, not a dressed-up timeout …" alone.
+# M12 (1): "GET /v1/account/credits answers 500 server.error, not a dressed-up timeout …" alone.
+
+>>> mutant M1 the entitlement read runs under no budget
+>>> file server/src/routes/entitlements.ts
+>>> from
+      record = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () =>
+        deps.store.entitlementFor(caller.accountId),
+      );
+>>> to
+      record = await deps.store.entitlementFor(caller.accountId);
+>>> end
+
+>>> mutant M2 the credits read runs under no budget
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+>>> to
+      read = await position(caller.accountId, at);
+>>> end
+
+>>> mutant M3 the consent switch takes a minute instead of the row's total
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, async () => {
+>>> to
+      read = await underTotalDeadline({ total: 60_000 }, async () => {
+>>> end
+
+>>> mutant M4 every lease starts the total afresh instead of reading what is left
+>>> file server/src/model/routing.ts
+>>> from
+      const remaining = request.expiresAt - Date.now();
+>>> to
+      const remaining = 15_000;
+>>> end
+
+>>> mutant M5 a budget of exactly nothing still takes a connection
+>>> file server/src/model/routing.ts
+>>> from
+    if (beforeTheLease <= 0) {
+>>> to
+    if (beforeTheLease < 0) {
+>>> end
+
+>>> mutant M6 a lease outside any declared budget is bounded anyway, widening routes the ticket never named
+>>> file server/src/model/routing.ts
+>>> from
+    if (request === undefined) return withConnection(work);
+>>> to
+    if (request === undefined) {
+      return withConnection((client) => withDatabaseDeadline({ total: 15_000 }, client, work));
+    }
+>>> end
+
+>>> mutant M7 the remainder read before the pool wait, so a queued connection's time is added on top of the budget
+>>> file server/src/model/routing.ts
+>>> from
+    return leaseWithin(beforeTheLease, withConnection, (client) => {
+      const remaining = request.expiresAt - Date.now();
+      return withDatabaseDeadline({ total: remaining, perStatement: perStatementMs }, client, work);
+    });
+>>> to
+    const remaining = request.expiresAt - Date.now();
+    return leaseWithin(beforeTheLease, withConnection, (client) =>
+      withDatabaseDeadline({ total: remaining, perStatement: perStatementMs }, client, work),
+    );
+>>> end
+
+>>> mutant M8 the per-statement ceiling dropped: the remainder replaces the pool's bound for the statement (PR #235's fresh review, F1)
+>>> file server/src/model/routing.ts
+>>> from
+        const statementBudget =
+          deadline.perStatement === undefined ? remaining : Math.min(remaining, deadline.perStatement);
+>>> to
+        const statementBudget = remaining;
+>>> end
+
+>>> mutant M9 the wait for a connection unbounded again: the lease taken directly, no timer and no mapping (PR #235's fresh review, F3)
+>>> file server/src/model/routing.ts
+>>> from
+    return leaseWithin(beforeTheLease, withConnection, (client) => {
+>>> to
+    return withConnection((client) => {
+>>> end
+
+>>> mutant M10 the pool's connect timeout inside a budget rethrown as the plain error: a 500 again (PR #235's fresh review, F3)
+>>> file server/src/model/routing.ts
+>>> from
+  return error instanceof Error && POOL_CONNECT_TIMEOUT_MESSAGES.has(error.message);
+>>> to
+  return false;
+>>> end
+
+>>> mutant M11 the entitlement read dresses every store error as a timeout (PR #235's fresh review, X4)
+>>> file server/src/routes/entitlements.ts
+>>> from
+      return sendUpstreamFailure(request, reply, error);
+>>> to
+      void error;
+      return reply.status(504).send({ error: { code: "provider.timeout", message: "The upstream provider did not answer in time.", request_id: request.id, retryable: true } });
+>>> end
+
+>>> mutant M12 the credits read dresses every store error as a timeout (PR #235's fresh review, X3)
+>>> file server/src/routes/credits.ts
+>>> from
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+    } catch (error) {
+      return sendUpstreamFailure(request, reply, error);
+    }
+>>> to
+      read = await underTotalDeadline(ACCOUNT_DEADLINE_MS, () => position(caller.accountId, at));
+    } catch (error) {
+      void error;
+      return reply.status(504).send({ error: { code: "provider.timeout", message: "The upstream provider did not answer in time.", request_id: request.id, retryable: true } });
+    }
+>>> end

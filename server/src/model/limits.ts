@@ -129,10 +129,18 @@ export const DEADLINE_MS = {
    *   They reach no provider and every one of them holds a pooled connection, so `withDeadlines` is
    *   forbidden for them by PR #212's F1 and the `upstream` half of this row has nothing to bound:
    *   they take `CONTENT_DELETION_DEADLINE_MS` below, through `withDatabaseDeadline`.
-   * - Three of the four account routes (`routes/entitlements.ts`, and the read and the consent
-   *   switch in `routes/credits.ts`) wait on the database rather than on a provider, and
-   *   `db/pool.ts` sets no statement timeout — so bounding those is a wider change than one route's
-   *   wrapper and is filed rather than half-made here (SONNY-427).
+   * - **Three of the five `/v1/account/*` routes are wired now, and by a third shape** (SONNY-434;
+   *   five, because `DELETE /v1/account/content` is one of the four deletion routes above — this
+   *   line said four until PR #235's fresh review counted, and the count is
+   *   `git grep -nE 'app\.(get|put|post|delete)\((CREDITS_PATH|AUTO_TOP_UP_PATH|TOP_UP_PATH|"/v1/account/)' -- server/src`
+   *   from the repository root, which answers 0 run from inside `server/` for the pathspec reason
+   *   `CLAUDE.md` names). `routes/entitlements.ts`, and the read and the consent switch in
+   *   `routes/credits.ts`, wait on the database rather than on a provider, and their stores lease
+   *   connections internally, so the handler holds no client for `withDatabaseDeadline` to wrap.
+   *   They take `ACCOUNT_DEADLINE_MS` below through `underTotalDeadline`, a request-scoped budget
+   *   every lease inside the handler reads, beneath which the per-statement bound `db/pool.ts` sets
+   *   (SONNY-427) still holds — each statement takes the smaller of the two; `model/routing.ts`
+   *   carries the reasoning. Outside that scope, and everywhere else, the pool's bound governs alone.
    * - **`POST /v1/account/credits/top-up` is the fourth and is not database-bound at all**: it
    *   charges at the payment provider, so this row was never its. It has **its own row now**, below
    *   (SONNY-430). It was folded into the sentence above until PR #212's F4 — the lane's own
@@ -284,3 +292,19 @@ export const MAXIMUM_AUDIO_DURATION_SECONDS = 180;
  * routes is the whole-handler deadline, enforced against Postgres rather than against a socket.
  */
 export const CONTENT_DELETION_DEADLINE_MS = { total: DEADLINE_MS.auth.total } as const;
+
+/**
+ * §12's last row applied to the three account routes whose slow work is the database (SONNY-434):
+ * `GET /v1/account/entitlements`, `GET /v1/account/credits` and `PUT /v1/account/credits/auto-top-up`.
+ *
+ * Derived from `DEADLINE_MS.auth` for `CONTENT_DELETION_DEADLINE_MS`'s reason, and `total` alone
+ * for its reason too: none of the three reaches a provider, so an `upstream` here would bound
+ * nothing. What applies it is `underTotalDeadline` in `model/routing.ts`, a budget the request
+ * carries to every lease its stores take, because those stores lease internally and the handler
+ * never holds a client for the deletion routes' wrapper to bound.
+ *
+ * **`POST /v1/account/credits/top-up` is not on this constant**, though it reads the same store: it
+ * has its own row above (`topUp`) and its own answer when that elapses, and its reads before and
+ * after the charge stay on the pool's per-statement bound, exactly as before this constant existed.
+ */
+export const ACCOUNT_DEADLINE_MS = { total: DEADLINE_MS.auth.total } as const;

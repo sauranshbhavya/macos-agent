@@ -4588,6 +4588,97 @@ were fetched. Signed in, gateway up.
 - [ ] `summarize https://simonwillison.net/2006/Dec/19/botbouncer/ and save it as Markdown` (an LF
       site that allows the page): a real note, as before.
 
+### Three account routes take §12's total deadline (new 2026-09-11, SONNY-434)
+
+`GET /v1/account/entitlements`, `GET /v1/account/credits` and `PUT /v1/account/credits/auto-top-up`
+now run their database work under §12's last row's 15 s total, carried to every lease their stores
+take — the wait for a pooled connection included — with the pool's 10 s per-statement bound still
+beneath it. Server half only; nothing on the Mac changes.
+
+**Setup: a local gateway over a lane database, and a token it will attribute** (PR #235's fresh
+review, F4: the earlier draft of these rows asked for a signed-in token and a port and said how to
+get neither). Start the lane database and apply the migrations exactly as the SONNY-307 row's fenced
+block does (`docker run … postgres:17` with the derived name and port, the `pg_isready` wait,
+`npm run build && npm run migrate -- up`, and `DATABASE_URL` exported with `host.docker.internal`),
+then, in the same shell and still in `server/`:
+
+```
+export SUPABASE_JWT_SECRET="$(openssl rand -hex 24)"   # 48 characters, generated: under 32 the gateway refuses to start, and a literal here is a credential shape `npm run check:secrets` refuses
+export SUPABASE_JWT_ISSUER='https://placeholder.supabase.co/auth/v1'
+export SUPABASE_JWT_AUDIENCE=authenticated
+export SUPABASE_ANON_KEY=placeholder
+export RATE_LIMIT_SALT=placeholder
+export ENTITLEMENT_SIGNING_KEY="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n')"
+export ENTITLEMENT_SIGNING_KEY_ID=sonny-dev-1
+export SPEND_CAP_UNITS=1000
+export CREDIT_PLANS='{"runCredits":100,"defaultPlan":"free","weights":{"perSession":10,"perIteration":5,"perMegapixel":2},"plans":[{"key":"free","monthlyCredits":500},{"key":"pro","monthlyCredits":10000}]}'
+./scripts/deploy.sh local        # then `docker logs sonny-gateway-local | tail -3` must show "auth":"mounted"
+```
+
+A token the gate accepts is one signed with that secret whose `sub` names a Supabase user this
+database attributes to a live account, so give the database an account and an identity for a user
+id you invent, then sign a token for it (`node` is enough; the claims are the ones the gate pins —
+issuer, audience, a UUID `sub`, a UUID `session_id`, `iat` and `exp`). `psql` is not installed on
+this Mac, so the statement runs inside the database container:
+
+```
+USER_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+docker exec -i "sonny-gw-db-$LANE" psql -U postgres -v ON_ERROR_STOP=1 -c "WITH a AS (INSERT INTO sonny.account DEFAULT VALUES RETURNING id)
+  INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified, supabase_user_id, link_method)
+  SELECT id, 'email', '$USER_ID', 'you@example.com', true, '$USER_ID', 'primary' FROM a"
+TOKEN="$(node -e '
+const { createHmac } = require("node:crypto");
+const part = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const now = Math.floor(Date.now() / 1000);
+const head = part({ alg: "HS256", typ: "JWT" });
+const claims = part({ iss: process.env.SUPABASE_JWT_ISSUER, aud: "authenticated", role: "authenticated",
+  sub: process.argv[1], session_id: process.argv[2], iat: now, exp: now + 3600 });
+console.log(head + "." + claims + "." + createHmac("sha256", process.env.SUPABASE_JWT_SECRET).update(head + "." + claims).digest("base64url"));
+' "$USER_ID" "$(uuidgen | tr '[:upper:]' '[:lower:]')")"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/credits     # 200 with "plan":"free" before any row below
+```
+
+The lock the rows hold is taken the same way, in a second terminal, and left open until the row
+says to release it:
+`docker exec -it "sonny-gw-db-$LANE" psql -U postgres` then `BEGIN; LOCK TABLE sonny.entitlement IN ACCESS EXCLUSIVE MODE;`.
+
+- [ ] **The lock, and the pool's ten seconds.** With the lock held,
+      `time curl -si -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/entitlements`:
+      a `504` with `"code":"provider.timeout"` and `"retryable":true`, after about **10 s** — the
+      pool's per-statement bound, which the budget no longer widens (the fresh review's F1; the
+      earlier draft of this row expected 15 s, which is the statement the review measured running
+      inside the budget). **What would be a finding:** an answer at about 15 s, which is the
+      remainder replacing the pool's bound again; or a `500`. `ROLLBACK;` in psql, repeat the curl:
+      `200` with the claim, as before.
+- [ ] **The consent switch can answer `504` after its write has committed** (the fresh review's F2).
+      Lock held again, then
+      `curl -si -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"enabled":true}' http://localhost:8080/v1/account/credits/auto-top-up`:
+      the same `504` after about 10 s — the write to `sonny.auto_topup_consent` is not behind the
+      lock and commits on its own lease, and it is the re-read that is cut. **Before releasing the
+      lock**, from the first terminal:
+      `docker exec -i "sonny-gw-db-$LANE" psql -U postgres -c "SELECT opted_in_at FROM sonny.auto_topup_consent WHERE account_id = (SELECT account_id FROM sonny.identity WHERE supabase_user_id = '$USER_ID')"`
+      already shows a timestamp: the setting is on while the client was told the request timed out.
+      The Mac retries this request once on `provider.timeout` and converges on the `200`; this row is
+      what a retry that also times out leaves behind. `ROLLBACK;`, repeat the `PUT`: `200` with the
+      whole position and `"opted_in":true`.
+- [ ] **A wait for a connection is a timeout, never a `500`** (the fresh review's F3). Lock held,
+      start ten requests in the background and then one more:
+      `for i in $(seq 10); do curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/entitlements & done; sleep 1; curl -si -w "\n%{time_total}s\n" -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/entitlements; wait`.
+      The pool has ten connections and the ten background requests hold every one of them blocked
+      on the lock, so the eleventh waits for a connection: it answers `504 provider.timeout` after
+      about **5 s** — the pool's own connect timeout, answered as the timeout it is rather than the
+      `500 server.error` it was — and the ten answer `504` at about 10 s each. **What would be a
+      finding:** a `500` from the eleventh. (The other half of F3, a wait cut at the budget's own
+      end, needs the budget to run out before the pool gives up, which the production numbers — a
+      15 s total against a 5 s connect timeout — reach only on the consent switch's second lease
+      after a slow write; it is held by `account-deadline.db.test.ts` against a real pool rather
+      than by a row.) `ROLLBACK;` afterwards.
+- [ ] **Healthy afterwards.** With the lock released, ten ordinary calls in a row —
+      `for i in $(seq 10); do curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" http://localhost:8080/v1/account/credits; done`
+      — all `200`, each in well under a second: every connection came back with the pool's bound
+      restored and no transaction left open, and the budget costs one extra round trip per statement
+      and nothing a person can notice.
+
 ## 8. How to report back
 
 For each real finding, give me:

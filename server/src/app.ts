@@ -16,6 +16,7 @@ import { registerEntitlementRoutes } from "./routes/entitlements.js";
 import { postgresCreditStore, type CreditStore } from "./credit/store.js";
 import { postgresTopUpAttemptStore, type TopUpAttemptStore } from "./credit/topup.js";
 import { registerCreditRoutes } from "./routes/credits.js";
+import { leasingUnderTotalDeadline } from "./model/routing.js";
 import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
@@ -670,8 +671,12 @@ export function buildApp(
    * event — money moved with nothing recording what moved it, which is the direction this whole row
    * exists to close.
    */
+  // Over `leasingUnderTotalDeadline` rather than the bare lease (SONNY-434): the account routes
+  // declare §12's total for their request, and every lease this store takes inside one shares it.
+  // A lease taken outside one — the gate's admit and settle — is the bare lease, unchanged.
   const entitlementStore =
-    overrides.entitlementStore ?? (auth ? postgresEntitlementStore(auth.withConnection) : undefined);
+    overrides.entitlementStore ??
+    (auth ? postgresEntitlementStore(leasingUnderTotalDeadline(auth.withConnection)) : undefined);
   registerEntitlement(
     app,
     auth && entitlementStore
@@ -698,8 +703,11 @@ export function buildApp(
    * or its plan map is not, which is `config.ts`'s standing property: a missing credential is a
    * startup failure with a named variable.
    */
+  // The same lease as the entitlement store's, for the same reason (SONNY-434); the charge route's
+  // own reads on this store declare no budget and stay on the pool's bound.
   const creditStore =
-    overrides.creditStore ?? (auth ? postgresCreditStore(auth.withConnection) : undefined);
+    overrides.creditStore ??
+    (auth ? postgresCreditStore(leasingUnderTotalDeadline(auth.withConnection)) : undefined);
 
   const billing = billingDepsFrom(config);
   const billingStore =
