@@ -33,6 +33,11 @@ public enum LocalStorageEncryptionError: Error, Equatable, LocalizedError {
             return "A local data file exists but could not be decrypted or decoded."
         }
     }
+
+    /// The sentence that ends the storage banner for one unreadable store, so a *task* that meets
+    /// one can end its failure with the same door (SONNY-449). One constant, two readers, so the
+    /// two cannot drift; the banner's plural form is built beside it in `AgentViewModel`.
+    public static let unreadableStoreWayOut = "Open Memory in Command Center to clear it."
 }
 
 public struct LocalStorageEncryptionKeyManager: LocalStorageKeyManaging, @unchecked Sendable {

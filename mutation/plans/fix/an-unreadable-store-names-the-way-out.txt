@@ -1,0 +1,167 @@
+# SONNY-449 — a task that meets an unreadable local file ends its failure with the way out the
+# storage banner names. Property: for undecodableLocalData the message ends with the shared
+# sentence; for any other error it is the error's own sentence; the banner reads the same constant.
+# Killers expected: W1 and W2 by MemoryCommandCenterTests (aTaskThatMeetsAnUnreadableStoreNamesTheWayOut,
+# aTaskThatFailsForAnotherReasonNamesNoWayOut), UnreadableStoreWayOutTests and, for W1, ScheduledRoutineRunTests
+# (aScheduledRunThatMeetsAnUnreadableStoreNamesTheWayOutInItsNotice); W3 by the five banner tests that pin
+# the sentence by value (MemoryCommandCenterTests.theBannerForAnUnreadableStoreNamesTheWayOut and three
+# siblings, AgentViewModelLocalStorageTests.theLoadFailureBannerExplainsItselfOnceAndStillNamesTheAffectedStore),
+# measured by PR #233's first review. W4 by UnreadableStoreWayOutTests
+# (anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut); W5 by StandingWatcherStopTests
+# (aStopAgainstAnUnreadableFileNamesTheWayOut); both from PR #233's second review. W6 by
+# MemoryCommandCenterTests (aMemoryRowDeleteAgainstAnUnreadableFileNamesTheWayOut) and W7 by
+# MemoryCommandCenterTests (aRoutineDeleteAgainstAnUnreadableFileNamesTheWayOut); both from the third.
+
+>>> mutant W1 the way out dropped from a task's failure
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let sentence = error.localizedDescription
+        guard Self.reportsAnUnreadableStore(error),
+              !sentence.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut) else {
+            return sentence
+        }
+        return "\(sentence) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+>>> to
+        return error.localizedDescription
+>>> end
+
+>>> mutant W2 every failure told to open Memory, whatever the error
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        let sentence = error.localizedDescription
+        guard Self.reportsAnUnreadableStore(error),
+              !sentence.hasSuffix(LocalStorageEncryptionError.unreadableStoreWayOut) else {
+            return sentence
+        }
+        return "\(sentence) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+>>> to
+        return "\(error.localizedDescription) \(LocalStorageEncryptionError.unreadableStoreWayOut)"
+>>> end
+
+>>> mutant W3 the banner's singular no longer reads the shared sentence
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            wayOut = " " + LocalStorageEncryptionError.unreadableStoreWayOut
+>>> to
+            wayOut = " Open Memory to clear it."
+>>> end
+
+>>> mutant W4 the sentence match dropped: a wrapper that reports the failure by its words loses the way out
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+        return error.localizedDescription.contains(Self.unreadableStoreSentence)
+>>> to
+        return false
+>>> end
+
+>>> mutant W5 a watcher stop reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(Self.failureMessage(for: error))")
+>>> to
+            setError("Could not stop watching \u{201C}\(watcher.subject)\u{201D}: \(error.localizedDescription)")
+>>> end
+
+>>> mutant W6 the Memory rows' shared write helper reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("\(failureMessage): \(Self.failureMessage(for: error))")
+>>> to
+            setError("\(failureMessage): \(error.localizedDescription)")
+>>> end
+
+>>> mutant W7 a routine delete reports the bare decrypt sentence again
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+            setError("Could not delete routine: \(Self.failureMessage(for: error))")
+>>> to
+            setError("Could not delete routine: \(error.localizedDescription)")
+>>> end
+
+>>> mutant W8 a task's own bookkeeping reports the bare decrypt sentence on the notice again (PR #233's fresh review, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save this task to task history: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save this task to task history: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W9 the schedule controls report the bare decrypt sentence again (PR #233's fresh review, F1)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save this routine's schedule: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save this routine's schedule: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W10 declining a resume offer reports the bare decrypt sentence again (PR #233's fresh review, F1)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(Self.failureMessage(for: error))"
+>>> to
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W11 the task's plan's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(Self.failureMessage(for: error))")
+>>> to
+recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(error.localizedDescription)")
+>>> end
+
+>>> mutant W12 the unfinished-task record's clear's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not clear the record of a task that has now finished: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not clear the record of a task that has now finished: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W13 the unfinished-task record's save's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+recordLocalStorageWriteFailure("Sonny \(what): \(Self.failureMessage(for: error))")
+>>> to
+recordLocalStorageWriteFailure("Sonny \(what): \(error.localizedDescription)")
+>>> end
+
+>>> mutant W14 the scheduled run's history row's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not save this scheduled run to task history: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W15 the scheduled run's plan's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not save what this scheduled run planned: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not save what this scheduled run planned: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W16 the schedule pause's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not pause this routine's schedule: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not pause this routine's schedule: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W17 the schedule baseline's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not save this routine's schedule state: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not save this routine's schedule state: \(error.localizedDescription)"
+>>> end
+
+>>> mutant W18 the routine's run history's notice reports the bare decrypt sentence again (PR #233's delta pass, F2)
+>>> file Sources/MacAgent/AgentViewModel.swift
+>>> from
+"Sonny could not save this routine's run history: \(Self.failureMessage(for: error))"
+>>> to
+"Sonny could not save this routine's run history: \(error.localizedDescription)"
+>>> end

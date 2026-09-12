@@ -4516,6 +4516,55 @@ planner's reason goes to the log.
       `aRefusedPlansReasonReachesTheActLog`; the delta pass on PR #232's fix round removed a row
       here that sent you looking for it under a refused task.)
 
+### A task that meets an unreadable local file names the way out (new 2026-09-11, SONNY-449)
+
+Test 19 of the founders' pass hit a snippets file that would not decrypt: "A local data file exists
+but could not be decrypted or decoded." with Retry, and no door. The task failure now ends with the
+banner's own sentence, "Open Memory in Command Center to clear it."
+
+- [ ] Quit Sonny. `echo garbage > ~/Library/Application\ Support/Sonny/snippets.json`. Launch,
+      type `snippet save addr = 221B Baker Street`: the failure reads the decrypt sentence
+      followed by "Open Memory in Command Center to clear it."
+- [ ] Command Center › Memory › Snippets reads "Can't be read"; press Delete and confirm; the row
+      recovers. Type the same save again: it succeeds.
+- [ ] A failure that is not a file (`calc banana`, or a research command with the gateway
+      stopped): its sentence is unchanged, with no "Open Memory" on the end.
+- [ ] Best effort, since whether the planner builds an item job is its choice: with `snippets.json`
+      poisoned again, `save these as snippets: addr = 221B Baker Street, phone = 555-0100`: the
+      failure ends with "Open Memory in Command Center to clear it." whichever route the planner
+      took; the item-job door itself is held by the unit test
+      `anItemJobThatFailedOnAnUnreadableFileKeepsTheWayOut`.
+- [ ] The watcher Stop. **Sonny stays running for this row**: a relaunch empties the Watching list
+      when the file cannot be read, so there would be no row to press. Create a standing watcher
+      (`watch for the order status on this page`, or any watcher command) and see it on Command
+      Center › **Routines** › Watching. Then, with Sonny still running, `echo garbage >
+      ~/Library/Application\ Support/Sonny/resumable-tasks.json`, and press that row's Stop: the
+      error reads "Could not stop watching “…”: A local data file exists but could not be decrypted
+      or decoded. Open Memory in Command Center to clear it."
+- [ ] The per-entry Delete. **Sonny stays running with the entries on screen**: open Command Center
+      › Memory › Snippets with a saved snippet listed, then `echo garbage >
+      ~/Library/Application\ Support/Sonny/snippets.json` with Sonny still running, then press that
+      entry's own Delete (not the row-level Delete, which is the recovery and moves the file aside):
+      the error ends with "Open Memory in Command Center to clear it." (PR #233's third review: the
+      Memory rows' shared write helper, behind seven Delete and Forget controls; the row-level
+      Delete is row 2 above.)
+- [ ] With Sonny running and a routine created beforehand, `echo garbage >
+      ~/Library/Application\ Support/Sonny/routines.json`, then Routines › the routine › Delete:
+      "Could not delete routine: A local data file exists but could not be decrypted or decoded.
+      Open Memory in Command Center to clear it." Then, on the same routine, open its editor and
+      press Add a schedule, then Save schedule — the editor's Save reaches the same door, and it is
+      there whether or not the routine has a schedule; on a routine that already has one, Remove
+      schedule or the row's schedule toggle do the same (the delta pass on PR #233's fix round: the
+      earlier wording named only the two controls a routine without a schedule does not show). The
+      storage notice reads "Sonny could not save this routine's schedule: …" ending with the same
+      way out (PR #233's fresh review, F1).
+- [ ] The notice channel (PR #233's fresh review, F2). Quit Sonny; `echo garbage >
+      ~/Library/Application\ Support/Sonny/task-history.json`; launch (the storage banner names
+      the way out); type `2 + 2`: the answer shows, and the notice now reads "Sonny could not save
+      this task to task history: A local data file exists but could not be decrypted or decoded.
+      Open Memory in Command Center to clear it." — the way out still there after a task that
+      succeeded.
+
 ## 8. How to report back
 
 For each real finding, give me:
