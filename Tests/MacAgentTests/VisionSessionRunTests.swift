@@ -74,6 +74,10 @@ struct VisionSessionRunTests {
             case typed(String)
             case pressed(VisionActionKey)
             case scrolled(VisionScrollDirection)
+            /// The run's `FocusRestorer` brought the user's app back (SONNY-451) — a different event
+            /// from `activated`, which is the session bringing its *target* forward, so a test can
+            /// tell the two apart in one ordered list.
+            case restored(String)
         }
 
         private(set) var events: [Event] = []
@@ -139,6 +143,12 @@ struct VisionSessionRunTests {
         var throwsAfterDeliveringClick: Error?
 
         var clickCount: Int { events.filter { if case .clicked = $0 { return true } else { return false } }.count }
+
+        /// What the run's focus restorer did to this screen: the user's app is in front again.
+        func recordRestore(_ bundleIdentifier: String) {
+            events.append(.restored(bundleIdentifier))
+            frontmost = bundleIdentifier
+        }
     }
 
     private struct FakeCaptureBackend: ScreenCaptureBackend {
@@ -313,6 +323,35 @@ struct VisionSessionRunTests {
         }
     }
 
+    /// How the run's focus restorer behaves in a session test (SONNY-451).
+    ///
+    /// It builds the shipping `FocusRestorer` over closures that read and move the synthesizer's own
+    /// screen, so a restore lands in the same ordered event list as the session's clicks and its
+    /// activations of the target. `appStillRunning` is the liveness read: `false` is the user's app
+    /// having quit during the session, which the restorer must answer by asking for nothing.
+    private struct SessionRestoreScript {
+        var appStillRunning = true
+
+        func restorer(over synthesizer: RecordingSynthesizer) -> FocusRestorer {
+            let stillRunning = appStillRunning
+            return FocusRestorer(
+                frontmost: {
+                    synthesizer.frontmost.map { bundleIdentifier in
+                        NotedFrontmost(
+                            app: RunningApp(displayName: bundleIdentifier, bundleIdentifier: bundleIdentifier, processIdentifier: 7),
+                            heldInstances: []
+                        )
+                    }
+                },
+                stillRunning: { _ in stillRunning },
+                activation: { noted in
+                    synthesizer.recordRestore(noted.app.bundleIdentifier)
+                    return .switched
+                }
+            )
+        }
+    }
+
     /// An attention monitor a test can flip mid-session.
     private final class SwitchableAttentionMonitor: SessionAttentionMonitoring, @unchecked Sendable {
         var state: SessionAttentionState = .attended
@@ -388,9 +427,10 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.errorMessage != nil || !fixture.viewModel.finalSummary.isEmpty)
     }
 
-    /// The session brings the app the user was in back in front when it ends, and never the target:
-    /// the fake screen starts on another app, the session activates Safari to run, and the last
-    /// activation is the other app again.
+    /// **The session gives the user's app back when it ends, and only then.** The screen starts on
+    /// another app, the session brings Safari forward and clicks, and the restore comes after the
+    /// last click — never before one, which would put the user's app under a synthesized action.
+    /// Through the run's `FocusRestorer`, so the restore is its own event and not an activation.
     @Test
     func theSessionBringsThePreviousAppBackWhenItEnds() async throws {
         let fixture = try makeFixture(
@@ -398,7 +438,8 @@ struct VisionSessionRunTests {
                 #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
                 #"{"action":"done","rationale":"The reading list is tidy."}"#
             ],
-            frontmost: "com.other.App"
+            frontmost: "com.other.App",
+            restore: SessionRestoreScript()
         )
         defer { fixture.tearDown() }
 
@@ -406,12 +447,88 @@ struct VisionSessionRunTests {
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
 
-        let activations = fixture.synthesizer.events.compactMap { event -> String? in
-            if case .activated(let bundle) = event { return bundle } else { return nil }
+        let events = fixture.synthesizer.events
+        #expect(events.first == .activated("com.apple.Safari"))
+        #expect(events.last == .restored("com.other.App"))
+        let lastClick = try #require(events.lastIndex { if case .clicked = $0 { return true } else { return false } })
+        let restore = try #require(events.firstIndex(of: .restored("com.other.App")))
+        #expect(restore > lastClick, "the user's app came back before Sonny had finished acting")
+        #expect(events.filter { $0 == .restored("com.other.App") }.count == 1)
+    }
+
+    /// **An app the user quit during the session is not started again when the session ends**
+    /// (founder decision, 2026-09-12: restoring focus must never start an app that has quit). This
+    /// went through the synthesizer's `activateApp` until SONNY-451's rebase, which since SONNY-440
+    /// answers `true` for a launch as well as a switch and so started the quit app. The restore is
+    /// now the shipping `FocusRestorer`, whose liveness read here answers that the app is gone.
+    @Test
+    func anAppTheUserQuitDuringTheSessionIsNotStartedWhenItEnds() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            restore: SessionRestoreScript(appStillRunning: false)
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "[s] tidy the reading list in Safari"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "the session ran")
+        #expect(!fixture.synthesizer.events.contains(.restored("com.other.App")), "a quit app was brought back")
+    }
+
+    /// **A pause gives the user's app back, and no action ever lands while it is in front.** The
+    /// session pauses after its first click, the user's app is restored while it waits, and on resume
+    /// the session brings the target forward again before it clicks a second time. Every click in
+    /// the list is preceded — since the most recent restore — by the target's own activation, which
+    /// is "never restores over the app under control while Sonny is acting", held over the order.
+    @Test
+    func aPauseGivesTheUsersAppBackAndNothingIsClickedUntilTheTargetIsInFrontAgain() async throws {
+        let attention = UserPausableAttentionMonitor(base: AlwaysAttendedMonitor())
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"B","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            frontmost: "com.other.App",
+            attention: attention,
+            restore: SessionRestoreScript()
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionUserPauseMonitor = attention
+        fixture.synthesizer.afterClick = { count in
+            if count == 1 { attention.pause() }
         }
-        #expect(activations.first == "com.apple.Safari")
-        #expect(activations.last == "com.other.App")
-        #expect(fixture.synthesizer.events.contains { if case .clicked = $0 { return true } else { return false } })
+
+        fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
+        try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
+        #expect(fixture.synthesizer.events.contains(.restored("com.other.App")), "the user's app did not come back while the session waited")
+        #expect(fixture.synthesizer.frontmost == "com.other.App")
+
+        fixture.viewModel.resolveVisionPause(resuming: true)
+        try await waitForIdle(fixture.viewModel)
+
+        let events = fixture.synthesizer.events
+        #expect(fixture.synthesizer.clickCount == 2)
+        var targetInFront = false
+        for event in events {
+            switch event {
+            case .activated("com.apple.Safari"):
+                targetInFront = true
+            case .restored:
+                targetInFront = false
+            case .clicked:
+                #expect(targetInFront, "a click landed while the user's app was in front: \(events)")
+            default:
+                break
+            }
+        }
+        #expect(events.last == .restored("com.other.App"))
     }
 
     private func makeFixture(
@@ -469,7 +586,12 @@ struct VisionSessionRunTests {
         /// one. There is no permissive default anywhere in `Sources/` —
         /// `VisionSessionEnvironment.init` and `makeVisionEnvironment` both require it, so a
         /// shipping call site cannot acquire one by saying nothing.
-        screenControlGate: ScriptedScreenControlGate? = nil
+        screenControlGate: ScriptedScreenControlGate? = nil,
+        /// The run's focus restorer (SONNY-451). `nil` is the inert one, which is what every test
+        /// that is not about giving the user's app back wants. A script builds the **real**
+        /// `FocusRestorer` shape over the synthesizer's own screen, so the never-start-a-quit-app
+        /// check is exercised through the session rather than asserted beside it.
+        restore: SessionRestoreScript? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -494,6 +616,8 @@ struct VisionSessionRunTests {
                 approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
             )
         }
+        let synthesizer = RecordingSynthesizer(frontmost: frontmost)
+        let focusRestorer: any FocusRestoring = restore.map { $0.restorer(over: synthesizer) } ?? FocusRestorer.inert()
         let viewModel = AgentViewModel(
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
@@ -501,6 +625,7 @@ struct VisionSessionRunTests {
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: NoShortcuts(),
             finderRevealer: hermeticFinderRevealer,
+            focusRestorer: focusRestorer,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
             taskHistoryStore: taskHistoryStore,
             taskPlanDetailStore: taskPlanDetailStore,
@@ -541,7 +666,6 @@ struct VisionSessionRunTests {
         viewModel.interactionMode = mode
 
         let model = ScriptedVisionModel(replies, failingAt: modelFailure)
-        let synthesizer = RecordingSynthesizer(frontmost: frontmost)
         let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
         let gate = screenControlGate ?? .permissive()
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(

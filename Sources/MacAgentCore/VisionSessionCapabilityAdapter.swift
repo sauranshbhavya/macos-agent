@@ -320,6 +320,9 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
                 attentionMonitor: environment.attentionMonitor,
                 permissionChecker: environment.permissionChecker
             ),
+            // The one restorer the run carries, so a session gives the user's app back by the same
+            // rule an open step does (SONNY-451).
+            focusRestorer: context.focusRestorer,
             log: log
         )
         let outcome = try await session.run()
