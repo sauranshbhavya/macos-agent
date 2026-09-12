@@ -418,10 +418,12 @@ struct WidgetSessionApprovalPanelTests {
     /// the same predicate first, verbatim.
     ///
     /// What this does *not* hold is the receiver: `iteration: someOtherProgress.iteration` passes.
-    /// That is what the per-site pins are for, and all four now have one — this test's two, the
-    /// approval panel's in
-    /// `theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive`, and the
-    /// capture review's in `theStepLineHasOneOwnerAndNoPanelHandWritesIt`.
+    /// That is what the per-site pins are for: this test's two, the approval panel's in
+    /// `theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive`, the capture
+    /// review's in `theStepLineHasOneOwnerAndNoPanelHandWritesIt`, and — since SONNY-450's fix
+    /// round put the step line on the run pill too — the pill's in
+    /// `RunPillPresentationTests.theControllingPillCarriesWhatTheHudCarries`, which asserts the
+    /// rendered sentence for a session at iteration 2 of 12.
     @Test
     func everyStepLineCallPairsItsArgumentsWithTheirOwnFields() throws {
         // The guard first, against the defect itself. A predicate that cannot see a swap would pass
@@ -444,7 +446,12 @@ struct WidgetSessionApprovalPanelTests {
                 calls.append((file: MacAgentSource.relativePath(of: url), call: call))
             }
         }
-        #expect(calls.count == 4, "the whole-tree population, not a per-file count: \(calls.map(\.file))")
+        // Five since SONNY-450's fix round: the run pill became the HUD while a screen-control
+        // session is live (founder decision 2026-09-12), so `RunPillPresentation` builds the step
+        // line for the corner the same way the panels build it for the widget. A new surface
+        // drawing this line arrives here, which is the whole point of sweeping the target rather
+        // than a list of filenames.
+        #expect(calls.count == 5, "the whole-tree population, not a per-file count: \(calls.map(\.file))")
         for (file, call) in calls {
             #expect(
                 Self.pairsItsArgumentsWithTheirOwnFields(call),
