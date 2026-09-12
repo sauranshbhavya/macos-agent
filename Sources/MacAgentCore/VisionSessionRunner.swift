@@ -203,7 +203,7 @@ final class VisionSessionRunner {
         // the instances of it that were running. It comes back on every exit and at an attention
         // pause, and never while Sonny acts: the controlled app stays in front for the whole of a
         // session, because a session is exactly the thing that must keep it there.
-        previousFrontmost = await focusRestorer.frontmost()
+        previousFrontmost = focusRestorer.frontmost()
         do {
             let outcome = try await runLoop()
             await restorePreviousFrontmost()
@@ -264,7 +264,7 @@ final class VisionSessionRunner {
         guard let previous = previousFrontmost, previous.app.bundleIdentifier != target.bundleIdentifier else {
             return
         }
-        guard await focusRestorer.frontmost()?.app.bundleIdentifier != previous.app.bundleIdentifier else {
+        guard focusRestorer.frontmost()?.app.bundleIdentifier != previous.app.bundleIdentifier else {
             return
         }
         _ = await focusRestorer.bringToFront(previous)

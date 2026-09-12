@@ -82,7 +82,7 @@
 >>> from
         guard let previous = previousFrontmost, previous.app.bundleIdentifier != target.bundleIdentifier else {
 >>> to
-        guard let previous = await focusRestorer.frontmost(), previous.app.bundleIdentifier != target.bundleIdentifier else {
+        guard let previous = focusRestorer.frontmost(), previous.app.bundleIdentifier != target.bundleIdentifier else {
 >>> end
 
 >>> mutant X6 an app open no longer restores focus
