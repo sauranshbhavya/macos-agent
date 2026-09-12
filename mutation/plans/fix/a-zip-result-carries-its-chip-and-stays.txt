@@ -1,0 +1,63 @@
+# SONNY-445 and SONNY-446 — a zip result carries an Open suggestion, and an outcome counts down
+# from its own longer delay. Property: the zip adapter emits .openFile at the archive path; a
+# result or failure the widget is showing gets the outcome delay, one it is not showing and idle
+# keep six seconds, a parked question has none, and the view's timer reads the table.
+# Killers, each measured by applying the mutant by hand at the fix round's tree (PR #231, 2026-09-11):
+# Z1 by AgentRunnerTests.aZipResultCarriesOpenFirstAndRevealAtTheArchivePath; Z2, Z3 and Z4 by
+# WidgetAutoCollapseDelayTests; Z5 by theViewsTimerReadsTheTableAndKeepsNoLiteral; Z6 by
+# anOutcomeTheWidgetDoesNotShowCountsDownFromIdle and everyStateHasTheClockTheTableSays.
+
+>>> mutant Z1 the Open suggestion dropped: only Reveal is emitted, as before
+>>> file Sources/MacAgentCore/LargestFilesZipCapabilityAdapter.swift
+>>> from
+            RunSuggestion(
+                title: "Open zip",
+                kind: .openFile,
+                value: spec.outputURL.path
+            ),
+>>> to
+>>> end
+
+>>> mutant Z2 an outcome counts down from the idle figure, as before
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+        case .result, .failure:
+            return showsPanel ? outcome : idle
+>>> to
+        case .result, .failure:
+            return idle
+>>> end
+
+>>> mutant Z3 idle counts down from the outcome figure
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+        case .idle, .resumeOffer, .working, .tooOld, .updateAvailable:
+            return idle
+>>> to
+        case .idle, .resumeOffer, .working, .tooOld, .updateAvailable:
+            return outcome
+>>> end
+
+>>> mutant Z4 the outcome figure shortened back under idle
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+    static let outcome: Duration = .seconds(20)
+>>> to
+    static let outcome: Duration = .seconds(5)
+>>> end
+
+>>> mutant Z5 the view's timer back on a literal of its own: the six seconds return to the view (PR #231's fresh review, F1)
+>>> file Sources/MacAgent/FloatingWidgetView.swift
+>>> from
+            try? await Task.sleep(for: delay)
+>>> to
+            try? await Task.sleep(for: .seconds(6))
+>>> end
+
+>>> mutant Z6 an outcome the widget does not show is held for the outcome figure (PR #231's fresh review, F2)
+>>> file Sources/MacAgent/WidgetAutoCollapseDelay.swift
+>>> from
+            return showsPanel ? outcome : idle
+>>> to
+            return outcome
+>>> end

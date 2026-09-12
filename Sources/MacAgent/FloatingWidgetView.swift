@@ -146,12 +146,10 @@ struct FloatingWidgetView: View {
     /// at all — the mic's tracking view reports each arrival and departure and this responds; see
     /// `micHintPointerEnteredMic` for the hover SONNY-179 found a stored copy swallowing.
     ///
-    /// *How long* it counts for is not here and not `autoCollapseDelay`'s neighbour below: it
+    /// *How long* it counts for is not here and not `WidgetAutoCollapseDelay`'s: it
     /// arrives with the hint, from `AgentViewModel.micHoverHintPresentation`, because one of the two
     /// hints this row can show does not count down at all.
     @StateObject private var micHint = MicHoverHintModel()
-
-    private static let autoCollapseDelay: Duration = .seconds(6)
 
     var body: some View {
         // .leading, not .trailing: the panel and pill are both a fixed 472pt (matching the
@@ -391,8 +389,8 @@ struct FloatingWidgetView: View {
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
             // An outcome the user was notified about does not collapse (SONNY-121). They were
-            // working somewhere else when it happened, so the six-second timer measures how long
-            // they have been *away*, not how long they have had to read it. Returning `false` here
+            // working somewhere else when it happened, so the outcome's timer would measure how
+            // long they have been *away*, not how long they have had to read it. Returning `false` here
             // also stops the clear: `scheduleAutoDismissIfNeeded` returns before arming the timer.
             //
             // Only `.failure` can currently be notified — the marker is set when an error
@@ -444,9 +442,18 @@ struct FloatingWidgetView: View {
             isCompact = false
             return
         }
+        // Two figures since SONNY-446: an outcome gets longer than idle, because a collapsed
+        // result is a cleared one and six seconds was not enough to read it and press Open.
+        // `WidgetAutoCollapseDelay` holds both and their order; `isCollapsible` above has already
+        // said this state has a clock, so a `nil` here is a state the two disagree about and the
+        // safe answer is to leave it alone.
+        guard let delay = WidgetAutoCollapseDelay.delay(for: state, showsPanel: showsPanel) else {
+            isCompact = false
+            return
+        }
         let shouldClearOutcome = shouldClearOutcomeOnDismiss
         autoDismissTask = Task {
-            try? await Task.sleep(for: Self.autoCollapseDelay)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             isCompact = true
             if shouldClearOutcome {
