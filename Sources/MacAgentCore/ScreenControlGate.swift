@@ -152,6 +152,26 @@ public struct ClosedScreenControlGate: ScreenControlGating {
 /// that service's own doc gives for why it never hands out an ``EntitlementClaim``.
 public protocol ScreenControlEntitlementConfirming: Sendable {
     func claimConfirmation() async -> EntitlementDecision
+    /// Waits for the background refresh a refusal may have started, if one is in flight, and
+    /// returns at once when none is (SONNY-442). `EntitlementService.awaitPendingRefresh()` is the
+    /// live answer; the gate uses it once, at the door, for the refusals a refresh cures.
+    func awaitPendingRefresh() async
+}
+
+extension EntitlementRefusal {
+    /// The refusals `EntitlementService.evaluate` starts a refresh on its way out of, because a
+    /// fresh claim is the whole cure: nothing cached, bytes this build cannot read, a claim that
+    /// belongs to somebody else, or a claim past its honoured window (SONNY-442). `notSignedIn`
+    /// (no session to refresh with), `clockUnusable` (the clock, not the claim) and `notEntitled`
+    /// (a valid claim that says no) are not on the list, and a wait would change none of them.
+    public var isCuredByARefresh: Bool {
+        switch self {
+        case .noClaim, .unreadableClaim, .claimIsForAnotherSession, .lapsed:
+            return true
+        case .notSignedIn, .clockUnusable, .notEntitled:
+            return false
+        }
+    }
 }
 
 /// How many screen-control runs are left this period, or a throw.
@@ -333,7 +353,42 @@ public struct SonnyScreenControlGate: ScreenControlGating {
         // one, so a Mac with no confirmable claim is refused without waiting for a request that
         // would fail anyway — and a refusal names the ground the user can actually act on rather
         // than whichever one happened to be checked first.
-        let confirmation = await entitlements.claimConfirmation()
+        var confirmation = await entitlements.claimConfirmation()
+        // **At the door, a refusal a refresh cures waits for the refresh it started, once**
+        // (SONNY-442). `EntitlementService.evaluate` starts a background refresh on every one of
+        // those refusals and returns the refusal at once — by design, since an answer that never
+        // waits is what keeps §16.3's instant feel for everything else. Here the answer is the
+        // only thing between a signed-in user and a session, and refusing "Connect once so Sonny
+        // can check your plan" while that check is already on the wire sends them to press Retry a
+        // moment later, which is what the founders' pass read on test 55. What puts a Mac in that
+        // state is a claim that is not there when the door reads — nothing cached yet, or a sign-in
+        // as another account, whose first reader discards the old claim and starts the refresh the
+        // next reader lands before. A same-account sign-out and sign-in is **not** one of them:
+        // `SonnyAccountService.signOut` clears the tokens and leaves the claim in the Keychain
+        // (PR #229's F4), so what produced test 55's refusal on the founders' Mac is not established.
+        // The Account dialog already reads twice for the same reason
+        // (`SonnyAccountModel.refreshSubscription()`); this is that shape at the door. Only at
+        // `.sessionStart`: a boundary that waited on the network would be the mid-session stall
+        // the allowance branch below refuses to be.
+        //
+        // **The wait's bound is the client's, and it is not one timeout** (PR #229's F2).
+        // `refreshNow()` sends with `SonnyBackendTimeouts.auth`, 20 s of idle time per request, and
+        // a transport timeout is not retried — so a gateway that accepts and hangs costs 20 s. The
+        // retryable codes (`server.error`, `server.unavailable`, `provider.unavailable`) get three
+        // attempts with a server-named `Retry-After` honoured up to 20 s each, about 100 s in all;
+        // an access-token refresh that falls due first is one more 20 s request. **A stop does not
+        // wait for any of it**: `awaitPendingRefresh` returns the moment the run is cancelled, and
+        // the adapter turns the cut-short answer into the run's own "Canceled." (F1).
+        //
+        // **Wait first, then ask — the order is the fix.** With the real service the second read
+        // answers from the store, and the refresh writes the store when it ends; a read taken
+        // before the wait lands on the same empty store the first one did and reports the refusal
+        // this branch exists to stop. `ScreenControlGateRefreshWaitTests` holds the order by an
+        // event list and by composing the real service (F3).
+        if case .refused(let refusal) = confirmation, moment == .sessionStart, refusal.isCuredByARefresh {
+            await entitlements.awaitPendingRefresh()
+            confirmation = await entitlements.claimConfirmation()
+        }
         if case .refused(let refusal) = confirmation {
             return .refused(.entitlementUnconfirmed(refusal))
         }

@@ -4385,6 +4385,56 @@ the rest counted.
       refusal reads as before, "<path> is not one of the folders Sonny can use: <Desktop>,
       <Documents>."; nothing about that sentence changed.
 
+### The screen-control door waits for the plan check it started (new 2026-09-11, SONNY-442)
+
+Test 55 of the founders' pass was refused with "Connect once so Sonny can check your plan." on a
+signed-in Mac with the gateway up: the door read before the refresh its own first read had started
+could write anything, and refused instead of waiting for it. It waits once now, at the door only,
+and Cancel during that wait ends the run as "Canceled." at once. What put the founders' Mac in that
+state is not established: a same-account sign-out and sign-in leaves the cached claim in the
+Keychain (PR #229's fresh review, F4), and the earlier row that relied on a sign-out could not have
+reached the no-claim state. **Reaching the door's wait takes more than the no-claim state** (the
+delta review of that fix round, F4): signing in, and Command Center opening at launch, both start
+the refresh, and a local gateway answers it in one round trip before anyone can type, so the door's
+first read finds a claim and never waits — a build without the fix admits that press too. So the
+rows that need the wait pause the local gateway container (`docker pause sonny-gateway-local`,
+which keeps the port open and answers nothing) before the command and unpause or stop it after; a
+sign-in as a different account, which the earlier rows relied on, cannot leave the door waiting
+against a local gateway, and no row below uses it for that. "Remove the cached claim" below means:
+quit Sonny, open Keychain Access, login keychain, search `com.sonny.account`, delete the item whose
+account is `entitlement-v1` and nothing else (the neighbouring items are the sign-in tokens; deleting
+them signs you out), then relaunch Sonny, which is still signed in.
+
+- [ ] **The door waits, and takes the refresh's answer.** Nothing cached, the gateway paused: remove
+      the cached claim, `docker pause sonny-gateway-local`, relaunch (Command Center's opening
+      starts the refresh, which now stays open), and type `in Safari, open apple.com and scroll to
+      the bottom of the page`. The widget's working panel shows and nothing else happens: the door
+      is waiting. Then `docker unpause sonny-gateway-local`: within a second or two the approval or
+      the session appears, not "Connect once so Sonny can check your plan." **What would be a
+      finding:** "Connect once" at once, before the unpause — the unfixed build's answer, which is
+      the door reading before the refresh it started could write.
+- [ ] **The wait ends with the refresh, whichever way the refresh ends.** The same setup — nothing
+      cached, `docker pause sonny-gateway-local`, relaunch, the same command, the working panel
+      showing — and instead of unpausing, `docker rm -f sonny-gateway-local` while it waits. The
+      run is refused with "Connect once so Sonny can check your plan." within a few seconds of the
+      container going, not at once and not after a 20 s wait: the refresh failed and the door took
+      that answer. Start the gateway (`./scripts/deploy.sh local`) and press Retry: the session
+      starts. **What would be a finding:** the refusal arriving before the container is removed.
+- [ ] Nothing cached, gateway down: remove the cached claim, stop the gateway (`docker rm -f
+      sonny-gateway-local`), relaunch, type the same command. It is refused with "Connect once so
+      Sonny can check your plan." after about half a second — the connection is refused and retried
+      once — not instantly and not after a long wait. Start the gateway and press Retry: the
+      session starts.
+- [ ] Nothing cached, gateway paused rather than stopped (`docker pause sonny-gateway-local`, which
+      keeps the port open and answers nothing): remove the cached claim, relaunch, type the same
+      command, and within a few seconds press Cancel on Command Center's running line (the widget's
+      working panel has no stop control, and the emergency stop is inert until a session is live).
+      The run ends "Canceled." at once, not after 20 s, and not with a plan or allowance sentence.
+      `docker unpause sonny-gateway-local` afterwards; if the container was left paused, the same
+      command with nobody pressing Cancel is refused with a plan sentence after 20 s.
+- [ ] Signed out: the same command is refused at once with "Sign in to Sonny to use this.", with
+      no wait.
+
 ## 8. How to report back
 
 For each real finding, give me:

@@ -2799,6 +2799,32 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.approvalRequest == nil)
     }
 
+    /// **A stop pressed while the screen-control door is still waiting for the plan check ends the
+    /// run as "Canceled.", not as the refusal the cut-short wait produces** (SONNY-442, PR #229's
+    /// F1). The gate here holds until the run is stopped and then answers a refusal, exactly as the
+    /// real one does once its wait has been ended by cancellation; the adapter's cancellation check
+    /// after the door is what turns that into the stop the user pressed, and without it the run
+    /// would end with "Sonny couldn't check your screen-control allowance." and a Retry.
+    @Test
+    func aStopWhileTheDoorWaitsEndsTheRunAsCanceledNotAsARefusal() async throws {
+        let gate = ScriptedScreenControlGate.holdingUntilStopped()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"Done."}"#],
+            screenControlGate: gate
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the Mac page", appName: "Safari")
+        try await waitUntil("the door being asked") { gate.consults.contains(.sessionStart) }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary == "Canceled.")
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(gate.consults == [.sessionStart])
+    }
+
     /// **Stop stays reachable while the question is up**, which is the constraint the reorder had to
     /// respect: the HUD it displaces is where the emergency control for a program driving the user's
     /// screen lived.

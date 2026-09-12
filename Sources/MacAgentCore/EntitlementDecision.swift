@@ -15,7 +15,7 @@ public enum EntitlementDecision: Equatable, Sendable {
     public var isEntitled: Bool { self == .entitled }
 }
 
-public enum EntitlementRefusal: Equatable, Sendable {
+public enum EntitlementRefusal: CaseIterable, Equatable, Sendable {
     /// No session is held on this Mac. §7.2 case 1.
     case notSignedIn
     /// Signed in, but nothing has ever been cached — a first run that has not yet been online.

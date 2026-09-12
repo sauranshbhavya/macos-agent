@@ -297,7 +297,16 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         // allowance read. It sits below the terminal ban deliberately: a structural deny should not
         // depend on a billing answer, and the third door's own comment a few lines up says why that
         // ordering is a principle rather than a convenience.
-        if case .refused(let refusal) = await environment.screenControlGate.decide(at: .sessionStart) {
+        let admission = await environment.screenControlGate.decide(at: .sessionStart)
+        // **A stop pressed while the door waited ends the run as "Canceled.", never as the refusal
+        // the cut-short wait produced** (SONNY-442, PR #229's F1). The gate's wait returns on
+        // cancellation, and what it then reads — no claim yet, or an allowance read that threw on
+        // the cancelled task — is a refusal in every sentence but the true one. The gate cannot say
+        // "stopped", so the run says it here, the same check `requestVisionActionApproval` makes
+        // after its own await and for the same reason: the user pressed stop, and the summary must
+        // say so rather than send them to Retry.
+        try Task.checkCancellation()
+        if case .refused(let refusal) = admission {
             throw VisionSessionError.screenControlUnavailable(refusal)
         }
 

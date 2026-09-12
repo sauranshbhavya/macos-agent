@@ -66,9 +66,10 @@ struct EntitlementCopyTests {
 
     @Test
     func everyRefusalIsCovered() {
-        // The population, so a case added later is a failing test rather than a silent gap. There is
-        // no `CaseIterable` on `EntitlementRefusal` — the compiler's exhaustiveness check below is
-        // what holds it, and it fails to compile rather than failing at run time.
+        // The population, so a case added later is a failing test rather than a silent gap.
+        // `EntitlementRefusal` is `CaseIterable` since SONNY-442, and this list stays hand-written
+        // anyway: the compiler's exhaustiveness check below is what holds it, and it fails to
+        // compile rather than failing at run time — a population held two ways, not one.
         for refusal in allRefusals {
             #expect(!EntitlementCopy.message(for: refusal).isEmpty)
         }

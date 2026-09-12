@@ -288,12 +288,20 @@ final class SonnyAccountModel: ObservableObject {
     /// is off the render path and the answer is correct. Worth knowing before someone reads the
     /// sentence above as "only on a first run".
     ///
-    /// **`await refreshTask?.value` cannot be cancelled.** The task is `Task<Void, Never>`, so the
-    /// wait has no cancellation point, and closing the Account sheet does not stop it. It would not
-    /// have stopped the *refresh* either — that task is detached by design — so what is bounded here
-    /// is only how long this method sits, and that bound is the client's: `refreshNow()` uses
-    /// `SonnyBackendTimeouts.auth` (20 s) and is not retried on a transport timeout, so roughly 20 s
-    /// realistically and about 100 s worst case across the retryable codes' three attempts.
+    /// **The wait ends on cancellation now, and closing the sheet cancels it.** `awaitPendingRefresh()`
+    /// used to be `await refreshTask?.value`, which has no cancellation point; since SONNY-442 (PR
+    /// #229's F1) it returns as soon as the waiting task is cancelled, because the screen-control
+    /// door waits on it too and a stop there must land at once. Both callers run this inside a
+    /// SwiftUI `.task` — the Account sheet's and the Command Center page's — and SwiftUI cancels
+    /// that task when its view goes away, so closing the sheet now ends the wait: the second
+    /// `currentSubscription()` read runs at once and answers `nil` if the refresh has not landed,
+    /// which is harmless, since the sheet is gone and the next open reads again (the delta review
+    /// of PR #229's fix round, N1: the first version of this paragraph said closing the sheet does
+    /// not cancel the wait, which was true only while the wait ignored cancellation). While the
+    /// sheet stays open the bound is the client's: `refreshNow()` uses `SonnyBackendTimeouts.auth`
+    /// (20 s) and is not retried on a transport timeout, so roughly 20 s realistically and about
+    /// 100 s worst case across the retryable codes' three attempts. The *refresh* is never
+    /// cancelled by anyone — that task is detached by design.
     ///
     /// **Nothing on screen awaits this.** Both call sites are off the render path — `.task`, and an
     /// unstructured `Task` in `onChange` — and this does not set `isBusy`, so the row appears late
