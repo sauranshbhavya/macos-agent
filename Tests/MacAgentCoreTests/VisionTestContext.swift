@@ -41,7 +41,14 @@ enum VisionTestContext {
             webResearchSynthesizer: UnavailableWebResearchSynthesizer(),
             clipboardHistoryStore: ClipboardHistoryStore(fileURL: scratchURL("clipboard.json")),
             snippetStore: SnippetStore(fileURL: scratchURL("snippets.json")),
-            runningAppSwitcher: WorkspaceRunningAppSwitcher(),
+            // Inert rather than `forThisMac()` (SONNY-440): the real one reads this Mac's process
+            // list and, for a switch step, would bring a real app forward from inside a test.
+            // Nothing here switches apps, so the empty list and a refusing activation are the
+            // honest fixture.
+            runningAppSwitcher: WorkspaceRunningAppSwitcher(
+                runningApplications: { [] },
+                activation: { _ in .refused }
+            ),
             recentArtifactStore: RecentArtifactStore(fileURL: scratchURL("artifacts.json")),
             shortcutCatalog: ProcessShortcutCatalog(),
             shortcutInvoker: ProcessShortcutInvoker(),

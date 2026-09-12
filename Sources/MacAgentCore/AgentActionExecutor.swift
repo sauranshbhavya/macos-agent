@@ -173,7 +173,7 @@ public final class AgentActionExecutor {
         usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared,
         clipboardHistoryStore: ClipboardHistoryStore,
         snippetStore: SnippetStore,
-        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
+        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher.forThisMac(),
         recentArtifactStore: RecentArtifactStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),

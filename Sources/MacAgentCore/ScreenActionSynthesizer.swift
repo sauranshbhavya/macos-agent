@@ -52,14 +52,25 @@ public struct SystemScreenActionSynthesizer: ScreenActionSynthesizing {
     public init() {}
 
     public func activateApp(bundleIdentifier: String) async -> Bool {
-        await MainActor.run {
-            guard let app = NSRunningApplication
-                .runningApplications(withBundleIdentifier: bundleIdentifier)
-                .first else {
-                return false
-            }
-            return app.activate(options: [])
+        // Through Launch Services, not `NSRunningApplication.activate(options:)` (SONNY-440): that
+        // call answers false from a process that is not the active app, which Sonny is not while a
+        // command typed into its non-activating widget runs. `RunningAppActivation`'s doc comment
+        // carries the whole reason; this is the same route the app switcher takes, so a session
+        // started from the background brings its target forward exactly as one started with
+        // Command Center in front did on the founders' pass.
+        let held = await MainActor.run {
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
         }
+        guard let bundleURL = held.first?.bundleURL else {
+            return false
+        }
+        // A launch in place of an activation is not told apart here (PR #227's F1 names the
+        // window). The runner re-checks which app is frontmost after it settles, and that check
+        // compares only the frontmost bundle identifier, which a relaunched target passes — so a
+        // session whose target quit in the window continues with the relaunched app, and nothing
+        // on this path reports the launch (PR #227's delta review, R3). The switcher, whose whole
+        // outcome is the activation, tells the two apart by app identity instead.
+        return await RunningAppActivation.activate(bundleURL: bundleURL, amongHeld: held) != .refused
     }
 
     public func frontmostBundleIdentifier() async -> String? {
